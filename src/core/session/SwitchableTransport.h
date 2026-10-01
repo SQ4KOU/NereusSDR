@@ -57,6 +57,10 @@
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-10-01: Control logging lane: linkDiagnostics() and
+//               deliveringMessageWaitUs() from the connection in use, for
+//               the Core's log only. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionTransport.h"
@@ -142,6 +146,15 @@ public:
     }
     bool carriesBinary() const override { return m_sendOn && m_sendOn->carriesBinary(); }
     qint64 backlogBytes() const override { return m_sendOn ? m_sendOn->backlogBytes() : 0; }
+    SessionLinkDiagnostics linkDiagnostics() const override
+    {
+        return m_sendOn ? m_sendOn->linkDiagnostics() : SessionLinkDiagnostics{};
+    }
+    /// The connection whose message is being delivered says.
+    std::optional<qint64> deliveringMessageWaitUs() const override
+    {
+        return m_delivering ? m_delivering->deliveringMessageWaitUs() : std::nullopt;
+    }
 
     /// Test seam: the move's deadline (kSwitchDeadlineMs).
     void setSwitchDeadlineMsForTest(int ms);
@@ -186,6 +199,9 @@ private:
     QPointer<SessionTransport> m_next;
     /// After a move: the old connection, until it has closed.
     QPointer<SessionTransport> m_old;
+    /// Control logging lane: set only while a message read from it is
+    /// re-emitted.
+    QPointer<SessionTransport> m_delivering;
     QList<QByteArray> m_held;
     quint64 m_heldBytes = 0;
     QTimer* m_deadline = nullptr;

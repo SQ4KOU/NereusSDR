@@ -958,6 +958,11 @@
 //               time), and the gaps between a device's control messages,
 //               rate-limited per device. Logging only. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Control logging lane fix round: the log is ControlLog's;
+//               hooks for each keepalive's channel, a new watch, the
+//               watchdog's stop, the heartbeat and a connection's end.
+//               Logging only. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2371,8 +2376,11 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         },
         [this](const QByteArray& deviceId, quint64 sequence, quint32 epoch) {
             if (m_txWatchdog) {
+                // Control logging lane: logged after, as it was watched.
+                const bool watched = m_txWatchdog->isWatching(deviceId);
                 m_txWatchdog->keepalive(deviceId, sequence, epoch,
                                         RemoteTxWatchdog::Path::Auxiliary);
+                controlLogKeepalive(deviceId, ControlLog::KeepaliveChannel::TxWatch, 0, watched);
             }
         }, this);
     // iPhone app Task 71 (R-IOS-02): who holds a place, and the mirrored
@@ -2783,6 +2791,19 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             hooks.deviceName = [this](const QByteArray& id) { return deviceNameForStop(id); };
             m_txWatchdog->setHooks(std::move(hooks));
         }
+        // Control logging lane: a watchdog stop, beside the keepalives and
+        // the control state it happened in. Logging only.
+        connect(m_txWatchdog.get(), &RemoteTxWatchdog::tripped, this,
+                [this](const QByteArray& deviceId, bool linkClosed, qint64 silentMs) {
+                    SessionTransport* const transport = controlTransportForDevice(deviceId);
+                    ControlLog::PeerInfo info;
+                    info.deviceId = deviceId;
+                    if (transport != nullptr) {
+                        info = controlLogPeer(*m_peers.constFind(transport));
+                    }
+                    m_controlLog.watchdogStopped(deviceId, transport, info, linkClosed,
+                                                 silentMs);
+                });
         connect(m_radioModel, &RadioModel::keyedByChanged, this,
                 &StationServer::followKeyedForWatchdog);
 
@@ -3712,8 +3733,16 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         // Task 37: tx.keepalive on the session's own link.
         access.keepalive = [this](const QByteArray& requester, quint64 sequence, quint32 epoch) {
             if (m_txWatchdog) {
+                // Control logging lane: logged after, as it was watched,
+                // with its wait since the control link received it.
+                const bool watched = m_txWatchdog->isWatching(requester);
+                const std::optional<qint64> waitUs = m_dispatchingTransport != nullptr
+                    ? m_dispatchingTransport->deliveringMessageWaitUs()
+                    : std::nullopt;
                 m_txWatchdog->keepalive(requester, sequence, epoch,
                                         RemoteTxWatchdog::Path::Session);
+                controlLogKeepalive(requester, ControlLog::KeepaliveChannel::Control,
+                                    waitUs.value_or(0) / 1000, watched);
             }
         };
         // Task 77 (ruling 7.7): the transmitter's own settings are the
@@ -3839,7 +3868,6 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     connect(m_heartbeatTimer, &QTimer::timeout, this, &StationServer::onHeartbeatTick);
 
     m_settingsExportClock.start();
-    m_controlLogClock.start();
     m_settingsExportCleanup = new QTimer(this);
     m_settingsExportCleanup->setInterval(1000);
     connect(m_settingsExportCleanup, &QTimer::timeout, this,
@@ -4913,6 +4941,8 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     const quint64 mediaEpoch = it->mediaEpoch;
     // Task 77 fix wave, M6: its tx.take copies are forgotten with it.
     m_takeCopies.remove(it->sessionId);
+    // Control logging lane: its skipped counts and folded answers.
+    m_controlLog.closed(transport, controlLogPeer(*it));
     m_peers.erase(it);
     // Parity Task 19: nothing more from any record stream.
     for (auto& [name, stream] : m_recordStreams) {
@@ -5150,7 +5180,12 @@ void StationServer::onHeartbeatTick()
         }
         ++it->pingsAwaitingPong;
         transport->ping();
+        // Control logging lane: skipped counts, folded answers and the link.
+        if (const auto peer = m_peers.constFind(transport); peer != m_peers.cend()) {
+            m_controlLog.tick(transport, controlLogPeer(*peer));
+        }
     }
+    m_controlLog.tickCore();
     // The selected relay pair and the separate leg can change after the
     // initial snapshot without changing transmit permission.
     publishTxPermitted();
@@ -7757,6 +7792,11 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
             }
             m_voxArmedBy = writer;
             if (m_txWatchdog) {
+                // Control logging lane: a new watch measures keepalive
+                // gaps afresh.
+                if (!m_txWatchdog->isWatching(writer)) {
+                    m_controlLog.keepaliveWatchStarted(writer);
+                }
                 m_txWatchdog->setVoxArmed(writer, true);
             }
             emit voxArmedByChanged(writer);
@@ -8601,202 +8641,56 @@ void StationServer::send(SessionTransport* transport, const SessionMessage& mess
     transport->sendText(encodeFor(transport, message));
 }
 
-namespace {
-
-// Control logging lane: at most this many writes and commands wait for
-// their answers per device; past it, those older than a minute go.
-constexpr int kControlPendingLimit = 256;
-constexpr qint64 kControlPendingStaleMs = 60000;
-
-// A device as the control log names it: its id in hex, as the transmit
-// lines do.
-QString controlLogDevice(const QByteArray& sessionDeviceId, const QByteArray& deviceId)
+ControlLog::PeerInfo StationServer::controlLogPeer(const Peer& peer)
 {
-    const QByteArray& id = !sessionDeviceId.isEmpty() ? sessionDeviceId : deviceId;
-    return id.isEmpty() ? QStringLiteral("a device not signed in")
-                        : QString::fromLatin1(id.toHex());
-}
-
-QByteArray controlLogName(const SessionMessage& message)
-{
-    return message.kind == SessionMessageKind::CommandInvoke ? message.commandVerb
-                                                             : SessionMessages::kindName(message.kind);
-}
-
-// A write and its answer share their writeId; a command and its answer
-// share their commandId.
-quint64 controlPendingKey(const SessionMessage& message)
-{
-    const bool write = message.kind == SessionMessageKind::PropertyWrite
-        || message.kind == SessionMessageKind::PropertyResult;
-    return write ? ((quint64(1) << 32) | message.writeId) : quint64(message.commandId);
-}
-
-QString controlLogClockTime()
-{
-    return QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"));
-}
-
-} // namespace
-
-qint64 StationServer::controlLogNow() const
-{
-    return m_controlLogNowForTest ? m_controlLogNowForTest() : m_controlLogClock.elapsed();
+    ControlLog::PeerInfo info;
+    info.deviceId = peer.sessionDeviceId.isEmpty() ? peer.deviceId : peer.sessionDeviceId;
+    info.signedIn = peer.authenticated;
+    info.introduced = peer.introduced;
+    info.mediaTunnel = peer.mediaTunnel.get();
+    return info;
 }
 
 void StationServer::noteControlIn(SessionTransport* transport, const SessionMessage& message)
 {
-    const auto it = m_peers.find(transport);
-    if (it == m_peers.end()) {
-        return;
-    }
-    const qint64 now = controlLogNow();
-    const QByteArray name = controlLogName(message);
-    const QString device = controlLogDevice(it->sessionDeviceId, it->deviceId);
-
-    // The gap since this device's last control message, rate-limited.
-    if (it->lastControlInMs >= 0 && now - it->lastControlInMs >= kControlGapLogMs) {
-        const qint64 gap = now - it->lastControlInMs;
-        if (it->controlGapWindowStartMs < 0
-            || now - it->controlGapWindowStartMs >= kControlGapWindowMs) {
-            it->controlGapWindowStartMs = now;
-            it->controlGapLinesInWindow = 0;
-        }
-        if (it->controlGapLinesInWindow < kControlGapLinesPerWindow) {
-            ++it->controlGapLinesInWindow;
-            const int dropped = std::exchange(it->controlGapLinesDropped, 0);
-            qCInfo(lcStation).noquote()
-                << QStringLiteral("Control gap from %1: %2 ms between %3 and %4, %5 bytes "
-                                  "waiting in the control channel's send buffer%6")
-                       .arg(device)
-                       .arg(gap)
-                       .arg(QString::fromUtf8(it->lastControlInName), QString::fromUtf8(name))
-                       .arg(transport->backlogBytes())
-                       .arg(dropped > 0
-                                ? QStringLiteral(" (%1 more gaps not logged)").arg(dropped)
-                                : QString());
-        } else {
-            ++it->controlGapLinesDropped;
-        }
-    }
-    it->lastControlInMs = now;
-    it->lastControlInName = name;
-
-    // One line per write and command from a signed-in device. The transmit
-    // keepalive (ten a second while keyed) is left to the gap line.
-    if (!it->authenticated || it->heldSerial != 0) {
-        return;
-    }
-    const bool write = message.kind == SessionMessageKind::PropertyWrite;
-    const bool command = message.kind == SessionMessageKind::CommandInvoke
-        && message.commandVerb != "tx.keepalive";
-    if (!write && !command) {
-        return;
-    }
-    if (it->controlLineWindowStartMs < 0
-        || now - it->controlLineWindowStartMs >= kControlLineWindowMs) {
-        const int dropped = std::exchange(it->controlLinesDropped, 0);
-        if (dropped > 0) {
-            qCInfo(lcStation).noquote()
-                << QStringLiteral("Control log for %1: %2 control messages and their "
-                                  "answers not logged (over %3 a second)")
-                       .arg(device)
-                       .arg(dropped)
-                       .arg(kControlLinesPerSecond);
-        }
-        it->controlLineWindowStartMs = now;
-        it->controlLinesInWindow = 0;
-    }
-    const bool logged = it->controlLinesInWindow < kControlLinesPerSecond;
-    if (logged) {
-        ++it->controlLinesInWindow;
-    } else {
-        ++it->controlLinesDropped;
-    }
-    // A write with writeId 0 is never answered.
-    if (command || message.writeId != 0) {
-        if (it->controlPending.size() >= kControlPendingLimit) {
-            for (auto pending = it->controlPending.begin(); pending != it->controlPending.end();) {
-                pending = now - pending->receivedMs >= kControlPendingStaleMs
-                    ? it->controlPending.erase(pending)
-                    : std::next(pending);
-            }
-            if (it->controlPending.size() >= kControlPendingLimit) {
-                it->controlPending.clear();
-            }
-        }
-        it->controlPending.insert(controlPendingKey(message),
-                                  ControlPending{now, message.commandVerb, logged});
-    }
-    if (!logged) {
-        return;
-    }
-    if (write) {
-        QStringList properties;
-        for (const MirrorUpdate& update : message.updates) {
-            properties.append(QString::fromUtf8(update.name));
-        }
-        qCInfo(lcStation).noquote()
-            << QStringLiteral("Control in from %1: property.write %2 %3, write %4, received %5")
-                   .arg(device, QString::fromUtf8(message.objectKey), properties.join(u','))
-                   .arg(message.writeId)
-                   .arg(controlLogClockTime());
-    } else {
-        qCInfo(lcStation).noquote()
-            << QStringLiteral("Control in from %1: command.invoke %2, command %3, received %4")
-                   .arg(device, QString::fromUtf8(message.commandVerb))
-                   .arg(message.commandId)
-                   .arg(controlLogClockTime());
+    const auto it = m_peers.constFind(transport);
+    if (it != m_peers.cend()) {
+        m_controlLog.inbound(transport, controlLogPeer(*it), message);
     }
 }
 
 void StationServer::logControlResult(SessionTransport* transport, const SessionMessage& message)
 {
-    const bool write = message.kind == SessionMessageKind::PropertyResult;
-    if (!write && message.kind != SessionMessageKind::CommandResult) {
-        return;
+    const auto it = m_peers.constFind(transport);
+    if (it != m_peers.cend()) {
+        m_controlLog.answer(transport, controlLogPeer(*it), message);
     }
-    const auto it = m_peers.find(transport);
-    if (it == m_peers.end()) {
-        return;
+}
+
+SessionTransport* StationServer::controlTransportForDevice(const QByteArray& deviceId) const
+{
+    if (deviceId.isEmpty()) {
+        return nullptr;
     }
-    const auto pending = it->controlPending.find(controlPendingKey(message));
-    if (pending == it->controlPending.end()
-        || (!write && pending->verb != message.commandVerb)) {
-        return;
-    }
-    const ControlPending entry = *pending;
-    it->controlPending.erase(pending);
-    if (!entry.logged) {
-        return;
-    }
-    const qint64 handledMs = controlLogNow() - entry.receivedMs;
-    const QString device = controlLogDevice(it->sessionDeviceId, it->deviceId);
-    if (write) {
-        QStringList refused;
-        for (const SessionPropertyResult& result : message.propertyResults) {
-            if (!result.accepted) {
-                refused.append(QString::fromUtf8(result.property) + QStringLiteral(": ")
-                               + result.reason);
-            }
+    for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
+        if (it->sessionDeviceId == deviceId) {
+            return it.key();
         }
-        qCInfo(lcStation).noquote()
-            << QStringLiteral("Control out to %1: property.result %2, write %3, %4, handled in %5 ms")
-                   .arg(device, QString::fromUtf8(message.objectKey))
-                   .arg(message.writeId)
-                   .arg(refused.isEmpty() ? QStringLiteral("accepted")
-                                          : QStringLiteral("refused (%1)")
-                                                .arg(refused.join(QStringLiteral("; "))))
-                   .arg(handledMs);
-        return;
     }
-    qCInfo(lcStation).noquote()
-        << QStringLiteral("Control out to %1: command.result %2, command %3, %4, handled in %5 ms")
-               .arg(device, QString::fromUtf8(message.commandVerb))
-               .arg(message.commandId)
-               .arg(message.accepted ? QStringLiteral("accepted")
-                                     : QStringLiteral("refused (%1)").arg(message.reason))
-               .arg(handledMs);
+    return nullptr;
+}
+
+void StationServer::controlLogKeepalive(const QByteArray& deviceId,
+                                        ControlLog::KeepaliveChannel channel, qint64 ageMs,
+                                        bool watched)
+{
+    SessionTransport* const transport = controlTransportForDevice(deviceId);
+    ControlLog::PeerInfo info;
+    info.deviceId = deviceId;
+    if (transport != nullptr) {
+        info = controlLogPeer(*m_peers.constFind(transport));
+    }
+    m_controlLog.keepalive(deviceId, channel, ageMs, watched, transport, info);
 }
 
 bool StationServer::peerSeesPairingCode(SessionTransport* transport) const
@@ -9731,6 +9625,10 @@ void StationServer::followKeyedForWatchdog()
     }
     if (remoteKey) {
         m_watchedKeyedDevice = keyedBy.deviceId;
+        // Control logging lane: a new watch measures keepalive gaps afresh.
+        if (!m_txWatchdog->isWatching(keyedBy.deviceId)) {
+            m_controlLog.keepaliveWatchStarted(keyedBy.deviceId);
+        }
         // A VOX key was never answered to the device, so it has no epoch
         // of it: any epoch counts.
         m_txWatchdog->setKeyed(keyedBy.deviceId, true,
@@ -9778,8 +9676,12 @@ void StationServer::txChannelMessage(quint64 mediaEpoch, const QByteArray& messa
     if (deviceId.isEmpty()) {
         return;
     }
+    // Control logging lane: logged after, as it was watched.
+    const bool watched = m_txWatchdog->isWatching(deviceId);
     m_txWatchdog->keepalive(deviceId, sequence, epoch, RemoteTxWatchdog::Path::TxChannel,
                             std::max<qint64>(0, heldUs) / 1000);
+    controlLogKeepalive(deviceId, ControlLog::KeepaliveChannel::MediaTx,
+                        std::max<qint64>(0, heldUs) / 1000, watched);
 }
 
 void StationServer::remoteMicStarved(const QByteArray& deviceId, bool starved)
@@ -12139,6 +12041,8 @@ void StationServer::handlePathJoin(SessionTransport* transport, const SessionMes
         return;
     }
     disconnect(joiningSwitchableGuard, nullptr, this, nullptr);
+    // Control logging lane: its skipped counts and folded answers.
+    m_controlLog.closed(transport, controlLogPeer(*joining));
     m_peers.erase(joining);
     joiningSwitchableGuard->deleteLater();
     const bool started = connectionGuard

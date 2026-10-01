@@ -45,6 +45,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 18 (R-IOS-08):
 //                                    peerCertificateSha256(). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-10-01  J.J. Boyd / KG4VCF  Control logging lane: linkDiagnostics()
+//                                    and deliveringMessageWaitUs(), read
+//                                    for the Core's log only. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -68,6 +72,32 @@ struct SessionTransportTelemetry {
     quint64 acceptedPayloadBytes = 0;
     std::optional<quint64> pongRttMs;
     std::optional<qint64> pongAgeMs;
+};
+
+// Control logging lane: what a transport can say about its own link, read
+// on its owner thread for the Core's log only. Nothing here changes a
+// socket option or what is sent.
+struct SessionLinkDiagnostics {
+    enum class Buffer {
+        /// A transport that does not say what its backlog is.
+        Unknown,
+        /// A data channel's bufferedAmount (bytes the SCTP stack holds).
+        DataChannel,
+        /// Bytes Qt holds for a WebSocket's TCP socket, not yet written to
+        /// the kernel.
+        WebSocket,
+    };
+    Buffer buffer = Buffer::Unknown;
+    qint64 bufferedBytes = 0;
+    /// TCP_NODELAY as the socket has it, where there is a TCP socket.
+    std::optional<bool> noDelay;
+    /// A data channel's SCTP round-trip estimate.
+    std::optional<quint32> sctpRttMs;
+    // The kernel's TCP figures (Linux only).
+    std::optional<quint32> tcpRttUs;
+    std::optional<quint32> tcpUnacked;
+    std::optional<quint32> tcpRetransmits;
+    std::optional<quint32> tcpNotSentBytes;
 };
 
 class SessionTransport : public QObject {
@@ -140,6 +170,21 @@ public:
     /// tunnel writes only while little waits, as the web relay's leg).
     virtual qint64 backlogBytes() const { return 0; }
 
+    /// Control logging lane: the link's buffers and, where there is one,
+    /// its TCP socket's figures. For the log only.
+    virtual SessionLinkDiagnostics linkDiagnostics() const
+    {
+        SessionLinkDiagnostics link;
+        link.bufferedBytes = backlogBytes();
+        return link;
+    }
+    /// Control logging lane: while textReceived() is being emitted, how
+    /// long (microseconds) the message waited between the transport's
+    /// receipt of it off the network and its delivery on this thread.
+    /// Absent where the transport reads on this thread (no separate
+    /// receipt) or does not measure it. For the log only.
+    virtual std::optional<qint64> deliveringMessageWaitUs() const { return std::nullopt; }
+
 signals:
     void textReceived(const QByteArray& wire);
     /// Step 2b: one binary message (sendBinary()).
@@ -195,6 +240,7 @@ public:
     bool sendBinary(const QByteArray& message) override;
     bool carriesBinary() const override { return true; }
     qint64 backlogBytes() const override;
+    SessionLinkDiagnostics linkDiagnostics() const override;
 
     QWebSocket* socket() const { return m_socket; }
 

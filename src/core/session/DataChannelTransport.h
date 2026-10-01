@@ -76,6 +76,9 @@
 //               implementation via OpenAI Codex for J.J. Boyd (KG4VCF).
 //   2026-10-01: lingerTargetExistsForTest(). J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Control logging lane: linkDiagnostics() and
+//               deliveringMessageWaitUs(), for the Core's log only. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -324,6 +327,8 @@ public:
     QByteArray peerCertificateSha256() const override;
     std::optional<SessionTransportTelemetry> telemetry() const override;
     std::optional<NetworkPathSnapshot> networkPathSnapshot() const override;
+    SessionLinkDiagnostics linkDiagnostics() const override;
+    std::optional<qint64> deliveringMessageWaitUs() const override { return m_deliveringWaitUs; }
 
     // ---- Test seams ----
 
@@ -444,6 +449,8 @@ private:
     QList<QByteArray> m_held;
     quint64 m_heldBytes = 0;
     bool m_heldDeliveryPosted = false;
+    /// Control logging lane: set only while textReceived() is emitted.
+    std::optional<qint64> m_deliveringWaitUs;
 };
 
 } // namespace NereusSDR

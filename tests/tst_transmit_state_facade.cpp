@@ -28,7 +28,8 @@
 //      it keeps the last stop.
 //  10. Control logging lane: an unkey logs one line with the key's
 //      leveler, leveler gain, ALC, ALC gain and compression peaks from the
-//      readings the pump took, "none" for a reading it did not have.
+//      readings the pump took, "none" for a reading it did not have; a
+//      second key's peaks start fresh.
 //
 // Through the Core (StationServer, over the loopback):
 //  10. Only a device whose hello declared remoteTx gets txStateVersion and
@@ -72,6 +73,9 @@
 //               send ring, on Protocol 1 and Protocol 2. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-10-01: Control logging lane: the unkey's stage peaks line, and a
+//               second key's peaks start fresh. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -496,6 +500,32 @@ private slots:
         // The next unkey with no key between logs nothing more.
         rig.unkey();
         QCOMPARE(log.lines().size(), 1);
+
+        // A second key's peaks start fresh: lower readings than the first
+        // key's are its peaks, and the ALC gain it reads shows.
+        rig.state.meterPump()->setSource([&reads]() {
+            ++reads;
+            TxMeterReadings r;
+            r.levelerDb = -30.0;
+            r.levelerGainDb = 2.0;
+            r.alcDb = -3.0;
+            r.alcGainDb = 1.0;
+            r.compressionDb = 0.5;
+            return r;
+        });
+        reads = 0;
+        rig.key();
+        for (int i = 0; i < 2; ++i) {
+            tickMeters(rig.state);
+        }
+        rig.unkey();
+        QVERIFY(reads >= 3);
+        QCOMPARE(log.lines().size(), 2);
+        QCOMPARE(log.lines().last(),
+                 QStringLiteral("TX stage peaks for key 2 (%1 readings): leveler -30.0 dB, "
+                                "leveler gain 2.0 dB, ALC -3.0 dB, ALC gain 1.0 dB, compression "
+                                "0.5 dB")
+                     .arg(reads));
     }
 
     void unkeyedOnlyAChangeOfTheRadiosPowerIsSent()

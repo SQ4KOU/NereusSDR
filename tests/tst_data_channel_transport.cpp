@@ -34,6 +34,11 @@
 //               implementation via Anthropic Claude Code.
 //   2026-09-27: real transmit-watch peer, candidate and frame tests;
 //               AI-assisted via OpenAI Codex for J.J. Boyd (KG4VCF).
+//   2026-10-01: Control logging lane: a delivered message's wait since
+//               its receipt is readable while it is delivered, and only
+//               then; the link's diagnostics name the data channel's
+//               buffer. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 //   2026-09-28: watch peers through two actual RelayLegs and a local WSS
 //               relay player; AI-assisted via OpenAI Codex for J.J. Boyd.
 // =================================================================
@@ -938,6 +943,31 @@ private slots:
         // On one computer the far end has an address of its own.
         QVERIFY(!pair.answerer->peerAddress().isEmpty());
         QVERIFY(pair.offerer->telemetry().has_value());
+    }
+
+    // Control logging lane: while a message is delivered the transport
+    // says how long it waited since the library's thread received it; the
+    // wait is gone once the delivery returns. Measurement only.
+    void aDeliveredMessageCarriesItsWaitSinceReceipt()
+    {
+        OpenPair pair;
+        QVERIFY(pair.open());
+        QVERIFY(!pair.answerer->deliveringMessageWaitUs().has_value());
+        std::optional<qint64> seen;
+        bool delivered = false;
+        DataChannelTransport* const core = pair.answerer.get();
+        connect(core, &SessionTransport::textReceived, this, [&](const QByteArray&) {
+            seen = core->deliveringMessageWaitUs();
+            delivered = true;
+        });
+        pair.offerer->sendText(QByteArrayLiteral("{\"type\":\"hello\"}"));
+        QTRY_VERIFY(delivered);
+        QVERIFY(seen.has_value());
+        QVERIFY(*seen >= 0);
+        QVERIFY(!core->deliveringMessageWaitUs().has_value());
+        const SessionLinkDiagnostics link = core->linkDiagnostics();
+        QCOMPARE(link.buffer, SessionLinkDiagnostics::Buffer::DataChannel);
+        QVERIFY(!link.noDelay.has_value());
     }
 
     // R-R3-49: on a busy computer the connection failed with "DTLS alert:
