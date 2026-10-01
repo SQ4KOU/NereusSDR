@@ -163,7 +163,7 @@ public:
     bool pairingWindowOpen() const { return m_state.pairingWindowOpen; }
     QString pairingCode() const { return m_state.pairingCode; }
     /// Where a device can dial this Core, as compact JSON
-    /// {"addresses":["[2001:db8::5]:47910","44.31.0.7:47910"]}
+    /// {"addresses":["[2001:db8::5]:47910","203.0.113.7:47910"]}
     /// (CoreAddresses::toJson); an empty list while the Core does not
     /// listen or has no stable global address.
     QString coreAddresses() const { return m_coreAddresses; }
