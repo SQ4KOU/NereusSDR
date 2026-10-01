@@ -9,6 +9,17 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling fix round 2: a
+//                                    cancelled edit falls back to its
+//                                    write in flight (whose answer then
+//                                    applies), else to the delta's value,
+//                                    else to the last value the Core sent
+//                                    (m_coreValues); unsent edits step
+//                                    back before a delta's setters run, so
+//                                    a cancelled edge is never saved as a
+//                                    LastFilter; a sibling behind the same
+//                                    notifier is cancelled with it. AI-
+//                                    assisted via Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling fix round 1: a delta
 //                                    whose side effect moves an edit the
 //                                    window has not sent cancels that edit
@@ -1001,8 +1012,22 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
                     if (propertyResultsAvailable()) {
                         // The operator's value, held until the Core
                         // answers this write (restoreOperatorValues).
-                        m_pendingWrites[objectKey].insert(
-                            update.name, PendingWrite{0, update, m_nextPendingWriteOrder++});
+                        // A write of it already on its way stays known
+                        // (inFlightWriteId), so a delta that cancels
+                        // this newer edit can fall back to it.
+                        auto& writes = m_pendingWrites[objectKey];
+                        PendingWrite next{0, update, m_nextPendingWriteOrder++, 0, MirrorUpdate{}};
+                        if (const auto previous = writes.constFind(update.name);
+                            previous != writes.cend()) {
+                            if (previous->writeId != 0) {
+                                next.inFlightWriteId = previous->writeId;
+                                next.inFlightValue = previous->value;
+                            } else {
+                                next.inFlightWriteId = previous->inFlightWriteId;
+                                next.inFlightValue = previous->inFlightValue;
+                            }
+                        }
+                        writes.insert(update.name, next);
                     }
                 }
             });
@@ -2154,6 +2179,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     }
     m_forwardLocalChanges = false;
     m_pendingWrites.clear();
+    m_coreValues.clear();
     // Desktop remote transmit: the Core unkeys this device when the link
     // drops and never keys it again by itself; nothing of it is kept.
     refreshRemoteTransmit();
@@ -4091,6 +4117,7 @@ void StationClient::handleObjectDestroy(const SessionMessage& message)
     const int sliceId = idFromKey(message.objectKey, kSliceKeyPrefix);
     m_objects.remove(message.objectKey);
     m_pendingWrites.remove(message.objectKey);
+    m_coreValues.remove(message.objectKey);
     m_outboundMirror->unwatch(message.objectKey);
     if (sliceId >= 0 && !m_radioModel.isNull()) {
         InboundGuard guard(m_applyingInbound);
@@ -4138,6 +4165,10 @@ void StationClient::handleDelta(const SessionMessage& message)
         }
     }
     applyUpdates(target, message.objectKey, current, SideEffectRule::Delta, held);
+    // What the Core holds, applied or not: a later cancel falls back to it.
+    for (const auto& value : held) {
+        m_coreValues[message.objectKey].insert(value.name, value);
+    }
 }
 
 void StationClient::handlePropertyResult(const SessionMessage& message)
@@ -4155,6 +4186,18 @@ void StationClient::handlePropertyResult(const SessionMessage& message)
     for (const auto& result : message.propertyResults) {
         if (!pending->contains(result.property)
             || pending->value(result.property).writeId != message.writeId) {
+            // The answer to a write a newer unsent edit has superseded:
+            // that edit still wins, but the write is no longer on its way,
+            // and its value is now what the Core holds.
+            auto superseded = pending->find(result.property);
+            if (superseded != pending->end() && superseded->writeId == 0
+                && superseded->inFlightWriteId == message.writeId) {
+                superseded->inFlightWriteId = 0;
+                superseded->inFlightValue = MirrorUpdate{};
+                if (result.hasValue) {
+                    m_coreValues[message.objectKey].insert(result.property, result.value);
+                }
+            }
             continue;
         }
         pending->remove(result.property);
@@ -4195,9 +4238,22 @@ void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
     // suppressed too.
     InboundGuard guard(m_applyingInbound);
 
+    // A delta may cancel an unsent edit on this object (see
+    // restoreOperatorValues). Before its setters run, each unsent edit
+    // steps back to what the window last had from the Core (or to its
+    // write still in flight), so a side effect never saves an edit that
+    // may be cancelled: SliceModel::setDspMode stores the current edges
+    // as the old mode's LastFilter. `baselines` is what each one read
+    // after that step; moving away from it is the side effect.
+    QHash<QByteArray, QVariant> baselines;
+    if (rule == SideEffectRule::Delta) {
+        baselines = stepBackUnsentEdits(target, objectKey);
+    }
+
     QSet<QByteArray> applied;
     for (const MirrorUpdate& update : updates) {
         applied.insert(update.name);
+        m_coreValues[objectKey].insert(update.name, update);
         const MirrorProperty* prop = schema.byName(update.name);
         if (prop == nullptr) {
             // A property this build does not declare. Already recorded by
@@ -4223,13 +4279,42 @@ void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
 
     // Still under the guard: putting the operator's values back is not a
     // change of theirs to send again.
-    restoreOperatorValues(objectKey, applied, rule, heldValues);
+    restoreOperatorValues(objectKey, applied, rule, heldValues, baselines);
+}
+
+QHash<QByteArray, QVariant> StationClient::stepBackUnsentEdits(QObject* target,
+                                                               const QByteArray& objectKey)
+{
+    QHash<QByteArray, QVariant> baselines;
+    const auto writes = m_pendingWrites.constFind(objectKey);
+    if (writes == m_pendingWrites.cend()) {
+        return baselines;
+    }
+    const MirrorSchema& schema = MirrorSchema::forObject(target);
+    const auto core = m_coreValues.value(objectKey);
+    for (auto write = writes->cbegin(); write != writes->cend(); ++write) {
+        if (write->writeId != 0) {
+            continue;
+        }
+        const MirrorProperty* prop = schema.byName(write.key());
+        if (prop == nullptr) {
+            continue;
+        }
+        if (write->inFlightWriteId != 0) {
+            applyOne(target, *prop, write->inFlightValue);
+        } else if (core.contains(write.key())) {
+            applyOne(target, *prop, core.value(write.key()));
+        }
+        baselines.insert(write.key(), schema.read(*prop, target));
+    }
+    return baselines;
 }
 
 void StationClient::restoreOperatorValues(const QByteArray& appliedKey,
                                           const QSet<QByteArray>& applied,
                                           SideEffectRule rule,
-                                          const QList<MirrorUpdate>& heldValues)
+                                          const QList<MirrorUpdate>& heldValues,
+                                          const QHash<QByteArray, QVariant>& baselines)
 {
     // The guard suppresses the observer, not the change. A Core value a
     // setter applies can move a DIFFERENT property as a side effect
@@ -4251,9 +4336,10 @@ void StationClient::restoreOperatorValues(const QByteArray& appliedKey,
     // console.cs:34513 [v2.10.3.15]) and SetRX1Filter saves the edges as
     // the current mode's (console.cs:34766-34768 [v2.10.3.15]), so an
     // old mode's edge has no place in the new mode. The hold and its
-    // coalesced write are dropped and the delta's own value applies. An
-    // edit already sent is still put back: the Core applies that write
-    // after its own change, and the window shows what it will hold.
+    // coalesced write are dropped and the Core's value applies (see
+    // cancelUnsentEdit). An edit already sent is still put back: the
+    // Core applies that write after its own change, and the window shows
+    // what it will hold.
     struct Held {
         quint64 order;
         QByteArray key;
@@ -4267,6 +4353,7 @@ void StationClient::restoreOperatorValues(const QByteArray& appliedKey,
     }
     std::sort(held.begin(), held.end(),
               [](const Held& a, const Held& b) { return a.order < b.order; });
+    QSet<int> cancelledNotifiers;
     for (const Held& h : held) {
         QObject* object = m_objects.value(h.key).data();
         auto writes = m_pendingWrites.find(h.key);
@@ -4290,27 +4377,97 @@ void StationClient::restoreOperatorValues(const QByteArray& appliedKey,
             write->value.value = live;
             continue;
         }
-        if (live == write->value.value) {
-            continue;
-        }
         if (rule == SideEffectRule::Delta && write->writeId == 0) {
-            writes->erase(write);
-            if (writes->isEmpty()) {
-                m_pendingWrites.erase(writes);
-            }
-            m_outboundCoalescer.remove(h.key, prop->ordinal);
-            if (h.key == appliedKey) {
-                for (const MirrorUpdate& value : heldValues) {
-                    if (value.name == h.name) {
-                        applyOne(object, *prop, value);
-                        break;
-                    }
+            // Moved means moved by this delta: away from where the edit
+            // was stepped back to (stepBackUnsentEdits), or, on another
+            // object, away from the operator's value.
+            const bool stepped = h.key == appliedKey && baselines.contains(h.name);
+            const QVariant before = stepped ? baselines.value(h.name) : write->value.value;
+            if (live != before) {
+                if (h.key == appliedKey) {
+                    cancelledNotifiers.insert(prop->notifyMethodIndex);
                 }
+                cancelUnsentEdit(h.key, object, *prop,
+                                 h.key == appliedKey ? heldValues : QList<MirrorUpdate>{});
+                continue;
             }
+        }
+        if (live == write->value.value) {
             continue;
         }
         const MirrorUpdate operatorValue = write->value;
         applyOne(object, *prop, operatorValue);
+    }
+
+    // Properties behind one notifier move together (filterChanged names
+    // both edges). When the delta cancelled one, an unsent edit of a
+    // sibling the delta carried is cancelled too, even where its value
+    // happened not to move: the old mode's edge must not be sent into
+    // the new mode.
+    if (cancelledNotifiers.isEmpty()) {
+        return;
+    }
+    QObject* object = m_objects.value(appliedKey).data();
+    const auto writes = m_pendingWrites.value(appliedKey);
+    if (object == nullptr || writes.isEmpty()) {
+        return;
+    }
+    const MirrorSchema& schema = MirrorSchema::forObject(object);
+    for (auto write = writes.cbegin(); write != writes.cend(); ++write) {
+        if (write->writeId != 0) {
+            continue;
+        }
+        const MirrorProperty* prop = schema.byName(write.key());
+        if (prop == nullptr || !cancelledNotifiers.contains(prop->notifyMethodIndex)) {
+            continue;
+        }
+        const bool carried = std::any_of(heldValues.cbegin(), heldValues.cend(),
+                                         [&](const MirrorUpdate& v) { return v.name == write.key(); });
+        if (carried) {
+            cancelUnsentEdit(appliedKey, object, *prop, heldValues);
+        }
+    }
+}
+
+void StationClient::cancelUnsentEdit(const QByteArray& objectKey, QObject* object,
+                                     const MirrorProperty& prop,
+                                     const QList<MirrorUpdate>& heldValues)
+{
+    auto writes = m_pendingWrites.find(objectKey);
+    if (writes == m_pendingWrites.end()) {
+        return;
+    }
+    auto write = writes->find(prop.name);
+    if (write == writes->end()) {
+        return;
+    }
+    m_outboundCoalescer.remove(objectKey, prop.ordinal);
+    if (write->inFlightWriteId != 0) {
+        // An earlier write of this property is still on its way. Back to
+        // that state: its value shows and its answer applies, so the
+        // window ends where the Core does (the Core excludes the writer
+        // from its own change).
+        write->writeId = write->inFlightWriteId;
+        write->value = write->inFlightValue;
+        write->inFlightWriteId = 0;
+        write->inFlightValue = MirrorUpdate{};
+        applyOne(object, prop, write->value);
+        return;
+    }
+    writes->erase(write);
+    if (writes->isEmpty()) {
+        m_pendingWrites.erase(writes);
+    }
+    // The delta's own value for it, else the last value the Core sent.
+    for (const MirrorUpdate& value : heldValues) {
+        if (value.name == prop.name) {
+            applyOne(object, prop, value);
+            return;
+        }
+    }
+    const auto core = m_coreValues.value(objectKey);
+    if (core.contains(prop.name)) {
+        applyOne(object, prop, core.value(prop.name));
     }
 }
 
@@ -4774,10 +4931,12 @@ void StationClient::onWriteFlushTick()
                     auto entry = writes.find(update.name);
                     if (entry == writes.end()) {
                         writes.insert(update.name,
-                                      PendingWrite{writeId, update, m_nextPendingWriteOrder++});
+                                      PendingWrite{writeId, update, m_nextPendingWriteOrder++, 0, MirrorUpdate{}});
                     } else {
                         entry->writeId = writeId;
                         entry->value = update;
+                        entry->inFlightWriteId = 0;
+                        entry->inFlightValue = MirrorUpdate{};
                     }
                 }
             }

@@ -447,6 +447,10 @@
 //               moves an UNSENT edit cancels it (SideEffectRule::Delta),
 //               following Thetis's per-mode filter edges. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: inbound sibling fix round 2: m_coreValues (the last value
+//               the Core sent), stepBackUnsentEdits, cancelUnsentEdit, and
+//               PendingWrite's in-flight write. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -1833,7 +1837,21 @@ private:
     void restoreOperatorValues(const QByteArray& appliedKey,
                                const QSet<QByteArray>& applied,
                                SideEffectRule rule,
-                               const QList<MirrorUpdate>& heldValues);
+                               const QList<MirrorUpdate>& heldValues,
+                               const QHash<QByteArray, QVariant>& baselines);
+    /// Before a delta's setters run: every unsent edit on `objectKey`
+    /// steps back to its write in flight, else to the last value the
+    /// Core sent, so a side effect never saves an edit the delta may
+    /// cancel. Returns what each one read after the step.
+    QHash<QByteArray, QVariant> stepBackUnsentEdits(QObject* target,
+                                                    const QByteArray& objectKey);
+    /// Cancels the unsent edit of `prop`: its coalesced write goes, and
+    /// either its write in flight comes back (value and writeId, so that
+    /// write's answer applies) or the hold ends and the delta's value
+    /// (`heldValues`), else the last value the Core sent, applies.
+    void cancelUnsentEdit(const QByteArray& objectKey, QObject* object,
+                          const MirrorProperty& prop,
+                          const QList<MirrorUpdate>& heldValues);
     bool applyOne(QObject* target, const MirrorProperty& prop, const MirrorUpdate& update);
 
     /// Client-side adapter for daemon-to-client-only properties whose
@@ -2038,15 +2056,24 @@ private:
     /// its most recent sent batch. Both protect the value from an older
     /// answer. `value` is the operator's value (what the observer read
     /// when the property went dirty, then what the flush sent); `order`
-    /// is when the operator last changed it.
+    /// is when the operator last changed it. An unsent edit made while
+    /// an earlier write of the same property was still on its way keeps
+    /// that write's id and value (inFlightWriteId, inFlightValue) until
+    /// its answer arrives or the edit is sent.
     struct PendingWrite {
         quint32 writeId = 0;
         MirrorUpdate value;
         quint64 order = 0;
+        quint32 inFlightWriteId = 0;
+        MirrorUpdate inFlightValue;
     };
     /// Object key -> property name -> its pending write.
     QHash<QByteArray, QHash<QByteArray, PendingWrite>> m_pendingWrites;
     quint64 m_nextPendingWriteOrder = 1;
+    /// Object key -> property name -> the last value the Core sent for
+    /// it (object.create, delta, or a result's value). A delta that
+    /// cancels an unsent edit without carrying the property applies it.
+    QHash<QByteArray, QHash<QByteArray, MirrorUpdate>> m_coreValues;
 
     /// What each in-flight command was about, keyed by the commandId the
     /// station echoes back. A CommandResult carries the verb but no slice

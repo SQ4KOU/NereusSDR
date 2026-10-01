@@ -11,6 +11,7 @@
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
 #include "core/settings/SettingsProxyServer.h"
+#include "models/Band.h"
 #include "models/RadioModel.h"
 #include "models/PureSignalSettings.h"
 #include "models/SliceModel.h"
@@ -63,6 +64,26 @@ int propertyWrites(const QSignalSpy& sent)
     }
     return count;
 }
+// A Core with one USB slice and a window on it, write flush paused.
+struct SliceSession {
+    QTemporaryDir security;
+    RadioModel station;
+    SliceModel* coreSlice = nullptr;
+    std::unique_ptr<StationServer> server;
+    RadioModel gui{RadioModel::Role::Remote};
+    SettingsProxy proxy;
+    std::unique_ptr<StationClient> client;
+    LoopbackTransport* guiEnd = nullptr;
+    SliceModel* slice = nullptr;
+};
+// The per-(band, mode) LastFilter key prefix SliceModel::setDspMode uses.
+QString lastFilterPrefix(const SliceModel* slice, DSPMode mode)
+{
+    return QStringLiteral("Slice%1/Band%2/Mode%3/")
+        .arg(slice->sliceIndex())
+        .arg(bandKeyName(bandFromFrequency(slice->frequency())))
+        .arg(SliceModel::modeName(mode));
+}
 MirrorUpdate real(const char* name, double value)
 {
     return {0, name, MirrorWireKind::Float64, value};
@@ -71,6 +92,34 @@ MirrorUpdate real(const char* name, double value)
 
 class TestSessionPropertyResult : public QObject {
     Q_OBJECT
+private:
+    void startSliceSession(SliceSession& s)
+    {
+        QVERIFY(s.security.isValid());
+        s.station.setBoardForTest(HPSDRHW::HermesLite);
+        RadioInfo info;
+        info.macAddress = "AA:BB:CC:DD:EE:01";
+        info.boardType = HPSDRHW::HermesLite;
+        s.station.setLastRadioInfoForTest(info);
+        const int id = s.station.addSlice();
+        s.coreSlice = s.station.sliceById(id);
+        s.coreSlice->setDspMode(DSPMode::USB);
+        s.server = std::make_unique<StationServer>(
+            &s.station, AppSettings::instance(),
+            NereusSDR::Test::seedUpgradedCoreToken(s.security.path()));
+        s.client = std::make_unique<StationClient>(&s.gui, &s.proxy);
+        auto* coreEnd = new HoldingTransport;
+        s.guiEnd = new LoopbackTransport("gui");
+        coreEnd->linkTo(s.guiEnd);
+        s.client->startSession(s.guiEnd, s.server->token());
+        s.server->acceptTransport(coreEnd);
+        QTRY_VERIFY(s.client->isHandshakeComplete());
+        s.slice = s.gui.sliceById(id);
+        QVERIFY(s.slice);
+        QCOMPARE(s.slice->dspMode(), DSPMode::USB);
+        s.client->pauseWriteFlushForTest();
+    }
+
 private slots:
     void initTestCase()
     {
@@ -466,6 +515,144 @@ private slots:
         QCOMPARE(propertyWrites(sent), 0);
         QCOMPARE(coreTx.lineInGain(), coreGain);
         QCOMPARE(coreTx.lineInBoost(), 6.0);
+    }
+
+    // Fix round 2, I1: the operator drags, the drag is sent (W1, still on
+    // its way), drags again (unsent), and then a Core mode change cancels
+    // the unsent drag. The window falls back to W1, whose answer applies,
+    // so the window ends where the Core is. The Core never sends its
+    // writer a correction of its own write.
+    void coreModeChangeAfterAReEditEndsWhereTheCoreIs()
+    {
+        SliceSession s;
+        startSliceSession(s);
+        if (QTest::currentTestFailed()) { return; }
+
+        const int firstLow = s.slice->filterLow() + 170;
+        s.slice->setFilterLow(firstLow);
+        s.guiEnd->setHoldsOutgoing(true);
+        s.client->flushWritesForTest();
+        s.slice->setFilterLow(firstLow + 50);
+
+        s.coreSlice->setDspMode(DSPMode::CWU);
+        QTRY_COMPARE(s.slice->dspMode(), DSPMode::CWU);
+        // W1 is what the window now shows and still holds.
+        QCOMPARE(s.slice->filterLow(), firstLow);
+
+        s.guiEnd->clearReceived();
+        s.guiEnd->setHoldsOutgoing(false);
+        QTRY_COMPARE(s.coreSlice->filterLow(), firstLow);
+        QTRY_VERIFY(s.guiEnd->receivedKinds().contains("property.result"));
+        QCOMPARE(s.slice->filterLow(), s.coreSlice->filterLow());
+        QCOMPARE(s.slice->filterHigh(), s.coreSlice->filterHigh());
+
+        QSignalSpy sent(s.guiEnd, &LoopbackTransport::outboundText);
+        s.client->flushWritesForTest();
+        QCOMPARE(propertyWrites(sent), 0);
+    }
+
+    // Fix round 2, I3: the delta that cancels the unsent edge carries an
+    // edge of its own that is not the window's CW memory. That value is
+    // what the window shows.
+    void coreModeChangeShowsTheDeltasOwnFilterEdge()
+    {
+        SliceSession s;
+        startSliceSession(s);
+        if (QTest::currentTestFailed()) { return; }
+
+        const int operatorLow = s.slice->filterLow() + 170;
+        s.slice->setFilterLow(operatorLow);
+
+        // Mode and edge change before the Core's flush: one delta.
+        s.coreSlice->setDspMode(DSPMode::CWU);
+        const int memoryLow = s.coreSlice->filterLow();
+        const int coreLow = memoryLow - 60;
+        QVERIFY(coreLow != operatorLow);
+        s.coreSlice->setFilterLow(coreLow);
+        QTRY_COMPARE(s.slice->dspMode(), DSPMode::CWU);
+
+        QCOMPARE(s.slice->filterLow(), coreLow);
+        QCOMPARE(s.slice->filterHigh(), s.coreSlice->filterHigh());
+        QSignalSpy sent(s.guiEnd, &LoopbackTransport::outboundText);
+        s.client->flushWritesForTest();
+        QCOMPARE(propertyWrites(sent), 0);
+        QCOMPARE(s.coreSlice->filterLow(), coreLow);
+    }
+
+    // Fix round 2, I2: the Core's edges do not change with its mode, so
+    // its delta carries none, and the window's own CW memory differs (as
+    // on another machine: here the shared store is rewritten between the
+    // Core's change and the window's). The window shows the Core's edges,
+    // and the cancelled edge is not saved as the window's USB memory.
+    void coreModeChangeWithoutEdgesShowsTheCoresEdges()
+    {
+        SliceSession s;
+        startSliceSession(s);
+        if (QTest::currentTestFailed()) { return; }
+        auto& settings = AppSettings::instance();
+        const QString usb = lastFilterPrefix(s.coreSlice, DSPMode::USB);
+        const QString cw = lastFilterPrefix(s.coreSlice, DSPMode::CWU);
+        const int usbLow = s.coreSlice->filterLow();
+        const int usbHigh = s.coreSlice->filterHigh();
+        // The Core's CW memory is its USB edges: its mode change moves none.
+        settings.setValue(cw + QStringLiteral("FilterLow"), usbLow);
+        settings.setValue(cw + QStringLiteral("FilterHigh"), usbHigh);
+
+        const int operatorLow = usbLow + 170;
+        s.slice->setFilterLow(operatorLow);
+
+        s.coreSlice->setDspMode(DSPMode::CWU);
+        QCOMPARE(s.coreSlice->filterLow(), usbLow);
+        QCOMPARE(s.coreSlice->filterHigh(), usbHigh);
+        // The window's own CW memory.
+        settings.setValue(cw + QStringLiteral("FilterLow"), usbLow + 300);
+        settings.setValue(cw + QStringLiteral("FilterHigh"), usbHigh + 300);
+        QTRY_COMPARE(s.slice->dspMode(), DSPMode::CWU);
+
+        QCOMPARE(s.slice->filterLow(), usbLow);
+        QCOMPARE(s.slice->filterHigh(), usbHigh);
+        QCOMPARE(settings.value(usb + QStringLiteral("FilterLow")).toInt(), usbLow);
+        QSignalSpy sent(s.guiEnd, &LoopbackTransport::outboundText);
+        s.client->flushWritesForTest();
+        QCOMPARE(propertyWrites(sent), 0);
+        QCOMPARE(s.coreSlice->filterLow(), usbLow);
+    }
+
+    // Fix round 2, Minor 1: the operator moved the low edge only. The
+    // window's CW memory keeps the old high edge, so the high hold does
+    // not move, but it is behind the same notifier as the cancelled low
+    // edge and the delta carries the Core's high: it is cancelled too,
+    // and the old mode's high is not sent into the new mode.
+    void coreModeChangeCancelsTheUnmovedSiblingEdge()
+    {
+        SliceSession s;
+        startSliceSession(s);
+        if (QTest::currentTestFailed()) { return; }
+        auto& settings = AppSettings::instance();
+        const QString cw = lastFilterPrefix(s.coreSlice, DSPMode::CWU);
+        const int usbLow = s.coreSlice->filterLow();
+        const int usbHigh = s.coreSlice->filterHigh();
+        const int cwLow = usbLow + 100;
+        const int cwHigh = usbHigh + 200;
+        settings.setValue(cw + QStringLiteral("FilterLow"), cwLow);
+        settings.setValue(cw + QStringLiteral("FilterHigh"), cwHigh);
+
+        s.slice->setFilterLow(usbLow + 170);
+
+        s.coreSlice->setDspMode(DSPMode::CWU);
+        QCOMPARE(s.coreSlice->filterLow(), cwLow);
+        QCOMPARE(s.coreSlice->filterHigh(), cwHigh);
+        // The window's own CW memory keeps the USB high edge.
+        settings.setValue(cw + QStringLiteral("FilterLow"), usbLow + 300);
+        settings.setValue(cw + QStringLiteral("FilterHigh"), usbHigh);
+        QTRY_COMPARE(s.slice->dspMode(), DSPMode::CWU);
+
+        QCOMPARE(s.slice->filterLow(), cwLow);
+        QCOMPARE(s.slice->filterHigh(), cwHigh);
+        QSignalSpy sent(s.guiEnd, &LoopbackTransport::outboundText);
+        s.client->flushWritesForTest();
+        QCOMPARE(propertyWrites(sent), 0);
+        QCOMPARE(s.coreSlice->filterHigh(), cwHigh);
     }
 };
 
