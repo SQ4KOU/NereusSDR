@@ -199,7 +199,9 @@ endif()
 # the compiler's default warnings, so a problem in our own changes shows up.
 # On Clang the edited upstream files still use WDSP's `if (x = f())` idiom,
 # so -Wparentheses alone is turned off for them. Keep this list in step with
-# the provenance table when a file is edited or synced back to the pin.
+# the provenance table when a file is edited or synced back to the pin;
+# scripts/audit-wdsp-headers.py (run in CI) fails when a source here matches
+# the pinned hash in source-manifest.csv, or one left out of it does not.
 set(WDSP_EDITED_SOURCES
     src/RXA.c
     src/TXA.c
