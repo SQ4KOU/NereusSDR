@@ -10,7 +10,7 @@
 # (sets git config core.hooksPath to scripts/git-hooks/)
 #
 # Bypass: do NOT use --no-verify. If a verifier fails, fix the
-# attribution. Per CLAUDE.md "License-preservation rule
+# attribution. Per CLAUDE.md "License rules for ported code
 # (non-negotiable)" — that is the rule, not a suggestion.
 
 set -euo pipefail
