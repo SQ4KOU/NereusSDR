@@ -128,10 +128,9 @@ struct RemoteMicConfig {
     static constexpr int kOpusPayloadType = 111;
     static constexpr int kOpusFrameSamples = 960;
     /// The bitrate a desktop remote window's encoder sends at
-    /// (RemoteMicEncoder). The phone sends 48 kbit/s full band, or 24
-    /// kbit/s under Save data. Both stay within the line's offered
-    /// maxaveragebitrate (LibDataChannelMediaTransport.h
-    /// kMicLineMaxAverageBitrate, 48 kbit/s).
+    /// (RemoteMicEncoder), within the line's offered maxaveragebitrate
+    /// (LibDataChannelMediaTransport.h kMicLineMaxAverageBitrate, 48
+    /// kbit/s, the ceiling set for the phone's microphone).
     static constexpr int kOpusBitrate = 24'000;
     /// The transmit pump's block (TxWorkerThread::kBlockFrames).
     static constexpr int kPumpBlockFrames = 64;
@@ -168,21 +167,20 @@ struct RemoteMicConfig {
     static constexpr int kReserveMs = 3;
     /// Silence. A 64-frame block counts as silent when its peak is under
     /// -40 dBFS, and it may be shed (or silence inserted before it) only
-    /// after 20 ms of silence. Measured (tx-latency report): after the
-    /// phone's Opus 24 kbit/s round trip, pause blocks peak at -73 dBFS
-    /// (p50) over a -80 dBFS microphone floor and at -54 dBFS (p50, p99
-    /// -50) over a -60 dBFS floor, so pauses qualify for any floor up to
-    /// about -55 dBFS; speech blocks peak far above it (a splice at the
-    /// threshold steps by at most 0.02 of full scale, 34 dB under speech
-    /// peaks, and TX DSP filters it in band). Re-measured at the phone's
-    /// 48 kbit/s full band (mic 48k lane, tst_tx_leveler_remote_mic
-    /// phonePausesStayUnderTheSilencePeak, speech peaking at -6 dBFS):
-    /// pause blocks peak at -73 dBFS (p50, p99 -52) over a -80 dBFS RMS
-    /// floor, -53 dBFS (p50, p99 -48) over -60 and -48 dBFS (p50, p99
-    /// -44) over -55; at 24 kbit/s wideband the same pauses sit about
-    /// 7 dB lower (-79, -60 and -55 dBFS p50), since the floor's noise
-    /// above 8 kHz is no longer coded away. Pauses still qualify for any
-    /// floor up to about -55 dBFS, so the threshold stays.
+    /// after 20 ms of silence; speech blocks peak far above it (a splice
+    /// at the threshold steps by at most 0.02 of full scale, 34 dB under
+    /// speech peaks, and TX DSP filters it in band). Measured at the
+    /// phone's Opus 48 kbit/s full band (mic 48k lane,
+    /// tst_tx_leveler_remote_mic phonePausesStayUnderTheSilencePeak,
+    /// speech peaking at -6 dBFS, a white full-band microphone floor,
+    /// which is the worst case for the full-band path): the p99 pause
+    /// block peaks at -52 dBFS over a -80 dBFS RMS floor, -48 over -60
+    /// and -44 over -55, so pauses qualify for any floor up to about
+    /// -55 dBFS. The threshold rests on these. The earlier 24 kbit/s
+    /// figures (tx-latency report: -73 dBFS p50 over a -80 floor, -54
+    /// p50 and -50 p99 over -60) sit about 6 dB above this harness's own
+    /// 24 kbit/s results; the cause is unknown and the original harness
+    /// is gone.
     static constexpr float kSilencePeak = 0.01f;
     static constexpr int kSilenceRunMs = 20;
     /// Clock matching: the ratio moves the buffer toward its margin at

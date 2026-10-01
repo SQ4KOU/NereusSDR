@@ -736,13 +736,12 @@ QString micLineOpusFormatParameters()
     // (the Core) prefers to receive on this line: mono (stereo=0), in-band
     // FEC, 10 ms minimum packet time, and maxaveragebitrate, the maximum
     // average bitrate the Core will receive, which the sender keeps under.
-    // The ceiling is 48 kbit/s, the highest measured Opus profile: the
-    // phone's microphone encoder sends 48 kbit/s full band, or 24 kbit/s
-    // under Save data, and a desktop remote window sends 24 kbit/s
-    // (RemoteMicConfig::kOpusBitrate), all within it. The device's own
-    // choice is not known when the offer is written (it comes in the
-    // `audio` control after the peer starts), so the line carries the
-    // ceiling rather than the choice.
+    // The ceiling is 48 kbit/s, the highest measured Opus profile and
+    // JJ's ruling for the phone's microphone; a desktop remote window's
+    // 24 kbit/s (RemoteMicConfig::kOpusBitrate) is within it. The
+    // device's own choice is not known when the offer is written (it
+    // comes in the `audio` control after the peer starts), so the line
+    // carries the ceiling rather than the choice.
     return QStringLiteral("minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=%1")
         .arg(kMicLineMaxAverageBitrate);
 }

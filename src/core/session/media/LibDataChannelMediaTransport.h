@@ -72,11 +72,11 @@ MediaSctpSettingsRecord mediaSctpSettingsRecord();
 QString opusOfferFormatParameters(int targetBitrate);
 
 /// Mic 48k lane: the microphone line's maxaveragebitrate, bit/s. Under RFC
-/// 7587 section 6.1 it is the most the sender may average, so it is the
-/// ceiling of every microphone encoder that sends on the line: the phone's
-/// 48 kbit/s full band (24 kbit/s under Save data) and a desktop remote
-/// window's RemoteMicConfig::kOpusBitrate. 48000 is the highest profile in
-/// the measured Opus table (OpusAudioCodec.h kOpusMeasuredProfiles).
+/// 7587 section 6.1 it is the most the Core will receive on average, so it
+/// bounds every microphone encoder on the line. 48000 is the highest
+/// profile in the measured Opus table (OpusAudioCodec.h
+/// kOpusMeasuredProfiles), JJ's ruling for the phone's microphone, and above
+/// a desktop remote window's RemoteMicConfig::kOpusBitrate.
 inline constexpr int kMicLineMaxAverageBitrate = 48'000;
 
 /// iPhone app plan Task 36 (R-IOS-13): the Opus a=fmtp parameters of the

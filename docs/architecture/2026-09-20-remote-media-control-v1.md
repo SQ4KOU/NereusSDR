@@ -1066,14 +1066,16 @@ when it transmits, and the Core decides what the transmitter takes.
 
 **What the client sends.** The microphone, mono 48 kHz, as Opus 20 ms
 frames with in-band FEC (payload type 111, one channel) averaging no more
-than the line's `maxaveragebitrate` of 48000 bit/s: the phone sends 48000
-bit/s full band, or 24000 bit/s under its Save data choice, and a desktop
-remote window 24000 bit/s. A client whose operator chose lossless audio
-and whose line agreed the L16 format (the phone or a desktop remote
-window) sends L16 packets of 192 frames with the microphone in both
-channels (payload type 96) instead. A client sends while its device holds transmit,
-while its own key is down, or while it has VOX armed (the Core's VOX on and
-its session permitted to transmit), and never otherwise. A program keying
+than the line's `maxaveragebitrate` of 48000 bit/s, or, when its line
+agreed the L16 format, L16 packets of 192 frames with the microphone in
+both channels (payload type 96). The Core accepts either. A desktop remote
+window sends Opus at 24000 bit/s, or L16 when its operator chose lossless
+audio. The phone's rates (Opus at 48000 bit/s full band, 24000 bit/s under
+its Save data choice, and L16 when lossless is agreed) are pending the
+phone audio-quality change (claude/iphone-audioquality). A client sends
+while its device holds transmit, while its own key is down, or while it
+has VOX armed (the Core's VOX on and its session permitted to transmit),
+and never otherwise. A program keying
 through a desktop window's TCI server is sent on the line in place of the
 microphone while its audio comes (the app's left channel, resampled to 48
 kHz).

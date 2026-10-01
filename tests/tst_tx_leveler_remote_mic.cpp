@@ -61,8 +61,10 @@
 // peak at least -26 dBFS) that the threshold would call silent. It asserts
 // that at the phone's 48 kbit/s, over floors up to -60 dBFS, 99 % of pause
 // blocks stay under the threshold, and that no more active speech blocks
-// fall under it than on the L16 path. The table prints with
-// NEREUS_LEVELER_MATRIX=1.
+// fall under it than on the L16 path (none at all for quiet speech). The
+// floor is white and full band, the worst case for the full-band path. By
+// default only those rows run; NEREUS_LEVELER_MATRIX=1 runs and prints the
+// whole table (every floor, PhoneSave and OpusDesk too).
 //
 // NEREUS_LEVELER_MATRIX=1 prints the whole measurement matrix.
 //
@@ -80,7 +82,9 @@
 //   2026-10-01: Mic 48k lane: OpusPhone at the phone's 48 kbit/s,
 //               PhoneSave at its 24 kbit/s Save data, and
 //               phonePausesStayUnderTheSilencePeak. J.J. Boyd (KG4VCF),
-//               AI-assisted via Anthropic Claude Code.
+//               AI-assisted via Anthropic Claude Code. Fix wave: the lag
+//               found once per path, and only the asserted rows by
+//               default.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -835,8 +839,19 @@ void TestTxLevelerRemoteMic::phonePausesStayUnderTheSilencePeak()
         qInfo().noquote() << "PAUSE path speechPk floorRms | pause block peak p50 p90 p99 max "
                              "| pause>=thr% | active<thr% | lag";
     }
+    // A path's delay is constant (the codec's and the feed's priming: 636
+    // frames for L16, 933 for Opus), so it is found once per path.
+    std::map<Path, int> lags;
     for (const double speechPeakDb : {-6.0, -20.0}) {
         for (const double floorDb : {-80.0, -70.0, -60.0, -55.0}) {
+            // By default only the asserted rows run: the phone's 48 kbit/s
+            // over floors up to -60 dBFS, and L16 beside it where speech
+            // blocks can fall under the threshold (speech at -6 dBFS). The
+            // full table runs with NEREUS_LEVELER_MATRIX=1.
+            const bool asserted = floorDb <= -60.0;
+            if (!print && !asserted) {
+                continue;
+            }
             // Words and pauses, the floor under both (Gaussian, a fixed
             // seed, RMS at floorDb).
             std::vector<float> clean;
@@ -862,23 +877,32 @@ void TestTxLevelerRemoteMic::phonePausesStayUnderTheSilencePeak()
             double pcmActiveUnder = 0.0;
             for (const Path path : {Path::RemotePcm, Path::OpusPhoneSaveData, Path::OpusPhone,
                                     Path::OpusDesk}) {
+                const bool needed = path == Path::OpusPhone
+                    || (path == Path::RemotePcm && speechPeakDb > -10.0);
+                if (!print && !needed) {
+                    continue;
+                }
                 const std::vector<float> out = micStream(path, input);
                 QVERIFY(!out.empty());
                 // The path's delay: the lag that best matches the output to
-                // the input over the first 4 s.
-                int lag = 0;
-                double best = -1.0;
-                const size_t span = std::min<size_t>(192000, out.size() - 9600);
-                for (int l = 0; l < 9600; ++l) {
-                    double c = 0.0;
-                    for (size_t i = 0; i < span; i += 4) {
-                        c += double(out[i + static_cast<size_t>(l)]) * input[i];
+                // the input over the first 4 s, the first time the path runs.
+                if (lags.count(path) == 0) {
+                    int found = 0;
+                    double best = -1.0;
+                    const size_t span = std::min<size_t>(192000, out.size() - 9600);
+                    for (int l = 0; l < 9600; ++l) {
+                        double c = 0.0;
+                        for (size_t i = 0; i < span; i += 4) {
+                            c += double(out[i + static_cast<size_t>(l)]) * input[i];
+                        }
+                        if (c > best) {
+                            best = c;
+                            found = l;
+                        }
                     }
-                    if (c > best) {
-                        best = c;
-                        lag = l;
-                    }
+                    lags[path] = found;
                 }
+                const int lag = lags[path];
                 std::vector<double> pausePeaks;
                 int pauseOver = 0;
                 int active = 0;
@@ -918,14 +942,20 @@ void TestTxLevelerRemoteMic::phonePausesStayUnderTheSilencePeak()
                 if (path == Path::RemotePcm) {
                     pcmActiveUnder = underPct;
                 }
-                if (path == Path::OpusPhone && floorDb <= -60.0) {
+                if (path == Path::OpusPhone && asserted) {
                     const QByteArray what = QByteArray("speech ")
                         + QByteArray::number(speechPeakDb) + " floor "
                         + QByteArray::number(floorDb) + " p99 "
                         + QByteArray::number(pct(pausePeaks, 0.99));
                     QVERIFY2(toDb(RemoteMicConfig::kSilencePeak) > pct(pausePeaks, 0.99),
                              what.constData());
-                    QVERIFY2(underPct <= pcmActiveUnder + 0.5, what.constData());
+                    if (speechPeakDb > -10.0) {
+                        QVERIFY2(underPct <= pcmActiveUnder + 0.5, what.constData());
+                    } else {
+                        // Quiet speech: no active block falls under on any
+                        // path (0.00 % in the full table), L16 not run.
+                        QVERIFY2(underPct == 0.0, what.constData());
+                    }
                 }
             }
         }

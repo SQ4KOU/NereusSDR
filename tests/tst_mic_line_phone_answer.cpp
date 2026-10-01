@@ -41,7 +41,8 @@
 // Modification history (NereusSDR):
 //   2026-10-01: original test for NereusSDR by J.J. Boyd (KG4VCF), Mic 48k
 //               lane, with AI-assisted implementation via Anthropic Claude
-//               Code.
+//               Code. Fix wave: the phone encoder's create and settings
+//               are checked.
 // =================================================================
 
 #include "RealtimeTestLoad.h"
@@ -63,6 +64,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -320,18 +322,26 @@ public:
         int error = OPUS_OK;
         m_encoder = opus_encoder_create(RemoteMicConfig::kSampleRate, 1, OPUS_APPLICATION_VOIP,
                                         &error);
-        if (m_encoder == nullptr) {
+        if (m_encoder == nullptr || error != OPUS_OK) {
             return;
         }
-        opus_encoder_ctl(m_encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
-        opus_encoder_ctl(m_encoder, OPUS_SET_BITRATE(48000));
-        opus_encoder_ctl(m_encoder, OPUS_SET_VBR(1));
-        opus_encoder_ctl(m_encoder, OPUS_SET_VBR_CONSTRAINT(1));
-        opus_encoder_ctl(m_encoder, OPUS_SET_INBAND_FEC(1));
-        opus_encoder_ctl(m_encoder, OPUS_SET_PACKET_LOSS_PERC(10));
-        opus_encoder_ctl(m_encoder, OPUS_SET_DTX(0));
-        opus_encoder_ctl(m_encoder, OPUS_SET_COMPLEXITY(9));
+        // Every setting must take, as the phone's encoder throws when one
+        // does not (OpusEncoder.swift).
+        const int settings[] = {
+            opus_encoder_ctl(m_encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE)),
+            opus_encoder_ctl(m_encoder, OPUS_SET_BITRATE(48000)),
+            opus_encoder_ctl(m_encoder, OPUS_SET_VBR(1)),
+            opus_encoder_ctl(m_encoder, OPUS_SET_VBR_CONSTRAINT(1)),
+            opus_encoder_ctl(m_encoder, OPUS_SET_INBAND_FEC(1)),
+            opus_encoder_ctl(m_encoder, OPUS_SET_PACKET_LOSS_PERC(10)),
+            opus_encoder_ctl(m_encoder, OPUS_SET_DTX(0)),
+            opus_encoder_ctl(m_encoder, OPUS_SET_COMPLEXITY(9)),
+        };
+        m_ready = std::all_of(std::begin(settings), std::end(settings),
+                              [](int result) { return result == OPUS_OK; });
     }
+
+    bool isReady() const { return m_ready; }
     ~PhoneOpusEncoder()
     {
         if (m_encoder != nullptr) {
@@ -356,6 +366,7 @@ public:
 
 private:
     OpusEncoder* m_encoder{nullptr};
+    bool m_ready{false};
 };
 
 } // namespace
@@ -473,6 +484,7 @@ void TestMicLinePhoneAnswer::phoneAnswerIsGrantedAndDecoded()
         }
     } else {
         PhoneOpusEncoder encoder;
+        QVERIFY(encoder.isReady());
         constexpr int kFrames = RemoteMicConfig::kOpusFrameSamples;
         std::vector<float> frame(kFrames);
         for (int k = 0; k < kPackets; ++k) {
