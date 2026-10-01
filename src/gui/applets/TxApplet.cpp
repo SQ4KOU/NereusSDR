@@ -185,6 +185,11 @@
 //                MOX and TUNE press toggles against its own key
 //                (RadioModel::moxPressAsksOn, tunePressAsksOn).
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  TX safety: a lost radio link locks
+//                MOX, TUN and 2TONE with its reason until the link is back
+//                (RadioModel::radioLinkDownChanged); VOX stays as Thetis's
+//                power-off leaves it (console.cs:27488-27493 [v2.10.3.15]).
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1480,6 +1485,10 @@ void TxApplet::wireControls()
         };
         connect(m_model, &RadioModel::txInhibitedChanged, this, relock);
         connect(m_model, &RadioModel::txInhibitReasonChanged, this, relock);
+        // TX safety (2026-09-30): and a lost radio link locks MOX, TUN and
+        // 2TONE until it is back, as Thetis's power-off on loss of sync
+        // disables them (console.cs:27488-27493 [v2.10.3.15]).
+        connect(m_model, &RadioModel::radioLinkDownChanged, this, relock);
         applyReceiveOnlyLock();
     }
 
@@ -2581,7 +2590,11 @@ void TxApplet::applyReceiveOnlyLock()
     }
     lock(m_tuneBtn);
     lock(m_twoToneBtn);   // MW0LGE_21a
-    lock(m_voxBtn);
+    // TX safety (2026-09-30): a lost radio link leaves VOX alone, as
+    // Thetis's power-off does (console.cs:27488-27493 [v2.10.3.15]).
+    if (m_model->transmitLockCoversVox()) {
+        lock(m_voxBtn);
+    }
 }
 
 // ── pollVoxMeter — Phase 3M-3a-iii bench polish 2026-05-04 ─────────────────

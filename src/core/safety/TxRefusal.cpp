@@ -29,6 +29,8 @@
 //   2026-09-29: slice control plan Task 11: chooseTransmitSlice. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: TX safety: radioLinkDown. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/safety/TxRefusal.h"
@@ -89,6 +91,11 @@ TxRefusal txInhibited()
 {
     return make(kInterlock,
                 QStringLiteral("The radio's transmit inhibit input is holding transmit off."));
+}
+
+TxRefusal radioLinkDown()
+{
+    return make(kInterlock, QStringLiteral("The link to the radio is down."));
 }
 
 TxRefusal interlock()

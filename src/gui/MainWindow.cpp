@@ -526,6 +526,11 @@
 //                on the transmit permission and its meters subscribed only
 //                while the applet shows it. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-30 - TX safety: the function buttons follow
+//                RadioModel::radioLinkDownChanged, so MOX, TUN and 2TONE
+//                are disabled with their reason while the link to the radio
+//                is lost. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -7158,6 +7163,8 @@ void MainWindow::buildUI()
         // HL2 port part 2: so does a TX inhibit, with its reason.
         connect(m_radioModel, &RadioModel::txInhibitedChanged, this, refresh);
         connect(m_radioModel, &RadioModel::txInhibitReasonChanged, this, refresh);
+        // TX safety (2026-09-30): and a lost radio link, until it is back.
+        connect(m_radioModel, &RadioModel::radioLinkDownChanged, this, refresh);
         if (MoxController* mox = m_radioModel->moxController()) {
             connect(mox, &MoxController::moxStateChanged, this, refresh);
             connect(mox, &MoxController::moxRejected, this, refresh);

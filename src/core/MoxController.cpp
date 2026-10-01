@@ -197,6 +197,10 @@
 //   2026-09-29: slice control plan Task 7: the noTransmitSlice refusal
 //               from the mox check. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: TX safety: setRadioLinkDown, the lost radio link's gate
+//               (Thetis console.cs:27488-27493 [v2.10.3.15]). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -1795,6 +1799,9 @@ TxRefusal MoxController::transmitBlockRefusal() const
 {
     // iPhone app plan Task 34: transmitBlockReason's gate as a TxRefusal,
     // in the same order.
+    if (m_radioLinkDown) {
+        return TxRefusals::radioLinkDown();
+    }
     if (m_paTripped) {
         return TxRefusals::paProtection();
     }
@@ -1815,6 +1822,9 @@ TxRefusal MoxController::transmitBlockRefusal() const
 
 QString MoxController::transmitBlockReason() const
 {
+    if (m_radioLinkDown) {
+        return TxRefusals::radioLinkDown().text;
+    }
     if (m_paTripped) {
         return QStringLiteral("The amplifier has tripped. Reset it before transmitting.");
     }
@@ -1959,6 +1969,43 @@ void MoxController::setRxOnly(bool on, const QString& reason)
     }
     // RADE end-of-over callsigns: a block ends a running tail at once too.
     // G-05: and the send ring's wait.
+    if (on) {
+        abortEndOfOverTail();
+        abortSendRingWait();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setRadioLinkDown: TX safety (2026-09-30).
+//
+// From Thetis console.cs:27488-27493 [v2.10.3.15], which runs when loss of
+// sync powers the radio off (console.cs:21339-21340, cited at
+// RadioModel::onConnectionStateChanged), just after the CW form stop
+// (console.cs:27486, not part of this gate):
+//   m_frmCWXForm.StopEverything(chkPower.Checked); //[2.10.3]MW0LGE
+//   chkMOX.Checked = false;
+//   chkMOX.Enabled = false;
+//   chkTUN.Checked = false;
+//   chkTUN.Enabled = false;
+//   chk2TONE.Checked = false;  // MW0LGE_21a
+//   chk2TONE.Enabled = false;
+// Thetis greys the buttons, so no key reaches the radio until the operator
+// powers it on again. NereusSDR's P1 connection reconnects by itself, so
+// the gate is here, where every key passes, and it lifts when the link is
+// back. It works as the other gates do: the refusal, the PollPTT skip, the
+// CAT and TCI drop and the unkey.
+// ---------------------------------------------------------------------------
+void MoxController::setRadioLinkDown(bool on)
+{
+    const QString before = transmitBlockReason();
+    m_radioLinkDown = on;
+    emitTransmitBlockIfChanged(before);
+    if (on) {
+        dropAppLevelsUnderBlock();
+    }
+    if (on && m_mox) {
+        setMox(false);
+    }
     if (on) {
         abortEndOfOverTail();
         abortSendRingWait();

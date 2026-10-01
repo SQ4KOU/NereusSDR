@@ -251,6 +251,11 @@
 //               [@c26a8a4]); the refusal and transmitBlockReason carry it.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-30: TX safety: setRadioLinkDown, a fourth gate that refuses
+//               every key while the link to the radio is lost, as Thetis
+//               disables chkMOX, chkTUN and chk2TONE when it loses sync
+//               (console.cs:27488-27493 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -754,9 +759,26 @@ public slots:
     QString rxOnlyReason() const { return m_rxOnlyReason; }
     static QString defaultRxOnlyReason();
 
+    // setRadioLinkDown: TX safety (2026-09-30). RadioModel sets it while the
+    // link to the radio is lost and until it is back. While set, setMox(true)
+    // refuses every key with moxRejected("The link to the radio is down.")
+    // and TxRefusals::radioLinkDown, PollPTT skips every source, CAT and TCI
+    // requests are dropped as under TX inhibit, and setting it unkeys an
+    // active transmission. From Thetis console.cs:27488-27493 [v2.10.3.15],
+    // run when loss of sync powers the radio off:
+    //   chkMOX.Checked = false;
+    //   chkMOX.Enabled = false;
+    //   chkTUN.Checked = false;
+    //   chkTUN.Enabled = false;
+    //   chk2TONE.Checked = false;  // MW0LGE_21a
+    //   chk2TONE.Enabled = false;
+    void setRadioLinkDown(bool on);
+    bool isRadioLinkDown() const noexcept { return m_radioLinkDown; }
+
     // transmitBlockReason: the words setMox(true) refuses with while TX
-    // inhibit, a PA trip or receive only holds (the trip first, then
-    // receive only, then TX inhibit); empty when none does. Task 16 fix
+    // inhibit, a PA trip, receive only or a lost radio link holds (the lost
+    // link first, then the trip, then receive only, then TX inhibit); empty
+    // when none does. Task 16 fix
     // wave (M2). transmitBlockChanged reports a change.
     QString transmitBlockReason() const;
     // iPhone app plan Task 34: the same gate as a TxRefusal (empty when
@@ -1667,10 +1689,13 @@ private:
     // m_rxOnly: Thetis _rx_only (Task 16), with the words a refusal shows.
     bool     m_rxOnly{false};
     QString  m_rxOnlyReason;
-    // One predicate for the three PollPTT gates that block every source.
+    // m_radioLinkDown: the link to the radio is lost (setRadioLinkDown).
+    bool     m_radioLinkDown{false};
+    // One predicate for the gates that block every source: the three
+    // PollPTT gates and the lost radio link.
     bool     transmitBlocked() const noexcept
     {
-        return m_txInhibited || m_paTripped || m_rxOnly;
+        return m_txInhibited || m_paTripped || m_rxOnly || m_radioLinkDown;
     }
     // Emits transmitBlockChanged when transmitBlockReason() differs from
     // `before` (a gate setter's value on entry).

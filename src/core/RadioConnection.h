@@ -501,6 +501,9 @@ public slots:
     /// Task 2.5 of the P1 full-parity epic, not here.
     /// Default false = PureSignal feedback DDC NOT routing.
     virtual void setPuresignalRun(bool run) = 0;
+    /// TX safety fix round 1 (2026-09-30) test seam: the run flag as the
+    /// connection holds it. Read it on the connection's thread.
+    bool puresignalRunForTest() const { return m_puresignalRun; }
 
     /// HPF Bypass on PureSignal feedback flag (G2E / OrionMKII / Saturn).
     /// When set + MOX active + PureSignal active, the host sends the Alex0
