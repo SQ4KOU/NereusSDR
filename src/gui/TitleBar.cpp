@@ -58,6 +58,9 @@
 //                 groups at a 1440 px window when the header font is
 //                 monospace. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-30 — Fix wave round 3: the kUtcToMasterGap comment states
+//                 what was measured instead of naming fonts that were not.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TitleBar.h"
@@ -98,10 +101,12 @@ constexpr int kSpacing      = 6;
 
 // Gap between the UTC clock and the master output slider. It keeps the
 // clock from reading as part of the slider (a mis-drag there changes the
-// audio level). 18 px rather than 24 so a 1440 px window leaves the
-// connection segment room for its four remote groups with the longest
-// audio wording in a monospace header font (Menlo or DejaVu Sans Mono
-// metrics need 4 px more than 24 allows; 18 frees 6).
+// audio level). 18 px rather than 24 gives the connection segment 6 px
+// more at a 1440 px window. Measured offscreen with the header font
+// substituted by monospace fonts (Menlo, Monaco, Courier New, Andale Mono,
+// PT Mono): the fault wording needed 4 px more than a 24 px gap allowed,
+// and 18 covers it; the radio-offline wording, the longest, needs a gap of
+// 4 px in those fonts, so 18 does not cover it there.
 constexpr int kUtcToMasterGap = 18;
 
 // Fixed strip height. From AetherSDR TitleBar.cpp:30.
