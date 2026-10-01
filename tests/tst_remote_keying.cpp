@@ -25,7 +25,7 @@
 //
 // then the keys themselves: a person's key on unheld transmit takes it and
 // keys the transmit slice, tx.unkey unkeys, tx.tune tunes at the tune
-// power, VOX is the holder's, and keyedBy names the holder.
+// power, VOX the holder armed is the holder's, and keyedBy names the holder.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -139,6 +139,30 @@ struct Pair {
                      const QList<MirrorUpdate>& arguments)
     {
         return invokeAs(app, verb, nextId++, arguments);
+    }
+    // Station VOX (whole-branch review, TX path): A, holding transmit,
+    // arms VOX as a device does (its write, its microphone line open, VOX
+    // listening to it as DaemonMediaController marks it). VOX keys only
+    // for the device that armed it.
+    bool armVoxForA()
+    {
+        const QByteArray id = a.key.fingerprint();
+        core.model->openRemoteMicLine(id);
+        const quint32 writeId = nextId++;
+        appA->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "transmit", {MirrorUpdate{0, "voxEnabled", MirrorWireKind::Bool, QVariant(true)}},
+            writeId)));
+        if (!QTest::qWaitFor([&]() { return !propertyResult(appA, writeId).isEmpty(); }, 5000)) {
+            return false;
+        }
+        const QJsonObject result = propertyResult(appA, writeId)
+                                       .value(QStringLiteral("results")).toArray().first().toObject();
+        if (!accepted(result)) {
+            qWarning() << "VOX arm refused:" << describe(result);
+            return false;
+        }
+        core.model->setRemoteMicVoxArmed(id, true);
+        return core.server->voxArmedBy() == id && core.model->remoteVoxDevice() == id;
     }
 };
 
@@ -544,7 +568,8 @@ private slots:
         const QJsonObject key = p.send(p.appA, "tx.key", trigger("screen"));
         QVERIFY(accepted(p.send(p.appA, "tx.unkey", {int64("epoch", epochOf(key))})));
         QTRY_COMPARE(p.mox->state(), MoxState::Rx);
-        // A holds transmit; a VOX key is admitted as A's.
+        // A holds transmit and armed VOX; a VOX key is admitted as A's.
+        QVERIFY(p.armVoxForA());
         p.mox->onVoxActive(true);
         QVERIFY(p.mox->isMox());
         QCOMPARE(p.core.model->keyedBy().deviceId, p.a.key.fingerprint());
@@ -568,6 +593,7 @@ private slots:
         const QJsonObject key = p.send(p.appA, "tx.key", trigger("screen"));
         QVERIFY(accepted(p.send(p.appA, "tx.unkey", {int64("epoch", epochOf(key))})));
         QTRY_COMPARE(p.mox->state(), MoxState::Rx);
+        QVERIFY(p.armVoxForA());
         p.mox->onVoxActive(true);
         QVERIFY(p.mox->isMox());
         const quint32 voxEpoch = p.core.model->keyedBy().epoch;

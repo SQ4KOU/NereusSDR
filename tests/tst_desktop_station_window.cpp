@@ -32,6 +32,7 @@
 #include "gui/setup/DspSetupPages.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 #include "models/NotchModel.h"
 
 #include <QImage>
@@ -1332,6 +1333,73 @@ private slots:
         QVERIFY(!pending || !pending->isVisible());
         QVERIFY(!controller.enabled());
         QCOMPARE(tx->tuneButton()->isChecked(), model->isTune());
+    }
+
+    // Station VOX (whole-branch review, TX path): while another device holds
+    // transmit, the hosting window's VOX is disabled naming the holder, as a
+    // remote window's is; VOX armed here is dropped when that device takes
+    // transmit; with transmit unheld or held here, VOX is live again.
+    void hostVoxFollowsTheTransmitHolder()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        QVERIFY(model->addSlice(QStringLiteral("pan-0")) >= 0);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        TxApplet* tx = window.findChild<TxApplet*>();
+        QVERIFY(tx && tx->voxButton());
+        QPushButton* vox = tx->voxButton();
+        TransmitModel& transmit = model->transmitModel();
+        TransmitHolder* holder = controller.server()->transmitHolder();
+        QCOMPARE(holder->state(), TransmitHolder::State::Unheld);
+        QVERIFY(vox->isEnabled());
+
+        // VOX armed here, then a phone takes transmit: VOX is dropped.
+        vox->click();
+        QVERIFY(transmit.voxEnabled());
+        QObject peerSession;
+        DeviceSessionRegistry::Entry peer;
+        peer.deviceId = QByteArrayLiteral("token:phone");
+        peer.kind = DeviceSessionRegistry::Kind::Token;
+        peer.name = QStringLiteral("Phone");
+        peer.shortName = QStringLiteral("Phone");
+        peer.deviceKind = QStringLiteral("phone");
+        StationServer* server = controller.server();
+        QCOMPARE(server->deviceSessions()->admit(peer, &peerSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+        TransmitHolder::KeyRequest key;
+        key.deviceId = peer.deviceId;
+        QCOMPARE(holder->askKey(key).verdict, KeyingVerdict::Admit);
+        QVERIFY(holder->isHeldBy(peer.deviceId));
+        QVERIFY(!transmit.voxEnabled());
+        QVERIFY(!vox->isChecked());
+
+        // While the phone holds transmit: disabled, the holder named.
+        const QString reason = TxRefusals::otherDeviceHolds(QStringLiteral("Phone")).text;
+        QTRY_VERIFY(!vox->isEnabled());
+        QCOMPARE(vox->toolTip(), reason);
+        QCOMPARE(vox->accessibleDescription(), reason);
+        vox->click();
+        QVERIFY(!transmit.voxEnabled());
+
+        // The phone lets go: VOX is live here again.
+        holder->release(peer.deviceId, QStringLiteral("test hand-back"));
+        QTRY_VERIFY(holder->state() == TransmitHolder::State::Unheld);
+        QTRY_VERIFY(vox->isEnabled());
+        QVERIFY(vox->toolTip() != reason);
+        vox->click();
+        QVERIFY(transmit.voxEnabled());
+        vox->click();
+        QVERIFY(!transmit.voxEnabled());
+        controller.stop();
     }
 
     // Desktop listening lane (JJ, 2026-09-30; it replaces Task 16's

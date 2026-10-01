@@ -11,6 +11,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - J.J. Boyd (KG4VCF). Station VOX: a hosting window's VOX
+//                (the TX applet's button, Setup's Enable VOX) is disabled,
+//                naming the holder, while another device holds transmit.
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - J.J. Boyd (KG4VCF). Shared-input filters (ruling (d)):
 //                the CH label's tooltip is the receive low-pass reason.
 //                AI-assisted via Anthropic Claude Code.
@@ -2413,12 +2417,42 @@ void MainWindow::refreshDesktopStationState()
     // Slice control plan Task 11 fix: the flags' TX buttons follow who
     // holds transmit here, as the letters do.
     refreshFlagTransmitGates();
+    // Station VOX: and VOX, as a remote window's does.
+    applyDesktopVoxHolderGate();
     refreshActiveSlicePresentation();
     refreshContainerControls();
     for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
         dialog->notifyReceiverSelectionChanged();
     }
     refreshForeignMarkers();
+}
+
+QString MainWindow::desktopVoxHolderReason() const
+{
+    // Station VOX (whole-branch review, TX path): VOX keys for the device
+    // that armed it, only while it holds transmit (ruling 8.4). While
+    // another device holds transmit, VOX armed here could key only in that
+    // device's name, so it is not armed here; the Core refuses its key too.
+    if (!desktopHosting()) { return {}; }
+    StationServer* server = m_desktopStationController->server();
+    TransmitHolder* holder = server ? server->transmitHolder() : nullptr;
+    if (holder == nullptr) { return {}; }
+    const std::optional<TransmitHolder::Holder> current = holder->holder();
+    if (!current || current->deviceId == SliceOwnership::stationDevice()) { return {}; }
+    // StationClient::otherHolderReason's words, in a hosting window.
+    const QString name = current->name.isEmpty() ? QStringLiteral("Another device")
+                                                 : current->name;
+    return TxRefusals::otherDeviceHolds(name).text;
+}
+
+void MainWindow::applyDesktopVoxHolderGate()
+{
+    if (!m_radioModel || m_radioModel->role() != RadioModel::Role::Local) { return; }
+    const QString reason = desktopVoxHolderReason();
+    if (m_txApplet) { m_txApplet->setVoxPermitted(reason.isEmpty(), reason); }
+    for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
+        dialog->setVoxPermitted(reason.isEmpty(), reason);
+    }
 }
 
 void MainWindow::requestDesktopTransmit(bool tune, bool on)
@@ -14436,6 +14470,10 @@ SetupDialog* MainWindow::createSetupDialog()
     // Fix wave 2 (M8): Enable VOX needs this computer's microphone line.
     if (m_remoteMedia != nullptr && !m_remoteMedia->micLineOpen()) {
         dialog->setVoxPermitted(false, TxRefusals::micNotConnected().text);
+    }
+    // Station VOX: a hosting window's, while another device holds transmit.
+    if (const QString holderReason = desktopVoxHolderReason(); !holderReason.isEmpty()) {
+        dialog->setVoxPermitted(false, holderReason);
     }
     dialog->setStationSettingsAvailable(stationSettingsAvailable(), stationSettingsReason());
     seedReceiverAudioNote(dialog, [this] { return receiverAudioNoteFor(m_remoteMedia); });

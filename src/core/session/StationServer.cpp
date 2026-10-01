@@ -1,6 +1,11 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-30: Station VOX (whole-branch review, TX path): the keying
+//               gate refuses a station VOX key while a device holds
+//               transmit that did not arm VOX (VOX armed at the Core keys
+//               only for the station device). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-30: TX badge take fix round 1: peerInfoFor() counts a token
 //               session as paired under setTokenSessionsMayTransmitForTest()
 //               (tests only). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
@@ -2468,6 +2473,18 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             if (keyer.isStation() && source == PttMode::Vox
                 && m_transmitHolder->state() == TransmitHolder::State::Held) {
                 if (const auto holder = m_transmitHolder->holder()) {
+                    // Station VOX (whole-branch review, TX path): VOX keys
+                    // for the device that armed it, and only while it holds
+                    // transmit. VOX armed at the Core (nobody in
+                    // m_voxArmedBy) while another device holds transmit is
+                    // never that device's key: refused naming the holder,
+                    // as the station's own key is.
+                    if (holder->deviceId != KeyerIdentity::kStationDeviceId
+                        && (m_voxArmedBy.isEmpty() || holder->deviceId != m_voxArmedBy)) {
+                        return {KeyingVerdict::Refuse,
+                                m_transmitHolder->keyRefusalFor(
+                                    QByteArray(KeyerIdentity::kStationDeviceId), false)};
+                    }
                     request.deviceId = holder->deviceId;
                 }
             } else if (keyer.isStation() && source == PttMode::Vox && m_radioModel
