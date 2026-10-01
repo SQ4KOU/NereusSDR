@@ -54,6 +54,9 @@
 //                the key, PWR slider limit off for the FIXED source, TwoTone
 //                set before MOX with or without a PA profile. The stop and a
 //                refused key clear TwoTone, then restore PWR with the limit.
+//   2026-09-30 : Fix round 1 (minor 3), by J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code. An abandoned start
+//                under another device's key clears its manual key.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation flow
@@ -794,7 +797,11 @@ void TwoToneController::onRejectSettleElapsed()
     // completing). That key is theirs and ends on its own path (chkMOX_Click,
     // completeTuneOff). Clearing it here let a held mic key inside the
     // TUN-off window and leave the tune tone on air under it.
-    if (m_moxController->isMox()
+    // Fix round 1 (minor 3): only a station key is a manual key here. A
+    // key another device holds is not (MoxController::onMoxButton clears
+    // _manual_mox for a key refused under another device's key), so the
+    // flag this start set is cleared under it.
+    if ((m_moxController->isMox() && m_moxController->currentKeyer().isStation())
         || (m_tuneActive && m_tuneActive())
         || (m_tuneOffPending && m_tuneOffPending())) {
         return;

@@ -974,6 +974,52 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!mox.isManualKey(), 2000);
     }
 
+    // ── Fix round 1 (minor 3): an abandoned start under another device's
+    // key clears its manual key. That key is not the station's, as
+    // MoxController::onMoxButton clears _manual_mox for a key refused while
+    // another device's key is on; left set, it holds off every PTT source.
+    void abandonedStartUnderAnotherDevicesKey_clearsTheManualKey()
+    {
+        TransmitModel tx;
+        tx.setTwoTonePulsed(false);
+        tx.setTwoToneFreq2Delay(0);
+        RecordingTxChannel tc(kTxChannelId);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        int asked = 0;
+        mox.setKeyingGate([&asked](PttMode, const KeyerIdentity&) {
+            KeyingAnswer answer;
+            // admitKey asks first; the key itself is taken; then admitted.
+            answer.verdict = (asked++ == 1) ? KeyingVerdict::Take : KeyingVerdict::Admit;
+            return answer;
+        });
+        SliceModel slice;
+
+        TwoToneController ctrl;
+        ctrl.setTransmitModel(&tx);
+        ctrl.setTxChannel(&tc);
+        ctrl.setMoxController(&mox);
+        ctrl.setSliceModel(&slice);
+        ctrl.setSettleDelaysMs(0, 0);
+
+        ctrl.setActive(true);
+        QVERIFY(!ctrl.isActive());
+        QVERIFY(mox.isManualKey());
+        // Within the settle, the device that took transmit keys.
+        KeyerIdentity phone;
+        phone.deviceId = QByteArray("phone");
+        mox.setMox(true, phone);
+        QVERIFY(mox.isMox());
+        QCOMPARE(mox.currentKeyer().deviceId, QByteArray("phone"));
+
+        QTRY_VERIFY_WITH_TIMEOUT(!mox.isManualKey(), 2000);
+        // The phone's key is left alone.
+        QVERIFY(mox.isMox());
+        QCOMPARE(mox.currentKeyer().deviceId, QByteArray("phone"));
+        mox.setMox(false, phone);
+        QVERIFY(!mox.isMox());
+    }
+
     // ── Fix wave RD-I4: the stop releases only its own device's key ────────
     // After a take another device may hold the key when the station's
     // two-tone stops; console.MOX = false there must not unkey it.
