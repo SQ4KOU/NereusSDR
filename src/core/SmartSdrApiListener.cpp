@@ -20,6 +20,9 @@
 // Modified 2026-10-01 by J.J. Boyd (KG4VCF): TGXL tune lane round 3,
 // tuneStateSent for every tune=1 frame and each visible tune=0;
 // AI-assisted via Anthropic Claude Code.
+// Modified 2026-10-01 by J.J. Boyd (KG4VCF): TGXL tune lane round 4, a
+// new client's or a sub's push emits only for tune=1; AI-assisted via
+// Anthropic Claude Code.
 
 #include "SmartSdrApiListener.h"
 
@@ -795,8 +798,11 @@ void SmartSdrApiListener::onNewConnection()
                        .arg(m_sliceMode)
                        .arg(m_tuneActive ? 1 : 0)
                        .arg(m_txActive ? 1 : 0));
-        // TGXL tune lane round 3: the new client may echo this tune state.
-        emit tuneStateSent(m_tuneActive);
+        // TGXL tune lane round 3: the new client may echo this tune=1.
+        // Round 4: an idle tune=0 here is not a change, so not counted.
+        if (m_tuneActive) {
+            emit tuneStateSent(true);
+        }
 
         emit clientConnected(host, port);
     }
@@ -1219,8 +1225,11 @@ void SmartSdrApiListener::dispatchLine(QTcpSocket* sock, const QString& line)
                        .arg(m_sliceMode)
                        .arg(m_tuneActive ? 1 : 0)
                        .arg(m_txActive ? 1 : 0));
-        // TGXL tune lane round 3: the subscriber may echo this tune state.
-        emit tuneStateSent(m_tuneActive);
+        // TGXL tune lane round 3: the subscriber may echo this tune=1.
+        // Round 4: an idle tune=0 here is not a change, so not counted.
+        if (m_tuneActive) {
+            emit tuneStateSent(true);
+        }
     }
 }
 

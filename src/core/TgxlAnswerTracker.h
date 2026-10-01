@@ -25,6 +25,9 @@
 //                link epoch and sequence; a tuning rise starts only the
 //                oldest unstarted `autotune`. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - Round 4: the guarantees below restated as the invariant
+//                that holds. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 //
 // One entry per thing sent, counted, never a single flag:
 //   - an `autotune` (by link epoch and sequence) expects a tune on;
@@ -42,16 +45,27 @@
 // A link drop and reconnect does not clear it: the answer comes on the
 // SmartSDR API port, not the dropped :9010 link.
 //
-// What this guarantees, given that every send the tuner answers is counted:
-//   - an answer that arrives within kAnswerWindowMs of its send is never
-//     a press;
-//   - a stale entry (its answer never came) blocks at most one press, and
-//     only until the window passes; that press keys as a plain station key.
-// What it does not guarantee:
-//   - an answer later than kAnswerWindowMs counts as a press;
-//   - a send the tuner answers that the Core does not count (a frame the
-//     listener writes outside the counted paths) leaves its answer to count
-//     as a press.
+// The invariant: takes never outnumber the tuner's real presses, provided
+// every send the tuner answers is counted, each answer comes within
+// kAnswerWindowMs, and an `autotune`'s tune on comes before its sweep's
+// fall (the capture: tune on 503 ms after the send, inside the sweep).
+// It is not that every answer is classed as an answer. An answer is
+// classed as the press in two cases:
+//   1. A real press arrives first and uses up the entry its answer was
+//      waiting for (press, then echo). The answer is then the take; one
+//      press, one take.
+//   2. A sweep's fall (or a tune off that is not an echo) removes an
+//      `autotune` entry before that sweep's tune on arrives. That answer
+//      is then a take with no press. The capture never shows this order.
+// The other side fails closed: a press inside the window after a tune,
+// while an entry still waits (an echo the tuner never sent, a frame to a
+// client that is not the tuner or to a dropped socket), uses up that entry
+// and is dropped: it keys nothing and takes nothing, and the operator
+// presses again once the window has passed. If the entry is the band-change
+// recall's `autotune`, RadioModel keys the press as a station key, which
+// never takes.
+// An answer later than kAnswerWindowMs, or one to a send the Core did not
+// count, is a take with no press.
 // RadioModel logs each answer's kind and latency, and the echoes per tune,
 // so a bench tune can size the window and confirm the cadence.
 

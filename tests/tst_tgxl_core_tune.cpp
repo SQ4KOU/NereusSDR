@@ -41,6 +41,10 @@
 //               key on any holder; frames sent while :9010 is down or to a
 //               reconnecting client are counted. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-10-01: round 4: a sub push and a new client during a tune are
+//               counted, an idle push is not; the recall's answer keys as
+//               a station key and never takes. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -243,6 +247,18 @@ void recallOnce(Core& core, FakeTuner& tuner)
     tx->setFrequency(tx->frequency() < 10'000'000.0 ? 14'100'000.0 : 7'100'000.0);
     QTRY_COMPARE(tuner.count(QStringLiteral("autotune")), before + 1);
     QTest::qWait(100);   // its reply is read
+}
+
+// How many times `spy` (on tuneStateSent) saw `tune`.
+int countEmits(const QSignalSpy& spy, bool tune)
+{
+    int n = 0;
+    for (const QList<QVariant>& args : spy) {
+        if (args.at(0).toBool() == tune) {
+            ++n;
+        }
+    }
+    return n;
 }
 
 // The tuner's tune on (and its tune off) take nothing: the holder keeps
@@ -461,8 +477,9 @@ private slots:
     // tuner's echoes of our tune=1 frames arrive after the carrier dropped.
     // Every frame is counted, so every late echo is dropped (it neither
     // keys nor takes); once they are all in, the tuner's next tune on is
-    // its own TUNE again. Under PerChange the tuner echoes once, the other
-    // frames' entries keep a press a plain key until the window passes.
+    // its own TUNE again. Under PerChange the tuner echoes once; a press
+    // inside the window uses up one of the other frames' entries and is
+    // dropped (it keys nothing and takes nothing) until the window passes.
     void lateEchoesOfAPlainTuneDoNotTake_data()
     {
         QTest::addColumn<bool>("perFrame");
@@ -492,8 +509,8 @@ private slots:
         QTest::qWait(100);
         tuner.lan.echo = LanClient::Echo::PerFrame;
         if (!perFrame && tuner.lan.tuneFramesSeen() > 1) {
-            // Uncounted-for frames: a press inside the window is a plain
-            // station key, refused while the phone holds.
+            // Frames the tuner did not echo: a press inside the window uses
+            // up one of their entries and is dropped, failing closed.
             tuneOnTakesNothing(core, tuner, a.key.fingerprint());
             QTest::qWait(int(TgxlAnswerTracker::kAnswerWindowMs) + 200);
         }
@@ -565,7 +582,7 @@ private slots:
     // (the echo comes on :4992), and so is a reconnecting client's first
     // frame during a tune: none of their late echoes takes. A frame the
     // Core wrote to the dropped socket is counted too and never echoed:
-    // it keeps a press a plain key until the window passes.
+    // a press inside the window uses up its entry and is dropped.
     void framesSentAroundReconnectsAreCounted()
     {
         Core core;
@@ -603,6 +620,149 @@ private slots:
         }
         QTest::qWait(int(TgxlAnswerTracker::kAnswerWindowMs) + 200);
         tuneOnTakesAndKeys(core, tuner);
+    }
+
+    // N-2 (round 4): the tuner subscribes during a tune; the Core's
+    // `transmit ... tune=1` push to it is counted like any other frame, so
+    // its late echo takes nothing. Each tune=1 frame the tuner saw is one
+    // count; one more tune on is a press.
+    void aSubscriptionPushDuringATuneIsCounted()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        FakeTuner tuner;
+        QVERIFY(startTuner(core, tuner));
+        tuner.lan.echo = LanClient::Echo::Off;
+        QSignalSpy sent(core.model->smartSdrListener(), &SmartSdrApiListener::tuneStateSent);
+        MoxController* mox = core.model->moxController();
+
+        QVERIFY(core.invoke(appA, "tx.tune", {kOn}).value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(core.model->isTune());
+        QTRY_VERIFY(tuner.lan.tuneSeen());
+        const int beforeSub = tuner.lan.tuneFramesSeen();
+        tuner.lan.send(QStringLiteral("sub transmit all"));
+        QTRY_VERIFY(tuner.lan.tuneFramesSeen() > beforeSub);
+        QVERIFY(core.invoke(appA, "tx.tune", {kOff}).value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_VERIFY(!tuner.lan.tuneSeen());
+        QTest::qWait(100);
+        QCOMPARE(countEmits(sent, true), tuner.lan.tuneFramesSeen());
+
+        for (int i = 0; i < tuner.lan.tuneFramesSeen(); ++i) {
+            tuneOnTakesNothing(core, tuner, a.key.fingerprint(), 100);
+        }
+        tuneOnTakesAndKeys(core, tuner);
+    }
+
+    // N-2 (round 4): a client that connects during a tune is sent tune=1,
+    // and that frame is counted: one more than the frame rounds the
+    // tuner's own connection saw. Deterministic: the tuner's connection
+    // stays up, so no frame goes to a dropped socket.
+    void aClientConnectingDuringATuneIsCounted()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        FakeTuner tuner;
+        QVERIFY(startTuner(core, tuner));
+        tuner.lan.echo = LanClient::Echo::Off;
+        SmartSdrApiListener* listener = core.model->smartSdrListener();
+        QSignalSpy sent(listener, &SmartSdrApiListener::tuneStateSent);
+        MoxController* mox = core.model->moxController();
+
+        QVERIFY(core.invoke(appA, "tx.tune", {kOn}).value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(core.model->isTune());
+        QTRY_VERIFY(tuner.lan.tuneSeen());
+        LanClient other;
+        QVERIFY(other.connectTo(QHostAddress::LocalHost, listener->serverPort()));
+        QTRY_VERIFY(other.tuneSeen());
+        QVERIFY(core.invoke(appA, "tx.tune", {kOff}).value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_VERIFY(!tuner.lan.tuneSeen());
+        QTRY_VERIFY(!other.tuneSeen());
+        QTest::qWait(100);
+        const int counted = countEmits(sent, true);
+        QCOMPARE(counted, tuner.lan.tuneFramesSeen() + 1);
+
+        for (int i = 0; i < counted; ++i) {
+            tuneOnTakesNothing(core, tuner, a.key.fingerprint(), 100);
+        }
+        tuneOnTakesAndKeys(core, tuner);
+    }
+
+    // N-4 (round 4): while idle, a new client's and a sub's tune=0 push
+    // is not a change the tuner can echo, so nothing is counted; the
+    // tuner's tune off after that ends its sweep as before.
+    void anIdlePushIsNotCounted()
+    {
+        Core core;
+        FakeTuner tuner;
+        QVERIFY(startTuner(core, tuner));
+        SmartSdrApiListener* listener = core.model->smartSdrListener();
+        QSignalSpy sent(listener, &SmartSdrApiListener::tuneStateSent);
+        LanClient other;
+        QVERIFY(other.connectTo(QHostAddress::LocalHost, listener->serverPort()));
+        tuner.lan.send(QStringLiteral("sub transmit all"));
+        other.send(QStringLiteral("sub transmit all"));
+        QTest::qWait(1500);   // a 1 Hz idle tick too
+        QCOMPARE(sent.count(), 0);
+    }
+
+    // N-2 (round 4), the recall exception: the tuner's tune on that
+    // answers the band-change recall's `autotune` keys the carrier the
+    // sweep needs as a station key, and never takes. Transmit unheld, and
+    // held by the station. (A device holding it: autoRecallAnswerDoesNotTake.)
+    void aRecallAnswerKeysAsAStationKey_data()
+    {
+        QTest::addColumn<bool>("stationHolds");
+        QTest::newRow("unheld") << false;
+        QTest::newRow("station holds") << true;
+    }
+    void aRecallAnswerKeysAsAStationKey()
+    {
+        QFETCH(bool, stationHolds);
+        Core core;
+        allowTransmit(core);
+        FakeTuner tuner;
+        QVERIFY(startTuner(core, tuner));
+        tuner.lan.echo = LanClient::Echo::Off;
+        TransmitHolder* held = core.server->transmitHolder();
+        MoxController* mox = core.model->moxController();
+        const QByteArray station(KeyerIdentity::kStationDeviceId);
+        if (stationHolds) {
+            core.model->setTune(true);
+            QTRY_VERIFY(core.model->isTune());
+            core.model->setTune(false);
+            QTRY_COMPARE(mox->state(), MoxState::Rx);
+            QTRY_VERIFY(!core.model->isTune());
+            QTest::qWait(int(TgxlAnswerTracker::kAnswerWindowMs) + 200);   // its echoes' entries pass
+            QVERIFY(held->isHeldBy(station));
+        } else {
+            QVERIFY(!held->holder().has_value());
+        }
+        const quint64 epochBefore = held->epoch();
+
+        armRecall(core);
+        recallOnce(core, tuner);
+        tuner.push(QStringLiteral("S0|state tuning=1"));
+        tuner.lan.send(QStringLiteral("transmit tune on"));   // the recall's answer
+        QTRY_VERIFY(mox->isMox());
+        QVERIFY(held->isHeldBy(station));
+        if (stationHolds) {
+            QCOMPARE(held->epoch(), epochBefore);   // no change of holder: nothing taken
+        }
+        tuner.lan.send(QStringLiteral("transmit tune off"));
+        tuner.push(QStringLiteral("S0|state tuning=0"));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_VERIFY(!core.model->isTune());
+        QVERIFY(held->isHeldBy(station));
     }
 
     // m-A (round 2): two autotunes in flight, the second refused: the

@@ -25,6 +25,9 @@
 //                 (the 1 Hz tick, a TX state resend, a new client's or a
 //                 sub's push) and each tune=0 a client can see change.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - Round 4: tune=0 only on a change; a new client's or a
+//                 sub's idle tune=0 push is not emitted. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -194,9 +197,11 @@ signals:
     // own `transmit tune on/off` (bench 2026-05-20, commit 01ca5b824 item
     // 8), which RadioModel must not take for its front-panel TUNE. Emitted
     // once per frame round for tune=1 (every broadcast, the 1 Hz tick, a new
-    // client's and a sub's push), and for tune=0 on setTuneActive(false)
-    // and on a new client's or a sub's push. Not for the idle tick's
-    // repeated tune=0, which changes nothing a client can see.
+    // client's and a sub's push), and for tune=0 only on
+    // setTuneActive(false), the one tune=0 a client sees as a change. Round
+    // 4: not for the idle tick's tune=0, nor a new client's or a sub's
+    // tune=0 push while idle: the client already sees tune=0, so the tuner
+    // has nothing to echo.
     void tuneStateSent(bool tune);
 
     // LAN PTT MOX request from a SmartSDR-API client. Same pattern as

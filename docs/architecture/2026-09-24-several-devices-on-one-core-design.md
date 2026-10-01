@@ -1453,21 +1453,32 @@ stays: the cycle never starts while the radio is on the air (so it never unkeys 
 amplifier rules, TX inhibit, the PA trip and receive only, and the 3 s start watchdog. The press
 is only a `transmit tune on` that the connected Tuner Genius sends from its own address on the
 SmartSDR API port and answers nothing the Core sent the tuner. The tuner answers each `autotune`
-the Core sends (the Tuner page, a device's tune, the band-change recall) and echoes the
-`transmit tune=1/0` the Core broadcasts with its own tune on or off. The Core counts every
-tune=1 frame it writes (the change, the 1 s re-send, a new SmartSDR API client, a subscription
-push), whether or not the tuner's own link is up, because how often the tuner echoes has never
-been measured; each `autotune` is counted by link and sequence. Each entry waits until its
-answer arrives, the tuner refuses that `autotune`, the sweep it started ends (an `autotune`
-owns the first `tuning=1` after it, as in the captures), or 3 s pass (the capture shows the
-answer at 503 ms; 3 s is the Core's existing tuner start window). A tune on is the tuner's own
-TUNE only when nothing is waiting for one. A tune on that answers an echo or a running cycle's
-`autotune` is dropped: it never keys and never takes. A tune on that answers the band-change
-recall's `autotune` keys the carrier that sweep needs, as a station key under ruling 8.9a,
-and never takes. The Core logs each answer's kind and latency and the echoes per tune, so a
-bench tune can size the window.
+the Core sends (the Tuner page, a device's tune, the band-change recall) and echoes each
+`transmit tune=1/0` the Core broadcasts with its own tune on or off. The Core counts each of
+these until its answer arrives, the tuner refuses that `autotune`, the sweep it started ends, or
+3 s pass (the capture shows the answer at 503 ms; 3 s is the Core's existing tuner start
+window). A tune on is the tuner's own TUNE only when nothing is waiting for one.
 The tuner's `tuning=1` alone, another SmartSDR API client's line, and a device's `tx.tunerTune`
 never take; they are station or device keys under ruling 8.9a and the holder rules.
+
+*Implementation note (not a ruling; awaiting JJ's confirmation, 2026-10-01).* How the TGXL tune
+lane implements the counting above:
+
+- The Core counts every tune=1 frame it writes to the SmartSDR API port: the change, the 1 s
+  re-send, a new client, and a subscription push. It counts them whether or not the tuner's
+  own :9010 link is up, because how often the tuner echoes has never been measured. A tune=0
+  is counted only when it changes, since an idle tune=0 push gives the tuner nothing to echo.
+- Each `autotune` is counted by link and sequence. It owns the first `tuning=1` after it, as in
+  the captures.
+- A tune on that answers an echo, or a running cycle's `autotune`, is dropped: it never keys
+  and never takes.
+- **Exception:** a tune on that answers the band-change recall's `autotune` keys the carrier
+  that sweep needs, as a station key under ruling 8.9a, and never takes. This matches what
+  the Core did before the lane, because the recall's sweep has no other carrier.
+- Takes never outnumber the tuner's real presses. A press inside the 3 s window after a tune
+  can use up a waiting entry and be dropped, which fails closed.
+- The Core logs each answer's kind and latency and the echoes per tune, so a bench tune can
+  size the window.
 
 ### 8.6 Take it back
 
