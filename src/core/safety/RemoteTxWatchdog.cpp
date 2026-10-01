@@ -18,6 +18,10 @@
 //               device per overdue period, and only to a check more than
 //               kLateCheckSlackMs late. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-10-01: TX watch follow-up: a check already due is left to run
+//               rather than restarted, so the stop bound no longer rests on
+//               where the event loop puts a restarted check. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/safety/RemoteTxWatchdog.h"
@@ -29,6 +33,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 namespace NereusSDR {
 
@@ -165,7 +170,9 @@ void RemoteTxWatchdog::onTimer()
     // the timer's ordinary slack, and once per device per overdue period,
     // so nothing (another device's keepalives rescheduling the check on
     // every turn included) can put the judgement off again.
-    const bool late = m_checkDueMs >= 0 && at - m_checkDueMs > kLateCheckSlackMs;
+    // TX watch follow-up: this check is no longer pending once it runs.
+    const qint64 due = std::exchange(m_checkDueMs, -1);
+    const bool late = due >= 0 && at - due > kLateCheckSlackMs;
     const bool canTurn = late && static_cast<bool>(m_hooks.startTimer);
     QList<QByteArray> quiet;
     for (auto it = m_devices.begin(); it != m_devices.end(); ++it) {
@@ -223,6 +230,15 @@ void RemoteTxWatchdog::reschedule()
         if (m_hooks.stopTimer) {
             m_hooks.stopTimer();
         }
+        return;
+    }
+    // TX watch follow-up: a check already due is left to run. Restarting
+    // it would put it behind the timers already due (the transports'
+    // drains among them), and a device whose keepalives arrive on every
+    // drain would then put it off on every turn of the event loop. Left
+    // alone it runs in this turn, whatever order the event loop gives
+    // timers due together.
+    if (m_checkDueMs >= 0 && m_checkDueMs <= now()) {
         return;
     }
     qint64 earliest = std::numeric_limits<qint64>::max();

@@ -40,7 +40,10 @@
 //   waiting behind it in, one turn of the event loop, and then judges by
 //   when they came. That turn is given once for each device's overdue
 //   period (fix round 2): the check after it judges the device, whatever
-//   else rescheduled the timer in between.
+//   else rescheduled the timer in between. A check already due is never
+//   restarted (TX watch follow-up): it runs in the turn it came due in,
+//   whatever order the event loop gives timers due together, so a
+//   device's keepalives on every turn cannot put it off.
 // - More than 400 ms without one: stop(), which the Core makes StopAllTx
 //   with "The link to <device> went quiet, so the Core stopped
 //   transmitting." and the VOX that device armed turned off. The device is
@@ -78,6 +81,9 @@
 //               can no longer hold a dead link's key), and only for a check
 //               more than kLateCheckSlackMs late. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX watch follow-up: a check already due is left to run
+//               rather than restarted. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -136,8 +142,16 @@ public:
         std::function<qint64()> clock;
         /// (Re)starts the one single-shot check timer to fire onTimer()
         /// after `ms`; a later call replaces an earlier one.
+        ///
+        /// TX watch follow-up: the timer is the watchdog's alone. Nothing
+        /// else starts or stops it, and every start ends in exactly one
+        /// onTimer() unless stopTimer or a later start replaces it. The
+        /// watchdog relies on this: a check it recorded as due is still
+        /// pending in the timer, so reschedule() leaves it to run rather
+        /// than restarting it. A timer stopped or restarted behind the
+        /// watchdog's back would leave that check never run.
         std::function<void(int ms)> startTimer;
-        /// Stops the check timer.
+        /// Stops the check timer (the watchdog's alone, as above).
         std::function<void()> stopTimer;
         /// Stops transmitting for `deviceId` with `message` (StopAllTx, and
         /// the VOX that device armed turned off).
@@ -225,7 +239,8 @@ private:
 
     Hooks m_hooks;
     QHash<QByteArray, Watch> m_devices;
-    // TX mic thread: when the check timer was asked to fire.
+    // TX mic thread: when the check timer was asked to fire (-1: no check
+    // pending; cleared when the check runs, TX watch follow-up).
     qint64 m_checkDueMs{-1};
 };
 

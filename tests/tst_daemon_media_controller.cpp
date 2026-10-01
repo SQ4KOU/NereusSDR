@@ -11,6 +11,11 @@
 //               microphone line torn down (a new connection's start, and
 //               the session's end) while its own thread delivers. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX watch follow-up: the torn-down line's test checks that
+//               its packets came on the line's own thread and never on the
+//               owner's, and that a new connection's line accepted and
+//               rejected nothing of the old. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -65,6 +70,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <mutex>
 #include <numbers>
 #include <numeric>
 #include <thread>
@@ -457,6 +463,12 @@ struct Harness {
     // A run in real time paces displays on the wall clock instead of nowNs.
     bool realClock{false};
     QElapsedTimer realTimer;
+    // TX watch follow-up: while set, the names of the threads that read the
+    // clock (the microphone line's receiver reads it on the delivering
+    // thread).
+    std::atomic<bool> recordClockThreads{false};
+    std::mutex clockThreadsLock;
+    QSet<QString> clockThreads;
     QPointer<QTimer> manualSender;
     DaemonMediaController controller;
     int sliceId{-1};
@@ -475,7 +487,14 @@ struct Harness {
                          mediaTransport = new FakeTransport(parent);
                          return mediaTransport;
                      },
-                     [this] { return realClock ? realTimer.nsecsElapsed() : nowNs; })
+                     [this] {
+                         if (recordClockThreads.load(std::memory_order_relaxed)) {
+                             const QString name = QThread::currentThread()->objectName();
+                             const std::lock_guard<std::mutex> lock(clockThreadsLock);
+                             clockThreads.insert(name);
+                         }
+                         return realClock ? realTimer.nsecsElapsed() : nowNs;
+                     })
     {
         Q_ASSERT(directory.isValid());
         realTimer.start();
@@ -1794,8 +1813,13 @@ void TstDaemonMediaController::realMicLineTornDownWhileItsThreadDelivers()
     }
     Harness harness;
     QPointer<LibDataChannelMediaTransport> core;
-    harness.realTransport = [&core](QObject* parent) -> IMediaTransport* {
+    // TX watch follow-up: packets the transport hands to its owner instead
+    // of the line's sink (on the owner's thread).
+    int ownerMicPackets = 0;
+    harness.realTransport = [&core, &ownerMicPackets](QObject* parent) -> IMediaTransport* {
         core = new LibDataChannelMediaTransport(parent);
+        connect(core.data(), &IMediaTransport::micRtpReceived, core.data(),
+                [&ownerMicPackets](const QByteArray&, qint64) { ++ownerMicPackets; });
         return core;
     };
     harness.establishSession();
@@ -1911,9 +1935,21 @@ void TstDaemonMediaController::realMicLineTornDownWhileItsThreadDelivers()
         stopSending.store(true);
         sender.join();
     });
+    harness.recordClockThreads.store(true);
     QTRY_VERIFY_WITH_TIMEOUT(harness.controller.micReceiver() != nullptr
                                  && harness.controller.micReceiver()->stats().decodedPackets >= 20,
                              kRealTransportWaitMs);
+    // TX watch follow-up: the packets came on the line's own thread, never
+    // through the owner.
+    harness.recordClockThreads.store(false);
+    {
+        const std::lock_guard<std::mutex> lock(harness.clockThreadsLock);
+        QVERIFY2(harness.clockThreads.contains(QStringLiteral("NereusMicRx")),
+                 qPrintable(QStringList(harness.clockThreads.values()).join(QLatin1Char(','))));
+    }
+    QCOMPARE(ownerMicPackets, 0);
+    // The line being torn down (a new connection's start makes another).
+    const QPointer<LibDataChannelMediaTransport> lineCore = core;
 
     // Torn down from the owner while the line's thread delivers.
     if (sessionEnds) {
@@ -1927,16 +1963,27 @@ void TstDaemonMediaController::realMicLineTornDownWhileItsThreadDelivers()
             {QStringLiteral("remoteTxVersion"), 1}},
             harness.client.sessionEpoch()));
         // The old connection's transport is stopped (its peer goes later).
-        QTRY_VERIFY(!core || !core->isReady());
+        QTRY_VERIFY(!lineCore || !lineCore->isReady());
     }
     QTRY_VERIFY(harness.controller.micReceiver() == nullptr
                 || harness.controller.micReceiver()->stats().decodedPackets == 0);
     // The phone goes on sending to a line that is gone.
     QTest::qWait(200);
     QVERIFY(sent.load() > 20);
-    // A new connection's line (not yet up) has heard nothing of the old.
-    QVERIFY(harness.controller.micReceiver() == nullptr
-            || harness.controller.micReceiver()->stats().decodedPackets == 0);
+    // A new connection's line (not yet up) has heard nothing of the old:
+    // nothing accepted, nothing rejected, nothing decoded. The session's
+    // end leaves no line; a new connection's start has one.
+    const RemoteMicReceiver* receiver = harness.controller.micReceiver();
+    if (!sessionEnds) {
+        QVERIFY2(receiver != nullptr, "the new connection opened no microphone line");
+    }
+    if (receiver != nullptr) {
+        const RemoteMicReceiver::Stats stats = receiver->stats();
+        QCOMPARE(stats.accepted, quint64(0));
+        QCOMPARE(stats.rejectedPackets, quint64(0));
+        QCOMPARE(stats.decodedPackets, quint64(0));
+    }
+    QCOMPARE(ownerMicPackets, 0);
 }
 
 void TstDaemonMediaController::displayDiagnosticsLineReportsBytesAndFragments()
