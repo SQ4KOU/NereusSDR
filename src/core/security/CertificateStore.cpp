@@ -7,6 +7,11 @@
 // specification for any of the three).
 //
 // AI tooling: Anthropic Claude Code.
+//
+// Modification history (NereusSDR):
+//   2026-09-30: LINK minor 6: the private key is made owner-only again
+//               on every load. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/CertificateStore.h"
@@ -359,6 +364,16 @@ CertificateStore::LoadResult CertificateStore::loadExisting()
     if (m_certificate.isNull() || m_privateKey.isNull()) {
         ERR_clear_error();
         return LoadResult::NotPresent;
+    }
+
+    // LINK minor 6: a key file loosened since it was written (a restore
+    // from backup, a copy, a hand edit) is made owner-only again on every
+    // load, as generateAndStore() writes it. Best effort, as there: a
+    // failure is logged and the identity still loads.
+    keyFile.close();
+    if (!QFile::setPermissions(m_keyPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
+        qCWarning(lcApp) << "CertificateStore: could not make the private key at" << m_keyPath
+                         << "owner-only";
     }
 
     m_fingerprint = fingerprint;

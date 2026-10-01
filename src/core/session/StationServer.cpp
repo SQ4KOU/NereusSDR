@@ -1,6 +1,9 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-30: Fix wave LINK minor 5: a token check counts failures per
+//               source address. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-30: RADE reason: radeReasonVersion 1 and each slice's
 //               radeReason only to a peer that declared radeReason 1
 //               (fitPeerOnlyProperties; before coreBuildInfo). J.J. Boyd
@@ -5950,19 +5953,22 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
                    /*retryable=*/false, SessionEndCode::kPairingRequired);
             return;
         }
-        const TokenStore::VerifyResult result = m_tokens->verify(message.token);
+        // LINK minor 5: the token's limiter is kept per source address
+        // (empty over the relay).
+        const TokenStore::VerifyResult result =
+            m_tokens->verify(message.token, transport->peerAddress());
         if (result != TokenStore::VerifyResult::Accepted) {
             // THE distinction TokenStore.h says the two results exist to
             // preserve, carried through to the client's retry policy.
             //
             // RateLimited is retryable: it is transient BY CONSTRUCTION --
             // the lockout expires on TokenStore's own timer, and the
-            // refusal text literally says "try again later". Crucially, the
-            // rate limiter is global rather than per-peer (TokenStore.h:44-
-            // 48 says so outright: a lockout refuses a connection
-            // "including one carrying the correct token"), so five bad
-            // guesses from anyone who can reach the port refuse the
-            // OPERATOR's token too. Marked permanent, that turned somebody
+            // refusal text literally says "try again later". The limiter
+            // is kept per source address (LINK minor 5), but over the relay
+            // every connection shares the empty address, and a lockout
+            // refuses a connection "including one carrying the correct
+            // token", so bad guesses from a stranger sharing that source
+            // can refuse the OPERATOR's token too. Marked permanent, that turned somebody
             // else's failed guesses into the operator being locked out of
             // their own station with no automatic recovery. (A paired
             // device's key is not refused by it: see above.)
