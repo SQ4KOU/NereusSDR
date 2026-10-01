@@ -614,6 +614,7 @@ private slots:
     void remoteTunerMenuRecallsOpensAdvancedAndCopiesTheCore();
     void advancedAndInterlockEntriesOpenTheirFourO3ATab();
     void olderCoreLeavesTheTunerSwitchesGreyed();
+    void aWindowThatMayTransmitNeverFallsBackToItsOwnTuner();
     void operateFromStandbyIsOneRequestOnACoreThatAppliesItWhole();
     void remoteWindowOperatesTheAmpThroughTheCore();
     void remoteWindowScansAndKeepsTheAmpAddressOnTheCore();
@@ -3638,6 +3639,55 @@ void RemotePeripheralsTest::olderCoreLeavesTheTunerSwitchesGreyed()
     QVERIFY(!outcome.sent);
     QCOMPARE(outcome.reason, IStationLink::tgxlControlUnavailableReason());
     QVERIFY(OperatorWording::isPlain(outcome.reason));
+    model.detachStation();
+}
+
+// GUI-I4 (fix wave): a remote window that may transmit, on a Core that
+// does not run the tuner for this app (no remoteTgxlControlVersion 2, no
+// tx.tunerTune), leaves TUNE, ANT, OPERATE and the relay bars disabled with
+// the reason. Before, they were live and acted on this computer's own Tuner
+// Genius. A Core that switches it but does not move relays (version below
+// 4) leaves only the relay bars disabled, with their own reason.
+void RemotePeripheralsTest::aWindowThatMayTransmitNeverFallsBackToItsOwnTuner()
+{
+    RadioModel model(RadioModel::Role::Remote);
+    RecordingTgxlLink link;
+    link.linkReady = true;
+    model.attachStation(&link);
+    TunerApplet applet(&model, model.tunerModel());
+    applet.setTransmitPermitted(true, QString());
+    model.reportStationLinkStateChanged();
+
+    QVERIFY(!applet.tuneButtonForTesting()->isEnabled());
+    QCOMPARE(applet.tuneButtonForTesting()->toolTip(), TunerApplet::noRemoteTuneReason());
+    for (int port = 1; port <= 3; ++port) {
+        QVERIFY(!applet.antennaButtonForTesting(port)->isEnabled());
+        QCOMPARE(applet.antennaButtonForTesting(port)->toolTip(),
+                 TunerApplet::noRemoteTunerReason());
+    }
+    QVERIFY(!applet.operateButtonForTesting()->isEnabled());
+    QCOMPARE(applet.operateButtonForTesting()->toolTip(), TunerApplet::noRemoteTunerReason());
+    for (int relay = 0; relay < 3; ++relay) {
+        QVERIFY(!applet.relayBarForTesting(relay)->isScrollEnabled());
+        QCOMPARE(applet.relayBarForTesting(relay)->toolTip(), TunerApplet::noRemoteTunerReason());
+    }
+    for (const QString& reason : {TunerApplet::noRemoteTuneReason(),
+                                  TunerApplet::noRemoteTunerReason(),
+                                  TunerApplet::noRemoteRelayReason()}) {
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+    }
+
+    // Switching through the Core, relays not: only the bars wait.
+    link.tgxlControl = true;
+    model.reportStationLinkStateChanged();
+    applet.setTransmitPermitted(true, QString());
+    QVERIFY(applet.antennaButtonForTesting(1)->isEnabled());
+    QVERIFY(applet.operateButtonForTesting()->isEnabled());
+    for (int relay = 0; relay < 3; ++relay) {
+        QVERIFY(!applet.relayBarForTesting(relay)->isScrollEnabled());
+        QCOMPARE(applet.relayBarForTesting(relay)->toolTip(), TunerApplet::noRemoteRelayReason());
+    }
+    QVERIFY(link.tgxlRequests.isEmpty());
     model.detachStation();
 }
 

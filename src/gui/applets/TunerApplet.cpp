@@ -163,7 +163,7 @@ void TunerApplet::buildUI()
     vbox->setSpacing(2);
 
     m_staleLabel = new QLabel(
-        QStringLiteral("Core disconnected — tuner values are stale"), this);
+        QStringLiteral("Core disconnected. The tuner values are stale."), this);
     m_staleLabel->setTextFormat(Qt::PlainText);
     m_staleLabel->setWordWrap(true);
     m_staleLabel->setStyleSheet(QStringLiteral("color: #d9a441; font-size: 10px;"));
@@ -252,6 +252,8 @@ void TunerApplet::buildUI()
     // a real FlexRadio that handles the carrier internally).
     connect(m_tuneBtn, &QPushButton::clicked, this, [this]() {
         if (!m_transmitPermitted || !m_tunerModel || transmitBlocked()) { return; }
+        // GUI-I4 (fix wave): a remote window tunes only through the Core.
+        if (remoteWindow() && !remoteTuneControl()) { return; }
         // Engage local CW tune carrier via the G.4 orchestrator
         // RadioModel::setTune(true). That call configures the gen1 PostGen
         // tone (TxChannel::setTuneTone), swaps CW->LSB/USB if needed,
@@ -463,6 +465,33 @@ bool TunerApplet::remoteRelayControl() const
     return link && link->tgxlFullControlAvailable();
 }
 
+bool TunerApplet::remoteWindow() const
+{
+    return m_model && m_model->role() == RadioModel::Role::Remote;
+}
+
+bool TunerApplet::remoteTuneControl() const
+{
+    if (!remoteWindow()) { return false; }
+    const IStationLink* link = m_model->stationLink();
+    return link && link->tgxlAutotuneAvailable();
+}
+
+QString TunerApplet::noRemoteTuneReason()
+{
+    return QStringLiteral("The connected Core does not offer Tuner Genius tuning to this app.");
+}
+
+QString TunerApplet::noRemoteTunerReason()
+{
+    return QStringLiteral("The connected Core does not offer Tuner Genius controls to this app.");
+}
+
+QString TunerApplet::noRemoteRelayReason()
+{
+    return QStringLiteral("The connected Core does not offer Tuner Genius relay control to this app.");
+}
+
 // R-R3-49 (parity Task 8): a remote window asks the Core, whose tuner moves
 // the relay; the bar follows the tuner's report (relayC1/relayL/relayC2),
 // never the wheel.
@@ -473,6 +502,9 @@ void TunerApplet::requestRelayMove(int relay, int direction)
             m_model->stationLink()->requestTgxlRelayMove(relay, direction > 0 ? 1 : -1);
         }
         return;
+    }
+    if (remoteWindow()) {
+        return;  // GUI-I4: never this computer's own tuner
     }
     if (m_transmitPermitted && m_tunerModel && !refuseLocalSwitchOnAir()) {
         m_tunerModel->adjustRelay(relay, direction);
@@ -521,6 +553,9 @@ void TunerApplet::requestAntenna(int port)
             m_model->stationLink()->requestTgxlAntenna(port);
         }
         return;
+    }
+    if (remoteWindow()) {
+        return;  // GUI-I4: never this computer's own tuner
     }
     if (m_transmitPermitted && m_tunerModel && !refuseLocalSwitchOnAir()) {
         m_tunerModel->setAntennaA(port);
@@ -578,6 +613,12 @@ void TunerApplet::updateActuatingControls()
         button->setToolTip(tooltip);
     };
     updateButton(m_tuneBtn);
+    // GUI-I4 (fix wave): a remote window's TUNE is the Core's tune; on a
+    // Core that does not offer it, TUNE waits with that reason.
+    if (m_tuneBtn && m_tuneBtn->isEnabled() && remoteWindow() && !remoteTuneControl()) {
+        m_tuneBtn->setEnabled(false);
+        m_tuneBtn->setToolTip(noRemoteTuneReason());
+    }
     // Task 16 fix wave (M2): TUNE also waits on the transmit block, with its
     // reason, and with both reasons when a remote window's missing transmit
     // applies too (M6).
@@ -607,6 +648,11 @@ void TunerApplet::updateActuatingControls()
         const bool onAir = coreOnAir();
         switchable = !onAir;
         switchTip = onAir ? onAirReason() : QString();
+    } else if (remoteWindow() && m_transmitPermitted) {
+        // GUI-I4 (fix wave): never this computer's own tuner. Without the
+        // transmit permission the transmit reason above stands.
+        switchable = false;
+        switchTip = noRemoteTunerReason();
     } else if (m_transmitPermitted && coreOnAir()) {
         // Group B fix wave (M5): a local window's, the same rule.
         switchable = false;
@@ -627,6 +673,11 @@ void TunerApplet::updateActuatingControls()
         const bool onAir = coreOnAir();
         relayCommandsEnabled = !onAir && m_tunerModel && m_tunerModel->hasDirectConnection();
         relayTip = onAir ? onAirReason() : QString();
+    } else if (remoteWindow() && m_transmitPermitted) {
+        // GUI-I4 (fix wave): never this computer's own tuner. Without the
+        // transmit permission the bars are already off.
+        relayCommandsEnabled = false;
+        relayTip = remoteTunerControl() ? noRemoteRelayReason() : noRemoteTunerReason();
     } else if (m_transmitPermitted && coreOnAir()) {
         // Group B fix wave (M5): a local window's relays, the same rule.
         relayCommandsEnabled = false;
@@ -882,6 +933,8 @@ void TunerApplet::cycleOperateState()
     // follows its report.
     if (!m_tunerModel) return;
     const bool remote = remoteTunerControl();
+    // GUI-I4 (fix wave): a remote window switches only through the Core.
+    if (!remote && remoteWindow()) { return; }
     if (remote ? coreOnAir() : (!m_transmitPermitted || refuseLocalSwitchOnAir())) return;
     IStationLink* link = remote ? m_model->stationLink() : nullptr;
     const auto setBypass = [this, link](bool on) {
@@ -972,6 +1025,8 @@ void TunerApplet::contextMenuEvent(QContextMenuEvent* ev)
 QMenu* TunerApplet::buildContextMenu(QObject* menuParent)
 {
     auto* menu = new QMenu(qobject_cast<QWidget*>(menuParent));
+    // GUI-M3 (fix wave): the disabled items carry their reasons as tooltips.
+    menu->setToolTipsVisible(true);
 
     // Open TGXL Advanced...
     // R-R3-49 (parity Task 8): Setup > CAT & Network > 4O3A > Tuner Genius
