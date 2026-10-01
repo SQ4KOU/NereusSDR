@@ -18881,6 +18881,20 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
 
 void RadioModel::disconnectFromRadio()
 {
+    retireConnectionForRecovery();
+    // TX safety fix round 2 (2026-09-30): the operator disconnected on
+    // purpose, so the lost-link lock lifts here. This runs after
+    // teardownConnection, which returns early when there is no connection,
+    // so a Disconnect made after a recovery retire still clears it.
+    if (m_radioLinkDown) {
+        m_radioLinkDown = false;
+        applyTxKeyBlock();
+        emit radioLinkDownChanged(false);
+    }
+}
+
+void RadioModel::retireConnectionForRecovery()
+{
     m_intentionalDisconnect = true;
     emit radioDisconnectRequested();
     teardownConnection();
@@ -24532,16 +24546,11 @@ void RadioModel::teardownConnection()
     // section 5.
     setConnectionState(ConnectionState::Disconnected);
 
-    // TX safety follow-up (2026-09-30): the forced Disconnected above never
-    // reaches onConnectionStateChanged, which is what clears the lost-link
-    // block. Clear it here, so a disconnect after a LinkLost (the
-    // operator's, or the Core retiring the radio) does not leave the window
-    // saying the link is down on a station disconnected on purpose.
-    if (m_radioLinkDown) {
-        m_radioLinkDown = false;
-        applyTxKeyBlock();
-        emit radioLinkDownChanged(false);
-    }
+    // TX safety fix round 2 (2026-09-30): the forced Disconnected above never
+    // reaches onConnectionStateChanged, so a lost-link lock stays set here.
+    // Every retire passes through this teardown, the recovery retire too,
+    // and that lock must hold until the rebuilt link reaches Connected. The
+    // operator's disconnect lifts it in disconnectFromRadio.
 
     // Tear down the connection on its own worker thread via the shared
     // helper. See src/core/RadioConnectionTeardown.h for why this must

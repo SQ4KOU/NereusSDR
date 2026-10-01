@@ -517,6 +517,10 @@
 //                and 2TONE until it is back (console.cs:27488-27493
 //                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - TX safety: retireConnectionForRecovery keeps the lost-link
+//                lock through an automatic recovery; disconnectFromRadio
+//                (the operator's) lifts it. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -4775,7 +4779,15 @@ public:
     void connectToRadio(const RadioInfo& info);
     // Same selected radio, retaining live receiver state and active selection.
     void connectToRadioPreservingSlices(const RadioInfo& info);
+    // The operator's disconnect (and an application shutdown). It also lifts
+    // the lost-link key lock, even when the connection is already gone.
     void disconnectFromRadio();
+    // TX safety fix round 2 (2026-09-30): automatic recovery's retire (the
+    // Core's retire-and-reconnect, the hosted GUI's retry). Same teardown as
+    // disconnectFromRadio, but a lost-link key lock stays set through the
+    // Disconnected wait and the rebuilt link's Connecting and Probing; it
+    // lifts when a link reaches Connected.
+    void retireConnectionForRecovery();
 #ifdef NEREUS_BUILD_TESTS
     // Instance-local loopback transport setup, applied before the connection
     // moves to its worker. No global port overrides or production callers.

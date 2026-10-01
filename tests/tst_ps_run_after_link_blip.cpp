@@ -15,9 +15,10 @@
 // as it runs in use, with PureSignal's timers running throughout.
 //
 // Against in-process fake radios only (never a real radio); nothing keys.
-//   1. P1: PS-A running, the link goes silent, PureSignal turns itself off,
-//      the connection reconnects by itself, PS-A re-arms, and bank 11's C2
-//      bit 6 (puresignal_run) is back on ep2.
+//   1. P1: PS-A running, the link goes silent, the connection is held at its
+//      LinkLost so no reconnect attempt is spent, PureSignal turns itself
+//      off, the hold lifts, the connection reconnects by itself, PS-A
+//      re-arms, and bank 11's C2 bit 6 (puresignal_run) is back on ep2.
 //   2. P2: PS-A running, the link goes silent (LinkLost), PureSignal turns
 //      itself off, the link is rebuilt as the hosted retry does
 //      (disconnectFromRadio, then connectToRadio), PS-A re-arms, and the new
@@ -27,8 +28,11 @@
 
 #include <QtTest/QtTest>
 #include <QFile>
+#include <QScopeGuard>
+#include <QSemaphore>
 #include <QTimer>
 
+#include <atomic>
 #include <memory>
 
 #include "core/AppSettings.h"
@@ -165,8 +169,14 @@ private slots:
         harness->fake().clearEp2CcLog();
         QTRY_VERIFY_WITH_TIMEOUT(bank11PsRun(harness->fake().ep2CcReceived()), 5000);
 
-        // The link goes silent; PureSignal turns itself off while it is
-        // down, and the radio answers again once it has.
+        // The link goes silent and the connection declares LinkLost. The
+        // connection is held at that point, on its own thread, before it
+        // arms its first reconnect, so none of its bounded reconnect
+        // attempts is spent while PureSignal turns itself off. The radio
+        // answers again at once; the reconnect starts when the hold lifts.
+        // (Fix round 2: the test used to keep the radio silent until
+        // PureSignal was off, so a slow turn-off spent all three attempts
+        // and failed the test for an unrelated reason.)
         bool sawLinkLost = false;
         P1FakeRadio* fake = &harness->fake();
         const QMetaObject::Connection watch = connect(
@@ -176,11 +186,27 @@ private slots:
                     sawLinkLost = true;
                 }
             });
+        auto lift = std::make_shared<QSemaphore>();
+        auto held = std::make_shared<std::atomic<bool>>(false);
+        const QMetaObject::Connection hold = connect(
+            p1, &RadioConnection::connectionStateChanged, p1,
+            [lift, held](ConnectionState s) {
+                if (s == ConnectionState::LinkLost && !held->exchange(true)) {
+                    lift->tryAcquire(1, 10000);
+                }
+            },
+            Qt::DirectConnection);
+        auto release = qScopeGuard([lift]() { lift->release(); });
         fake->goSilent();
         QTRY_VERIFY_WITH_TIMEOUT(sawLinkLost, 5000);
+        QVERIFY(held->load());
         disconnect(watch);
-        QVERIFY2(waitPsEnabled(model, false), "PureSignal stayed on with the link down");
+        disconnect(hold);
         fake->resume();
+        const bool psWentOff = waitPsEnabled(model, false);
+        lift->release();
+        release.dismiss();
+        QVERIFY2(psWentOff, "PureSignal stayed on with the link down");
         QTRY_COMPARE_WITH_TIMEOUT(model.connectionState(), ConnectionState::Connected, 10000);
         QCOMPARE(model.connection(), static_cast<RadioConnection*>(p1));
         QVERIFY(fake->metisStopCount() >= 1);
@@ -230,7 +256,7 @@ private slots:
 
         // The link is rebuilt as the hosted retry does it.
         fake.resumeIngress();
-        model.disconnectFromRadio();
+        model.retireConnectionForRecovery();
         model.connectToRadio(info);
         QTRY_VERIFY_WITH_TIMEOUT(model.isConnected(), 15000);
         QVERIFY(waitLanesIdle(model));

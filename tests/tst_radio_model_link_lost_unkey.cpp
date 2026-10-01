@@ -19,10 +19,15 @@
 //      back the lock lifts and a key reaches the connection.
 //   6. Fix round 1 (I2): the link back pushes the PureSignal enable to the
 //      connection again, whatever the protocol.
-//   7. Follow-up (Minor 1): a disconnect after a lost link (the operator's,
-//      or the Core retiring the radio) clears the lost-link lock, so the
-//      window no longer says the link is down on a station disconnected on
-//      purpose.
+//   7. Follow-up (Minor 1): the operator's disconnect after a lost link
+//      clears the lost-link lock, so the window no longer says the link is
+//      down on a station disconnected on purpose.
+//   8. Fix round 2: automatic recovery's retire (the Core's
+//      retire-and-reconnect, the hosted GUI's retry) keeps the lock and its
+//      reason through the Disconnected wait and the rebuilt link's
+//      Connecting and Probing, refuses a key there, and lifts on Connected.
+//   9. Fix round 2: the operator's disconnect made after such a retire, when
+//      there is no connection left to tear down, still clears the lock.
 
 #include <QtTest/QtTest>
 #include <QCoreApplication>
@@ -311,8 +316,112 @@ private slots:
         QVERIFY(rig.model.isRadioLinkDown());
         QCOMPARE(downChanged.count(), 1);
 
-        // The disconnect goes through teardownConnection, which sets
-        // Disconnected itself and never reaches onConnectionStateChanged.
+        // The operator's disconnect goes through teardownConnection, which
+        // sets Disconnected itself and never reaches onConnectionStateChanged;
+        // disconnectFromRadio lifts the lock after it.
+        rig.model.disconnectFromRadio();
+        pump();
+        QCOMPARE(rig.model.connectionState(), ConnectionState::Disconnected);
+        QVERIFY(!rig.model.isRadioLinkDown());
+        QCOMPARE(downChanged.count(), 2);
+        QCOMPARE(downChanged.at(1).at(0).toBool(), false);
+        QVERIFY(rig.model.transmitLockReasonAlongside(QString()) != reason);
+        QVERIFY(rig.model.moxController()->transmitBlockReason() != reason);
+        QVERIFY(!rig.model.moxController()->isRadioLinkDown());
+    }
+
+    void recoveryRetireKeepsTheLockUntilConnected()
+    {
+        MockConnection rebuilt;  // outlives the rig, which holds it last
+        Rig rig;
+        MoxController* mox = rig.model.moxController();
+        const QString reason = QStringLiteral("The link to the radio is down.");
+        QSignalSpy downChanged(&rig.model, &RadioModel::radioLinkDownChanged);
+        QSignalSpy rejected(mox, &MoxController::moxRejected);
+        QSignalSpy moxState(mox, &MoxController::moxStateChanged);
+
+        rig.conn.setStateForTest(ConnectionState::LinkLost);
+        rig.model.onConnectionStateChangedForTest(ConnectionState::LinkLost);
+        pump();
+        QVERIFY(rig.model.isRadioLinkDown());
+        QCOMPARE(downChanged.count(), 1);
+
+        // The recovery retire: Disconnected, and the lock holds.
+        rig.model.retireConnectionForRecovery();
+        pump();
+        QCOMPARE(rig.model.connectionState(), ConnectionState::Disconnected);
+        QVERIFY(rig.model.connection() == nullptr);
+        QVERIFY(rig.model.isRadioLinkDown());
+        QCOMPARE(downChanged.count(), 1);
+        QCOMPARE(rig.model.transmitLockReasonAlongside(QString()), reason);
+        QCOMPARE(mox->transmitBlockRefusal().text, reason);
+
+        // The rebuilt link: Connecting then Probing, each still locked with
+        // the reason a remote window is sent, and a key is refused.
+        rebuilt.log.clear();
+        rig.model.injectConnectionForTest(&rebuilt);
+        for (const ConnectionState s : {ConnectionState::Connecting,
+                                        ConnectionState::Probing}) {
+            rebuilt.setStateForTest(s);
+            rig.model.onConnectionStateChangedForTest(s);
+            pump();
+            QVERIFY(rig.model.isRadioLinkDown());
+            QVERIFY(rig.model.transmitButtonsLocked());
+            QCOMPARE(rig.model.transmitLockReasonAlongside(QString()), reason);
+            QCOMPARE(mox->transmitBlockReason(), reason);
+            QCOMPARE(mox->transmitBlockRefusal().code,
+                     QByteArray(TxRefusals::kInterlock));
+            QCOMPARE(mox->transmitBlockRefusal().text, reason);
+            const int before = rejected.count();
+            mox->setMox(true);
+            pump();
+            QCOMPARE(rejected.count(), before + 1);
+            QCOMPARE(rejected.at(before).at(0).toString(), reason);
+            QVERIFY(!rig.model.mox());
+        }
+        QCOMPARE(downChanged.count(), 1);
+        for (const QList<QVariant>& args : moxState) {
+            QVERIFY2(!args.at(0).toBool(), "the model showed TX during the recovery");
+        }
+        QVERIFY2(!rebuilt.log.contains(QStringLiteral("MOX on")),
+                 "a key reached the rebuilt link before it was Connected");
+
+        // Connected: the lock lifts and the next key is accepted. (The
+        // retire released the slice's TX binding, which only a real
+        // connectToRadio restores, so this harness checks the gate, not
+        // the wire.)
+        rebuilt.setStateForTest(ConnectionState::Connected);
+        rig.model.onConnectionStateChangedForTest(ConnectionState::Connected);
+        pump();
+        QVERIFY(!rig.model.isRadioLinkDown());
+        QCOMPARE(downChanged.count(), 2);
+        QCOMPARE(downChanged.at(1).at(0).toBool(), false);
+        QVERIFY(!rig.model.transmitButtonsLocked());
+        QVERIFY(mox->transmitBlockReason().isEmpty());
+        const int rejectedBefore = rejected.count();
+        mox->setMox(true);
+        QTRY_VERIFY_WITH_TIMEOUT(rig.model.mox(), 5000);
+        QCOMPARE(rejected.count(), rejectedBefore);
+        mox->setMox(false);
+        QTRY_VERIFY_WITH_TIMEOUT(rig.allOff(), 5000);
+    }
+
+    void operatorDisconnectAfterRetireClearsTheLock()
+    {
+        Rig rig;
+        const QString reason = QStringLiteral("The link to the radio is down.");
+        QSignalSpy downChanged(&rig.model, &RadioModel::radioLinkDownChanged);
+        rig.conn.setStateForTest(ConnectionState::LinkLost);
+        rig.model.onConnectionStateChangedForTest(ConnectionState::LinkLost);
+        pump();
+        rig.model.retireConnectionForRecovery();
+        pump();
+        QVERIFY(rig.model.connection() == nullptr);
+        QVERIFY(rig.model.isRadioLinkDown());
+        QCOMPARE(downChanged.count(), 1);
+
+        // The operator's Disconnect while the Core waits to reconnect: there
+        // is no connection for teardown to retire, and the lock still lifts.
         rig.model.disconnectFromRadio();
         pump();
         QCOMPARE(rig.model.connectionState(), ConnectionState::Disconnected);
