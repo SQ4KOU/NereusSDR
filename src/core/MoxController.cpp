@@ -201,6 +201,10 @@
 //               (Thetis console.cs:27488-27493 [v2.10.3.15]). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: TGXL tune lane (JJ's ruling): a tunerPress key's take
+//               (ruling 8.9) ends with tunerTakeFinished; admitKey records
+//               a take (lastAdmitTook). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -611,6 +615,12 @@ void MoxController::onTakeFinished(const KeyerIdentity& keyer, bool took)
     // Ruling 8.9: the press that asked for the take keys only if it is
     // still down; a press released meanwhile keys nothing. Only a station
     // PTT source is followed here; a remote keyer sends its key again.
+    if (keyer.isStation() && keyer.tunerPress) {
+        // TGXL tune lane: the tuner's press is followed by its tune cycle,
+        // which keys only while the tuner still asks for the carrier.
+        emit tunerTakeFinished(took);
+        return;
+    }
     if (!took || !keyer.isStation()) {
         return;
     }
@@ -641,6 +651,7 @@ bool MoxController::admitStationKey(PttMode source)
 
 bool MoxController::admitKey(const KeyerIdentity& keyer)
 {
+    m_lastAdmitTook = false;
     if (!m_keyingGate) {
         return true;
     }
@@ -675,6 +686,8 @@ bool MoxController::admitKey(const KeyerIdentity& keyer)
                                                            : answer.refusal;
         if (answer.verdict != KeyingVerdict::Take) {
             reportRefusal(refusal.text, refusal, /*quiet=*/false);
+        } else {
+            m_lastAdmitTook = true;
         }
         return false;
     }

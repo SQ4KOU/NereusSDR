@@ -934,6 +934,33 @@
 //                console.cs:27488-27493 [v2.10.3.15]); every link back
 //                (P1 and P2) gets the effective PureSignal enable again.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - TGXL tune lane: a refused tune carrier logs why it was
+//                refused, and the tuner's link dropping ends a tune cycle
+//                and drops its carrier. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-30 - TGXL tune lane (JJ's ruling): the tuner's front-panel TUNE
+//                takes transmit from another device and keys, as the
+//                radio's own PTT does (ruling 8.9, KeyerIdentity::
+//                tunerPress); its cycle gets the 3 s start watchdog and the
+//                drop on its sweep's end; the tuner's tune off before the
+//                carrier keys ends the cycle. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-10-01 - TGXL tune lane fix round: the take is the connected Tuner
+//                Genius's `transmit tune on` only (its address, never while
+//                an `autotune` this computer sent is unanswered, never a
+//                tuning=1 alone); a pending take is cleared when its cycle
+//                ends. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
+//   2026-10-01 - TGXL tune lane round 2: what the tuner may answer (each
+//                `autotune`, each tune=1/0 broadcast) is counted in a
+//                TgxlAnswerTracker; a tune on is the tuner's own TUNE only
+//                when it answers none of them. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - TGXL tune lane round 3: every tune=1 frame counted with
+//                no :9010 gate; an echo or a cycle's autotune answer is
+//                dropped, never keyed; entries keyed by link epoch; each
+//                answer's kind and latency logged. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1220,6 +1247,8 @@ warren@wpratt.com
 #include "core/meters/SliceMeterPump.h"
 #include "core/AppSettings.h"
 #include <QHostAddress>
+#include <chrono>
+#include <utility>
 #include "core/SampleRateCatalog.h"
 #include "core/LogCategories.h"
 #include "core/NoiseFloorTracker.h"
@@ -2834,12 +2863,61 @@ RadioModel::RadioModel(Role role, QObject* parent)
     m_tgxlConnection = new TgxlConnection(this);
     m_tunerModel     = new TunerModel(this);
     m_tunerModel->bindConnection(m_tgxlConnection);
+    // TGXL tune lane (2026-09-30): the tuner's link dropping ends a tune
+    // cycle. Nothing else would: a hardware cycle waits for the tuner's
+    // `transmit tune off`, and a cycle whose sweep started waits for its
+    // tuning state to fall, neither of which a lost tuner sends.
+    // TGXL tune lane fix round (2026-10-01): an `autotune` this computer
+    // sent (the Tuner page, a device's tune, the band-change recall) is
+    // answered by the tuner with its own `transmit tune on` (pcap
+    // T+172.199), which is then not its front-panel TUNE.
+    // Round 2: each one is counted in m_tgxlAnswers with the tune=1/0
+    // broadcasts the tuner echoes; it leaves on its answer, its own
+    // rejection, its sweep's end, or the answer window. A link drop does
+    // not clear it: the answer comes on :4992, not the dropped :9010 link.
+    // Round 3 (m-4): the link's sequence numbers restart on each connect,
+    // so entries are keyed by the link epoch as well.
+    connect(m_tgxlConnection, &TgxlConnection::connected, this, [this]() {
+        ++m_tgxlLinkEpoch;
+    });
+    // An `autotune` sent for a running cycle, or while a tune carrier is
+    // already up (TunerApplet.cpp extending an operator's TUN), has its
+    // carrier: the tuner's answer to it asks for nothing (m-5).
+    connect(m_tgxlConnection, &TgxlConnection::autotuneSent, this, [this](quint32 seq) {
+        m_tgxlAnswers.autotuneSent(m_tgxlLinkEpoch, seq, m_tgxlAutotuneInProgress || m_isTuning,
+                                   tgxlAnswerNowMs());
+    });
+    connect(m_tgxlConnection, &TgxlConnection::replyReceived, this,
+            [this](quint32 seq, bool accepted, const QString&) {
+        if (!accepted) {
+            m_tgxlAnswers.autotuneRejected(m_tgxlLinkEpoch, seq);
+        }
+    });
+    connect(m_tunerModel, &TunerModel::tuningChanged, this, [this](bool tuning) {
+        m_tgxlAnswers.tuningChanged(tuning, tgxlAnswerNowMs());
+    });
+    connect(m_tgxlConnection, &TgxlConnection::disconnected, this, [this]() {
+        if (!m_tgxlAutotuneInProgress) {
+            return;
+        }
+        qCWarning(lcConnection) << "TGXL autotune: the tuner disconnected; ending the cycle"
+                                   " and dropping the carrier";
+        if (m_isTuning) {
+            // The carrier drops; manualMoxChanged(false) finishes the cycle.
+            setTune(false);
+        } else {
+            finishTgxlAutotuneCycle();
+        }
+    });
     // iPhone app plan Task 77: a device's Tuner Genius cycle ends with the
     // tuner's own sweep, as the local Tuner page ends the Core's own.
     // Task 77 fix round 3: the Power Genius's OPERATE waits for the sweep.
     connect(m_tunerModel, &TunerModel::tuningChanged, this, &RadioModel::pgxlSwitchWaitChanged);
     connect(m_tunerModel, &TunerModel::tuningChanged, this, [this](bool tuning) {
-        if (!m_tgxlAutotuneInProgress || m_tgxlAutotuneDeviceId.isEmpty()) {
+        // TGXL tune lane: the tuner's own front-panel cycle too, which may
+        // now take transmit from another device (ruling 8.9).
+        if (!m_tgxlAutotuneInProgress
+            || (m_tgxlAutotuneDeviceId.isEmpty() && !m_tgxlAutotuneFromHardware)) {
             return;
         }
         if (tuning) {
@@ -3021,10 +3099,68 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // PostGen tone is actually emitted. Symmetric path on tune off.
     // No latch needed here because TGXL is authoritative -- the off arrives
     // when TGXL has finished tuning regardless of who initiated.
+    // TGXL tune lane round 2 (2026-10-01): the tuner answers the tune
+    // state we send with its own `transmit tune on/off` (bench
+    // 2026-05-20, commit 01ca5b824 item 8).
+    // Round 3: every tune=1 frame is counted, whether or not :9010 is up
+    // (the echo comes on :4992), and the frames and echoes of each tune
+    // are counted for the log.
+    connect(m_smartSdrListener, &SmartSdrApiListener::tuneStateSent,
+            this, [this](bool tune) {
+        m_tgxlAnswers.tuneSent(tune, tgxlAnswerNowMs());
+        if (tune) {
+            if (!m_tgxlLastTuneSent) {
+                m_tgxlTuneFramesSent = 0;
+                m_tgxlTuneEchoes = 0;
+            }
+            ++m_tgxlTuneFramesSent;
+        }
+        m_tgxlLastTuneSent = tune;
+    });
     connect(m_smartSdrListener, &SmartSdrApiListener::tuneRequested,
-            this, [this](bool on) {
-        qCInfo(lcConnection) << "LAN PTT tuneRequested(" << on << ")";
+            this, [this](bool on, const QHostAddress& peer) {
+        qCInfo(lcConnection) << "LAN PTT tuneRequested(" << on << ") from" << peer.toString();
         if (on) {
+            // TGXL tune lane fix round (2026-10-01): the Tuner Genius's own
+            // front-panel TUNE (JJ's ruling: it takes transmit as the
+            // radio's PTT does) is a `transmit tune on` from the connected
+            // tuner's address that answers nothing this computer sent.
+            // Round 2: "nothing sent" is every `autotune` and every
+            // tune=1 broadcast still waiting for its tune on
+            // (m_tgxlAnswers), not the state at arrival. Any other
+            // client's line, or an answer, keys as the station without
+            // taking (8.9a).
+            const bool fromTuner = tgxlIsPeer(peer);
+            const TgxlAnswerTracker::Answer answer =
+                fromTuner ? m_tgxlAnswers.tuneOnAnswer(tgxlAnswerNowMs())
+                          : TgxlAnswerTracker::Answer{};
+            using AnswerKind = TgxlAnswerTracker::Kind;
+            const bool press = fromTuner && answer.kind == AnswerKind::None;
+            if (!fromTuner) {
+                qCInfo(lcConnection) << "LAN PTT tune on is not the tuner's own TUNE:"
+                                        " it is not from the connected Tuner Genius";
+            } else if (!press) {
+                // Round 3 (m-1): each answer's kind and latency, and the
+                // echoes per tune, size the answer window from the bench.
+                if (answer.kind == AnswerKind::TuneOnEcho) {
+                    ++m_tgxlTuneEchoes;
+                }
+                qCInfo(lcConnection).nospace()
+                    << "TGXL answer: " << TgxlAnswerTracker::kindName(answer.kind) << " after "
+                    << answer.latencyMs << " ms (this tune: " << m_tgxlTuneEchoes << " echoes for "
+                    << m_tgxlTuneFramesSent << " tune=1 frames)";
+            }
+            // Round 3 (m-5): an echo of our tune state, or the answer to an
+            // `autotune` sent for a tune cycle, asks for nothing: it never
+            // keys and never takes. Only the answer to an `autotune` sent
+            // outside a cycle (the band-change recall, whose sweep has no
+            // other carrier) still keys, as the station, below.
+            if (answer.kind == AnswerKind::TuneOnEcho
+                || answer.kind == AnswerKind::CycleAutotune) {
+                qCInfo(lcConnection) << "LAN PTT tune on dropped: it answers"
+                                     << TgxlAnswerTracker::kindName(answer.kind);
+                return;
+            }
             // 2026-05-20 bench fix: TGXL ECHOES our outbound `tune=1` in
             // the slice/transmit S-frame back to us as `transmit tune
             // on` -- effectively saying "I acknowledge the tune state."
@@ -3052,6 +3188,15 @@ RadioModel::RadioModel(Role role, QObject* parent)
             // false AND m_tgxlAutotuneInProgress is false, so neither
             // guard fires and startTgxlAutotune(fromHardware=true) runs.
             if (m_tgxlAutotuneInProgress) {
+                if (press && m_tgxlAutotuneFromHardware && m_tgxlAutotuneDeviceId.isEmpty()
+                    && !m_isTuning && !m_tgxlAutotuneTunerPress) {
+                    // A desktop's Tuner page started this cycle from the
+                    // tuner's tuning=1 before its `transmit tune on`
+                    // arrived; the press is what makes it the tuner's own.
+                    qCInfo(lcConnection) << "TGXL autotune: the running cycle is the tuner's"
+                                            " own TUNE";
+                    m_tgxlAutotuneTunerPress = true;
+                }
                 qCInfo(lcConnection)
                     << "LAN PTT tuneRequested(true) suppressed:"
                        " TunerApplet autotune already in progress"
@@ -3071,8 +3216,20 @@ RadioModel::RadioModel(Role role, QObject* parent)
             // the duration. Same orchestration as TunerApplet TUNE click,
             // but with fromHardware=true to skip the redundant `autotune`
             // command (TGXL already started).
+            m_tgxlPendingTunerPress = press;
             startTgxlAutotune(/*fromHardware=*/true);
+            m_tgxlPendingTunerPress = false;
         } else {
+            if (tgxlIsPeer(peer)) {
+                // TGXL tune lane round 2: the echo of a tune=0 broadcast,
+                // or the tuner letting go of a sweep it started for us.
+                const TgxlAnswerTracker::Answer answer = m_tgxlAnswers.tuneOff(tgxlAnswerNowMs());
+                if (answer.kind != TgxlAnswerTracker::Kind::None) {
+                    qCInfo(lcConnection) << "TGXL answer:"
+                                         << TgxlAnswerTracker::kindName(answer.kind) << "after"
+                                         << answer.latencyMs << "ms";
+                }
+            }
             // TGXL released tune (cycle done or aborted). Drop our local
             // carrier only if WE engaged it via the autotune orchestration
             // (m_tgxlAutotuneInProgress). When the operator is running an
@@ -3086,6 +3243,15 @@ RadioModel::RadioModel(Role role, QObject* parent)
                     << "LAN PTT tuneRequested(false) suppressed:"
                        " no autotune in progress (TGXL echo, operator"
                        " TUN cycle owns the drop)";
+                return;
+            }
+            if (!m_isTuning) {
+                // TGXL tune lane: the tuner let go before the carrier keyed
+                // (the amplifier's standby or a take still running): the
+                // cycle ends here, so nothing keys after it.
+                qCInfo(lcConnection) << "TGXL autotune: the tuner ended the cycle before the"
+                                        " carrier keyed";
+                finishTgxlAutotuneCycle();
                 return;
             }
             setTune(false);
@@ -3104,6 +3270,28 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // button), which forced the operator to release the carrier manually
     // when our app TUNE was clicked.
     if (m_moxController) {
+        // TGXL tune lane (JJ's ruling, 2026-09-30; ruling 8.9): the take the
+        // tuner's front-panel TUNE asked for has ended. Its carrier keys
+        // only while that cycle still runs (the tuner has not let go, its
+        // link has not dropped), back through every gate of the cycle.
+        connect(m_moxController, &MoxController::tunerTakeFinished, this, [this](bool took) {
+            if (!m_tgxlTakePending) {
+                return;
+            }
+            m_tgxlTakePending = false;
+            if (!m_tgxlAutotuneInProgress || m_tgxlTakeGeneration != m_tgxlCycleGeneration) {
+                return;
+            }
+            if (!took) {
+                qCInfo(lcConnection) << "TGXL autotune: the take for the tuner's TUNE did not"
+                                        " finish; ending the cycle";
+                finishTgxlAutotuneCycle();
+                return;
+            }
+            qCInfo(lcConnection) << "TGXL autotune: transmit taken for the tuner's TUNE;"
+                                    " engaging the carrier";
+            continueTgxlAutotuneAfterStandby();
+        });
         connect(m_moxController, &MoxController::manualMoxChanged,
                 this, [this](bool isManual) {
             if (m_smartSdrListener) {
@@ -25772,6 +25960,12 @@ void RadioModel::setTune(bool on)
         if (m_moxController
             && !(m_tuneKeyer != nullptr ? m_moxController->admitKey(*m_tuneKeyer)
                                         : m_moxController->admitStationKey(PttMode::Manual))) {
+            if (m_moxController->lastAdmitTook()) {
+                // TGXL tune lane (ruling 8.9): the tuner's front-panel TUNE
+                // is taking transmit; nothing keys now, and its cycle keys
+                // when the take ends (tunerTakeFinished).
+                return;
+            }
             emit tuneRefused(m_moxController->lastRefusal().text);
             return;
         }
@@ -30116,6 +30310,10 @@ void RadioModel::finishTgxlAutotuneCycle(const QString& unkeyedReason)
         return;
     }
     setTgxlAutotuneInProgress(false);
+    // TGXL tune lane fix round (M5): a take still running for this cycle
+    // keys nothing when it ends.
+    m_tgxlTakePending = false;
+    m_tgxlAutotuneTunerPress = false;
     // Clear the interlock-grant gate too; if the cycle ends before
     // interlockGranted fires (e.g. operator hit TUN-off very early, or PGXL
     // force-tripped FAULT mid-handshake), we don't want a future
@@ -30146,6 +30344,26 @@ void RadioModel::finishTgxlAutotuneCycle(const QString& unkeyedReason)
                                 " before cycle, leaving in current state";
     }
     emit tgxlAutotuneEnded(device, unkeyedReason);
+}
+
+qint64 RadioModel::tgxlAnswerNowMs()
+{
+    // TGXL tune lane round 2: a monotonic clock for TgxlAnswerTracker's
+    // answer window.
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+bool RadioModel::tgxlIsPeer(const QHostAddress& peer) const
+{
+    // TGXL tune lane fix round (2026-10-01): the sender on :4992 is the
+    // Tuner Genius this computer is connected to on :9010.
+    if (!m_tgxlConnection || !m_tgxlConnection->isConnected() || peer.isNull()) {
+        return false;
+    }
+    const QHostAddress tuner(m_tgxlConnection->peerAddress());
+    return !tuner.isNull() && tuner.isEqual(peer, QHostAddress::TolerantConversion);
 }
 
 bool RadioModel::tgxlRfFlowing() const
@@ -30353,6 +30571,9 @@ void RadioModel::sendPgxlOperateRestore()
 
 QString RadioModel::beginTgxlAutotune(bool fromHardware)
 {
+    // TGXL tune lane fix round: whether this request is the tuner's own
+    // front-panel TUNE (set only by the LAN PTT handler, for one call).
+    const bool tunerPress = fromHardware && std::exchange(m_tgxlPendingTunerPress, false);
     // Task 16 fix wave (M2): receive only, TX inhibit and a PA trip refuse
     // the cycle before anything reaches the amplifier or the tuner; the
     // TUN it would key is refused at MoxController's gate anyway, and
@@ -30444,6 +30665,7 @@ QString RadioModel::beginTgxlAutotune(bool fromHardware)
     // Task 77 fix round 4: this cycle's number, for its failsafe timers.
     const quint64 generation = ++m_tgxlCycleGeneration;
     m_tgxlAutotuneFromHardware = fromHardware;
+    m_tgxlAutotuneTunerPress = tunerPress;
     // Need to await STANDBY confirm? Only while it is operating now.
     m_pgxlStandbyPending = m_hasAmplifier && m_ampOperate;
 
@@ -30578,6 +30800,13 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
     }
     qCInfo(lcConnection)
         << "TGXL autotune: PGXL standby ready, engaging local TUN carrier";
+    // TGXL tune lane (2026-09-30): why setTune(true) refused, for the log.
+    // A gate refusal arrives as tuneRefused; a refusal inside the MOX walk
+    // is the controller's last refusal.
+    QString refusedReason;
+    const QMetaObject::Connection refusalCapture =
+        connect(this, &RadioModel::tuneRefused, this,
+                [&refusedReason](const QString& reason) { refusedReason = reason; });
     if (!m_tgxlAutotuneDeviceId.isEmpty()) {
         // iPhone app plan Task 77: a device's cycle keys as that device,
         // through the keying gate (its session, the holder, the watchdog).
@@ -30586,30 +30815,65 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
         keyer.source = PttMode::Manual;
         keyer.session = m_tgxlAutotuneSession;
         setTune(true, keyer);
+    } else if (m_tgxlAutotuneTunerPress) {
+        // TGXL tune lane (JJ's ruling, 2026-09-30): the tuner's own
+        // front-panel TUNE is a press at the station. It takes transmit
+        // from another device and keys as the radio's PTT does (ruling
+        // 8.9), through the same gate and take.
+        KeyerIdentity tuner = KeyerIdentity::station(PttMode::Manual);
+        tuner.tunerPress = true;
+        setTune(true, tuner);
     } else {
         setTune(true);
+    }
+    disconnect(refusalCapture);
+    if (!m_isTuning && m_tgxlAutotuneTunerPress && m_moxController
+        && m_moxController->lastAdmitTook()) {
+        // Ruling 8.9: the press keys nothing while the transfer runs; the
+        // carrier keys when it ends if the tuner still asks for it.
+        qCInfo(lcConnection) << "TGXL autotune: the tuner's TUNE is taking transmit from"
+                                " another device; the carrier keys when the take ends";
+        m_tgxlTakePending = true;
+        m_tgxlTakeGeneration = m_tgxlCycleGeneration;
+        return;
     }
     if (!m_isTuning) {
         // Refused (the device went away, another holds transmit, a block
         // came on): nothing keyed, so the amplifier goes back now.
-        qCInfo(lcConnection) << "TGXL autotune: the tune carrier was refused; ending the cycle";
+        if (refusedReason.isEmpty() && m_moxController) {
+            refusedReason = QStringLiteral("none given; the controller's last refusal: %1")
+                                .arg(m_moxController->lastRefusal().text);
+        }
+        qCInfo(lcConnection) << "TGXL autotune: the tune carrier was refused; ending the cycle."
+                             << "Reason:" << refusedReason;
         finishTgxlAutotuneCycle();
         return;
     }
-    if (!m_tgxlAutotuneDeviceId.isEmpty()) {
+    if (!m_tgxlAutotuneDeviceId.isEmpty() || m_tgxlAutotuneFromHardware) {
         // iPhone app plan Task 77: a device's cycle has no Tuner page on the
         // Core to watch the tuner, so the Core does what the local page
         // does (TunerApplet's short watchdog and tuningChanged(false)): the
         // carrier drops when the tuner finishes, and after 3 s when the
         // tuner never started its sweep.
+        // TGXL tune lane (JJ's ruling): the tuner's front-panel cycle too,
+        // since it may now take transmit from another device and key.
         m_tgxlDeviceCycleSawTuning = m_tunerModel && m_tunerModel->isTuning();
         const QByteArray device = m_tgxlAutotuneDeviceId;
-        QTimer::singleShot(kTgxlDeviceCycleStartMs, this, [this, device]() {
-            if (m_tgxlAutotuneInProgress && m_tgxlAutotuneDeviceId == device
-                && !m_tgxlDeviceCycleSawTuning) {
+        const quint64 cycle = m_tgxlCycleGeneration;
+        QTimer::singleShot(kTgxlDeviceCycleStartMs, this, [this, device, cycle]() {
+            if (m_tgxlAutotuneInProgress && cycle == m_tgxlCycleGeneration
+                && m_tgxlAutotuneDeviceId == device && !m_tgxlDeviceCycleSawTuning) {
                 qCInfo(lcConnection) << "TGXL autotune: the tuner never started its sweep"
-                                        " for the device's cycle; dropping the carrier";
-                cancelTgxlAutotuneFor(device);
+                                        " for the cycle; dropping the carrier";
+                if (!device.isEmpty()) {
+                    cancelTgxlAutotuneFor(device);
+                } else if (m_isTuning) {
+                    // The carrier drops; manualMoxChanged(false) finishes
+                    // the cycle.
+                    setTune(false);
+                } else {
+                    finishTgxlAutotuneCycle();
+                }
             }
         });
     }

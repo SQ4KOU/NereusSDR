@@ -525,6 +525,20 @@
 //                lock through an automatic recovery; disconnectFromRadio
 //                (the operator's) lifts it. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-30 - TGXL tune lane (JJ's ruling): m_tgxlTakePending and
+//                m_tgxlTakeGeneration, the take the tuner's front-panel
+//                TUNE asks for (ruling 8.9). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-10-01 - TGXL tune lane fix round: m_tgxlAutotuneTunerPress,
+//                m_tgxlPendingTunerPress, the outstanding autotune and
+//                tgxlIsPeer. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-10-01 - TGXL tune lane round 2: m_tgxlAnswers (TgxlAnswerTracker)
+//                replaces the single outstanding-autotune flag. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - TGXL tune lane round 3: m_tgxlLinkEpoch and the per-tune
+//                frame and echo counts. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -583,6 +597,7 @@
 #include "core/ReceiveLayoutStore.h"
 #include "core/spectrum/WidebandSpectrumCache.h"
 #include "core/PgxlConnection.h"
+#include "core/TgxlAnswerTracker.h"
 #include "core/Rf2ksConnection.h"
 #include "core/TgxlConnection.h"
 #include "core/FaultLog.h"
@@ -632,6 +647,7 @@
 #include <QByteArray>
 #include <QDateTime>
 #include <QHash>
+#include <QHostAddress>
 #include <QObject>
 #include <QPointer>
 #include <QMap>
@@ -8151,6 +8167,34 @@ private:
     /// Task 77 fix round 4: counts cycles, so a failsafe timer left from an
     /// ended cycle never acts on a new one.
     quint64 m_tgxlCycleGeneration{0};
+    /// TGXL tune lane (JJ's ruling, 2026-09-30): the tuner's front-panel
+    /// TUNE is taking transmit from another device (ruling 8.9), for the
+    /// cycle of this generation; its carrier keys when the take ends.
+    bool m_tgxlTakePending{false};
+    quint64 m_tgxlTakeGeneration{0};
+    /// TGXL tune lane fix round (2026-10-01): this cycle is the tuner's own
+    /// front-panel TUNE (its `transmit tune on`, from its address, not an
+    /// answer to our autotune); only such a cycle takes transmit.
+    bool m_tgxlAutotuneTunerPress{false};
+    /// Set by the LAN PTT handler for the one startTgxlAutotune call it
+    /// makes; beginTgxlAutotune takes it.
+    bool m_tgxlPendingTunerPress{false};
+    /// TGXL tune lane round 2: everything this computer sent the tuner
+    /// that it may answer with its own `transmit tune on/off` (each
+    /// `autotune`, each tune=1/0 broadcast), counted; a tune on that
+    /// answers none of them is the tuner's own TUNE.
+    TgxlAnswerTracker m_tgxlAnswers;
+    /// Round 3: counts :9010 connects; `autotune` entries carry it.
+    quint64 m_tgxlLinkEpoch{0};
+    /// Round 3: the tune=1 frames sent and the echoes answered in the
+    /// current tune, for the answer log.
+    bool m_tgxlLastTuneSent{false};
+    int m_tgxlTuneFramesSent{0};
+    int m_tgxlTuneEchoes{0};
+    /// Whether `peer` (a :4992 client) is the connected Tuner Genius.
+    bool tgxlIsPeer(const QHostAddress& peer) const;
+    /// Monotonic milliseconds for m_tgxlAnswers.
+    static qint64 tgxlAnswerNowMs();
     /// Task 77 fix round 4: a relayed operate=1 held while RF may flow.
     bool m_relayedPgxlOperateHeld{false};
     void retryHeldRelayedPgxlOperate();

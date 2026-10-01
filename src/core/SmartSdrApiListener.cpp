@@ -11,6 +11,18 @@
 // AI tooling: Anthropic Claude Code.
 // Modified 2026-09-24 by J.J. Boyd (KG4VCF): R-R3-22 / R-R3-47 station
 // network binding (setStationBind); AI-assisted via Anthropic Claude Code.
+// Modified 2026-10-01 by J.J. Boyd (KG4VCF): TGXL tune lane fix round,
+// tuneRequested carries the sender's address; AI-assisted via Anthropic
+// Claude Code.
+// Modified 2026-10-01 by J.J. Boyd (KG4VCF): TGXL tune lane round 2,
+// tuneStateBroadcast on each tune state change; AI-assisted via Anthropic
+// Claude Code.
+// Modified 2026-10-01 by J.J. Boyd (KG4VCF): TGXL tune lane round 3,
+// tuneStateSent for every tune=1 frame and each visible tune=0;
+// AI-assisted via Anthropic Claude Code.
+// Modified 2026-10-01 by J.J. Boyd (KG4VCF): TGXL tune lane round 4, a
+// new client's or a sub's push emits only for tune=1; AI-assisted via
+// Anthropic Claude Code.
 
 #include "SmartSdrApiListener.h"
 
@@ -243,6 +255,10 @@ void SmartSdrApiListener::setTuneActive(bool active)
     m_tuneActive = active;
     qCInfo(lcSmartSdr) << "tune state change -> broadcasting transmit tune=" << (active ? 1 : 0);
     broadcastSliceState();
+    if (!active && !m_clients.isEmpty()) {
+        // Round 3: broadcastSliceState counts tune=1 frames itself.
+        emit tuneStateSent(false);
+    }
 }
 
 bool SmartSdrApiListener::hasInterlockedAmp() const
@@ -782,6 +798,11 @@ void SmartSdrApiListener::onNewConnection()
                        .arg(m_sliceMode)
                        .arg(m_tuneActive ? 1 : 0)
                        .arg(m_txActive ? 1 : 0));
+        // TGXL tune lane round 3: the new client may echo this tune=1.
+        // Round 4: an idle tune=0 here is not a change, so not counted.
+        if (m_tuneActive) {
+            emit tuneStateSent(true);
+        }
 
         emit clientConnected(host, port);
     }
@@ -1145,7 +1166,7 @@ void SmartSdrApiListener::dispatchLine(QTcpSocket* sock, const QString& line)
         if (initIt != m_clients.end() && !initIt->interlockName.isEmpty()) {
             m_lastTuneInitiator = initIt->interlockName;
         }
-        emit tuneRequested(true);
+        emit tuneRequested(true, sock->peerAddress());
     } else if (emitTuneOff) {
         qCInfo(lcSmartSdr) << "LAN PTT tune off from"
                            << sock->peerAddress().toString();
@@ -1158,7 +1179,7 @@ void SmartSdrApiListener::dispatchLine(QTcpSocket* sock, const QString& line)
         // (the MIC-source fallback) instead of the canonical
         // reason=AMP:TG. Clear AFTER the emit returns so the next TUNE
         // cycle starts with a fresh initiator slot.
-        emit tuneRequested(false);
+        emit tuneRequested(false, sock->peerAddress());
         m_lastTuneInitiator.clear();
     } else if (emitMoxOn) {
         qCInfo(lcSmartSdr) << "LAN PTT mox on from"
@@ -1204,6 +1225,11 @@ void SmartSdrApiListener::dispatchLine(QTcpSocket* sock, const QString& line)
                        .arg(m_sliceMode)
                        .arg(m_tuneActive ? 1 : 0)
                        .arg(m_txActive ? 1 : 0));
+        // TGXL tune lane round 3: the subscriber may echo this tune=1.
+        // Round 4: an idle tune=0 here is not a change, so not counted.
+        if (m_tuneActive) {
+            emit tuneStateSent(true);
+        }
     }
 }
 
@@ -1284,6 +1310,11 @@ void SmartSdrApiListener::broadcastSliceState()
             : it.value().ampHandle;
         sendStatus(it.key(), prefix, sliceBody);
         sendStatus(it.key(), prefix, txBody);
+    }
+    // TGXL tune lane round 3: every tune=1 frame round may be echoed (the
+    // cadence of the tuner's echo is unknown), so each one is counted.
+    if (m_tuneActive) {
+        emit tuneStateSent(true);
     }
 }
 

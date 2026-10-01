@@ -14,6 +14,20 @@
 //   2026-09-24 - R-R3-22 / R-R3-47: on the Core, listens on the station
 //                 network only (setStationBind). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - TGXL tune lane fix round: tuneRequested carries the
+//                 sender's address, so the Core takes transmit only for
+//                 the connected Tuner Genius. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - TGXL tune lane round 2: tuneStateBroadcast, each tune
+//                 state change this listener broadcasts. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - Round 3: tuneStateSent replaces it: every tune=1 frame
+//                 (the 1 Hz tick, a TX state resend, a new client's or a
+//                 sub's push) and each tune=0 a client can see change.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - Round 4: tune=0 only on a change; a new client's or a
+//                 sub's idle tune=0 push is not emitted. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -171,7 +185,24 @@ signals:
     // ends up actually engaging the carrier instead of being ACKed-and-
     // dropped. NereusSDR-native: AetherSDR has no equivalent because the
     // real FlexRadio handles this internally.
-    void tuneRequested(bool on);
+    //
+    // TGXL tune lane (2026-10-01): `peer` is the sender's address. Any
+    // SmartSDR-API client may send these lines; RadioModel treats one as
+    // the Tuner Genius's front-panel TUNE only when `peer` is the connected
+    // Tuner Genius.
+    void tuneRequested(bool on, const QHostAddress& peer);
+
+    // TGXL tune lane round 3 (2026-10-01): this listener wrote a
+    // `transmit ... tune=<tune>` frame the Tuner Genius may echo with its
+    // own `transmit tune on/off` (bench 2026-05-20, commit 01ca5b824 item
+    // 8), which RadioModel must not take for its front-panel TUNE. Emitted
+    // once per frame round for tune=1 (every broadcast, the 1 Hz tick, a new
+    // client's and a sub's push), and for tune=0 only on
+    // setTuneActive(false), the one tune=0 a client sees as a change. Round
+    // 4: not for the idle tick's tune=0, nor a new client's or a sub's
+    // tune=0 push while idle: the client already sees tune=0, so the tuner
+    // has nothing to echo.
+    void tuneStateSent(bool tune);
 
     // LAN PTT MOX request from a SmartSDR-API client. Same pattern as
     // tuneRequested but for regular `transmit mox on/off` (no tune

@@ -8198,6 +8198,14 @@ nereus_add_test(tst_on_air_refusals
 nereus_add_test(tst_station_multi_session
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# TGXL tune lane (bench 2026-09-30): the Tuner Genius's LAN PTT and a
+# device's tx.tunerTune against a real Core over loopback links. No RF.
+nereus_add_test(tst_tgxl_core_tune
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+# TGXL tune lane round 2: what the Core sent the tuner that it may answer
+# with its own tune on/off, as one table of sequences. No sockets.
+nereus_add_test(tst_tgxl_answer_tracker)
 nereus_add_test(tst_station_fifth_device
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)

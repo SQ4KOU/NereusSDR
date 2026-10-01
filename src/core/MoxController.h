@@ -256,6 +256,12 @@
 //               disables chkMOX, chkTUN and chk2TONE when it loses sync
 //               (console.cs:27488-27493 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: TGXL tune lane (JJ's ruling): KeyerIdentity::tunerPress,
+//               the Tuner Genius's own front-panel TUNE, which takes
+//               transmit as the radio's PTT does (ruling 8.9);
+//               lastAdmitTook() and tunerTakeFinished(). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -322,6 +328,14 @@ struct KeyerIdentity {
     /// not another of the same device's; empty for the station's own keys.
     /// Not part of who the keyer is (operator== leaves it out).
     QString session;
+    /// TGXL tune lane (JJ's ruling, 2026-09-30): the station's tune carrier
+    /// for the Tuner Genius's own front-panel TUNE (its LAN PTT `transmit
+    /// tune on`, or its tuning state on a desktop's Tuner page). A press at
+    /// the station: it takes transmit from another device as the radio's
+    /// own PTT does (ruling 8.9). Set only by RadioModel for a cycle the
+    /// tuner started; never by a device or a remote command. Not part of
+    /// who the keyer is (operator== leaves it out).
+    bool tunerPress{false};
 
     /// The same id as SliceOwnership::stationDevice().
     static constexpr char kStationDeviceId[] = "station";
@@ -524,6 +538,9 @@ public:
 
     // The last refusal, as moxRefused sent it.
     const TxRefusal& lastRefusal() const noexcept { return m_lastRefusal; }
+    /// TGXL tune lane: whether the last admitKey() was answered with a take
+    /// (ruling 8.9): nothing keyed now, and the take's end decides.
+    bool lastAdmitTook() const noexcept { return m_lastAdmitTook; }
 
     // A take the gate asked for has ended (ruling 8.9): with `took` true
     // and the keyer's press still down, the press keys now, as a new key
@@ -1255,6 +1272,10 @@ signals:
     // Emitted right after moxRejected, or alone when a held source's repeat
     // refusal is quiet.
     void moxRefused(const NereusSDR::TxRefusal& refusal);
+    /// TGXL tune lane (ruling 8.9 for the tuner's front-panel TUNE): the
+    /// take a tunerPress key asked for has ended; `took` says whether the
+    /// station now holds transmit.
+    void tunerTakeFinished(bool took);
 
     // iPhone app plan Task 77 fix round 2: a PTT source was released and
     // none is down now (anyPttSourceHeld() false). RadioModel retries an
@@ -1811,6 +1832,7 @@ private:
     // and the keyer a gate-admitted setMox(true) keys for.
     KeyingGateFn  m_keyingGate;
     OtherDeviceHoldsFn m_otherDeviceHolds;
+    bool m_lastAdmitTook{false};   // TGXL tune lane: see lastAdmitTook()
     KeyerIdentity m_currentKeyer{KeyerIdentity::station(PttMode::None)};
     KeyerIdentity m_admittedKeyer{KeyerIdentity::station(PttMode::None)};
     // Task 35: setTune(true, keyer) in progress, and for whom.

@@ -28,6 +28,12 @@
 //   2026-09-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
 //                 (R-R3-47, R-R3-22): replyReceived, every answer of an
 //                 admitted tuner by sequence, for the Core's device settings.
+//   2026-09-30  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (TGXL tune lane): messageReceived for the tuner's `M|`
+//                 lines, and its tuning flag in the state log line.
+//   2026-10-01  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (TGXL tune lane fix round): autotuneSent, every `autotune`
+//                 this computer sends the tuner, whoever asked for it.
 // =================================================================
 #pragma once
 
@@ -161,6 +167,17 @@ signals:
     /// (admitted, on the Core): its sequence, whether its code was 0, and
     /// its body. The Core's device settings match their requests by it.
     void replyReceived(quint32 seq, bool accepted, const QString& body);
+    /// TGXL tune lane (bench 2026-09-30): an `M|<text>` message line from
+    /// the tuner. captures/flex-tgxl-direct-CONTROL.pcapng shows the tuner
+    /// sending `M|Tuned SWR: 1.05:1` at the end of a sweep (T+174.551) and
+    /// `M|LOW RF POWER` when it gives a tune up (T+237.750).
+    void messageReceived(const QString& text);
+    /// TGXL tune lane fix round (2026-10-01): an `autotune` command was
+    /// written to the tuner (sequence `seq`), whoever asked for it (the
+    /// Tuner page, a device's tune, the band-change recall). The tuner
+    /// answers one with its own `transmit tune on` (pcap T+172.199), which
+    /// is then never its front-panel TUNE.
+    void autotuneSent(quint32 seq);
     void identityProtocolProgress(quint64 socketAttemptToken,
                                   const QString& peerAddress,
                                   quint16 peerPort,
