@@ -152,8 +152,9 @@
 //                [v2.10.3.15]); network.c's header added below. On macOS a
 //                socket bound to Any could share its port with another
 //                socket on that address, which then took the radio's
-//                frames. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
-//                Claude Code.
+//                frames. Bound again on each reconnect attempt; with no
+//                route it warns and binds every address. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -824,7 +825,10 @@ P1RadioConnection::~P1RadioConnection()
 // ---------------------------------------------------------------------------
 void P1RadioConnection::init()
 {
-    // Source: networkproto1.c:203 equivalent — bind to any available port
+    // A placeholder binding until connectToRadio() binds the address that
+    // reaches the radio (bindToRadioFacingAddress), as Thetis binds the
+    // network card's address in nativeInitMetis (network.c:116-118, 203
+    // [v2.10.3.15]).
     m_socket = new QUdpSocket(this);
 
     if (!m_socket->bind(QHostAddress::Any, 0)) {
@@ -919,44 +923,58 @@ void P1RadioConnection::applySocketBufferSizes()
 // itself gets a port no other socket holds there.
 //
 // NereusSDR has no network card selection, so the address is the one the
-// OS routes to the radio from: the source address the radio answers. A UDP
-// connect sends nothing. With no route the socket keeps its binding, as
-// before.
+// OS routes to the radio from: the source address the radio answers (on a
+// loopback radio, 127.0.0.1; with several interfaces, the one the route to
+// the radio leaves by). A UDP connect sends nothing. With no route, or if
+// that address cannot be bound, it says so with a warning and binds every
+// address. disconnect() and the connect timeout close the socket, so this
+// always leaves it bound, with the buffer sizes applied. Called on every
+// connect and reconnect attempt; it returns at once when nothing changed.
 // ---------------------------------------------------------------------------
 void P1RadioConnection::bindToRadioFacingAddress()
 {
     if (!m_socket || m_radioInfo.address.isNull()) { return; }
 
-    QHostAddress local;
-    {
-        QUdpSocket route;
-        route.connectToHost(m_radioInfo.address, m_radioInfo.port);
-        if (route.waitForConnected(kRouteLookupMs)) {
-            local = route.localAddress();
-        }
-    }
-    if (local.isNull()) {
-        qCWarning(lcConnection) << "P1: no local address reaches"
-                                << m_radioInfo.address.toString()
-                                << "; listening on every address";
-        return;
-    }
+    QHostAddress local = radioFacingAddress();
     if (m_socket->state() == QAbstractSocket::BoundState
-        && m_socket->localAddress() == local) {
+        && !local.isNull() && m_socket->localAddress() == local) {
         return;
     }
 
     m_socket->close();
-    if (!m_socket->bind(local, 0)) {
+    if (local.isNull()) {
+        qCWarning(lcConnection) << "P1: no local address reaches"
+                                << m_radioInfo.address.toString()
+                                << "; listening on every address";
+    } else if (!m_socket->bind(local, 0)) {
         qCWarning(lcConnection) << "P1: could not listen on" << local.toString()
                                 << "(" << m_socket->errorString()
                                 << "); listening on every address";
-        if (!m_socket->bind(QHostAddress::Any, 0)) {
-            qCWarning(lcConnection) << "P1: Failed to bind UDP socket";
-            return;
-        }
+        local = QHostAddress();
+    }
+    if (local.isNull() && !m_socket->bind(QHostAddress::Any, 0)) {
+        qCWarning(lcConnection) << "P1: Failed to bind UDP socket";
+        return;
     }
     applySocketBufferSizes();
+}
+
+// ---------------------------------------------------------------------------
+// radioFacingAddress
+//
+// The local address the OS routes to m_radioInfo.address from, or a null
+// address when none does within kRouteLookupMs. Tests may stand in for the
+// lookup (setRadioFacingAddressForTest) to reach the fallback paths.
+// ---------------------------------------------------------------------------
+QHostAddress P1RadioConnection::radioFacingAddress() const
+{
+    if (m_radioFacingOverridden) { return m_radioFacingOverride; }
+    QUdpSocket route;
+    route.connectToHost(m_radioInfo.address, m_radioInfo.port);
+    if (route.waitForConnected(kRouteLookupMs)) {
+        return route.localAddress();
+    }
+    return QHostAddress();
 }
 
 // ---------------------------------------------------------------------------
@@ -4480,6 +4498,10 @@ void P1RadioConnection::onReconnectTimeout()
     ++m_reconnectAttempts;
     qCDebug(lcConnection) << "P1: Reconnect attempt" << m_reconnectAttempts
                           << "of" << kMaxReconnectAttempts;
+
+    // The route to the radio may have changed, and a connect timeout closes
+    // the socket; bind it again (returns at once when nothing changed).
+    bindToRadioFacingAddress();
 
     // Transition to Connecting for this retry attempt.
     setState(ConnectionState::Connecting);

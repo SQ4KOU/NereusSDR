@@ -501,7 +501,10 @@ void P2RadioConnection::init()
 {
     m_socket = new QUdpSocket(this);
 
-    // From Thetis nativeInitMetis:203 — bind to any available port
+    // A placeholder binding until connectToRadio() binds the address that
+    // reaches the radio (bindToRadioFacingAddress), as Thetis binds the
+    // network card's address in nativeInitMetis (network.c:116-118, 203
+    // [v2.10.3.15]).
     if (!m_socket->bind(QHostAddress::Any, 0)) {
         qCWarning(lcConnection) << "P2: Failed to bind UDP socket";
         return;
@@ -658,9 +661,14 @@ void P2RadioConnection::applySocketBufferSizes()
 //     rc = bind(listenSock, (SOCKADDR*)&local, sizeof(local));
 // Every Protocol 2 stream, to and from the radio (general, receive specific,
 // transmit specific, high priority, receive audio, transmit I/Q; status,
-// DDC I/Q, mic, wideband back), goes through that one socket
-// (network.c:910, 1062, 1178, 1247, 1373, 1388 [v2.10.3.15]), as through
-// m_socket here, so this one bind covers every receive port.
+// DDC I/Q, mic, wideband back), goes through that one socket, as through
+// m_socket here, so this one bind covers every receive port. Sends:
+// network.c:910, 1062, 1178, 1247, 1373, 1388 [v2.10.3.15]. Receives, every
+// port on the one socket:
+//   From Thetis network.c:650 [v2.10.3.15]:
+//     WSAEventSelect(listenSock, prn->hDataEvent, FD_READ);
+//   From Thetis network.c:493 [v2.10.3.15]:
+//     nrecv = recvfrom(listenSock, readbuf, sizeof(readbuf), 0, (SOCKADDR*)&fromaddr, &fromlen);
 //
 // NereusSDR bound to every address (Any) instead. On macOS the OS can give
 // a socket bound to Any a port that another socket already holds on one
@@ -680,14 +688,7 @@ void P2RadioConnection::bindToRadioFacingAddress()
 {
     if (!m_socket || m_radioInfo.address.isNull()) { return; }
 
-    QHostAddress local;
-    {
-        QUdpSocket route;
-        route.connectToHost(m_radioInfo.address, m_radioInfo.port);
-        if (route.waitForConnected(kRouteLookupMs)) {
-            local = route.localAddress();
-        }
-    }
+    QHostAddress local = radioFacingAddress();
     if (m_socket->state() == QAbstractSocket::BoundState
         && !local.isNull() && m_socket->localAddress() == local) {
         return;
@@ -712,6 +713,24 @@ void P2RadioConnection::bindToRadioFacingAddress()
         return;
     }
     applySocketBufferSizes();
+}
+
+// ---------------------------------------------------------------------------
+// radioFacingAddress
+//
+// The local address the OS routes to m_radioInfo.address from, or a null
+// address when none does within kRouteLookupMs. Tests may stand in for the
+// lookup (setRadioFacingAddressForTest) to reach the fallback paths.
+// ---------------------------------------------------------------------------
+QHostAddress P2RadioConnection::radioFacingAddress() const
+{
+    if (m_radioFacingOverridden) { return m_radioFacingOverride; }
+    QUdpSocket route;
+    route.connectToHost(m_radioInfo.address, m_radioInfo.port);
+    if (route.waitForConnected(kRouteLookupMs)) {
+        return route.localAddress();
+    }
+    return QHostAddress();
 }
 
 // --- Connection Lifecycle ---

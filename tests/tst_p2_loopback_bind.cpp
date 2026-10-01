@@ -64,6 +64,27 @@ bool establish(P2RadioConnection& connection, P2FakeRadio& fake)
     return connected || connection.state() == ConnectionState::Connected;
 }
 
+// Every address: dual-stack Any, or IPv4 Any when Qt keeps the IPv4 socket
+// a failed bind to an IPv4 address left behind.
+bool listensEverywhere(const QHostAddress& a)
+{
+    return a == QHostAddress(QHostAddress::Any)
+        || a == QHostAddress(QHostAddress::AnyIPv4);
+}
+
+// The receive buffer the kernel grants a socket asking what
+// P2RadioConnection asks (0x400000); the kernel may cap it.
+int expectedReceiveBuffer()
+{
+    QUdpSocket probe;
+    if (!probe.bind(QHostAddress::Any, 0)) {
+        return -2;
+    }
+    probe.setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption,
+                          QVariant(0x400000));
+    return probe.socketOption(QAbstractSocket::ReceiveBufferSizeSocketOption).toInt();
+}
+
 } // namespace
 
 class TestP2LoopbackBind final : public QObject {
@@ -96,7 +117,8 @@ private slots:
             // Another program's socket on the radio's answer address and
             // the host's port. Sharing is requested, as a program that
             // wants the port would; only a socket bound to that address
-            // itself keeps it out.
+            // itself keeps it out. The collision reproduces only on macOS:
+            // a pass on Linux or Windows does not cover the fix.
             QUdpSocket other;
             const bool otherBound = other.bind(fake.localAddress(), hostPort,
                                                QAbstractSocket::ShareAddress);
@@ -109,6 +131,50 @@ private slots:
             QVERIFY2(!otherBound || !other.hasPendingDatagrams(),
                      "another socket took the radio's frames");
         }
+        connection.disconnect();
+    }
+
+    // With no route to the radio, connectToRadio warns and listens on every
+    // address. disconnect() closes the socket, so on a reconnect the
+    // fallback must bind it again, with the buffer sizes.
+    void noRouteOnAReconnectBindsEveryAddressWithTheBuffers()
+    {
+        P2FakeRadio fake;
+        QVERIFY(fake.start());
+        P2RadioConnection connection;
+        connection.setPortBasesForTest(fake.outboundPortBase(),
+                                       fake.inputRolePortBase());
+        connection.init();
+        QVERIFY(establish(connection, fake));
+        connection.disconnect();
+
+        connection.setRadioFacingAddressForTest(QHostAddress());
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("^P2: no local address reaches")));
+        QVERIFY(establish(connection, fake));
+        QCOMPARE(connection.socketStateForTest(), QAbstractSocket::BoundState);
+        QVERIFY(listensEverywhere(connection.socketAddressForTest()));
+        QCOMPARE(connection.socketReceiveBufferForTest(), expectedReceiveBuffer());
+        connection.disconnect();
+    }
+
+    // An address this host cannot bind (TEST-NET-1, RFC 5737) takes the
+    // same fallback, with its own warning.
+    void anUnbindableAddressBindsEveryAddressWithTheBuffers()
+    {
+        P2FakeRadio fake;
+        QVERIFY(fake.start());
+        P2RadioConnection connection;
+        connection.setPortBasesForTest(fake.outboundPortBase(),
+                                       fake.inputRolePortBase());
+        connection.init();
+        connection.setRadioFacingAddressForTest(QHostAddress(QStringLiteral("192.0.2.1")));
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("^P2: could not listen on")));
+        QVERIFY(establish(connection, fake));
+        QCOMPARE(connection.socketStateForTest(), QAbstractSocket::BoundState);
+        QVERIFY(listensEverywhere(connection.socketAddressForTest()));
+        QCOMPARE(connection.socketReceiveBufferForTest(), expectedReceiveBuffer());
         connection.disconnect();
     }
 };

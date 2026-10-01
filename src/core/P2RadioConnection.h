@@ -105,8 +105,9 @@
 //   2026-09-30 - Shared-input filters (ruling (c)): m_countedSlotsAdc0,
 //                the DDCs the receive low-pass follows. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
-//   2026-09-30 - bindToRadioFacingAddress, applySocketBufferSizes and
-//                kRouteLookupMs: the receive socket binds the address that
+//   2026-09-30 - bindToRadioFacingAddress, applySocketBufferSizes,
+//                kRouteLookupMs, radioFacingAddress and the receive-socket
+//                test seams: the receive socket binds the address that
 //                reaches the radio (network.c:116-118, 203 [v2.10.3.15]).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
@@ -581,6 +582,14 @@ private:
     void bindToRadioFacingAddress();
     void applySocketBufferSizes();
     static constexpr int kRouteLookupMs = 100;
+    // The local address that reaches m_radioInfo.address (a UDP connect),
+    // null if none does within kRouteLookupMs, or the test override.
+    QHostAddress radioFacingAddress() const;
+    // Test stand-in for the route lookup (setRadioFacingAddressForTest).
+    // Unconditional members: the class layout must not depend on
+    // NEREUS_BUILD_TESTS.
+    bool m_radioFacingOverridden{false};
+    QHostAddress m_radioFacingOverride;
 
     // MOX-off grace window (2026-07-27, Codex review PR #306).  After unkey
     // the 100 ms heartbeat keeps running this long so the MOX-off state is
@@ -1193,6 +1202,23 @@ private:
 
 #ifdef NEREUS_BUILD_TESTS
 public:
+    // Stand in for the route lookup in bindToRadioFacingAddress(): a null
+    // address is "no route", an address this host does not own cannot be
+    // bound. Both must leave the socket bound to every address.
+    void setRadioFacingAddressForTest(const QHostAddress& local) {
+        m_radioFacingOverridden = true;
+        m_radioFacingOverride = local;
+    }
+    QAbstractSocket::SocketState socketStateForTest() const {
+        return m_socket ? m_socket->state() : QAbstractSocket::UnconnectedState;
+    }
+    QHostAddress socketAddressForTest() const {
+        return m_socket ? m_socket->localAddress() : QHostAddress();
+    }
+    int socketReceiveBufferForTest() const {
+        return m_socket ? m_socket->socketOption(
+                   QAbstractSocket::ReceiveBufferSizeSocketOption).toInt() : -1;
+    }
     // Test-only helpers — allow unit tests to inject board state without a live radio.
     void setBoardForTest(HPSDRHW board) {
         m_caps = &BoardCapsTable::forBoard(board);
