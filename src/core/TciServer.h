@@ -809,8 +809,8 @@ private:
     // stopping, releases that key before its TX audio lock.
     QPointer<QWebSocket> m_tciPttClient;
     // Releases the TCI key of `client` (any keying app when null) through
-    // MoxController::onTciPtt(false). False when a callback destroyed this
-    // server meanwhile.
+    // MoxController::onTciPtt(false), and a TCI level no app owns (fix
+    // round 1). False when a callback destroyed this server meanwhile.
     bool releaseAppTciKey(QWebSocket* client);
 
     // ── Phase 19: sensor broadcast timers ────────────────────────────────────

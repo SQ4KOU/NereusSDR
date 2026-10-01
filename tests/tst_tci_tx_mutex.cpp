@@ -103,6 +103,9 @@ private slots:
     void trx_on_a_receiver_that_is_off_keys_nothing();
     void desktop_host_trx_goes_through_ptt_admission();
     void tx_audio_header_is_validated();
+    void uppercase_trx_key_ends_with_the_app_data();
+    void uppercase_trx_key_ends_with_the_app();
+    void desktop_host_uppercase_trx_goes_through_ptt_admission();
     void desktop_host_holder_and_program_ownership();
     void desktop_host_owned_two_three_broadcasts_logical_receivers();
     void stopped_server_queues_no_rx2_lines();
@@ -1492,6 +1495,87 @@ void TestTciTxMutex::desktop_host_trx_goes_through_ptt_admission()
     QVERIFY(!mox->isTciPttHeld());
     QCOMPARE(server.activeTxClientCount(), 0);
     app.socket.close();
+    server.stop();
+}
+
+// Fix round 1 (Important 1): command names are not case-sensitive
+// (TciProtocol lowercases them, as Thetis TCIServer.cs:5288 [v2.10.3.15]
+// does), so an app's TRX:0,true; keys like trx:0,true;. Its key must end
+// with the app, or with the server, as a lowercase trx's does.
+void TestTciTxMutex::uppercase_trx_key_ends_with_the_app_data()
+{
+    QTest::addColumn<bool>("stopServer");
+    QTest::newRow("disconnect") << false;
+    QTest::newRow("server stop") << true;
+}
+
+void TestTciTxMutex::uppercase_trx_key_ends_with_the_app()
+{
+    QFETCH(bool, stopServer);
+    RadioModel core;
+    MoxController* mox = core.moxController();
+    QVERIFY(mox != nullptr);
+    allowEveryKey(mox);
+    TciServer server(&core);
+    QVERIFY(server.start(0));
+    TrxApp app;
+    QVERIFY(app.open(server.port()));
+
+    app.socket.sendTextMessage(QStringLiteral("TRX:0,true;"));
+    QTRY_VERIFY_WITH_TIMEOUT(core.mox(), 3000);
+    QVERIFY(mox->isTciPttHeld());
+    if (stopServer) {
+        server.stop();
+    } else {
+        app.socket.close();
+        QTRY_COMPARE_WITH_TIMEOUT(server.clientCount(), 0, 3000);
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(!core.mox(), 3000);
+    QVERIFY(!mox->isTciPttHeld());
+    app.socket.close();
+    server.stop();
+}
+
+// Fix round 1 (Important 1): a desktop host's uppercase TRX goes through
+// the same PollPTT admission as trx (RD-I3): refused under a manual key,
+// with no TCI level left behind.
+void TestTciTxMutex::desktop_host_uppercase_trx_goes_through_ptt_admission()
+{
+    RadioModel radio;
+    const int owned = radio.addSlice(QStringLiteral("pan-0"));
+    radio.sliceOwnership()->setOwner(owned, SliceOwnership::stationDevice());
+    TransmitHolder holder;
+    MoxController* mox = radio.moxController();
+    mox->setKeyingGate([&holder](PttMode source, const KeyerIdentity& keyer) {
+        return holder.askKey({keyer.deviceId, TransmitHolder::Source::Device,
+                              keyer.program, source == PttMode::Vox});
+    });
+    holder.transferTo(TransmitHolder::Holder{SliceOwnership::stationDevice()},
+                      QStringLiteral("test"), [](bool) {});
+    radio.setTransmitHolder(SliceOwnership::stationDevice());
+    QVERIFY(radio.txSliceArbiter()->bindForHolder(SliceOwnership::stationDevice(), owned));
+    TciServer server(&radio);
+    server.setDesktopHostMode(true);
+    QVERIFY(server.start(0));
+    TrxApp app;
+    QVERIFY(app.open(server.port()));
+
+    mox->setManualKey(true);
+    const int mark = int(app.text.count());
+    app.socket.sendTextMessage(QStringLiteral("TRX:0,true,TCI;"));
+    QTRY_VERIFY_WITH_TIMEOUT(app.lines(mark).contains(QStringLiteral("trx:0,false;")), 3000);
+    QVERIFY(!radio.mox());
+    QVERIFY(!mox->isTciPttHeld());
+    QCOMPARE(server.activeTxClientCount(), 0);
+    mox->setManualKey(false);
+    QVERIFY(!radio.mox());
+
+    app.socket.sendTextMessage(QStringLiteral("TRX:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(radio.mox(), 3000);
+    QCOMPARE(mox->currentKeyer(), KeyerIdentity::station(PttMode::Tci));
+    app.socket.close();
+    QTRY_VERIFY_WITH_TIMEOUT(!radio.mox(), 3000);
+    QVERIFY(!mox->isTciPttHeld());
     server.stop();
 }
 

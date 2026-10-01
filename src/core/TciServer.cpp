@@ -119,6 +119,11 @@
 //   2026-09-29 - Level Cal: calibration_ex carries the meter and display
 //                calibration and goes to apps when either changes. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Fix round 1 (TX path): the trx intercept matches the
+//                command name in any case, as TciProtocol does; a TCI key
+//                no app owns ends with the server and with an app that
+//                goes. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -1696,8 +1701,16 @@ void TciServer::refreshLocalAudioReceiverMap()
 
 bool TciServer::releaseAppTciKey(QWebSocket* client)
 {
-    if (m_tciPttClient.isNull()
-        || (client != nullptr && m_tciPttClient.data() != client)) {
+    // Fix round 1 (Important 1): a backstop. A TCI level no app owns is
+    // released too, by the server's stop (client null) and by any app
+    // that goes; only a level another live app owns is left. In desktop
+    // host mode every trx is the program key's, which
+    // releaseDesktopProgramKey ends (and a key still being made ends in
+    // its own path), so an unowned level is left to them.
+    if (m_tciPttClient.isNull() && m_desktopHostMode) {
+        return true;
+    }
+    if (client != nullptr && !m_tciPttClient.isNull() && m_tciPttClient.data() != client) {
         return true;
     }
     m_tciPttClient = nullptr;
@@ -2287,7 +2300,8 @@ void TciServer::onClientDisconnected()
     // Deliberate departure from Thetis TCIServer.cs:3010-3026 [v2.10.3.15]
     // (StopSocketListener), which clears m_tciPttActive and releases the
     // audio listener but leaves console.TCIPTT, and so the key, as it was.
-    if (!m_tciPttClient.isNull() && m_tciPttClient.data() == ws) {
+    // Fix round 1 (Important 1): also a TCI level no app owns.
+    if (m_tciPttClient.isNull() || m_tciPttClient.data() == ws) {
         if (!releaseAppTciKey(ws) || !client) { return; }
         it = m_clients.find(ws);
         if (it == m_clients.end()) { return; }
@@ -4133,10 +4147,17 @@ void TciServer::onTextMessageReceived(const QString& msg)
                                 QString::fromLatin1(kStationTransmitRefusedReason));
         }
         {
-            const QString kTrx = QStringLiteral("trx:");
-            if (trimmed.startsWith(kTrx)) {
+            // Fix round 1 (Important 1): the command name as TciProtocol
+            // reads it, lowered and trimmed (Thetis TCIServer.cs:5288
+            // [v2.10.3.15]: parts[0].ToLower().Trim()), so TRX:0,true; is
+            // intercepted and owned like trx:0,true;.
+            const qsizetype trxColon = trimmed.indexOf(QLatin1Char(':'));
+            const bool isTrx = trxColon > 0
+                && trimmed.left(trxColon).trimmed().compare(
+                       QLatin1String("trx"), Qt::CaseInsensitive) == 0;
+            if (isTrx) {
                 // Parse "trx:N,bool[,tci]"
-                const QString args = trimmed.mid(kTrx.size());
+                const QString args = trimmed.mid(trxColon + 1);
                 const QStringList parts = args.split(QLatin1Char(','));
                 if (parts.size() >= 2) {
                     // Is the third arg "tci"?
