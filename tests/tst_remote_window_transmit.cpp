@@ -82,6 +82,10 @@
 //   2026-09-30: TX rulings review (I-1): with this window's VOX armed the
 //               lit MOX's press after a release unkeys. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: TX-parity-linkdown (fix wave): a window whose Core has no
+//               connection to the radio shows MOX, TUNE and 2-TONE
+//               disabled with the reason; VOX is left alone. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -529,6 +533,46 @@ private slots:
         QVERIFY(!window.container.stateOf(ContainerButtonDispatcher::Id::Mox, 0).available);
         QCOMPARE(window.container.stateOf(ContainerButtonDispatcher::Id::Mox, 0).reason,
                  QStringLiteral("This Core is set to receive only."));
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // TX-parity-linkdown (fix wave): the Core loses its radio while the
+    // window stays signed in. MOX, TUNE and 2-TONE show disabled with the
+    // reason, never hidden, until the radio is back; VOX is left as it was,
+    // as Thetis's power-off leaves chkVOX (console.cs:27488-27493).
+    void aCoreWithoutItsRadioLocksTheWindowsKeys()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.isHandshakeComplete());
+        QVERIFY(h.remote.isConnected());
+        WindowControls window(h);
+        window.follow(h.client);
+        QPushButton* twoTone = buttonNamed(window.applet, QStringLiteral("2-tone test"));
+        QVERIFY(twoTone);
+        QVERIFY(window.mox->isEnabled());
+        QVERIFY(window.tune->isEnabled());
+        QVERIFY(twoTone->isEnabled());
+        const bool voxBefore = window.vox->isEnabled();
+
+        h.station.setConnectionStateForTest(ConnectionState::Disconnected);
+        QTRY_VERIFY(!h.remote.isConnected());
+        const QString reason = RadioModel::radioLinkDownReason();
+        for (QPushButton* b : {window.mox, window.tune, twoTone}) {
+            QVERIFY2(!b->isEnabled(), qPrintable(b->accessibleName()));
+            QVERIFY(!b->isHidden());
+            QCOMPARE(b->toolTip(), reason);
+        }
+        QCOMPARE(window.vox->isEnabled(), voxBefore);
+
+        h.station.setConnectionStateForTest(ConnectionState::Connected);
+        QTRY_VERIFY(h.remote.isConnected());
+        QVERIFY(window.mox->isEnabled());
+        QVERIFY(window.tune->isEnabled());
+        QVERIFY(twoTone->isEnabled());
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 

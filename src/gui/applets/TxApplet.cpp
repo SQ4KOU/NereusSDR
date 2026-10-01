@@ -190,6 +190,10 @@
 //                (RadioModel::radioLinkDownChanged); VOX stays as Thetis's
 //                power-off leaves it (console.cs:27488-27493 [v2.10.3.15]).
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  TX-parity-linkdown (fix wave): the
+//                lock follows connectionStateChanged too, so a remote
+//                window whose Core has no radio locks MOX, TUN and 2TONE.
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1489,6 +1493,9 @@ void TxApplet::wireControls()
         // 2TONE until it is back, as Thetis's power-off on loss of sync
         // disables them (console.cs:27488-27493 [v2.10.3.15]).
         connect(m_model, &RadioModel::radioLinkDownChanged, this, relock);
+        // TX-parity-linkdown (fix wave): a remote window's Core losing or
+        // regaining its radio (RadioModel::transmitLinkDown) the same way.
+        connect(m_model, &RadioModel::connectionStateChanged, this, relock);
         applyReceiveOnlyLock();
     }
 

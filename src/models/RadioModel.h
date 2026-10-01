@@ -1638,6 +1638,10 @@ public:
     // window, whose Core refuses the key.
     bool isRadioLinkDown() const { return m_radioLinkDown; }
     static QString radioLinkDownReason();
+    // TX-parity-linkdown (fix wave): the link-down lock transmitButtonsLocked,
+    // transmitLockCoversMox and transmitLockReasonAlongside use: a lost
+    // link here, or, on a remote window, a Core not connected to its radio.
+    bool transmitLinkDown() const;
 
     // ── Remote-window parity Task 16 (R-R3-49, R-R3-21, R-R3-40) ──────────
     // Which noise reduction runs is nrCannotRunReason's (DspAssetService,

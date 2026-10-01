@@ -14,6 +14,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - TX-parity-linkdown (fix wave): a remote window whose Core
+//                 has no connection to the radio locks MOX, TUN and 2TONE
+//                 with the link-down reason (transmitLinkDown). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - Fix wave (RADE EOO): startRadeEndOfOverTail finishes in
 //                 queueEndOfOver's callback (finishRadeEndOfOverTailQueue),
 //                 so a decoder holding the codec never blocks the main
@@ -27398,7 +27402,23 @@ QString RadioModel::rxOnlyReasonAlongside(const QString& otherReason) const
 
 bool RadioModel::transmitButtonsLocked() const
 {
-    return m_radioLinkDown || m_rxOnlyEffective || isTxInhibited();
+    return transmitLinkDown() || m_rxOnlyEffective || isTxInhibited();
+}
+
+bool RadioModel::transmitLinkDown() const
+{
+    // TX-parity-linkdown (fix wave): a remote window locks MOX, TUN and
+    // 2TONE while its Core has no connection to the radio (the Core's
+    // mirrored `connected`), as the Core's own window does while its link
+    // is down. From Thetis console.cs:27488-27493 [v2.10.3.15]:
+    //   chkMOX.Checked = false;
+    //   chkMOX.Enabled = false;
+    //   chkTUN.Checked = false;
+    //   chkTUN.Enabled = false;
+    //   chk2TONE.Checked = false;  // MW0LGE_21a
+    //   chk2TONE.Enabled = false;
+    // chkVOX is left alone there; transmitLockCoversVox does not use this.
+    return m_radioLinkDown || (m_role == Role::Remote && !isConnected());
 }
 
 QString RadioModel::radioLinkDownReason()
@@ -27420,7 +27440,7 @@ bool RadioModel::transmitLockCoversMox() const
     // TX safety (2026-09-30): a lost link disables MOX in every mode.
     //   From Thetis console.cs:27489 [v2.10.3.15]
     //     chkMOX.Enabled = false;
-    if (m_radioLinkDown) {
+    if (transmitLinkDown()) {
         return true;
     }
     if (m_rxOnlyEffective) {
@@ -27445,6 +27465,12 @@ QString RadioModel::transmitLockReasonAlongside(const QString& otherReason) cons
     // matters until it is back.
     if (m_radioLinkDown) {
         return radioLinkDownReason();
+    }
+    // TX-parity-linkdown (fix wave): on a remote window the Core's own
+    // refusal (no permission confirmed, receive only) says why first, as
+    // the container's reasons always have; the link-down reason otherwise.
+    if (transmitLinkDown()) {
+        return otherReason.isEmpty() ? radioLinkDownReason() : otherReason;
     }
     if (m_rxOnlyEffective) {
         return rxOnlyReasonAlongside(otherReason);
