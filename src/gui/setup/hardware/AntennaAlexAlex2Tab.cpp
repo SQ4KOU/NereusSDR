@@ -21,6 +21,9 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18: the receive filter rows carry their
 //                Setup description ids (version 13). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30: Fix wave GUI-M4: plain wording for the filters tooltip.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 // =================================================================
 //
 //=================================================================

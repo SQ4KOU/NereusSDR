@@ -57,6 +57,9 @@
 //                 items open (radioMicSelectable) with the audio add-on
 //                 note as their tooltip. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-30: Fix wave GUI-M3: the DEXP right-click opens Setup
+//               without the transmit check. J.J. Boyd (KG4VCF), AI-
+//               assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================

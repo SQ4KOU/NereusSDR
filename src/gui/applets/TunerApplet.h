@@ -36,6 +36,9 @@
 //   2026-09-25  transmitBlocked(): TUNE follows the transmit block (Task
 //                 16 fix wave M2), by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-30: Fix wave GUI-I4: remoteWindow, remoteTuneControl and the
+//               three remote reasons. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #pragma once

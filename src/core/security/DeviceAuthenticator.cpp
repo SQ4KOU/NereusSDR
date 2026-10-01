@@ -8,6 +8,10 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: Fix wave LINK minor 4: a failed proof counts against the
+//               address and the relay introduction, never the id it
+//               names. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/security/DeviceAuthenticator.h"

@@ -76,6 +76,9 @@
 //   2026-09-30 - core-slice take-over: the tab menu's Take control is
 //                 disabled with the Core's words when it refuses the take.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: Fix wave GUI-M5: the step attenuator connections are
+//               kept and dropped on each slice change. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================

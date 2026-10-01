@@ -35,6 +35,8 @@
 //                 attenuator and preamp controls are held too, with the same
 //                 reason. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-30: Fix wave GUI-M5: m_stepAttConnections. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
