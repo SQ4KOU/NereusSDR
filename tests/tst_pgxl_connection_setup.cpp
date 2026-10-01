@@ -21,6 +21,7 @@ private slots:
     void readSetupSendsCommand();
     void writeSetupBuildsKvCommand();
     void writeSetupRefusesAFieldThatWouldSplit();
+    void anOldNameIsOfferedAsOneWord();
     void parsesSetupResponse();
     void seqIncrementsBetweenCalls();
 };
@@ -57,6 +58,20 @@ void PgxlConnectionSetupTest::writeSetupBuildsKvCommand() {
 
 // RD-I11: a value with a space or '=' would become extra fields on the
 // amp's `setup` line ("Shack bias=a" sets the bias). Nothing is sent.
+// Fix round 1 (minor 4): a name saved with spaces is offered as one word.
+void PgxlConnectionSetupTest::anOldNameIsOfferedAsOneWord() {
+    using NereusSDR::PgxlConnection;
+    QCOMPARE(PgxlConnection::asSetupToken(QStringLiteral(" Shack PGXL ")),
+             QStringLiteral("Shack_PGXL"));
+    QCOMPARE(PgxlConnection::asSetupToken(QStringLiteral("Shack  bias=a")),
+             QStringLiteral("Shack_bias_a"));
+    QCOMPARE(PgxlConnection::asSetupToken(QStringLiteral("Shack_Amp")),
+             QStringLiteral("Shack_Amp"));
+    QCOMPARE(PgxlConnection::asSetupToken(QString()), QString());
+    QVERIFY(PgxlConnection::isSetupToken(
+        PgxlConnection::asSetupToken(QStringLiteral("a = b\tc"))));
+}
+
 void PgxlConnectionSetupTest::writeSetupRefusesAFieldThatWouldSplit() {
     NereusSDR::PgxlConnection conn;
     QSignalSpy frameSpy(&conn, &NereusSDR::PgxlConnection::testFrameWrittenForTesting);

@@ -41,6 +41,9 @@
 //               a space or '=' (isSetupToken), so a name cannot add
 //               setup fields. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-30: Fix round 1: asSetupToken offers a name saved with
+//               spaces as one word. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 #include "PgxlConnection.h"
 #include "AppSettings.h"
@@ -792,6 +795,24 @@ quint32 PgxlConnection::interlockDisable(int interlockId) {
 // From FlexRadio wiki spec: setup read
 quint32 PgxlConnection::readSetup() {
     return sendCommand("setup read");
+}
+
+QString PgxlConnection::asSetupToken(const QString& text)
+{
+    QString out;
+    bool gap = false;
+    for (const QChar c : text.trimmed()) {
+        if (c.isSpace() || c == QLatin1Char('=') || c.category() == QChar::Other_Control) {
+            gap = true;
+            continue;
+        }
+        if (gap && !out.isEmpty()) {
+            out += QLatin1Char('_');
+        }
+        gap = false;
+        out += c;
+    }
+    return out;
 }
 
 bool PgxlConnection::isSetupToken(const QString& text)

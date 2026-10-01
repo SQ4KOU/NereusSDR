@@ -619,6 +619,7 @@ private slots:
     void olderCoreLeavesTheTunerSwitchesGreyed();
     void aWindowThatMayTransmitNeverFallsBackToItsOwnTuner();
     void remoteTuneWaitsWhileTheCoresTuneIsOn();
+    void aNameSavedWithSpacesStillTakesEdits();
     void operateFromStandbyIsOneRequestOnACoreThatAppliesItWhole();
     void remoteWindowOperatesTheAmpThroughTheCore();
     void remoteWindowScansAndKeepsTheAmpAddressOnTheCore();
@@ -3693,6 +3694,36 @@ void RemotePeripheralsTest::aWindowThatMayTransmitNeverFallsBackToItsOwnTuner()
     }
     QVERIFY(link.tgxlRequests.isEmpty());
     model.detachStation();
+}
+
+// Fix round 1 (minor 4): a name saved with spaces before names were one
+// word is offered with underscores, so the box accepts it and an edit is
+// saved. Before, the box held text its validator never accepted, so
+// editingFinished never fired and edits went nowhere.
+void RemotePeripheralsTest::aNameSavedWithSpacesStillTakesEdits()
+{
+    AppSettings::instance().clear();
+    AppSettings::instance().setValue(QStringLiteral("PGXL_Nickname"), QStringLiteral("Shack PGXL"));
+    AppSettings::instance().setValue(QStringLiteral("TGXL_Nickname"), QStringLiteral("Shack Tuner"));
+    const auto cleanup = qScopeGuard([] { AppSettings::instance().clear(); });
+    RadioModel local;
+    PgxlAdvancedPage amp(&local);
+    TgxlAdvancedPage tuner(&local);
+    const auto check = [](QLineEdit* edit, const QString& offered, const QString& key) {
+        QCOMPARE(edit->text(), offered);
+        QVERIFY(edit->hasAcceptableInput());
+        QSignalSpy finished(edit, &QLineEdit::editingFinished);
+        QTest::keyClick(edit, Qt::Key_End);
+        QTest::keyClicks(edit, QStringLiteral("2"));
+        QTest::keyClick(edit, Qt::Key_Return);
+        QCOMPARE(finished.count(), 1);
+        QCOMPARE(AppSettings::instance().value(key).toString(), offered + QStringLiteral("2"));
+    };
+    check(amp.nicknameEditForTesting(), QStringLiteral("Shack_PGXL"),
+          QStringLiteral("PGXL_Nickname"));
+    if (QTest::currentTestFailed()) { return; }
+    check(tuner.nicknameEditForTesting(), QStringLiteral("Shack_Tuner"),
+          QStringLiteral("TGXL_Nickname"));
 }
 
 // Fix round 1 (minor 1): in a remote window on a Core that runs TUNE for
