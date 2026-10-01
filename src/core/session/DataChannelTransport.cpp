@@ -46,6 +46,13 @@
 //               deletes under a lock (qAddPostRoutine), not a QPointer read
 //               on libdatachannel's thread. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-10-01: the application's teardown deletes the lingering close's
+//               context object after the lock, not under it, and a Linger
+//               clears its peer's callbacks when it is destroyed: deleting
+//               the object under the lock destroyed a lingering peer whose
+//               state callback took the same lock, and the process hung at
+//               exit (tst_station_tx_watch_relay). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
@@ -1450,6 +1457,12 @@ struct Linger {
     std::shared_ptr<rtc::PeerConnection> peer;
     std::shared_ptr<rtc::DataChannel> channel;
 
+    // A Linger dropped without release() (its deadline timer deleted with
+    // the target at the application's teardown) still clears the peer's
+    // callbacks before letting it go, so the peer's destructor reports its
+    // close to no one.
+    ~Linger() { release(); }
+
     void release()
     {
         if (!peer) {
@@ -1487,8 +1500,19 @@ LingerContext& lingerContext()
 void endLingerContext()
 {
     LingerContext& context = lingerContext();
-    std::lock_guard lock(context.mutex);
-    context.target.reset();
+    // The target is taken under the lock and deleted after it. Deleting it
+    // destroys the deadline timers it owns, and a timer holding the last
+    // reference to a Linger destroys the peer, whose destructor closes it
+    // and runs the state callback on this thread; that callback takes the
+    // same lock. Once the target is taken, a callback finds none and posts
+    // nothing, and one that already posted did so under the lock, so its
+    // event is queued to the live object and dropped with it.
+    std::unique_ptr<QObject> target;
+    {
+        std::lock_guard lock(context.mutex);
+        target = std::move(context.target);
+    }
+    target.reset();
 }
 
 // The context's target, made the first time and kept on the

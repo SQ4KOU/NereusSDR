@@ -19,6 +19,9 @@
 // the Tuner Genius announcements it heard; a typed address is saved without
 // dialling. Each refused while the radio is on the air, and the nudge with
 // no tuner. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-01: RD-I11: the tuner's name is one word (Shack_Tuner); a name
+// with a space is refused on the Core and nothing reaches the tuner. J.J.
+// Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -525,14 +528,21 @@ private slots:
             peer->flush();
         };
 
-        QVERIFY(model.setTgxlNameForStation(QStringLiteral("Shack Tuner"), &reason));
-        quint32 seq = waitFor(QStringLiteral("setup nickname=Shack Tuner"));
+        // RD-I11: the name is one word of the `setup` line (the local
+        // page's name box takes no space or '='), so a name with a space
+        // is refused on the Core and nothing reaches the tuner.
+        const qsizetype framesBeforeName = frames.count();
+        QVERIFY(!model.setTgxlNameForStation(QStringLiteral("Shack Tuner"), &reason));
+        QCOMPARE(reason, QStringLiteral("Enter a name without spaces or equals signs."));
+        QCOMPARE(frames.count(), framesBeforeName);
+        QVERIFY(model.setTgxlNameForStation(QStringLiteral("Shack_Tuner"), &reason));
+        quint32 seq = waitFor(QStringLiteral("setup nickname=Shack_Tuner"));
         QVERIFY(seq != 0);
         answer(seq, QStringLiteral("0|"));
-        QTRY_COMPARE(settings->tgxlNickname(), QStringLiteral("Shack Tuner"));
+        QTRY_COMPARE(settings->tgxlNickname(), QStringLiteral("Shack_Tuner"));
         QCOMPARE(settings->tgxlAnswer(), QStringLiteral("The Tuner Genius took the new name."));
         QCOMPARE(AppSettings::instance().value(QStringLiteral("TGXL_Nickname")).toString(),
-                 QStringLiteral("Shack Tuner"));
+                 QStringLiteral("Shack_Tuner"));
 
         // I5: DHCP off with no address or netmask is refused on the Core
         // and nothing reaches the tuner.

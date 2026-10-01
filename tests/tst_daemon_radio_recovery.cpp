@@ -581,10 +581,16 @@ private slots:
                 return;
             }
             watched = conn;
+            // connectFailed comes from the connection's thread, queued, and
+            // the model can delete that connection before the slot runs; a
+            // raw pointer assigned to `failed` then wrote through freed
+            // memory (the Linux SegFault). The guard is taken here, while
+            // the connection is alive, and reads null once it is gone.
+            const QPointer<RadioConnection> guard(conn);
             connect(conn, &RadioConnection::connectFailed, &watchScope,
-                    [&, conn](ConnectFailure, const QString&) {
+                    [&, guard](ConnectFailure, const QString&) {
                 ++timedOut;
-                failed = conn;
+                failed = guard;
             });
         });
 
