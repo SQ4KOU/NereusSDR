@@ -11,6 +11,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - J.J. Boyd (KG4VCF). Fix round 2 (minor 3): the disconnect
+//                comment says TX applet PS-A shows disabled, not hidden, for
+//                the unknown board. AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - J.J. Boyd (KG4VCF). Fix round 1 (minor 4): the container's
 //                MOX, TUNE and 2-TONE refresh when the window's link to the
 //                Core or the Core's waiting for a radio changes.
@@ -16719,16 +16722,18 @@ void MainWindow::onConnectionStateChanged()
         // disconnect.  Re-evaluated via updatePsaIndicatorVisibility on
         // next reconnect (which now also checks PureSignal::isAutoCalEnabled).
         updatePsaIndicatorVisibility();
-        // Phase 3M-4 Task 13: hide PureSignalApplet + TxApplet [PS-A] on
-        // disconnect.  Same lifetime model as the PSA indicator above.
-        // Re-evaluation happens on next reconnect via the connected-branch
-        // gating block.
+        // Phase 3M-4 Task 13: hide PureSignalApplet on disconnect and push
+        // the unknown board to TxApplet [PS-A].  Same lifetime model as the
+        // PSA indicator above.  Re-evaluation happens on next reconnect via
+        // the connected-branch gating block.
         if (m_pureSignalApplet) {
             m_pureSignalApplet->setVisible(false);
         }
         if (m_txApplet) {
-            // Push the unknown-board defaults (hasPureSignal == false) so
-            // [PS-A] hides.  RadioModel::boardCapabilities() returns the
+            // Push the unknown-board defaults (hasPureSignal == false).
+            // Fix round 1 (minor 5): [PS-A] then shows disabled with its
+            // reason until the board is known; only a known board without
+            // PureSignal hides it.  RadioModel::boardCapabilities() returns the
             // unknown-board fallback when m_hardwareProfile.caps is null
             // (RadioModel.cpp:1016 [v2.10.3.13] equivalent).
             m_txApplet->setBoardCapabilities(m_radioModel->boardCapabilities());
