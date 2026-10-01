@@ -14,6 +14,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - Fix wave (RADE EOO): startRadeEndOfOverTail finishes in
+//                 queueEndOfOver's callback (finishRadeEndOfOverTailQueue),
+//                 so a decoder holding the codec never blocks the main
+//                 thread. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-09-30 - RADE reason: a RADE slice with no working decoder (its
 //                 create or start failed, its model file is missing, its
 //                 receiver is not running, or a saved layout started RADE on
@@ -7997,11 +8002,24 @@ bool RadioModel::startRadeEndOfOverTail()
     const bool reporting = m_spotSourceHost
         && m_spotSourceHost->freedvReporterState() != SpotSourceHost::kOff;
     const QString callsign = reporting ? SpotSourceHost::freedvCallsign() : QString();
-    // queueEndOfOver emits txModemReady synchronously; wireRadeChannel's
-    // lambda queues the samples to the worker, so the notice below lands
-    // behind them.
-    if (!channel->queueEndOfOver(callsign)) {
-        return false;
+    // queueEndOfOver emits txModemReady (the speech recorded before the
+    // release, then the EOO) and runs the callback right after it, on this
+    // thread; wireRadeChannel's lambda queues the samples to the worker, so
+    // the notice below lands behind them. Fix wave (RADE EOO): with the
+    // decoder holding the codec this happens once it lets go, not here;
+    // MoxController's tail limit still bounds the wait.
+    QPointer<RadioModel> self(this);
+    return channel->queueEndOfOver(callsign, [self]() {
+        if (self) {
+            self->finishRadeEndOfOverTailQueue();
+        }
+    });
+}
+
+void RadioModel::finishRadeEndOfOverTailQueue()
+{
+    if (!m_txWorker) {
+        return;
     }
     // Review Minor 1: the 24 -> 48 kHz stage holds back its latency too
     // (about 70 ms); push that much silence through it so the worker gets
@@ -8018,7 +8036,6 @@ bool RadioModel::startRadeEndOfOverTail()
     }
     QMetaObject::invokeMethod(m_txWorker.get(), "armRadeAudioDrainedNotice",
                               Qt::QueuedConnection);
-    return true;
 }
 
 void RadioModel::dropRadeTxAudio()

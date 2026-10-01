@@ -84,6 +84,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave (RADE EOO): queueEndOfOver
+//                 encodes held speech first, never waits for the decoder.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  RADE reason: test seam setStartFailsForTest, read at the top of start().
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-05-11  J.J. Boyd / KG4VCF  Phase 3R Task I1. See
@@ -456,6 +459,8 @@ void RadeChannel::stop()
     m_radeRxCallCount = 0;
     m_radeTxCallCount = 0;
     m_endOfOverQueued = false;
+    m_endOfOverPending = false;  // fix wave (RADE EOO)
+    m_pendingEndOfOverSent = {};
 
     qCInfo(lcRade) << "RadeChannel: stopped";
 }
@@ -607,6 +612,20 @@ void RadeChannel::processIq(const QByteArray& iqSamples)
 
 QByteArray RadeChannel::decodeRxBlock(const QByteArray& iqSamples)
 {
+    // Fix wave (RADE EOO): an end-of-over that found the codec busy is sent
+    // on this object's thread once this decode has let go of the codec, on
+    // every return path. Constructed before the lock, so it runs after the
+    // lock is released.
+    struct EndOfOverWake {
+        RadeChannel* self;
+        ~EndOfOverWake()
+        {
+            if (self->m_endOfOverPending.load(std::memory_order_seq_cst)) {
+                QMetaObject::invokeMethod(self, [s = self]() { s->runPendingEndOfOver(); },
+                                          Qt::QueuedConnection);
+            }
+        }
+    } endOfOverWake{this};
     // RADE threads: what to emit once m_codecMutex is released.
     QByteArray speechOut;
     bool syncEdge = false;
@@ -963,6 +982,29 @@ void RadeChannel::txEncode(const QByteArray& speechSamples)
     }
     m_txAccum.append(speechSamples);
 
+    // Steps 2-6 (fix wave, RADE EOO: shared with queueEndOfOver).
+    encodeSpeechLocked(modemOut);
+    }  // RADE threads: m_codecMutex released
+    for (const QByteArray& chunk : modemOut) {
+        emit txModemReady(chunk);
+    }
+}
+
+// Fix wave (RADE EOO): txEncode's steps 2-6, unchanged, so queueEndOfOver
+// can encode the speech recorded before the release ahead of the EOO.
+// m_codecMutex is held by the caller; blocks held while the codec was busy
+// go first.
+void RadeChannel::encodeSpeechLocked(std::vector<QByteArray>& modemOut)
+{
+    if (!m_rade || !m_lpcnetEnc || !m_up8to24) {
+        m_txHeld.clear();
+        return;
+    }
+    if (!m_txHeld.isEmpty()) {
+        m_txAccum.append(m_txHeld);
+        m_txHeld.clear();
+    }
+
     // Step 2: process LPCNet 10 ms frames (LPCNET_FRAME_SIZE = 160
     // samples at 16 kHz). From AetherSDR src/core/RADEEngine.cpp
     // :154-170 [@0cd4559].
@@ -1024,10 +1066,6 @@ void RadeChannel::txEncode(const QByteArray& speechSamples)
             modemOut.push_back(stereo24k);  // RADE threads: emitted below
         }
     }
-    }  // RADE threads: m_codecMutex released
-    for (const QByteArray& chunk : modemOut) {
-        emit txModemReady(chunk);
-    }
 }
 
 // From AetherSDR src/core/RADEEngine.cpp:126-132 (resetTx body)
@@ -1058,6 +1096,9 @@ void RadeChannel::dropTxAudio()
     m_txFeatAccum.clear();
     m_radeTxCallCount = 0;
     m_endOfOverQueued = false;  // RADE end-of-over callsigns: a new over
+    // Fix wave (RADE EOO): a deferred end-of-over goes with the over.
+    m_endOfOverPending = false;
+    m_pendingEndOfOverSent = {};
     // NereusSDR: the 8 -> 24 kHz stage holds about 300 ms of this over's
     // modem audio; drop it so none of it starts the next over.
     if (m_up8to24) {
@@ -1088,52 +1129,110 @@ int RadeChannel::endOfOverSamples8k() const
 // NereusSDR follows txEncode's path for the samples (the real leg as
 // float, 8 -> 24 kHz stereo, txModemReady) instead of scaling to int16 for
 // a sound card.
-bool RadeChannel::queueEndOfOver(const QString& callsign)
+bool RadeChannel::queueEndOfOver(const QString& callsign, std::function<void()> onSent)
 {
-    // RADE threads: the modem audio leaves after m_codecMutex is released.
-    QByteArray stereo24k;
-    {
-    std::lock_guard<std::mutex> lock(m_codecMutex);
-    if (!m_active || !m_rade || !m_up8to24) {
+    if (!m_active.load(std::memory_order_acquire)) {
         return false;
     }
-
-    m_textChannel->setOurCallsign(callsign);
-    m_textChannel->pushTxCallsign(m_rade);
-
-    const int numEOOSamples = rade_n_tx_eoo_out(m_rade);
-    if (numEOOSamples <= 0) {
-        return false;
-    }
-    std::vector<RADE_COMP> eooOut(static_cast<size_t>(numEOOSamples));
-    rade_tx_eoo(m_rade, eooOut.data());
-
-    // NereusSDR: the 8 -> 24 kHz resampler holds back its latency (about
-    // 300 ms of input), more than the 200 ms of silence, so that many more
-    // zeros follow to bring the EOO and all of the silence out. FreeDV has
-    // no resampler at this point.
-    const int total = numEOOSamples + NUM_SAMPLES_SILENCE + m_up8to24->latencyInputSamples();
-    std::vector<float> modem8k(static_cast<size_t>(total), 0.0f);
-    for (int index = 0; index < numEOOSamples; index++) {
-        modem8k[static_cast<size_t>(index)] = eooOut[static_cast<size_t>(index)].real;
-    }
-
+    m_pendingEndOfOverCallsign = callsign;
+    m_pendingEndOfOverSent = std::move(onSent);
     // Nothing more is encoded in this over (txEncode checks this flag).
     m_endOfOverQueued = true;
-
-    for (int offset = 0; offset < total; offset += kRadeResamplerMaxBlock) {
-        const int chunk = std::min(kRadeResamplerMaxBlock, total - offset);
-        stereo24k.append(m_up8to24->processMonoToStereo(modem8k.data() + offset, chunk));
-    }
-    qCInfo(lcRade) << "RadeChannel: end-of-over frame queued"
-                   << "eooSamples=" << numEOOSamples
-                   << "silenceSamples=" << NUM_SAMPLES_SILENCE
-                   << "callsign=" << (callsign.isEmpty() ? QStringLiteral("(none)") : callsign);
-    }  // RADE threads: m_codecMutex released
-    if (!stereo24k.isEmpty()) {
-        emit txModemReady(stereo24k);
+    // Fix wave (RADE EOO): set before the codec is tried, so a decode that
+    // holds it now sees the flag once it lets go and queues the send.
+    m_endOfOverPending.store(true, std::memory_order_seq_cst);
+    switch (runPendingEndOfOver()) {
+    case EndOfOverRun::Failed:
+        m_endOfOverQueued = false;
+        return false;
+    case EndOfOverRun::Busy:
+        qCInfo(lcRade) << "RadeChannel: end-of-over waits for the decoder";
+        return true;
+    case EndOfOverRun::Sent:
+    case EndOfOverRun::NothingPending:
+        return true;
     }
     return true;
+}
+
+RadeChannel::EndOfOverRun RadeChannel::runPendingEndOfOver()
+{
+    if (!m_endOfOverPending.load(std::memory_order_seq_cst)) {
+        return EndOfOverRun::NothingPending;
+    }
+    // RADE threads: the modem audio leaves after m_codecMutex is released.
+    std::vector<QByteArray> modemOut;
+    QString callsign;
+    {
+        // Fix wave (RADE EOO): never wait for the decoder on this thread.
+        // A busy codec leaves the send pending; decodeRxBlock queues
+        // another try once it releases the codec.
+        std::unique_lock<std::mutex> lock(m_codecMutex, std::try_to_lock);
+        if (!lock.owns_lock()) {
+            return EndOfOverRun::Busy;
+        }
+        if (!m_endOfOverPending.exchange(false, std::memory_order_seq_cst)) {
+            return EndOfOverRun::NothingPending;
+        }
+        callsign = m_pendingEndOfOverCallsign;
+        if (!m_active || !m_rade || !m_up8to24) {
+            m_pendingEndOfOverSent = {};
+            return EndOfOverRun::Failed;
+        }
+
+        // Fix wave (RADE EOO): the speech recorded before the release goes
+        // out ahead of the EOO, whole LPCNet frames only.
+        // From freedv-gui src/pipeline/TxRxThread.cpp:808-811 [@a4ae053]:
+        //   // There may be recorded audio left to encode while ending TX. To handle this,
+        //   // we keep reading from the FIFO until we have less than nsam_in_48 samples available.
+        // A partial frame left over is dropped with the over (resetTx), as
+        // FreeDV leaves it in its FIFO.
+        encodeSpeechLocked(modemOut);
+
+        m_textChannel->setOurCallsign(callsign);
+        m_textChannel->pushTxCallsign(m_rade);
+
+        const int numEOOSamples = rade_n_tx_eoo_out(m_rade);
+        if (numEOOSamples <= 0) {
+            m_pendingEndOfOverSent = {};
+            return EndOfOverRun::Failed;
+        }
+        std::vector<RADE_COMP> eooOut(static_cast<size_t>(numEOOSamples));
+        rade_tx_eoo(m_rade, eooOut.data());
+
+        // NereusSDR: the 8 -> 24 kHz resampler holds back its latency
+        // (about 300 ms of input), more than the 200 ms of silence, so that
+        // many more zeros follow to bring the EOO and all of the silence
+        // out. FreeDV has no resampler at this point.
+        const int total = numEOOSamples + NUM_SAMPLES_SILENCE + m_up8to24->latencyInputSamples();
+        std::vector<float> modem8k(static_cast<size_t>(total), 0.0f);
+        for (int index = 0; index < numEOOSamples; index++) {
+            modem8k[static_cast<size_t>(index)] = eooOut[static_cast<size_t>(index)].real;
+        }
+
+        QByteArray stereo24k;
+        for (int offset = 0; offset < total; offset += kRadeResamplerMaxBlock) {
+            const int chunk = std::min(kRadeResamplerMaxBlock, total - offset);
+            stereo24k.append(m_up8to24->processMonoToStereo(modem8k.data() + offset, chunk));
+        }
+        if (!stereo24k.isEmpty()) {
+            modemOut.push_back(stereo24k);
+        }
+        qCInfo(lcRade) << "RadeChannel: end-of-over frame queued"
+                       << "speechChunks=" << (modemOut.size() - (stereo24k.isEmpty() ? 0 : 1))
+                       << "eooSamples=" << numEOOSamples
+                       << "silenceSamples=" << NUM_SAMPLES_SILENCE
+                       << "callsign=" << (callsign.isEmpty() ? QStringLiteral("(none)") : callsign);
+    }  // RADE threads: m_codecMutex released
+    for (const QByteArray& chunk : modemOut) {
+        emit txModemReady(chunk);
+    }
+    std::function<void()> sent = std::move(m_pendingEndOfOverSent);
+    m_pendingEndOfOverSent = {};
+    if (sent) {
+        sent();
+    }
+    return EndOfOverRun::Sent;
 }
 
 }  // namespace NereusSDR

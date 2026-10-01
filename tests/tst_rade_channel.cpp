@@ -50,6 +50,11 @@
 #include <cmath>
 #include <cstdint>
 #include <random>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <chrono>
+#include <atomic>
 
 #include "core/RadeChannel.h"
 
@@ -84,6 +89,7 @@ private slots:
     void noSpeechAfterEndOfOverUntilReset();
     void endOfOverWhileInactiveSendsNothing();
     void endOfOverCallsignReachesAnotherChannel();
+    void endOfOverEncodesHeldSpeechFirstWithoutWaiting();
 };
 
 void TestRadeChannel::initialState()
@@ -569,6 +575,108 @@ void TestRadeChannel::endOfOverCallsignReachesAnotherChannel()
     QVERIFY(textSpy.first().value(1).toString().isEmpty());
     tx.stop();
     rx.stop();
+}
+
+// Fix wave (RADE EOO): FreeDV keeps encoding the microphone audio recorded
+// before the release, then sends the end-of-over frame (freedv-gui
+// src/pipeline/TxRxThread.cpp:808-847 [@a4ae053]). Speech held while the
+// decoder had the codec goes out ahead of the EOO, and queueing the EOO
+// never waits for the decoder on the main thread.
+void TestRadeChannel::endOfOverEncodesHeldSpeechFirstWithoutWaiting()
+{
+    RadeChannel ch;
+    QVERIFY(ch.start("dummy"));
+
+    // A decode on another thread holds the codec until released.
+    std::mutex gateMutex;
+    std::condition_variable gateCv;
+    bool released = false;
+    std::atomic<int> entered{0};
+    auto release = [&] {
+        {
+            std::lock_guard<std::mutex> l(gateMutex);
+            released = true;
+        }
+        gateCv.notify_all();
+    };
+    ch.setRxDecodeLockedHookForTest([&] {
+        entered.fetch_add(1);
+        std::unique_lock<std::mutex> l(gateMutex);
+        gateCv.wait(l, [&] { return released; });
+    });
+    const QByteArray iq(2048 * 2 * static_cast<int>(sizeof(float)), '\0');
+    std::thread decoder([&] { ch.processIq(iq); });
+
+    // A watchdog frees the decoder after 5 s, so a call that waited for it
+    // returns only then.
+    std::atomic<bool> watchdogFired{false};
+    std::atomic<bool> done{false};
+    std::thread watchdog([&] {
+        for (int i = 0; i < 500 && !done.load(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (!done.load()) {
+            watchdogFired.store(true);
+            release();
+        }
+    });
+    struct JoinOnExit {
+        std::function<void()> release;
+        std::atomic<bool>& done;
+        std::thread& a;
+        std::thread& b;
+        ~JoinOnExit()
+        {
+            done.store(true);
+            release();
+            if (a.joinable()) {
+                a.join();
+            }
+            if (b.joinable()) {
+                b.join();
+            }
+        }
+    } joinOnExit{release, done, watchdog, decoder};
+
+    QTRY_VERIFY_WITH_TIMEOUT(entered.load() == 1, 5000);
+
+    QSignalSpy modemSpy(&ch, &RadeChannel::txModemReady);
+    ch.txEncode(makeSyntheticSpeech16k(16000));
+    QVERIFY(ch.txHeldBytesForTest() > 0);
+    QCOMPARE(ch.radeTxCallCountForTest(), 0);
+
+    bool sent = false;
+    QVERIFY(ch.queueEndOfOver(QStringLiteral("KG4VCF"), [&sent] { sent = true; }));
+    const bool waited = watchdogFired.load();
+    QVERIFY(ch.endOfOverQueued());
+    QVERIFY2(!waited, "queueEndOfOver waited for the decoder");
+    QCOMPARE(modemSpy.count(), 0);
+    QVERIFY(!sent);
+
+    // The decode ends; the held speech, then the EOO, go out.
+    ch.setRxDecodeLockedHookForTest({});
+    release();
+    decoder.join();
+    QTRY_VERIFY_WITH_TIMEOUT(sent, 5000);
+    QCOMPARE(ch.txHeldBytesForTest(), 0);
+    QVERIFY2(ch.radeTxCallCountForTest() > 0,
+             qPrintable(QStringLiteral("radeTx=%1").arg(ch.radeTxCallCountForTest())));
+    QVERIFY2(modemSpy.count() == ch.radeTxCallCountForTest() + 1,
+             qPrintable(QStringLiteral("chunks=%1 radeTx=%2")
+                            .arg(modemSpy.count()).arg(ch.radeTxCallCountForTest())));
+    // The last chunk carries the EOO and the silence: at least
+    // (1152 + 1600) x 3 stereo float frames at 24 kHz.
+    const int lastFrames = modemSpy.last().value(0).toByteArray().size()
+        / (2 * static_cast<int>(sizeof(float)));
+    QVERIFY2(lastFrames >= (1152 + 1600) * 3 - 3,
+             qPrintable(QStringLiteral("%1 frames").arg(lastFrames)));
+
+    // Sent once; a dropped over sends no second one.
+    sent = false;
+    ch.dropTxAudio();
+    QCoreApplication::processEvents();
+    QVERIFY(!sent);
+    ch.stop();
 }
 
 QTEST_GUILESS_MAIN(TestRadeChannel)

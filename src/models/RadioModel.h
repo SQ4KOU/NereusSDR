@@ -6019,6 +6019,10 @@ private:
     // FreeDV Reporter uses, on the TX-bound slice's RADE channel and arms
     // the TX worker's drained notice. False (no tail) otherwise.
     bool startRadeEndOfOverTail();
+    // Fix wave (RADE EOO): after the EOO's samples leave the channel (now,
+    // or once the decoder releases the codec): flush the 24 -> 48 kHz
+    // stage and arm the TX worker's drained notice.
+    void finishRadeEndOfOverTailQueue();
     // The TX worker's RADE connections: the path latch on MOX-on and the
     // tail's drained notice. Called where the worker is created.
     void wireTxWorkerRade(TxWorkerThread* worker);
