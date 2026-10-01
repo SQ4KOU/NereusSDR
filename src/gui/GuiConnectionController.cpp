@@ -304,8 +304,8 @@ void GuiConnectionController::refresh()
         if (selected && m_remoteControls) {
             row.state = m_remoteControls->statusText();
             row.radioText = m_remoteControls->radioText();
-            if (!exact) { row.state += tr(" — saved changes pending"); }
-            else if (!current.savedAddressBeforeDiscovery.isEmpty()) { row.state += tr(" — LAN address"); }
+            if (!exact) { row.state += tr(", saved changes pending"); }
+            else if (!current.savedAddressBeforeDiscovery.isEmpty()) { row.state += tr(", using the LAN address"); }
         }
         row.connectable = !exact || !m_remoteControls || m_remoteControls->canConnect();
         rows.append(row);
@@ -340,7 +340,7 @@ void GuiConnectionController::refresh()
     } else {
         const bool active = model->connectionState() != ConnectionState::Disconnected;
         m_selector->setCurrentConnection(model->isConnected() ? tr("Connected using this computer's Core")
-            : tr("This computer's Core — no radio connected"), model->connectionIpText(), active,
+            : tr("This computer's Core, with no radio connected"), model->connectionIpText(), active,
             model->connectionState() == ConnectionState::LinkLost);
     }
 }

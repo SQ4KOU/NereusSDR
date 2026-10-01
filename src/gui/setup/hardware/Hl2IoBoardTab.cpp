@@ -1192,7 +1192,7 @@ void Hl2IoBoardTab::onProbeClicked()
     QString result;
     if (!remote) {
         result = issued ? QStringLiteral("(3 reads enqueued)")
-                        : QStringLiteral("(no P1 connection — skipped)");
+                        : QStringLiteral("(not sent: no Protocol 1 connection)");
     } else {
         result = issued ? QStringLiteral("(asked the Core)")
                         : QStringLiteral("(not sent: %1)").arg(outcome.reason);
