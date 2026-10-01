@@ -531,6 +531,10 @@
 //                are disabled with their reason while the link to the radio
 //                is lost. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-30 - TX safety: Radio > Disconnect stays enabled while the
+//                lost-link lock holds, so the operator can lift it after an
+//                automatic recovery stops. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1396,6 +1400,17 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
     // Wire connection state changes to status bar
     connect(m_radioModel, &RadioModel::connectionStateChanged,
             this, &MainWindow::onConnectionStateChanged);
+    // TX safety fix round 3 (2026-09-30): the lost-link lock lifts on the
+    // operator's disconnect after the model has already reported
+    // Disconnected, so Radio > Disconnect follows the lock itself too.
+    connect(m_radioModel, &RadioModel::radioLinkDownChanged, this, [this](bool down) {
+        if (m_actDisconnect == nullptr || !m_radioModel->ownsLocalDsp()) {
+            return;
+        }
+        m_actDisconnect->setEnabled(
+            down || m_radioModel->connectionState() == ConnectionState::Connected);
+        refreshContainerControls();
+    });
 
     // Issue #118 — show a transient status-bar message when a band-button
     // click short-circuits (locked slice, XVTR without transverter config).
@@ -16658,7 +16673,10 @@ void MainWindow::onConnectionStateChanged()
             && !lastMac.isEmpty()
             && s.savedRadio(lastMac).has_value();
         m_actConnect->setEnabled(m_connectionPickerManaged || hasReconnectTarget);
-        m_actDisconnect->setEnabled(connected);
+        // TX safety fix round 3 (2026-09-30): Disconnect also stays
+        // available while the lost-link lock holds, Disconnected included
+        // (an automatic recovery that stopped), since it is what lifts it.
+        m_actDisconnect->setEnabled(connected || m_radioModel->isRadioLinkDown());
         m_actProtocolInfo->setEnabled(connected);
     }
 

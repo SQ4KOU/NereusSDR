@@ -24755,17 +24755,20 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
 {
     // TX safety fix round 1 (2026-09-30): the lost link's key block. It is
     // set on LinkLost, held through the Connecting and Probing of a
-    // reconnect, and lifted when the link is back (Connected) or closed
-    // (Disconnected). It is set before connectionStateChanged goes out so
-    // the windows lock MOX, TUN and 2TONE on that signal; the keying gate
-    // itself follows below, after LinkLost's stopAllTx. See
+    // reconnect, and lifted when the link is back (Connected). Fix round 3:
+    // a connection-reported Disconnected does not lift it. A rebuilt link's
+    // connect timeout reports Disconnected before the recovery's next retry,
+    // which would otherwise run unlocked; only Connected here and the
+    // operator's disconnectFromRadio lift it. It is set before
+    // connectionStateChanged goes out so the windows lock MOX, TUN and
+    // 2TONE on that signal; the keying gate itself follows below, after
+    // LinkLost's stopAllTx. See
     // MoxController::setRadioLinkDown for the Thetis lines.
     const bool wasRadioLinkDown = m_radioLinkDown;
     if (m_role != Role::Remote) {
         if (state == ConnectionState::LinkLost) {
             m_radioLinkDown = true;
-        } else if (state == ConnectionState::Connected
-                   || state == ConnectionState::Disconnected) {
+        } else if (state == ConnectionState::Connected) {
             m_radioLinkDown = false;
         }
     }

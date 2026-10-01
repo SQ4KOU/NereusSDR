@@ -531,6 +531,97 @@ private slots:
         app.stop();
     }
 
+    // TX safety fix round 3: after a lost link the Core retires the radio
+    // and rebuilds it. A rebuilt link that never answers reports
+    // Disconnected itself, from its own connect timeout
+    // (P1RadioConnection::onConnectTimeout), before the Core's next retry.
+    // The lost-link lock holds through that, a key in the next attempt's
+    // Connecting is refused with the link reason, and the lock lifts only
+    // when a link reaches Connected.
+    void aFailedRebuildKeepsTheLostLinkLock()
+    {
+        P1FakeRadio fake;
+        fake.start();
+        const RadioInfo info = infoFor(fake);
+        // The same radio at an address that reads nothing back.
+        QUdpSocket silent;
+        QVERIFY(silent.bind(QHostAddress::LocalHost, 0));
+        RadioInfo dead = info;
+        dead.address = QHostAddress::LocalHost;
+        dead.port = silent.localPort();
+        std::atomic<bool> offerDead {false};
+        DaemonApp app;
+        prepare(app);
+        app.m_discoveryProviderForTest = [&]() {
+            return QList<RadioInfo>{offerDead.load() ? dead : info};
+        };
+        DaemonConfig cfg = testCoreConfig();
+        cfg.radioMac = info.macAddress.toUpper();
+        cfg.remoteTransmitAllowed = true; // so the lost link is what refuses
+        QVERIFY(app.start(cfg));
+        QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel->isConnected(), 10000);
+        RadioModel* const model = app.m_radioModel.get();
+        MoxController* const mox = model->moxController();
+        QVERIFY(mox);
+        const QString reason = RadioModel::radioLinkDownReason();
+        QSignalSpy downChanged(model, &RadioModel::radioLinkDownChanged);
+        QSignalSpy rejected(mox, &MoxController::moxRejected);
+
+        // Count the rebuilt links that time out on their own.
+        int timedOut = 0;
+        QPointer<RadioConnection> failed;
+        QPointer<RadioConnection> watched;
+        connect(model, &RadioModel::connectionStateChanged, &app,
+                [&](ConnectionState) {
+            RadioConnection* const conn = model->connection();
+            if (conn == nullptr || conn == watched) {
+                return;
+            }
+            watched = conn;
+            connect(conn, &RadioConnection::connectFailed, &app,
+                    [&, conn](ConnectFailure, const QString&) {
+                ++timedOut;
+                failed = conn;
+            });
+        });
+
+        offerDead = true;
+        model->onConnectionStateChangedForTest(ConnectionState::LinkLost);
+        QTRY_VERIFY(!model->connection());
+        QVERIFY(model->isRadioLinkDown());
+        QCOMPARE(downChanged.count(), 1);
+
+        // The rebuilt link times out and reports Disconnected itself.
+        QTRY_VERIFY_WITH_TIMEOUT(timedOut >= 1, 15000);
+        QVERIFY(model->isRadioLinkDown());
+        // The Core's next attempt, Connecting: still locked, a key refused.
+        QTRY_VERIFY_WITH_TIMEOUT(model->connection() != nullptr
+                                     && model->connection() != failed.data()
+                                     && model->connectionState() == ConnectionState::Connecting,
+                                 15000);
+        QVERIFY(model->isRadioLinkDown());
+        QVERIFY(mox->isRadioLinkDown());
+        QCOMPARE(mox->transmitBlockReason(), reason);
+        const int before = rejected.count();
+        mox->setMox(true);
+        QCoreApplication::processEvents();
+        QVERIFY(!mox->isMox());
+        QVERIFY(!model->mox());
+        QCOMPARE(rejected.count(), before + 1);
+        QCOMPARE(rejected.last().at(0).toString(), reason);
+        for (const QList<QVariant>& args : downChanged) {
+            QVERIFY2(args.at(0).toBool(), "the lock lifted before a link was Connected");
+        }
+
+        // The radio answers again: Connected lifts the lock.
+        offerDead = false;
+        QTRY_VERIFY_WITH_TIMEOUT(model->isConnected(), 20000);
+        QTRY_VERIFY(!model->isRadioLinkDown());
+        QCOMPARE(downChanged.last().at(0).toBool(), false);
+        QVERIFY(mox->transmitBlockReason() != reason);
+        app.stop();
+    }
+
     void quietPeriodAndBusyRadioDoNotStartAConnection()
     {
         std::atomic<int> scans {0};
@@ -661,6 +752,10 @@ private slots:
         model->onConnectionStateChangedForTest(ConnectionState::LinkLost);
         QTRY_VERIFY(!model->connection());
         QCOMPARE(model->connectionState(), ConnectionState::Disconnected);
+        // TX safety fix round 3: the Core's retire is a recovery, not the
+        // operator's disconnect, so the lost-link lock holds through it.
+        QVERIFY(model->isRadioLinkDown());
+        QVERIFY(model->moxController()->isRadioLinkDown());
         QVERIFY(!model->wdspEngine()->isInitialized());
         QVERIFY2(a, "loss retirement deleted the original Slice A object");
         QVERIFY2(b, "loss retirement deleted the original Slice B object");
@@ -685,6 +780,7 @@ private slots:
         QCOMPARE(b->frequency(), 14225000.0);
         QVERIFY(model->receiveOnlyStationPolicy());
         QVERIFY(!model->mox());
+        QVERIFY(!model->isRadioLinkDown());
 
         model->disconnectFromRadio();
         QVERIFY(!app.m_radioRecoveryEnabled);
