@@ -50,10 +50,16 @@
 //               (txReadingsVersion 3) compared, applied and cleared with
 //               the meters. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-10-01: Control logging lane: one line per key with the peaks
+//               of the leveler, leveler gain, ALC, ALC gain and
+//               compression readings the meter pump already took. Logging
+//               only. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/session/TransmitStateFacade.h"
 
+#include "core/LogCategories.h"
 #include "core/MoxController.h"
 #include "core/PaTelemetryScaling.h"
 #include "core/RadioStatus.h"
@@ -351,6 +357,8 @@ void TransmitState::onTransmittingChanged(bool keyed)
         ++m_key;
         m_keyStopped = false;
         m_keyedSinceMs = now();
+        m_keyPeaks = {};
+        m_keyReadings = 0;
         refreshState();
         refreshTimeOut();
         m_pump->poll();
@@ -358,6 +366,7 @@ void TransmitState::onTransmittingChanged(bool keyed)
         return;
     }
     m_pump->stop();
+    logStagePeaks();
     m_keyedSinceMs = 0;
     refreshState();
     refreshTimeOut();
@@ -434,10 +443,37 @@ void TransmitState::refreshTimeOut()
 
 void TransmitState::onMeterReadings(const TxMeterReadings& readings)
 {
+    // Control logging lane: the key's peaks, from this reading.
+    ++m_keyReadings;
+    m_keyPeaks.levelerDb = std::max(m_keyPeaks.levelerDb, readings.levelerDb);
+    m_keyPeaks.levelerGainDb = std::max(m_keyPeaks.levelerGainDb, readings.levelerGainDb);
+    m_keyPeaks.alcDb = std::max(m_keyPeaks.alcDb, readings.alcDb);
+    m_keyPeaks.alcGainDb = std::max(m_keyPeaks.alcGainDb, readings.alcGainDb);
+    m_keyPeaks.compressionDb = std::max(m_keyPeaks.compressionDb, readings.compressionDb);
     setMeters(readings);
     // Parity Task 33: the raw PA readings at the meters' pace while keyed.
     refreshAdcRaw();
     refreshTimeOut();
+}
+
+void TransmitState::logStagePeaks()
+{
+    if (m_keyReadings == 0) {
+        return;
+    }
+    const auto peak = [](double db) {
+        return db <= TxMeterReadings::kNoReadingDb ? QStringLiteral("none")
+                                                   : QStringLiteral("%1 dB").arg(db, 0, 'f', 1);
+    };
+    qCInfo(lcDsp).noquote()
+        << QStringLiteral("TX stage peaks for key %1 (%2 readings): leveler %3, leveler gain %4, "
+                          "ALC %5, ALC gain %6, compression %7")
+               .arg(m_key)
+               .arg(m_keyReadings)
+               .arg(peak(m_keyPeaks.levelerDb), peak(m_keyPeaks.levelerGainDb),
+                    peak(m_keyPeaks.alcDb), peak(m_keyPeaks.alcGainDb),
+                    peak(m_keyPeaks.compressionDb));
+    m_keyReadings = 0;
 }
 
 void TransmitState::onPowerChanged()

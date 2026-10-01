@@ -532,6 +532,10 @@
 //   2026-10-01: TX mic thread (JJ approved): txChannelMessage takes the
 //               keepalive's wait since its receipt (heldUs). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Control logging lane: each device's control writes,
+//               commands and their answers, and the gaps between its
+//               control messages, logged with a per-device rate limit.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -988,7 +992,23 @@ public:
     void setSettingsExportClockForTest(std::function<qint64()> clock)
     { m_settingsExportNowForTest = std::move(clock); }
     void expireSettingsExportsForTest() { expireSettingsExports(); }
+    /// Control logging lane: the clock the control log reads (ms).
+    void setControlLogClockForTest(std::function<qint64()> clock)
+    { m_controlLogNowForTest = std::move(clock); }
 #endif
+
+    /// Control logging lane: a gap between two control messages from one
+    /// device at or over this is logged.
+    static constexpr qint64 kControlGapLogMs = 250;
+    /// At most this many gap lines per device in each window; the rest
+    /// are counted and the count is logged with the next gap line.
+    static constexpr int kControlGapLinesPerWindow = 5;
+    static constexpr qint64 kControlGapWindowMs = 10000;
+    /// At most this many control writes and commands are logged per device
+    /// each second (with their answers); the rest are counted and the count
+    /// is logged once the second is over.
+    static constexpr int kControlLinesPerSecond = 50;
+    static constexpr qint64 kControlLineWindowMs = 1000;
 
     /// See kDefaultAuthDeadlineMs. Values below 1 disable the deadline,
     /// which is logged as a warning rather than silently accepted.
@@ -1627,6 +1647,13 @@ private:
     /// iPhone app Task 14: one connection's pairing (StationServer.cpp).
     struct PairingAttempt;
 
+    /// Control logging lane: a write or command waiting for its answer.
+    struct ControlPending {
+        qint64 receivedMs = 0;
+        QByteArray verb;
+        bool logged = false;
+    };
+
     struct Peer {
         SessionTransport* transport = nullptr;
         QString description;
@@ -1730,7 +1757,26 @@ private:
         /// and cancellability matters more here because this subsystem
         /// gates a transmitter.
         QTimer* authDeadline = nullptr;
+
+        /// Control logging lane (logging only; nothing acts on these):
+        /// when the last control message came and what it was, the writes
+        /// and commands waiting for their answers (keyed by
+        /// controlPendingKey()), and each rate limit's window.
+        qint64 lastControlInMs = -1;
+        QByteArray lastControlInName;
+        QHash<quint64, ControlPending> controlPending;
+        qint64 controlLineWindowStartMs = -1;
+        int controlLinesInWindow = 0;
+        int controlLinesDropped = 0;
+        qint64 controlGapWindowStartMs = -1;
+        int controlGapLinesInWindow = 0;
+        int controlGapLinesDropped = 0;
     };
+
+    // Control logging lane: logging only.
+    void noteControlIn(SessionTransport* transport, const SessionMessage& message);
+    void logControlResult(SessionTransport* transport, const SessionMessage& message);
+    qint64 controlLogNow() const;
 
     void onNewWebSocketConnection();
     void handleTxWatchTicket(SessionTransport* transport, const SessionMessage& message);
@@ -2736,6 +2782,9 @@ private:
     QElapsedTimer m_settingsExportClock;
     QTimer* m_settingsExportCleanup = nullptr;
     std::function<qint64()> m_settingsExportNowForTest;
+    // Control logging lane: the control log's clock.
+    QElapsedTimer m_controlLogClock;
+    std::function<qint64()> m_controlLogNowForTest;
     /// iPhone app Task 76: the admitted session with this media epoch, or
     /// null; the earliest admitted of those live (the primary).
     SessionTransport* mediaSessionFor(quint64 epoch) const;
