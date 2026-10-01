@@ -8673,9 +8673,11 @@ if(TEST tst_link_conformance_session)
     # binary, the first NEREUS_LINK_MODE=loopback (and every other check),
     # tst_link_conformance_session_datachannel NEREUS_LINK_MODE=datachannel.
     # Each keeps the 300 s override. Locally each takes about 28 s at load
-    # 10 to 14 (2026-09-30), but on the Linux CI runner they took 92.60 s
-    # and 104.16 s (run on 01d797e56), too close to the default 120 s.
-    # Making them faster is an open item; the limit is not raised past 300.
+    # 10 to 14 (2026-09-30). On the Linux CI runner (01d797e56) they took
+    # 92.60 s and 104.16 s, but those runs failed (two fixtures' gzip OS
+    # byte, since fixed), so there is no passing CI time yet; 120 s would
+    # be too close. Making them faster is an open item; the limit is not
+    # raised past 300.
     set_tests_properties(tst_link_conformance_session PROPERTIES TIMEOUT 300)
     set_property(TEST tst_link_conformance_session APPEND PROPERTY ENVIRONMENT
         "NEREUS_LINK_MODE=loopback")
@@ -9470,8 +9472,10 @@ target_compile_definitions(tst_path_racer PRIVATE
     NEREUS_TEST_PYTHON="${NEREUS_TEST_PYTHON}")
 # 22 s at load 10 to 14 (2026-09-30), on the Python NEREUS_TEST_PYTHON
 # names, but it runs real sessions like the link conformance entries, which
-# take 3 to 4 times longer on the Linux CI runner than here, and it has no
-# CI timing of its own. It keeps the 400 s override it had.
+# took 3 to 4 times longer on the Linux CI runner than here. It has no
+# passing CI time yet: on 01d797e56 it failed at 3.23 s on service.start()
+# (the helper's Python lacked its packages, since fixed). It keeps the
+# 400 s override it had.
 if(TEST tst_path_racer)
     set_tests_properties(tst_path_racer PROPERTIES TIMEOUT 400)
 endif()
