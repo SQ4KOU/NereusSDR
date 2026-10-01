@@ -93,8 +93,9 @@ warren@pratt.one
 // pinned TAPR WDSP 2.10 tree at b02d5bac): adds a stopping flag to the IQC state;
 // SetTXAiqcSwap and SetTXAiqcStart return whether they installed the
 // transition and wrap new Checked variants that test a cancellation flag
-// under csDSP and stop their busy waits on stop or cancel; END clears the
-// run bit when the ramp completes; and adds SetTXAiqcStopping,
+// under csDSP and stop their busy waits on stop or cancel; SetTXAiqcEnd's
+// busy wait also stops once the stopping flag is set; END clears the run
+// bit when the ramp completes; and adds SetTXAiqcStopping,
 // RequestTXAiqcEnd, StopTXAiqcQuiescent, ApplyTXAiqcRetained,
 // GetTXAiqcCorrectionAvailable and GetPSCorrectionState.
 // The "No NereusSDR-level edits" line in the historical record above
