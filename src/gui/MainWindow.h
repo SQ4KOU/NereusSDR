@@ -119,6 +119,9 @@
 //                is in m_vfoWidgetsBySlice like every other);
 //                m_sliceASpectrumWired. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-10-01 - VFO flag crash lane fix round: createSliceFlag's comment
+//                covers Slice A's flag. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1184,12 +1187,12 @@ private:
     /// updateStatusOverlay paints.
     void wireSliceStatusOverlayTriggers(SliceModel* slice);
 
-    /// Phase 3F: create the VfoWidget for a secondary slice (B+) on the
-    /// given SpectrumWidget, push initial state, wire all intent + bidi
+    /// Phase 3F: create the VfoWidget for a slice on the given
+    /// SpectrumWidget, push initial state, wire all intent + bidi
     /// signals, and register it in m_vfoWidgetsBySlice. Returns the new
-    /// flag (or nullptr). Used both at sliceAdded and on panKeyChanged
-    /// migration so the wiring lives in one place. Slice A keeps its own
-    /// dedicated path in wireSliceToSpectrum(). Mirrors AetherSDR's
+    /// flag (or nullptr). Used at sliceAdded, by wireSliceToSpectrum() for
+    /// Slice A, and on panKeyChanged migration and rehost for every slice
+    /// (Slice A's included), so the wiring lives in one place. Mirrors AetherSDR's
     /// addVfoWidget()+wireVfoWidget() pair (MainWindow.cpp:11583 +
     /// 13968 [@6a142807]).
     class VfoWidget* createSliceFlag(SliceModel* slice, SpectrumWidget* sw);
