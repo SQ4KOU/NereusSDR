@@ -7141,6 +7141,9 @@ nereus_add_test(tst_diversity_partner_ddc)
 # A, by id), and disables its controls with a reason while that slice is
 # closed.
 nereus_add_test(tst_diversity_dialog_owner)
+# Diversity lane B4: Protocol 1 sends the diversity VFO lock (bank 0 C4
+# bit 7) while diversity runs and clears it when diversity stops.
+nereus_add_test(tst_p1_diversity_lock_bit)
 # Phone wire batch: radio's logCategoryList (the Support dialog's categories
 # with their labels).
 nereus_add_test(tst_log_category_list)

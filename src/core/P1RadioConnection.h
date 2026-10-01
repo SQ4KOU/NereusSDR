@@ -92,6 +92,10 @@
 //   2026-09-30 - TX safety fix round 1: the latch only for a link lost
 //                keyed, lifted when the reconnect is back unkeyed.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - Diversity lane B4: setDiversity, the writer m_diversity
+//                never had, for the VFO lock bit (bank 0 C4 bit 7,
+//                networkproto1.c:471 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -475,6 +479,18 @@ public slots:
     // bits land within ≤1 frame; the per-DDC freq overrides land in
     // banks 2-9 over the next 4-9 frames (~10-25 ms at 380.95 fps).
     void applyPsDdcConfig(const NereusSDR::PsDdcConfig& cfg);
+
+    // Diversity lane B4: the en_diversity argument of Thetis
+    // Protocol1DDCConfig, which locks the radio's VFOs while diversity runs
+    // (bank 0 C4 bit 7). RadioModel passes DdcAssignment::p1Diversity on
+    // every DDC assignment, so the bit sets when diversity starts and clears
+    // when it stops or slice A closes. The Thetis lines are quoted at the
+    // definition.
+    //   From Thetis ChannelMaster/networkproto1.c:471 [v2.10.3.15]
+    //     C4 |= (P1_en_diversity) << 7;		// if diversity, locks VFOs
+    // Connection thread only (RadioModel marshals the call).
+    void setDiversity(bool on);
+    bool diversityForTest() const { return m_diversity; }
 
     // Phase 3M-4 Task 17 P1 follow-up — read-only access to the per-board
     // codec for ReceiverManager::setP1Codec injection.  Returns nullptr
