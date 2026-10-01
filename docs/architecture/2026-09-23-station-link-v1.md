@@ -8791,9 +8791,13 @@ pong on either connection counts. The new connection's connect deadline
 stays on the old one. An old connection that closes before the other end's
 `path.switch` counts as that `path.switch`: the end reads the new
 connection from then on. A new connection that closes after the move
-ends the session as a lost link does (section 12.4, retryable). An end that
-has sent `path.switch` and hears nothing more on the old connection within
-10 s closes it. A `path.switch` outside a move, or a `path.join` from a
+ends the session as a lost link does (section 12.4, retryable). A Core that
+has sent `path.switch` and hears no `path.switch` from the device on the
+old connection within 10 s ends the session as a lost link does (section
+12.4, retryable): what the device sent on the old connection may still be
+in flight, and the device reconnects and resyncs rather than lose it
+silently. A device that has sent its `path.switch` closes its end of the
+old connection once the Core has, or after 5 s. A `path.switch` outside a move, or a `path.join` from a
 device whose Core did not advertise `controlSwitchVersion`, is a message
 out of turn: `path.switch` is ignored, and `path.join` ends that connection
 as step 4 says.
