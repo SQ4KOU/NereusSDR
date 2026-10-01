@@ -412,14 +412,16 @@ void PsForm::buildUi()
 
     m_spinMoxDelay = new QDoubleSpinBox(this);
     m_spinMoxDelay->setObjectName(QStringLiteral("udPSMoxDelay"));
-    // From PSForm.designer.cs:347-372 [v2.10.3.13]:
-    //   DecimalPlaces=1, Increment=0.1, Minimum=0.1, Maximum=10.0,
-    //   Value=2.0.  (Decimal arrays {1,0,0,65536} = 1 / 10^1 = 0.1.)
+    // From Thetis PSForm.Designer.cs:346-372 [v2.10.3.15]:
+    //   DecimalPlaces=1, Increment=0.1, Maximum=1.0, Minimum=0.1,
+    //   Value=0.2.  (Decimal arrays {N,0,0,65536} = N / 10^1, so
+    //   Maximum {10,..} is 1.0 and Value {2,..} is 0.2.)
+    // Fix wave RD-I7: the earlier port read them as 10.0 and 2.0.
     m_spinMoxDelay->setDecimals(1);
     m_spinMoxDelay->setSingleStep(0.1);
     m_spinMoxDelay->setMinimum(0.1);
-    m_spinMoxDelay->setMaximum(10.0);
-    m_spinMoxDelay->setValue(2.0);
+    m_spinMoxDelay->setMaximum(1.0);
+    m_spinMoxDelay->setValue(0.2);
     m_spinMoxDelay->setToolTip(
         tr("Settling time between assertion of MOX and collection of feedback"));
     body->addWidget(m_spinMoxDelay, 0, 1);

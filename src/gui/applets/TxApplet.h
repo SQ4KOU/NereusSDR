@@ -140,6 +140,9 @@
 //   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 11 fix: holds
 //                the transmit slice's band while transmitting (m_txBand).
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix round 1 (minor 5): m_psBoardUnknown,
+//                PS-A shown disabled while the board is not known.
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -427,6 +430,9 @@ public:
                                std::function<bool()> moxOn,
                                std::function<bool()> tuneOn);
     void syncDesktopKeyState();
+    // Fix wave (hosting 2-TONE parity): a hosting window's 2-TONE press
+    // goes through the holder gate's take question. Empty: direct-local.
+    void setDesktopTwoToneHandler(std::function<void(bool)> request);
     /// Slice control plan Task 11 (Q15): the slice this window transmits
     /// on. The TX band, the per-band RF power, the MOX mode tooltip and the
     /// TX filter status follow it, never a slice this window only listens
@@ -536,6 +542,8 @@ private:
     void buildUI();
     void wireControls();  // called after buildUI() — attaches signals/slots
     void syncPsaFromFacade();
+    // Fix wave GUI-I7: put back PS-A's tooltip under the facade's reason.
+    void removePsaFacadeReason();
     // R-R3-45: show the MON output choice (true = headphones) without
     // writing it back, then refresh the notice.
     void showMonitorOutput(bool headphones);
@@ -712,6 +720,7 @@ private:
     std::function<void(bool)> m_desktopTuneRequest;
     std::function<bool()> m_desktopMoxOn;
     std::function<bool()> m_desktopTuneOn;
+    std::function<void(bool)> m_desktopTwoToneRequest;
     std::function<SliceModel*()> m_transmitSliceResolver;
     // Slice control plan Task 11 (U8): the transmit-slice letter row.
     QHBoxLayout* m_txSliceRow = nullptr;
@@ -733,6 +742,10 @@ private:
     bool m_txProcessingPermitted{true};   // R-R3-49 (parity Task 4)
     bool m_powerByBandPermitted{true};    // R-R3-49 (group A fix wave, M3)
     bool m_psArmingPermitted{true};       // R-R3-49 (parity Task 7)
+    // Fix round 1 (minor 5): the board is not known (no radio, so the caps
+    // fall back to Unknown) and does not say it has PureSignal: PS-A shows,
+    // disabled, with PureSignalSessionFacade::needsRadioReason().
+    bool m_psBoardUnknown{false};
     QString m_txProcessingReason;
     // R-R3-49 (parity Task 2): a remote window's Tune Power slider asks the
     // Core (setTunePowerForTxBand) and shows the Core's tunePowerForTxBand.

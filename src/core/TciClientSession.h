@@ -208,6 +208,9 @@ struct TciClientSession {
     // Separate from framesDropped (outbound) to keep semantics clean.
     // Phase 22 ClientChainApplet reads both: "outbound: N" + "TX: M dropped".
     int     txFramesDropped{0};
+    // Fix wave minor: a TX_AUDIO_STREAM header with a sample rate the
+    // TX resampler cannot take was logged once for this app.
+    bool    txRateRejectionLogged{false};
 
     // ── Phase 19: per-client sensor subscriptions ────────────────────────────
     // From Thetis TCIServer.cs:684-790 [v2.10.3.13] — per-listener

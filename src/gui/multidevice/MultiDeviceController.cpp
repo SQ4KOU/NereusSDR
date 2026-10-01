@@ -31,6 +31,11 @@
 //   2026-09-30: TX badge take fix round 1: lastTakeCommandId(), the
 //               tx.take the window's own take question sent. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: fix wave GUI-I1 and GUI-M6: a question or take dialog
+//               closes when its session ends or a new one starts, and is
+//               stamped with the session it was asked in; a notice card's
+//               Take it back is shown off once its session ends. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/multidevice/MultiDeviceController.h"
@@ -83,6 +88,18 @@ MultiDeviceController::MultiDeviceController(StationClient* client, QWidget* dia
             &MultiDeviceController::markersChanged);
     connect(m_client, &StationClient::deviceCommandFinished, this,
             &MultiDeviceController::onCommandFinished);
+    // Fix wave GUI-I1: a dialog answers the session it was asked in. The
+    // session ending closes it; a redial that replaces the link silently
+    // (no sessionEnded) is caught at the new session's handshake and by
+    // the epoch each answer checks before it is sent.
+    connect(m_client, &StationClient::sessionEnded, this,
+            &MultiDeviceController::onSessionEnded);
+    connect(m_client, &StationClient::handshakeComplete, this, [this]() {
+        if (m_dialog && m_dialogEpoch != currentEpoch()) {
+            closeDialogQuietly();
+        }
+        refreshCardsForSession();
+    });
     // Slice control plan Task 5: a change held back on a slice this window
     // only listens to says why, as the Core's refusal would.
     connect(m_client, &StationClient::sliceAccessHeld, this,
@@ -119,6 +136,7 @@ void MultiDeviceController::showDialog(QDialog* dialog)
 {
     closeDialogQuietly();
     m_dialog = dialog;
+    m_dialogEpoch = currentEpoch();  // fix wave GUI-I1
     dialog->setAttribute(Qt::WA_DeleteOnClose, true);
     // Window-modal and not blocking: the Core's next message (a newer
     // question, the answer) still arrives while the operator reads.
@@ -156,11 +174,16 @@ void MultiDeviceController::askTakeTransmit()
     auto* dialog = new TakeTransmitDialog(TakeTransmitDialog::fromTransmitState(tx),
                                           m_dialogParent);
     const QPointer<QDialog> self(dialog);
-    connect(dialog, &QDialog::accepted, this, [this, self, shownEpoch, shownKeyed]() {
+    const quint32 askedEpoch = currentEpoch();
+    connect(dialog, &QDialog::accepted, this,
+            [this, self, shownEpoch, shownKeyed, askedEpoch]() {
         if (m_dialog != self) { return; }
         m_dialog.clear();
         m_lastTakeCommandId = 0;
-        if (m_client) {
+        // Fix wave GUI-I1: what was shown belongs to the session it was
+        // shown in; a newer Core's holder epoch can restart at the same
+        // number, so the take would cut a holder never shown.
+        if (m_client && askedEpoch == currentEpoch()) {
             m_lastTakeCommandId = m_client->requestTakeTransmit(true, shownEpoch, shownKeyed);
         }
     });
@@ -216,23 +239,24 @@ void MultiDeviceController::onQuestionChanged()
     }
     const SessionPrompt& prompt = question->prompt;
     const qint64 id = prompt.id;
+    const quint32 askedEpoch = currentEpoch();  // fix wave GUI-I1
     std::function<qint64()> choice;
     QDialog* dialog = questionDialog(prompt, m_dialogParent, &choice);
     const QPointer<QDialog> self(dialog);
-    connect(dialog, &QDialog::accepted, this, [this, self, id, choice]() {
+    connect(dialog, &QDialog::accepted, this, [this, self, id, choice, askedEpoch]() {
         if (m_dialog != self) { return; }
         const qint64 picked = choice();
         m_dialog.clear();
         m_dialogQuestionId = 0;
-        if (m_client) {
+        if (m_client && askedEpoch == currentEpoch()) {
             m_client->proceedQuestion(id, picked);
         }
     });
-    connect(dialog, &QDialog::rejected, this, [this, self, id]() {
+    connect(dialog, &QDialog::rejected, this, [this, self, id, askedEpoch]() {
         if (m_dialog != self) { return; }
         m_dialog.clear();
         m_dialogQuestionId = 0;
-        if (m_client) {
+        if (m_client && askedEpoch == currentEpoch()) {
             m_client->cancelQuestion(id);
         }
     });
@@ -262,20 +286,21 @@ void MultiDeviceController::onHeldChanged()
     }
     auto* dialog = new ReplaceDeviceDialog(*held, m_dialogParent);
     const QPointer<ReplaceDeviceDialog> self(dialog);
-    connect(dialog, &QDialog::accepted, this, [this, self]() {
+    const quint32 askedEpoch = currentEpoch();  // fix wave GUI-I1
+    connect(dialog, &QDialog::accepted, this, [this, self, askedEpoch]() {
         if (m_dialog != self) { return; }
         const QString picked = self->pickedDeviceId();
         m_dialog.clear();
         m_dialogIsHeld = false;
-        if (m_client) {
+        if (m_client && askedEpoch == currentEpoch()) {
             m_client->answerHeld(picked);
         }
     });
-    connect(dialog, &QDialog::rejected, this, [this, self]() {
+    connect(dialog, &QDialog::rejected, this, [this, self, askedEpoch]() {
         if (m_dialog != self) { return; }
         m_dialog.clear();
         m_dialogIsHeld = false;
-        if (m_client) {
+        if (m_client && askedEpoch == currentEpoch()) {
             m_client->answerHeld(QString());
         }
     });
@@ -302,10 +327,19 @@ void MultiDeviceController::onNoticesChanged()
             continue;
         }
         card = new NoticeCard(notice, m_noticeHost, controlTakeBackOff(notice, takesControlBack));
-        connect(card, &NoticeCard::takeBackRequested, this, [this](qint64 id) {
-            if (m_client) {
-                m_client->takeBackNotice(id);
+        // Fix wave GUI-M6: the card's Take it back answers the session the
+        // notice came in, never a later one (whose ids start over).
+        const quint32 cardEpoch = currentEpoch();
+        m_cardEpochs.insert(notice.prompt.id, cardEpoch);
+        connect(card, &NoticeCard::takeBackRequested, this, [this, cardEpoch](qint64 id) {
+            if (!m_client) {
+                return;
             }
+            if (cardEpoch != currentEpoch() || cardEpoch == m_endedEpoch) {
+                emit refusal(sessionEndedTakeBackReason());
+                return;
+            }
+            m_client->takeBackNotice(id);
         });
         connect(card, &NoticeCard::dismissed, this, [this](qint64 id) {
             if (m_client) {
@@ -319,12 +353,53 @@ void MultiDeviceController::onNoticesChanged()
                 it.value()->deleteLater();
                 it.value()->hide();
             }
+            m_cardEpochs.remove(it.key());
             it = m_cards.erase(it);
         } else {
             ++it;
         }
     }
+    refreshCardsForSession();
     layoutNoticeCards();
+}
+
+quint32 MultiDeviceController::currentEpoch() const
+{
+    return m_client ? m_client->sessionEpoch() : 0;
+}
+
+QString MultiDeviceController::sessionEndedTakeBackReason()
+{
+    return QStringLiteral("The connection to the Core ended. This can no longer be taken back.");
+}
+
+void MultiDeviceController::onSessionEnded()
+{
+    // Fix wave GUI-I1: a question or take asked in the session that ended
+    // has nothing left to answer.
+    m_endedEpoch = currentEpoch();
+    closeDialogQuietly();
+    refreshCardsForSession();
+}
+
+void MultiDeviceController::refreshCardsForSession()
+{
+    // Fix wave GUI-M6: a card stays to be read after its session ends (the
+    // notices outlive the link, RemoteDevicesState::clear), but its Take it
+    // back is shown off with the reason.
+    for (auto it = m_cards.cbegin(); it != m_cards.cend(); ++it) {
+        NoticeCard* card = it.value().data();
+        if (!card || !card->takeBackButton()) {
+            continue;
+        }
+        const quint32 cardEpoch = m_cardEpochs.value(it.key());
+        const bool stale = cardEpoch != currentEpoch() || cardEpoch == m_endedEpoch;
+        if (stale && card->takeBackButton()->isEnabled()) {
+            card->takeBackButton()->setEnabled(false);
+            card->takeBackButton()->setToolTip(sessionEndedTakeBackReason());
+            card->takeBackButton()->setAccessibleDescription(sessionEndedTakeBackReason());
+        }
+    }
 }
 
 QString MultiDeviceController::controlTakeBackOff(const RemotePrompt& notice, bool available)

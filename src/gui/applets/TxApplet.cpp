@@ -190,6 +190,32 @@
 //                (RadioModel::radioLinkDownChanged); VOX stays as Thetis's
 //                power-off leaves it (console.cs:27488-27493 [v2.10.3.15]).
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave GUI-I6: a remote window's
+//                Tune Power slider ignores the Core's value while held or
+//                while its change is on its way.
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  TX-parity-linkdown (fix wave): the
+//                lock follows connectionStateChanged too, so a remote
+//                window whose Core has no radio locks MOX, TUN and 2TONE.
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix round 1 (minor 2): the remote
+//                Tune Power slider shows the Core's value when its change
+//                is answered, whatever arrived first. AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix round 1 (minor 5): PS-A shows,
+//                disabled with its reason, while the board is not known;
+//                only a known board without PureSignal hides it.
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix round 1 (minor 4): the link-down
+//                words follow the window's link to the Core and the Core's
+//                waiting for a radio. AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave, hosting 2-TONE parity: a
+//                hosting window's 2-TONE asks to take transmit, as MOX and
+//                TUNE do (setDesktopTwoToneHandler). AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave GUI-I7: PS-A greyed by the
+//                PureSignal facade carries the facade's reason.
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -350,6 +376,10 @@ constexpr auto kTransmitSavedTooltip = "TxAppletSavedTransmitTooltip";
 // Disable a control with `reason` as its tooltip, remembering what it had,
 // or put back what it had. Shared by the keying gate and the transmit
 // settings gate, which hold disjoint controls. No model state is written.
+// Fix wave GUI-I7: PS-A's own tooltip while the facade's reason shows.
+constexpr auto kPsaFacadeSavedTooltip = "TxAppletPsaFacadeSavedTooltip";
+constexpr auto kPsaFacadeSavedDescription = "TxAppletPsaFacadeSavedDescription";
+
 void gateTransmitControl(QWidget* control, bool permitted, const QString& reason)
 {
     if (!control) { return; }
@@ -1278,12 +1308,33 @@ void TxApplet::wireControls()
         requestRemoteTunePower(m_tunePwrSlider->value());
     });
 
+    // Fix round 1 (minor 2): the change answered, the slider shows the
+    // Core's value, whichever arrived first, its answer or its next value
+    // (or a value it clamped). Not while the operator holds the slider.
+    connect(&tx, &TransmitModel::tunePowerForTxBandWriteInFlightChanged,
+            this, [this, &tx](bool inFlight) {
+        if (inFlight || !remoteTunePower() || m_tunePwrSlider->isSliderDown()) { return; }
+        QSignalBlocker b(m_tunePwrSlider);
+        m_updatingFromModel = true;
+        m_tunePwrSlider->setValue(tx.tunePowerForTxBand());
+        updatePowerSliderLabels();
+        m_updatingFromModel = false;
+    });
+
     // R-R3-49 (parity Task 2): in a remote window the slider shows the
     // Core's tune power for its transmit band; a local window shows its own
     // transmit band's (PA on-air gate review).
     connect(&tx, &TransmitModel::tunePowerForTxBandChanged,
             this, [this, &tx](int watts) {
         if (!remoteTunePower() && !tx.tuneTxBandKnown()) { return; }
+        // Fix wave GUI-I6: the Core's value does not move the slider out
+        // from under the operator's hand, nor back to an older value while
+        // the operator's change is on its way (the Core's next value, after
+        // its answer, shows; a refusal shows the Core's value again).
+        if (remoteTunePower()
+            && (m_tunePwrSlider->isSliderDown() || tx.tunePowerForTxBandWriteInFlight())) {
+            return;
+        }
         QSignalBlocker b(m_tunePwrSlider);
         m_updatingFromModel = true;
         m_tunePwrSlider->setValue(watts);
@@ -1489,6 +1540,13 @@ void TxApplet::wireControls()
         // 2TONE until it is back, as Thetis's power-off on loss of sync
         // disables them (console.cs:27488-27493 [v2.10.3.15]).
         connect(m_model, &RadioModel::radioLinkDownChanged, this, relock);
+        // TX-parity-linkdown (fix wave): a remote window's Core losing or
+        // regaining its radio (RadioModel::transmitLinkDown) the same way.
+        connect(m_model, &RadioModel::connectionStateChanged, this, relock);
+        // Fix round 1 (minor 4): its words follow the window's link to the
+        // Core and the Core's waiting for a radio.
+        connect(m_model, &RadioModel::stationLinkStateChanged, this, relock);
+        connect(m_model, &RadioModel::stationRadioWaitingChanged, this, relock);
         applyReceiveOnlyLock();
     }
 
@@ -1847,6 +1905,17 @@ void TxApplet::wireControls()
             m_model->setTwoTone(on);
             return;
         }
+        // Fix wave (hosting 2-TONE parity): a hosting window asks to take
+        // transmit first. The button shows the test's own state after.
+        if (m_desktopTwoToneRequest) {
+            const QPointer<TxApplet> self(this);
+            m_desktopTwoToneRequest(on);
+            if (self && m_twoToneBtn) {
+                const QSignalBlocker blocker(m_twoToneBtn);
+                m_twoToneBtn->setChecked(m_twoToneCtrl && m_twoToneCtrl->isActive());
+            }
+            return;
+        }
         if (!m_twoToneCtrl) { return; }
         m_twoToneCtrl->setActive(on);
     });
@@ -2079,6 +2148,11 @@ void TxApplet::setDesktopKeyHandlers(std::function<void(bool)> mox,
     m_desktopMoxOn = std::move(moxOn);
     m_desktopTuneOn = std::move(tuneOn);
     syncFromModel();
+}
+
+void TxApplet::setDesktopTwoToneHandler(std::function<void(bool)> request)
+{
+    m_desktopTwoToneRequest = std::move(request);
 }
 
 void TxApplet::setTransmitSliceResolver(std::function<SliceModel*()> resolver)
@@ -2905,6 +2979,9 @@ void TxApplet::setPureSignalArmingPermitted(bool permitted, const QString& unava
     const QString reason = unavailableReason.isEmpty()
         ? tr("Remote transmit controls are not available from this Core.")
         : unavailableReason;
+    // Fix wave GUI-I7: the facade's reason off first, so this gate keeps
+    // the button's own tooltip to put back.
+    removePsaFacadeReason();
     gateTransmitControl(m_psaBtn, permitted, reason);
     syncPsaFromFacade();
     applyReceiveOnlyLock();
@@ -3061,7 +3138,13 @@ void TxApplet::requestRemoteTunePower(int watts)
 void TxApplet::setBoardCapabilities(const NereusSDR::BoardCapabilities& caps)
 {
     if (!m_psaBtn) { return; }
-    m_psaBtn->setVisible(caps.hasPureSignal);
+    // Fix round 1 (minor 5): with no radio the caps fall back to Unknown.
+    // PS-A shows, disabled with its reason, until the board is known; only
+    // a known board without PureSignal hides it.
+    const bool boardUnknown = caps.board == HPSDRHW::Unknown;
+    m_psBoardUnknown = boardUnknown && !caps.hasPureSignal;
+    m_psaBtn->setVisible(caps.hasPureSignal || boardUnknown);
+    syncPsaFromFacade();
 }
 
 // ---------------------------------------------------------------------------
@@ -3089,9 +3172,36 @@ void TxApplet::syncPsaFromFacade()
     m_updatingFromModel = true;
     m_psaBtn->setChecked(automaticIntent);
     // R-R3-49 (parity Task 7): arming keys nothing, so canArm.
-    m_psaBtn->setEnabled(m_psArmingPermitted && m_psFacade
-                         && m_psFacade->available() && m_psFacade->canArm());
+    const bool canArm = !m_psBoardUnknown && m_psFacade && m_psFacade->available()
+        && m_psFacade->canArm();
+    // Fix wave GUI-I7: greyed by the facade, with the facade's reason. The
+    // arming gate's reason, when it is on, stays (its tooltip is set).
+    removePsaFacadeReason();
+    if (m_psArmingPermitted && !canArm) {
+        // Fix round 1 (minor 5): a board not known says it needs one.
+        const QString refusal = m_psBoardUnknown || !m_psFacade ? QString()
+                                                               : m_psFacade->armingRefusal();
+        const QString reason = refusal.isEmpty()
+            ? PureSignalSessionFacade::needsRadioReason() : refusal;
+        m_psaBtn->setProperty(kPsaFacadeSavedTooltip, m_psaBtn->toolTip());
+        m_psaBtn->setProperty(kPsaFacadeSavedDescription, m_psaBtn->accessibleDescription());
+        m_psaBtn->setToolTip(reason);
+        m_psaBtn->setAccessibleDescription(reason);
+    }
+    m_psaBtn->setEnabled(m_psArmingPermitted && canArm);
     m_updatingFromModel = false;
+}
+
+void TxApplet::removePsaFacadeReason()
+{
+    if (!m_psaBtn || !m_psaBtn->property(kPsaFacadeSavedTooltip).isValid()) {
+        return;
+    }
+    m_psaBtn->setToolTip(m_psaBtn->property(kPsaFacadeSavedTooltip).toString());
+    m_psaBtn->setAccessibleDescription(
+        m_psaBtn->property(kPsaFacadeSavedDescription).toString());
+    m_psaBtn->setProperty(kPsaFacadeSavedTooltip, QVariant());
+    m_psaBtn->setProperty(kPsaFacadeSavedDescription, QVariant());
 }
 
 // ---------------------------------------------------------------------------

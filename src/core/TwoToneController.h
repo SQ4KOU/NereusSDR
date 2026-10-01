@@ -364,6 +364,16 @@ private:
     // The FIXED source's stop: PWR slider limit on, PWR restored.
     void restoreSavedPower();
 
+    // Fix wave RD-I4: the start's key keyed nothing (refused aloud, or
+    // taken or refused without a word). Thetis setup.cs:11165-11170
+    // [v2.10.3.15]: if (!console.MOX) { chkTestIMD.Checked = false; return; }
+    void abandonUnkeyedStart();
+
+    // Fix wave RD-I4: the stop's console.MOX = false, for this two-tone's
+    // keyer only (MoxController::setMox(false, keyer)); another device's
+    // key is never released by it.
+    void releaseOwnKey();
+
     // Continue the activation flow after any pending settle delay.
     // Reads parameters, applies TXPostGen* setters, computes magnitude,
     // engages MOX.

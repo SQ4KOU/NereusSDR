@@ -110,7 +110,7 @@ enum class Ps3ActionPhase;
 //   ├────────────────────────────────────────────────────────────────┤
 //   │ ▣ FB Feedback Level   ▣ CO Correcting    ☐ Show 2Tone meas.    │
 //   ├────────────────────────────────────────────────────────────────┤
-//   │ MOX Wait (s) [_2.0_]      ☑ Auto-Attenuate                     │
+//   │ MOX Wait (s) [_0.2_]      ☑ Auto-Attenuate                     │
 //   │ CAL Wait (s) [_0.0_]      ☐ Quick Attenuate Resp               │
 //   │ AMP Delay (ns) [_150_]                                         │
 //   ├────────────────────────────────────────────────────────────────┤

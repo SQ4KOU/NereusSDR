@@ -19,7 +19,8 @@ class DesktopStationController final : public QObject {
     Q_OBJECT
 public:
     // TX badge take (JJ, 2026-09-30): Take takes transmit and keys nothing.
-    enum class Key { Mox, Tune, Take };
+    // Fix wave (hosting 2-TONE parity): TwoTone starts the 2-tone test.
+    enum class Key { Mox, Tune, Take, TwoTone };
     enum class RequestState { Refused, NoChange, Pending, Ask };
 
     struct TakeQuestion {
@@ -64,6 +65,10 @@ signals:
 public:
     RequestResult requestMox(bool on);
     RequestResult requestTune(bool on);
+    /// Fix wave (hosting 2-TONE parity): the 2-tone test asks to take
+    /// transmit as MOX and TUNE do. Off always stops the test, as the
+    /// button did before.
+    RequestResult requestTwoTone(bool on);
     /// TX badge take: the station device takes transmit through tx.take's
     /// rules (asked first while another device holds it) and keys nothing.
     /// NoChange when it already holds transmit.

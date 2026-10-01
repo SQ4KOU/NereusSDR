@@ -20,6 +20,9 @@
 //                                    (seedUpgradedCoreToken), as Part C's
 //                                    paired-device sign-in requires.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave GUI-I7: every greyed arming
+//                                    and two-tone control says why.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -229,6 +232,7 @@ private slots:
     void psFormFollowsTheCore();
     void pureSignalAppletFollowsTheCore();
     void psaFollowsItsOwnGate();
+    void everyGreyedArmingControlSaysWhy();
 
 private:
     QTemporaryDir m_securityDir;
@@ -441,7 +445,8 @@ void TstRemotePureSignalArming::olderCoreKeepsTodaysGate()
     QTRY_VERIFY(!s.client->pureSignalArmingOffered());
     QTRY_VERIFY(!facade->canArm());
     QVERIFY(facade->available());
-    QVERIFY(facade->armingRefusal().isEmpty());
+    // Fix wave GUI-I7: a reason whenever canArm() is false.
+    QCOMPARE(facade->armingRefusal(), kNotYet);
     QVERIFY(facade->settingsRefusal().isEmpty());
     QCOMPARE(facade->requestAction(Ps3Action::StartAutomatic), 0u);
     QCOMPARE(facade->lastActionError(), kNotYet);
@@ -602,6 +607,84 @@ void TstRemotePureSignalArming::psaFollowsItsOwnGate()
     QCOMPARE(state.reason, remoteReason);
     // Its other transmit buttons keep the remote transmit gate.
     QVERIFY(!dispatcher.stateOf(Id::TwoTon, 0).available);
+}
+
+void TstRemotePureSignalArming::everyGreyedArmingControlSaysWhy()
+{
+    // Fix wave GUI-I7: a control that follows canArm or canActuate greys
+    // with a reason, never a bare grey or another control's reason.
+    const QString kNeedsRadio =
+        QStringLiteral("PureSignal needs a connected radio that supports it.");
+
+    // A station before its radio connects: no PureSignal to arm.
+    {
+        auto station = std::make_unique<RadioModel>();
+        station->setBoardForTest(HPSDRHW::HermesLite);
+        PureSignalSessionFacade* facade = station->pureSignalFacade();
+        QVERIFY(facade);
+        QVERIFY(!facade->available());
+        QVERIFY(!facade->canArm());
+        QCOMPARE(facade->armingRefusal(), kNeedsRadio);
+        QCOMPARE(facade->twoToneRefusal(), kNeedsRadio);
+
+        PureSignalApplet psApplet(station.get());
+        auto* calibrate = psApplet.findChild<QPushButton*>(QStringLiteral("PsAppletCalibrateBtn"));
+        auto* twoTone = psApplet.findChild<QPushButton*>(QStringLiteral("PsAppletTwoToneBtn"));
+        QVERIFY(calibrate && twoTone);
+        QVERIFY(!calibrate->isEnabled());
+        QCOMPARE(calibrate->toolTip(), kNeedsRadio);
+        QVERIFY(!twoTone->isEnabled());
+        QCOMPARE(twoTone->toolTip(), kNeedsRadio);
+
+        TxApplet txApplet(station.get());
+        auto* psa = txApplet.findChild<QPushButton*>(QStringLiteral("TxAppletPsaBtn"));
+        QVERIFY(psa);
+        QVERIFY(!psa->isEnabled());
+        QCOMPARE(psa->toolTip(), kNeedsRadio);
+    }
+
+    // A window whose Core is on the air: on the air, not "no radio".
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    PureSignalSessionFacade* facade = s.window.pureSignalFacade();
+    QTRY_VERIFY(facade->canArm());
+    TxApplet txApplet(&s.window);
+    auto* psa = txApplet.findChild<QPushButton*>(QStringLiteral("TxAppletPsaBtn"));
+    QVERIFY(psa);
+    txApplet.setPureSignalArmingPermitted(true);
+    QVERIFY(psa->isEnabled());
+    const QString psaOwnTooltip = psa->toolTip();
+    PureSignalApplet psApplet(&s.window);
+    auto* twoTone = psApplet.findChild<QPushButton*>(QStringLiteral("PsAppletTwoToneBtn"));
+    QVERIFY(twoTone);
+    // The two-tone test keys the radio: this receive-only Core's window
+    // may not transmit.
+    QVERIFY(!twoTone->isEnabled());
+    QCOMPARE(twoTone->toolTip(),
+             QStringLiteral("The 2-tone test needs permission to transmit from the Core."));
+
+    ContainerButtonDispatcher::Hooks hooks;
+    hooks.transmitPermitted = [] { return false; };
+    hooks.remoteTransmitReason =
+        QStringLiteral("Remote transmit controls are not available from this Core.");
+    hooks.pureSignalArmingPermitted = [] { return true; };
+    hooks.pureSignalArmingReason = [] { return QString(); };
+    ContainerButtonDispatcher dispatcher(&s.window, std::move(hooks));
+    using Id = ContainerButtonDispatcher::Id;
+    QVERIFY(dispatcher.stateOf(Id::PsA, 0).available);
+
+    s.keyCore();
+    QTRY_VERIFY(!facade->canArm());
+    QTRY_VERIFY(!psa->isEnabled());
+    QCOMPARE(psa->toolTip(), kOnAir);
+    const ContainerButtonDispatcher::State state = dispatcher.stateOf(Id::PsA, 0);
+    QVERIFY(!state.available);
+    QCOMPARE(state.reason, kOnAir);
+
+    s.unkeyCore();
+    QTRY_VERIFY(psa->isEnabled());
+    QCOMPARE(psa->toolTip(), psaOwnTooltip);
+    QVERIFY(dispatcher.stateOf(Id::PsA, 0).available);
 }
 
 QTEST_MAIN(TstRemotePureSignalArming)

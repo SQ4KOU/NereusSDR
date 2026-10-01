@@ -31,8 +31,9 @@
 //
 //   9. The retained Auto Attenuate default is checked.
 //
-//   10. The udPSMoxDelay default value is 2.0 per
-//       PSForm.designer.cs:368-372 [v2.10.3.13].
+//   10. The udPSMoxDelay default value is 0.2, range 0.1 to 1.0, per
+//       PSForm.Designer.cs:346-372 [v2.10.3.15] (fix wave RD-I7; the
+//       decimal arrays are tenths).
 //
 // Source: NereusSDR-original.  See PsForm.h for the Thetis cite map.
 //
@@ -155,8 +156,12 @@ private slots:
         QCOMPARE(form.findChild<QCheckBox*>(QStringLiteral("chkPSOnTop"))->isChecked(), false);
         QCOMPARE(form.findChild<QCheckBox*>(QStringLiteral("chkShow2ToneMeasurements"))->isChecked(), false);
 
-        // From PSForm.designer.cs:368-372 [v2.10.3.13] — udPSMoxDelay default 2.0
-        QCOMPARE(form.findChild<QDoubleSpinBox*>(QStringLiteral("udPSMoxDelay"))->value(), 2.0);
+        // From PSForm.Designer.cs:346-372 [v2.10.3.15]: udPSMoxDelay Value
+        // 0.2, Minimum 0.1, Maximum 1.0 (fix wave RD-I7).
+        auto* moxDelay = form.findChild<QDoubleSpinBox*>(QStringLiteral("udPSMoxDelay"));
+        QCOMPARE(moxDelay->value(), 0.2);
+        QCOMPARE(moxDelay->minimum(), 0.1);
+        QCOMPARE(moxDelay->maximum(), 1.0);
 
         // From PSForm.designer.cs:801-805 [v2.10.3.13] — udPSCalWait default 0
         QCOMPARE(form.findChild<QDoubleSpinBox*>(QStringLiteral("udPSCalWait"))->value(), 0.0);
@@ -361,9 +366,9 @@ private slots:
         auto* spin =
             form.findChild<QDoubleSpinBox*>(QStringLiteral("udPSMoxDelay"));
         QVERIFY(spin);
-        spin->setValue(5.0);
+        spin->setValue(0.5);
         QCOMPARE(spy.count(), 1);
-        QCOMPARE(ps.moxDelay(), 5.0);
+        QCOMPARE(ps.moxDelay(), 0.5);
     }
 
     void acceptedSettingsRoundTripThroughTheSettingsModel()

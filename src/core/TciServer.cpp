@@ -119,6 +119,16 @@
 //   2026-09-29 - Level Cal: calibration_ex carries the meter and display
 //                calibration and goes to apps when either changes. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Fix round 1 (TX path): the trx intercept matches the
+//                command name in any case, as TciProtocol does; a TCI key
+//                no app owns ends with the server and with an app that
+//                goes. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-09-30 - Fix round 2 (Critical 1, RD-C1): a remote window records
+//                the app whose trx:N,true it forwarded (m_remoteKeyClient);
+//                that app leaving releases the key on the Core, or the
+//                Core's answer when it comes. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -1694,6 +1704,31 @@ void TciServer::refreshLocalAudioReceiverMap()
     }
 }
 
+bool TciServer::releaseAppTciKey(QWebSocket* client)
+{
+    // Fix round 1 (Important 1): a backstop. A TCI level no app owns is
+    // released too, by the server's stop (client null) and by any app
+    // that goes; only a level another live app owns is left. In desktop
+    // host mode every trx is the program key's, which
+    // releaseDesktopProgramKey ends (and a key still being made ends in
+    // its own path), so an unowned level is left to them.
+    if (m_tciPttClient.isNull() && m_desktopHostMode) {
+        return true;
+    }
+    if (client != nullptr && !m_tciPttClient.isNull() && m_tciPttClient.data() != client) {
+        return true;
+    }
+    m_tciPttClient = nullptr;
+    const QPointer<MoxController> mox = m_model ? m_model->moxController() : nullptr;
+    if (!mox || !mox->isTciPttHeld()) { return true; }
+    qCInfo(lcTci) << "TciServer: releasing the TCI key of an app that is gone";
+    const QPointer<TciServer> self(this);
+    // As the app's own trx:N,false would (RadioModel::setMox): PollPTT
+    // falls back to a still-held source or unkeys.
+    mox->onTciPtt(false);
+    return !self.isNull();
+}
+
 void TciServer::releaseDesktopProgramKey()
 {
     if (!m_desktopHostMode || !m_desktopKeyHeld) { return; }
@@ -1704,6 +1739,14 @@ void TciServer::releaseDesktopProgramKey()
     m_desktopKeyClient = nullptr;
     QPointer<MoxController> mox = m_model ? m_model->moxController() : nullptr;
     if (!mox) { return; }
+    // Fix wave RD-I3: the key came through onTciPtt, so its release drops
+    // the TCI level, as a local app's trx:N,false does; a level left up
+    // would key again on the next PollPTT pass.
+    if (mox->isTciPttHeld()) {
+        m_tciPttClient = nullptr;
+        mox->onTciPtt(false);
+        return;
+    }
     const KeyerIdentity keyer = KeyerIdentity::station(PttMode::Tci);
     if (mox->isMox() && mox->currentKeyer() == keyer) {
         mox->setMox(false, keyer);
@@ -1885,6 +1928,10 @@ void TciServer::stop()
     const QPointer<TciServer> self(this);
     ++m_desktopKeyGeneration;
     releaseDesktopProgramKey();
+    if (!self) { return; }
+    // Fix wave RD-C1 (JJ ruling 1): an app's key ends with the server,
+    // released before its TX audio lock below. Not in Thetis.
+    if (m_server && !releaseAppTciKey(nullptr)) { return; }
     if (!self || !m_server) { return; }
 
     // Phase 26 review finding #4: explicitly sever DSP-thread signal connections
@@ -1944,6 +1991,7 @@ void TciServer::stop()
     m_remoteKeyEpoch = 0;
     m_remoteKeyPending = false;
     m_remoteReleaseWhilePending = false;
+    m_remoteKeyClient = nullptr;
     ++m_remoteKeyGeneration;
     const bool heldTxAudio = !m_txAudioActiveClient.isNull();
     m_txAudioActiveClient = nullptr;
@@ -2248,6 +2296,42 @@ void TciServer::onClientDisconnected()
         if (!self || !client) { return; }
         it = m_clients.find(ws);
         if (it == m_clients.end()) { return; }
+    }
+
+    // Fix wave RD-C1 (JJ ruling 1): the app that keyed through its trx is
+    // gone, so nothing would ever send its trx:N,false. Its key is released
+    // first; releasing only the TX audio lock below would leave the
+    // transmitter keyed with the microphone as its audio.
+    //
+    // Deliberate departure from Thetis TCIServer.cs:3010-3026 [v2.10.3.15]
+    // (StopSocketListener), which clears m_tciPttActive and releases the
+    // audio listener but leaves console.TCIPTT, and so the key, as it was.
+    // Fix round 1 (Important 1): also a TCI level no app owns.
+    if (m_tciPttClient.isNull() || m_tciPttClient.data() == ws) {
+        if (!releaseAppTciKey(ws) || !client) { return; }
+        it = m_clients.find(ws);
+        if (it == m_clients.end()) { return; }
+    }
+
+    // Fix round 2 (Critical 1, RD-C1): in a remote window, the app whose
+    // trx:N,true was forwarded is gone, with or without TCI audio. Nothing
+    // would send its trx:N,false, so the window's key is released on the
+    // Core now, or the Core's answer is when it comes.
+    if (m_remoteWindow && !m_remoteKeyClient.isNull() && m_remoteKeyClient.data() == ws) {
+        m_remoteKeyClient = nullptr;
+        if (m_remoteKeyPending) {
+            m_remoteReleaseWhilePending = true;
+        }
+        if (m_remoteKeyEpoch != 0 && m_remoteTransmit.unkey) {
+            qCInfo(lcTci) << "TciServer: the app that keyed left; unkeys this window's key, epoch"
+                          << m_remoteKeyEpoch;
+            m_remoteTransmit.unkey(m_remoteKeyEpoch);
+            m_remoteKeyEpoch = 0;
+            endRemoteKey();
+            if (!self || !client) { return; }
+            it = m_clients.find(ws);
+            if (it == m_clients.end()) { return; }
+        }
     }
 
     // Phase 17: release TX audio mutex if this client held it.
@@ -3541,6 +3625,7 @@ void TciServer::setRemoteTransmit(RemoteTransmit forward)
     }
     m_remoteKeyPending = false;
     m_remoteReleaseWhilePending = false;
+    m_remoteKeyClient = nullptr;
     ++m_remoteKeyGeneration;
     m_remoteTransmit = std::move(forward);
     m_protocol->setRemoteTransmitForwarded(forwardsRemoteTransmit());
@@ -3601,6 +3686,8 @@ void TciServer::handleRemoteTrx(QWebSocket* ws, const QString& peer, int rx, boo
 
     m_remoteKeyPending = true;
     m_remoteReleaseWhilePending = false;
+    // Fix round 2 (Critical 1, RD-C1): which app keyed.
+    m_remoteKeyClient = asker;
     const quint64 generation = ++m_remoteKeyGeneration;
     qCInfo(lcTci) << "TciServer: trx from" << peer << "forwarded to the Core as a program's key";
     m_remoteTransmit.key([this, asker, peer, rx, hasTciArg, generation, answerAsker](
@@ -3626,8 +3713,18 @@ void TciServer::handleRemoteTrx(QWebSocket* ws, const QString& peer, int rx, boo
         if (m_remoteReleaseWhilePending) {
             // The app let go before the Core answered.
             m_remoteReleaseWhilePending = false;
+            m_remoteKeyClient = nullptr;
             m_remoteTransmit.unkey(answer.epoch);
             answerAsker(rx, false);
+            return;
+        }
+        // Fix round 2 (Critical 1, RD-C1): the app that asked is gone; no
+        // key is kept for it.
+        if (asker.isNull() || !m_clients.contains(asker.data())) {
+            qCInfo(lcTci) << "TciServer: the Core accepted the key for" << peer
+                          << "after it left; released, epoch" << answer.epoch;
+            m_remoteKeyClient = nullptr;
+            m_remoteTransmit.unkey(answer.epoch);
             return;
         }
         m_remoteKeyEpoch = answer.epoch;
@@ -3709,6 +3806,13 @@ void TciServer::onTextMessageReceived(const QString& msg)
     // Task 7 follow-up (R-R3-49): this app took (or kept) the TX audio lock
     // for its trx:N,true,tci. Checked again after the protocol's setMox.
     bool trxTookTxAudio = false;
+    // Fix wave RD-C1: a trx the protocol acts on locally (not a desktop
+    // host, remote window or station server), its request, and the TCI
+    // level before it, to record which app keyed.
+    bool localTrx = false;
+    bool localTrxWantsMox = false;
+    const QPointer<MoxController> trxMox = m_model ? m_model->moxController() : nullptr;
+    const bool tciLevelBefore = trxMox && trxMox->isTciPttHeld();
 
     // Phase 3J-1 closeout Item 2 (2026-05-12): firehose for TciLogWindow.
     // Strip the trailing ';' for readability in the log view.  Peer comes
@@ -4083,10 +4187,17 @@ void TciServer::onTextMessageReceived(const QString& msg)
                                 QString::fromLatin1(kStationTransmitRefusedReason));
         }
         {
-            const QString kTrx = QStringLiteral("trx:");
-            if (trimmed.startsWith(kTrx)) {
+            // Fix round 1 (Important 1): the command name as TciProtocol
+            // reads it, lowered and trimmed (Thetis TCIServer.cs:5288
+            // [v2.10.3.15]: parts[0].ToLower().Trim()), so TRX:0,true; is
+            // intercepted and owned like trx:0,true;.
+            const qsizetype trxColon = trimmed.indexOf(QLatin1Char(':'));
+            const bool isTrx = trxColon > 0
+                && trimmed.left(trxColon).trimmed().compare(
+                       QLatin1String("trx"), Qt::CaseInsensitive) == 0;
+            if (isTrx) {
                 // Parse "trx:N,bool[,tci]"
-                const QString args = trimmed.mid(kTrx.size());
+                const QString args = trimmed.mid(trxColon + 1);
                 const QStringList parts = args.split(QLatin1Char(','));
                 if (parts.size() >= 2) {
                     // Is the third arg "tci"?
@@ -4131,6 +4242,11 @@ void TciServer::onTextMessageReceived(const QString& msg)
                             // another device's key are never this app's program key.
                             if (m_desktopKeyClient.data() == ws) {
                                 releaseDesktopProgramKey();
+                            } else if (m_tciPttClient.data() == ws) {
+                                // Fix wave RD-I3: its key ended another way
+                                // (an unkey, StopAllTx) and its TCI level is
+                                // still up; its own release drops it.
+                                if (!releaseAppTciKey(ws)) { return; }
                             }
                             answer(false);
                             return;
@@ -4155,23 +4271,34 @@ void TciServer::onTextMessageReceived(const QString& msg)
                             answer(false);
                             return;
                         }
-                        // The holder gate is checked again inside setMox. Only
-                        // its accepted station TCI key may acquire TX audio.
-                        // stop()/destruction can run synchronously inside
-                        // setMox. A transition away from this key means a
-                        // later key may own MOX, even if it uses TCI too.
+                        // Fix wave RD-I3: the app's key goes through the
+                        // same admission as a local app's trx (RadioModel::
+                        // setMox), MoxController::onTciPtt and PollPTT: the
+                        // manual-key gate, the StopAllTx latch, the held-off
+                        // sources and the holder gate at the press edge.
+                        // From Thetis console.cs:25470 [v2.10.3.15]:
+                        //   if (!_manual_mox && !_disable_ptt && !_rx_only && !_tx_inhibit && !QSKEnabled && !_ganymede_pa_issue)
+                        // (cw_ptt, on the lines below it, carries: //[2.10.3.9]MW0LGE only want to do this on semi breakin  [original inline comment from console.cs:25473])
+                        // and console.cs:25479-25492 [v2.10.3.15] (_stop_all_tx):
+                        //   // we can come in here from a ToT ( StopAllTX() ) //[2.10.3.6]MWLGE fixes #518
+                        // A desktop host refuses rather than queues: a press
+                        // that keyed nothing drops its TCI level below, so it
+                        // never keys later for an app that was told false.
+                        // Only its accepted station TCI key may acquire TX
+                        // audio. stop()/destruction can run synchronously
+                        // inside the key. A transition away from this key
+                        // means a later key may own MOX.
                         bool keyTransitionedAway = false;
                         const auto observeKey = connect(mox, &MoxController::moxChanging,
                             mox, [&keyTransitionedAway](int, bool, bool on) {
                                 if (!on) { keyTransitionedAway = true; }
                             });
-                        mox->setMox(true, keyer);
+                        mox->onTciPtt(true);
                         QObject::disconnect(observeKey);
                         if (!self) {
                             if (controller && !keyTransitionedAway
-                                && controller->isMox()
-                                && controller->currentKeyer() == keyer) {
-                                controller->setMox(false, keyer);
+                                && controller->isTciPttHeld()) {
+                                controller->onTciPtt(false);
                             }
                             return;
                         }
@@ -4182,18 +4309,21 @@ void TciServer::onTextMessageReceived(const QString& msg)
                             || !(controller->currentKeyer() == keyer)) {
                             // A callback may have stopped the server or
                             // replaced the requesting connection during
-                            // setMox. Never grant its abandoned key audio.
+                            // the key, or nothing keyed (a manual key, the
+                            // StopAllTx latch, a refusal). Never grant its
+                            // abandoned key audio, and drop its level.
                             if (m_desktopLatestOnIntent == requestGeneration
-                                && controller->isMox()
-                                && controller->currentKeyer() == keyer
-                                && !m_desktopKeyHeld) {
-                                controller->setMox(false, keyer);
+                                && !m_desktopKeyHeld
+                                && controller->isTciPttHeld()) {
+                                controller->onTciPtt(false);
+                                if (!self) { return; }
                             }
                             answer(false);
                             return;
                         }
                         m_desktopKeyClient = ws;
                         m_desktopKeyHeld = true;
+                        m_tciPttClient = ws;
                         if (hasTciArg && m_txAudioActiveClient.isNull()) {
                             m_txAudioActiveClient = ws;
                             emit txAudioActiveClientChanged(ws);
@@ -4282,6 +4412,8 @@ void TciServer::onTextMessageReceived(const QString& msg)
                         // receiver (TciProtocol::handleTrxCommand).
                         bool rxOk = false;
                         const int trxIdx = parts.at(0).trimmed().toInt(&rxOk);
+                        localTrx = rxOk;
+                        localTrxWantsMox = wantsMox;
                         const bool alreadyMox = m_model && m_model->mox();
                         const bool alreadyActiveTciPtt =
                             !m_txAudioActiveClient.isNull()
@@ -4385,6 +4517,17 @@ void TciServer::onTextMessageReceived(const QString& msg)
     // Not in Thetis: its handleTrxMessage keeps the listener's
     // ownsActiveTciPtt until the app's trx:false or OnMoxPreChangeHandler
     // (TCIServer.cs:3623-3672 [v2.10.3.15]).
+    // Fix wave RD-C1: the app whose trx raised the TCI level owns that
+    // key until the level drops (any app's trx:N,false, a refusal, an
+    // unkey under a block).
+    if (localTrx && trxMox) {
+        if (!trxMox->isTciPttHeld()) {
+            m_tciPttClient = nullptr;
+        } else if (localTrxWantsMox && !tciLevelBefore) {
+            m_tciPttClient = ws;
+        }
+    }
+
     if (trxTookTxAudio && m_model && m_model->moxController() != nullptr
         && !m_model->moxController()->isTciPttHeld()
         && !m_txAudioActiveClient.isNull() && m_txAudioActiveClient.data() == ws) {
@@ -4500,6 +4643,28 @@ void TciServer::onBinaryMessageReceived(const QByteArray& data)
     if (streamTypeInt != static_cast<int>(TciStreamType::TxAudioStream)) { return; }
     if (length <= 0) { return; }
 
+    // Fix wave minor: the header's sample rate becomes the TX channel's
+    // resampler input rate (TxChannel::feedTciAudioBlock), whose output
+    // buffer is sized from it; a rate of 1, or of millions, made it
+    // allocate per frame without bound or build an unusable resampler.
+    // Same bounds as the audio_samplerate: interceptor (8x headroom). A
+    // rate of 0 or less is passed on as Thetis does: no resampling
+    // (cmaster.cs:1446-1447 [v2.10.3.15], inputRate <= 0 returns the
+    // input). Not in Thetis, which passes any positive rate on.
+    constexpr int kMinTxAudioSampleRate = 8000;
+    constexpr int kMaxTxAudioSampleRate = 384000;
+    if (sampleRate > 0
+        && (sampleRate < kMinTxAudioSampleRate || sampleRate > kMaxTxAudioSampleRate)) {
+        session->txFramesDropped++;
+        if (!session->txRateRejectionLogged) {
+            session->txRateRejectionLogged = true;
+            qCWarning(lcTci) << "TciServer: TX audio dropped, sample rate" << sampleRate
+                             << "is outside" << kMinTxAudioSampleRate << "to"
+                             << kMaxTxAudioSampleRate << ", peer" << session->peer;
+        }
+        return;
+    }
+
     // ── TX mutex gate ─────────────────────────────────────────────────────────
     //
     // Only the active TX client may push audio. All others silently dropped.
@@ -4549,8 +4714,12 @@ void TciServer::onBinaryMessageReceived(const QByteArray& data)
             decodedValueCount -= decodedValueCount % channels;
         }
     } else {
-        // legacy/JTDX
-        channels = (actualValueCount >= length * 2) ? 2 : 1;
+            // legacy/JTDX
+        // Fix wave minor: length * 2 in 64 bits; a header length above
+        // INT_MAX / 2 overflowed the int product (undefined behaviour) and
+        // could read a mono block as stereo.
+        channels = (static_cast<qint64>(actualValueCount)
+                    >= static_cast<qint64>(length) * 2) ? 2 : 1;
         decodedValueCount = std::min(length, actualValueCount);
         if (channels > 1) {
             decodedValueCount -= decodedValueCount % channels;

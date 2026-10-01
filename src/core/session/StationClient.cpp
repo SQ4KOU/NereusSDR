@@ -9,6 +9,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave GUI-I6: a Tune Power change
+//                                    is marked on its way until the Core
+//                                    answers it (TransmitModel).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling fix round 4: the
 //                                    paired CFC curve cancels the unsent
 //                                    scalar edits only when the new curve
@@ -2235,6 +2239,10 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     // unanswered commands would suppress completions for fresh requests
     // after reconnect (including the 4O3A master and C-Tune controls).
     m_pendingCommands.clear();
+    if (!m_radioModel.isNull()) {
+        // Fix wave GUI-I6: nothing of the retired session is on its way.
+        m_radioModel->transmitModel().setTunePowerForTxBandWriteInFlight(false);
+    }
     m_controlTakeBacks.clear();
     m_pendingPs3Display.reset();
 
@@ -6716,8 +6724,14 @@ StationClient::CommandOutcome StationClient::requestTunePowerForTxBand(int watts
     if (!transmitSettingsAvailable(2)) {
         return IStationLink::requestTunePowerForTxBand(watts);
     }
-    return sendCommand("setTunePowerForTxBand", -1, { intArgument("watts", watts) },
-                       QStringLiteral("the tune power"));
+    const CommandOutcome outcome =
+        sendCommand("setTunePowerForTxBand", -1, { intArgument("watts", watts) },
+                    QStringLiteral("the tune power"));
+    // Fix wave GUI-I6: on its way until the Core answers it.
+    if (outcome.sent && !m_radioModel.isNull()) {
+        m_radioModel->transmitModel().setTunePowerForTxBandWriteInFlight(true);
+    }
+    return outcome;
 }
 
 // transmitSettingsVersion 15: the CFC dialog's band editor, applied by the
@@ -7391,6 +7405,19 @@ void StationClient::handleCommandResult(const SessionMessage& message)
     // five typed verbs, looks like -- so the signal below still fires and
     // only the operator-facing routing is skipped.
     const PendingCommand pending = m_pendingCommands.take(message.commandId);
+
+    // Fix wave GUI-I6: a Tune Power change answered; another may still be
+    // on its way. Before the refusal below shows the Core's value.
+    if (pending.verb == "setTunePowerForTxBand" && !m_radioModel.isNull()) {
+        bool newerTunePower = false;
+        for (auto it = m_pendingCommands.cbegin(); it != m_pendingCommands.cend(); ++it) {
+            if (it.value().verb == pending.verb) {
+                newerTunePower = true;
+                break;
+            }
+        }
+        m_radioModel->transmitModel().setTunePowerForTxBandWriteInFlight(newerTunePower);
+    }
 
     const bool isFourO3ACommand = pending.verb == "setFourO3AEnabled";
     bool newerFourO3ACommand = false;

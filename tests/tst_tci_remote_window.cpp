@@ -1099,6 +1099,61 @@ private slots:
         tci.stop();
     }
 
+    // Fix round 2 (Critical 1, RD-C1): an app that keyed without TCI audio
+    // (trx:0,true; with no ",tci") and then leaves releases the window's
+    // key on the Core, as the TCI-audio app does above.
+    void anAppKeyedWithoutTciAudioLeavingReleasesTheKey()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        TciServer tci(&remote);
+        FakeCoreTransmit core;
+        tci.setRemoteTransmit(core.forwarder());
+        QVERIFY(tci.start(0));
+        {
+            QWebSocket app;
+            QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+            QVERIFY(connectClient(app, tci.port()));
+            QTRY_VERIFY_WITH_TIMEOUT(texts(text).contains(QStringLiteral("ready;")), 3000);
+            app.sendTextMessage(QStringLiteral("trx:0,true;"));
+            QTRY_COMPARE_WITH_TIMEOUT(core.keys, 1, 3000);
+            core.accept(21);
+            QCOMPARE(tci.remoteKeyEpoch(), 21u);
+            QCOMPARE(tci.activeTxClientCount(), 0);
+            app.close();
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(core.unkeys, QList<quint32>{21u}, 3000);
+        QCOMPARE(tci.remoteKeyEpoch(), 0u);
+        tci.stop();
+    }
+
+    // Fix round 2 (Critical 1, RD-C1): the app leaves while its key is being
+    // asked for; the Core's accepted answer is released at once and no key
+    // is kept for an app that is gone.
+    void anAppLeavingWhileItsKeyIsAskedForReleasesTheAnswer()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        TciServer tci(&remote);
+        FakeCoreTransmit core;
+        tci.setRemoteTransmit(core.forwarder());
+        QVERIFY(tci.start(0));
+        {
+            QWebSocket app;
+            QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+            QVERIFY(connectClient(app, tci.port()));
+            QTRY_VERIFY_WITH_TIMEOUT(texts(text).contains(QStringLiteral("ready;")), 3000);
+            app.sendTextMessage(QStringLiteral("trx:0,true;"));
+            QTRY_COMPARE_WITH_TIMEOUT(core.keys, 1, 3000);
+            app.close();
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(tci.clientCount(), 0, 3000);
+        QVERIFY(core.unkeys.isEmpty());
+        core.accept(22);
+        QCOMPARE(core.unkeys, QList<quint32>{22u});
+        QCOMPARE(tci.remoteKeyEpoch(), 0u);
+        tci.stop();
+        QCOMPARE(core.unkeys, QList<quint32>{22u});
+    }
+
     // Without a forwarder (an older Core) transmit stays refused as before.
     void withoutAForwarderTransmitStaysRefused()
     {

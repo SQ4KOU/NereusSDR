@@ -25,6 +25,7 @@ private slots:
     void invalidEditRejectsWholeCandidate();
     void corruptFieldsFallBackIndependentlyAndRemainVisible();
     void loadingDesiredAutomaticIntentEmitsNoConfigurationWrite();
+    void legacyAutoCalKeyIsStillRead();
 };
 
 void TestPs3SettingsPersistence::defaultsMatchPs3Contract()
@@ -34,7 +35,9 @@ void TestPs3SettingsPersistence::defaultsMatchPs3Contract()
     QCOMPARE(settings.runCalibrationProcessing(), true);
     QCOMPARE(settings.autoAttenuate(), true);
     QCOMPARE(settings.quickAttenuate(), false);
-    QCOMPARE(settings.moxDelaySeconds(), 0.1);
+    // Fix wave RD-I7: Thetis udPSMoxDelay Value 0.2
+    // (PSForm.Designer.cs:368-372 [v2.10.3.15]).
+    QCOMPARE(settings.moxDelaySeconds(), 0.2);
     QCOMPARE(settings.loopDelaySeconds(), 0.0);
     QCOMPARE(settings.requestedTxDelayNs(), 150.0);
     QCOMPARE(settings.hardwarePeakOverrideEnabled(), false);
@@ -50,7 +53,7 @@ void TestPs3SettingsPersistence::allAcceptedValuesRoundTripPerRadio()
     requested.runCalibrationProcessing = false;
     requested.autoAttenuate = false;
     requested.quickAttenuate = true;
-    requested.moxDelaySeconds = 3.4;
+    requested.moxDelaySeconds = 0.7;
     requested.loopDelaySeconds = 17.25;
     requested.requestedTxDelayNs = 123456.5;
     requested.hardwarePeakOverrideEnabled = true;
@@ -89,6 +92,14 @@ void TestPs3SettingsPersistence::invalidEditRejectsWholeCandidate()
     QVERIFY(settings.values() == accepted);
     QCOMPARE(changed.count(), 0);
     QCOMPARE(rejected.count(), 1);
+    // Fix wave RD-I7: Thetis udPSMoxDelay Maximum 1.0.
+    invalid.moxDelaySeconds = 1.1;
+    QVERIFY(!settings.apply(invalid));
+    QCOMPARE(rejected.count(), 2);
+    auto atMaximum = accepted;
+    atMaximum.moxDelaySeconds = 1.0;
+    QVERIFY(settings.apply(atMaximum));
+    QVERIFY(settings.apply(accepted));
 
     settings.setRequestedTxDelayNs(std::numeric_limits<double>::infinity());
     settings.setLoopDelaySeconds(100.01);
@@ -113,7 +124,7 @@ void TestPs3SettingsPersistence::corruptFieldsFallBackIndependentlyAndRemainVisi
         "Saved PureSignal settings not used.*MoxDelaySeconds.*RequestedTxDelayNs")));
     QVERIFY(settings.load());
 
-    QCOMPARE(settings.moxDelaySeconds(), 0.1);
+    QCOMPARE(settings.moxDelaySeconds(), 0.2);
     QCOMPARE(settings.loopDelaySeconds(), 12.5);
     QCOMPARE(settings.requestedTxDelayNs(), 150.0);
     QCOMPARE(settings.hardwarePeakOverrideEnabled(), true);
@@ -133,6 +144,24 @@ void TestPs3SettingsPersistence::loadingDesiredAutomaticIntentEmitsNoConfigurati
     QVERIFY(settings.load());
     QCOMPARE(settings.autoCalEnabled(), true);
     QCOMPARE(writes.count(), 0);
+}
+
+// Fix wave minor: a preference saved under the old camelCase leaf, as a
+// bool, is still read; the PascalCase leaf wins once it exists.
+void TestPs3SettingsPersistence::legacyAutoCalKeyIsStillRead()
+{
+    PureSignalSettings settings;
+    settings.setRadioIdentity(radioA);
+    auto& app = AppSettings::instance();
+    const QString prefix = settings.settingsPrefix();
+    app.setValue(prefix + QStringLiteral("autoCalEnabled"), QStringLiteral("true"));
+    QVERIFY(settings.load());
+    QCOMPARE(settings.autoCalEnabled(), true);
+    QVERIFY(settings.lastLoadError().isEmpty());
+
+    app.setValue(prefix + QStringLiteral("AutoCalEnabled"), QStringLiteral("False"));
+    QVERIFY(settings.load());
+    QCOMPARE(settings.autoCalEnabled(), false);
 }
 
 QTEST_APPLESS_MAIN(TestPs3SettingsPersistence)

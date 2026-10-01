@@ -11,6 +11,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - Fix round 1 (minor 4): MOX, TUNE and 2-TONE on a remote
+//                 window give the link-down words by state. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-49, R-R3-21). AI-assisted
 //                                    via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2): MON follows
@@ -66,6 +69,14 @@
 //                                    window's MOX and TUNE press toggles
 //                                    against its own key. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave, hosting 2-TONE parity: a
+//                                    hosting window's 2TONE asks to take
+//                                    transmit, as MOX and TUNE do.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave GUI-I7: PS-A greys with the
+//                                    facade's own reason (on the air, or
+//                                    no radio that supports PureSignal).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  The container Power button is removed
 //                                    (maintainer decision): an old Power id
 //                                    falls to the unavailable default and a
@@ -274,7 +285,10 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
         } else if (transmitBlockedRemotely()) {
             unavailable(remoteReason);
         } else if (!m_model->isConnected()) {
-            unavailable(noRadioTransmitReason());
+            // Fix round 1 (minor 4): a remote window says which link is
+            // down (RadioModel::transmitLinkDownReason).
+            unavailable(m_model->ownsLocalDsp() ? noRadioTransmitReason()
+                                                : m_model->transmitLinkDownReason());
         } else if ((id == Id::Mox && !m_model->moxController())
                    || (id == Id::TwoTon && !m_model->twoToneController())) {
             unavailable(noRadioTransmitReason());
@@ -292,7 +306,11 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
                 ? m_hooks.pureSignalArmingReason() : QString();
             unavailable(reason.isEmpty() ? remoteReason : reason);
         } else if (!ps || !ps->available() || !ps->canArm()) {
-            unavailable(QStringLiteral("PureSignal needs a connected radio that supports it."));
+            // Fix wave GUI-I7: the facade's own reason (on the air, or no
+            // connected radio that supports PureSignal).
+            const QString refusal = ps ? ps->armingRefusal() : QString();
+            unavailable(refusal.isEmpty() ? PureSignalSessionFacade::needsRadioReason()
+                                          : refusal);
         }
         break;
     }
@@ -417,7 +435,14 @@ QString ContainerButtonDispatcher::click(Id id, int rxSource)
     case Id::TwoTon:
         // TxApplet's 2-TONE button (RadioModel::setTwoTone: the
         // TwoToneController here, the Core's in a remote window).
-        m_model->setTwoTone(turnOn);
+        // Fix wave (hosting 2-TONE parity): a hosting window asks to take
+        // transmit first, as for MOX and TUNE.
+        if (m_hooks.desktopHosting && m_hooks.desktopHosting()
+            && m_hooks.requestDesktopTwoTone) {
+            m_hooks.requestDesktopTwoTone(turnOn);
+        } else {
+            m_model->setTwoTone(turnOn);
+        }
         break;
     case Id::PsA:
         // TxApplet's PS-A button: automatic calibration on, or Off/reset.

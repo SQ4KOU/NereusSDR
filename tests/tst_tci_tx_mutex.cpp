@@ -44,8 +44,10 @@
 #include <QSignalSpy>
 #include <QWebSocket>
 #include <QUrl>
+#include <QRegularExpression>
 
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #include "core/TciServer.h"
@@ -95,6 +97,15 @@ private slots:
     void trx_false_during_operator_key_is_not_echoed();
     void trx_true_that_keys_nothing_is_not_echoed();
     void wsjtx_sequence_still_sees_trx_true_without_suffix();
+    void disconnect_releases_the_app_key_before_its_audio_data();
+    void disconnect_releases_the_app_key_before_its_audio();
+    void disconnect_of_an_app_that_did_not_key_leaves_the_key();
+    void trx_on_a_receiver_that_is_off_keys_nothing();
+    void desktop_host_trx_goes_through_ptt_admission();
+    void tx_audio_header_is_validated();
+    void uppercase_trx_key_ends_with_the_app_data();
+    void uppercase_trx_key_ends_with_the_app();
+    void desktop_host_uppercase_trx_goes_through_ptt_admission();
     void desktop_host_holder_and_program_ownership();
     void desktop_host_owned_two_three_broadcasts_logical_receivers();
     void stopped_server_queues_no_rx2_lines();
@@ -1300,6 +1311,325 @@ void TestTciTxMutex::wsjtx_sequence_still_sees_trx_true_without_suffix()
     QTRY_VERIFY_WITH_TIMEOUT(!core.mox(), 3000);
     QCOMPARE(server.activeTxClientCount(), 0);
     wsjtx.socket.close();
+    server.stop();
+}
+
+// Fix wave RD-C1 (JJ ruling 1): the app whose trx keyed the transmitter
+// is gone, by its own disconnect or by the server stopping. Its key is
+// released before its TX audio lock, so the microphone never goes on air
+// in the moment between. Departure from Thetis TCIServer.cs:3010-3026
+// [v2.10.3.15], which drops only the audio listener there.
+void TestTciTxMutex::disconnect_releases_the_app_key_before_its_audio_data()
+{
+    QTest::addColumn<bool>("stopServer");
+    QTest::addColumn<bool>("tciAudio");
+    QTest::newRow("disconnect, TCI audio") << false << true;
+    QTest::newRow("disconnect, no TCI audio") << false << false;
+    QTest::newRow("server stop, TCI audio") << true << true;
+    QTest::newRow("server stop, no TCI audio") << true << false;
+}
+
+void TestTciTxMutex::disconnect_releases_the_app_key_before_its_audio()
+{
+    QFETCH(bool, stopServer);
+    QFETCH(bool, tciAudio);
+    RadioModel core;
+    MoxController* mox = core.moxController();
+    QVERIFY(mox != nullptr);
+    allowEveryKey(mox);
+    TciServer server(&core);
+    QVERIFY(server.start(0));
+    TrxApp app;
+    QVERIFY(app.open(server.port()));
+
+    app.socket.sendTextMessage(tciAudio ? QStringLiteral("trx:0,true,tci;")
+                                        : QStringLiteral("trx:0,true;"));
+    QTRY_VERIFY_WITH_TIMEOUT(core.mox(), 3000);
+    QCOMPARE(server.activeTxClientCount(), tciAudio ? 1 : 0);
+
+    // At the moment the audio lock goes, the app's key must already be
+    // released: its TCI level dropped, so the transmitter is unkeying (the
+    // lock goes on the way down, as OnMoxPreChangeHandler releases it) and
+    // nothing keeps it on the air with the microphone.
+    bool keyedWhenAudioReleased = false;
+    int audioReleases = 0;
+    connect(&server, &TciServer::txAudioActiveClientChanged, &server,
+            [&](QWebSocket* active) {
+                if (active == nullptr) {
+                    ++audioReleases;
+                    keyedWhenAudioReleased = keyedWhenAudioReleased || mox->isTciPttHeld();
+                }
+            });
+    if (stopServer) {
+        server.stop();
+    } else {
+        app.socket.close();
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(!core.mox(), 3000);
+    QVERIFY(!mox->isTciPttHeld());
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeTxClientCount(), 0, 3000);
+    QCOMPARE(audioReleases, tciAudio ? 1 : 0);
+    QVERIFY2(!keyedWhenAudioReleased,
+             "the TX audio lock was released while the app's key still held");
+    app.socket.close();
+    server.stop();
+}
+
+// Only the app that keyed loses its key: an app that never keyed leaves a
+// MOX-button key, and another app's TCI key, alone when it goes.
+void TestTciTxMutex::disconnect_of_an_app_that_did_not_key_leaves_the_key()
+{
+    RadioModel core;
+    MoxController* mox = core.moxController();
+    QVERIFY(mox != nullptr);
+    allowEveryKey(mox);
+    TciServer server(&core);
+    QVERIFY(server.start(0));
+    TrxApp keyer;
+    TrxApp bystander;
+    QVERIFY(keyer.open(server.port()));
+    QVERIFY(bystander.open(server.port()));
+
+    keyer.socket.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(core.mox(), 3000);
+    // Ignored while keyed (Thetis handleTrxMessage): it takes no ownership.
+    bystander.socket.sendTextMessage(QStringLiteral("trx:0,true;"));
+    QTRY_VERIFY_WITH_TIMEOUT(bystander.lines().contains(QStringLiteral("trx:0,true;")), 3000);
+    bystander.socket.close();
+    QTRY_COMPARE_WITH_TIMEOUT(server.clientCount(), 1, 3000);
+    QVERIFY(core.mox());
+    QCOMPARE(server.activeTxClientCount(), 1);
+    keyer.socket.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTRY_VERIFY_WITH_TIMEOUT(!core.mox(), 3000);
+
+    // A MOX-button key is the operator's: an app that goes takes nothing.
+    core.setMoxFromButton(true);
+    QVERIFY(core.mox());
+    keyer.socket.close();
+    QTRY_COMPARE_WITH_TIMEOUT(server.clientCount(), 0, 3000);
+    QVERIFY(core.mox());
+    core.setMoxFromButton(false);
+    QTRY_VERIFY_WITH_TIMEOUT(!core.mox(), 3000);
+    server.stop();
+}
+
+// Fix wave RD-I2: trx keys only receiver 0, or receiver 1 while RX2 is on.
+// From Thetis TCIServer.cs:3666-3680 [v2.10.3.15] (handleTrxMessage):
+// rx == 0 writes TCIPTT; rx == 1 only with RX2Enabled; any other index
+// writes nothing.
+void TestTciTxMutex::trx_on_a_receiver_that_is_off_keys_nothing()
+{
+    RadioModel core;
+    MoxController* mox = core.moxController();
+    QVERIFY(mox != nullptr);
+    allowEveryKey(mox);
+    TciServer server(&core);
+    QVERIFY(server.start(0));
+    TrxApp app;
+    QVERIFY(app.open(server.port()));
+
+    // No receiver 1 slice: RX2 is off.
+    for (const QString& trx : {QStringLiteral("trx:1,true;"), QStringLiteral("trx:2,true,tci;"),
+                               QStringLiteral("trx:-1,true;")}) {
+        const int mark = int(app.text.count());
+        app.socket.sendTextMessage(trx);
+        QTRY_VERIFY_WITH_TIMEOUT(app.text.count() > mark, 3000);
+        QVERIFY2(!core.mox(), qPrintable(trx));
+        QVERIFY2(!mox->isTciPttHeld(), qPrintable(trx));
+        QCOMPARE(server.activeTxClientCount(), 0);
+    }
+    app.socket.sendTextMessage(QStringLiteral("trx:0,true;"));
+    QTRY_VERIFY_WITH_TIMEOUT(core.mox(), 3000);
+    app.socket.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTRY_VERIFY_WITH_TIMEOUT(!core.mox(), 3000);
+    app.socket.close();
+    server.stop();
+}
+
+// Fix wave RD-I3: a desktop host's app keys through the same PollPTT
+// admission as a local app's trx (MoxController::onTciPtt): never under a
+// manual key (Thetis console.cs:25470 [v2.10.3.15], !_manual_mox), and a
+// press that keyed nothing leaves no TCI level behind to key later for an
+// app that was told trx:0,false.
+void TestTciTxMutex::desktop_host_trx_goes_through_ptt_admission()
+{
+    RadioModel radio;
+    const int owned = radio.addSlice(QStringLiteral("pan-0"));
+    radio.sliceOwnership()->setOwner(owned, SliceOwnership::stationDevice());
+    TransmitHolder holder;
+    MoxController* mox = radio.moxController();
+    mox->setKeyingGate([&holder](PttMode source, const KeyerIdentity& keyer) {
+        return holder.askKey({keyer.deviceId, TransmitHolder::Source::Device,
+                              keyer.program, source == PttMode::Vox});
+    });
+    holder.transferTo(TransmitHolder::Holder{SliceOwnership::stationDevice()},
+                      QStringLiteral("test"), [](bool) {});
+    radio.setTransmitHolder(SliceOwnership::stationDevice());
+    QVERIFY(radio.txSliceArbiter()->bindForHolder(SliceOwnership::stationDevice(), owned));
+    TciServer server(&radio);
+    server.setDesktopHostMode(true);
+    QVERIFY(server.start(0));
+    TrxApp app;
+    QVERIFY(app.open(server.port()));
+
+    mox->setManualKey(true);
+    const int mark = int(app.text.count());
+    app.socket.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(app.lines(mark).contains(QStringLiteral("trx:0,false;")), 3000);
+    QVERIFY(!radio.mox());
+    QVERIFY(!mox->isTciPttHeld());
+    QCOMPARE(server.activeTxClientCount(), 0);
+    // The manual key ends: nothing keys for the press that was refused.
+    mox->setManualKey(false);
+    QVERIFY(!radio.mox());
+
+    // Admitted, it keys as the station's TCI source, and its release
+    // drops the level with the key.
+    app.socket.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(radio.mox(), 3000);
+    QVERIFY(mox->isTciPttHeld());
+    QCOMPARE(mox->currentKeyer(), KeyerIdentity::station(PttMode::Tci));
+    QCOMPARE(server.activeTxClientCount(), 1);
+    app.socket.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTRY_VERIFY_WITH_TIMEOUT(!radio.mox(), 3000);
+    QVERIFY(!mox->isTciPttHeld());
+    QCOMPARE(server.activeTxClientCount(), 0);
+    app.socket.close();
+    server.stop();
+}
+
+// Fix round 1 (Important 1): command names are not case-sensitive
+// (TciProtocol lowercases them, as Thetis TCIServer.cs:5288 [v2.10.3.15]
+// does), so an app's TRX:0,true; keys like trx:0,true;. Its key must end
+// with the app, or with the server, as a lowercase trx's does.
+void TestTciTxMutex::uppercase_trx_key_ends_with_the_app_data()
+{
+    QTest::addColumn<bool>("stopServer");
+    QTest::newRow("disconnect") << false;
+    QTest::newRow("server stop") << true;
+}
+
+void TestTciTxMutex::uppercase_trx_key_ends_with_the_app()
+{
+    QFETCH(bool, stopServer);
+    RadioModel core;
+    MoxController* mox = core.moxController();
+    QVERIFY(mox != nullptr);
+    allowEveryKey(mox);
+    TciServer server(&core);
+    QVERIFY(server.start(0));
+    TrxApp app;
+    QVERIFY(app.open(server.port()));
+
+    app.socket.sendTextMessage(QStringLiteral("TRX:0,true;"));
+    QTRY_VERIFY_WITH_TIMEOUT(core.mox(), 3000);
+    QVERIFY(mox->isTciPttHeld());
+    if (stopServer) {
+        server.stop();
+    } else {
+        app.socket.close();
+        QTRY_COMPARE_WITH_TIMEOUT(server.clientCount(), 0, 3000);
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(!core.mox(), 3000);
+    QVERIFY(!mox->isTciPttHeld());
+    app.socket.close();
+    server.stop();
+}
+
+// Fix round 1 (Important 1): a desktop host's uppercase TRX goes through
+// the same PollPTT admission as trx (RD-I3): refused under a manual key,
+// with no TCI level left behind.
+void TestTciTxMutex::desktop_host_uppercase_trx_goes_through_ptt_admission()
+{
+    RadioModel radio;
+    const int owned = radio.addSlice(QStringLiteral("pan-0"));
+    radio.sliceOwnership()->setOwner(owned, SliceOwnership::stationDevice());
+    TransmitHolder holder;
+    MoxController* mox = radio.moxController();
+    mox->setKeyingGate([&holder](PttMode source, const KeyerIdentity& keyer) {
+        return holder.askKey({keyer.deviceId, TransmitHolder::Source::Device,
+                              keyer.program, source == PttMode::Vox});
+    });
+    holder.transferTo(TransmitHolder::Holder{SliceOwnership::stationDevice()},
+                      QStringLiteral("test"), [](bool) {});
+    radio.setTransmitHolder(SliceOwnership::stationDevice());
+    QVERIFY(radio.txSliceArbiter()->bindForHolder(SliceOwnership::stationDevice(), owned));
+    TciServer server(&radio);
+    server.setDesktopHostMode(true);
+    QVERIFY(server.start(0));
+    TrxApp app;
+    QVERIFY(app.open(server.port()));
+
+    mox->setManualKey(true);
+    const int mark = int(app.text.count());
+    app.socket.sendTextMessage(QStringLiteral("TRX:0,true,TCI;"));
+    QTRY_VERIFY_WITH_TIMEOUT(app.lines(mark).contains(QStringLiteral("trx:0,false;")), 3000);
+    QVERIFY(!radio.mox());
+    QVERIFY(!mox->isTciPttHeld());
+    QCOMPARE(server.activeTxClientCount(), 0);
+    mox->setManualKey(false);
+    QVERIFY(!radio.mox());
+
+    app.socket.sendTextMessage(QStringLiteral("TRX:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(radio.mox(), 3000);
+    QCOMPARE(mox->currentKeyer(), KeyerIdentity::station(PttMode::Tci));
+    app.socket.close();
+    QTRY_VERIFY_WITH_TIMEOUT(!radio.mox(), 3000);
+    QVERIFY(!mox->isTciPttHeld());
+    server.stop();
+}
+
+// Fix wave minor: the TX_AUDIO_STREAM header. A sample rate the TX
+// resampler cannot take (outside 8000 to 384000, as audio_samplerate:) is
+// dropped; 0 passes as Thetis passes it (no resampling). A legacy header
+// (no channels field) whose length is above INT_MAX / 2 is read as mono,
+// not as stereo through an int overflow.
+void TestTciTxMutex::tx_audio_header_is_validated()
+{
+    TciServer server(nullptr);
+    QVERIFY(server.start(0));
+    QWebSocket app;
+    QSignalSpy connected(&app, &QWebSocket::connected);
+    app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeTxClientCount(), 1, 3000);
+
+    const auto frameAt = [](int sampleRate, int channels) {
+        std::vector<float> samples(128, 0.25f);
+        return TciBinaryFrame::buildStreamPayload(0, sampleRate,
+            static_cast<int>(TciSampleType::Float32), 128,
+            static_cast<int>(TciStreamType::TxAudioStream), channels, samples.data());
+    };
+    const auto sendAndMeasure = [&](const QByteArray& frame) {
+        const int before = server.peekTxRingSize();
+        // A mono marker frame after it shows the first was processed.
+        app.sendBinaryMessage(frame);
+        app.sendBinaryMessage(frameAt(48000, 1));
+        const int marker = 128 * int(sizeof(float));
+        if (!QTest::qWaitFor([&] { return server.peekTxRingSize() >= before + marker; }, 3000)) {
+            return -1;
+        }
+        return server.peekTxRingSize() - before - marker;
+    };
+
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(
+        QStringLiteral("TX audio dropped, sample rate 1 is outside")));
+    QCOMPARE(sendAndMeasure(frameAt(1, 1)), 0);
+    QCOMPARE(sendAndMeasure(frameAt(2000000, 1)), 0);   // logged once per app
+    QCOMPARE(sendAndMeasure(frameAt(0, 1)), 128 * int(sizeof(float)));
+    QCOMPARE(sendAndMeasure(frameAt(8000, 1)), 128 * int(sizeof(float)));
+
+    // Legacy header: channels field 0, length INT_MAX. 128 values are
+    // there; a stereo reading would fold them to 64.
+    QByteArray legacy = frameAt(48000, 0);
+    const qint32 huge = std::numeric_limits<qint32>::max();
+    for (int i = 0; i < 4; ++i) {
+        legacy[20 + i] = static_cast<char>((static_cast<quint32>(huge) >> (8 * i)) & 0xff);
+    }
+    QCOMPARE(sendAndMeasure(legacy), 128 * int(sizeof(float)));
+
+    app.close();
     server.stop();
 }
 

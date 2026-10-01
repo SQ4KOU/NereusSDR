@@ -11,6 +11,22 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - J.J. Boyd (KG4VCF). Fix round 2 (minor 3): the disconnect
+//                comment says TX applet PS-A shows disabled, not hidden, for
+//                the unknown board. AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - J.J. Boyd (KG4VCF). Fix round 1 (minor 4): the container's
+//                MOX, TUNE and 2-TONE refresh when the window's link to the
+//                Core or the Core's waiting for a radio changes.
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - J.J. Boyd (KG4VCF). Fix wave, hosting 2-TONE parity: a
+//                hosting window's 2-TONE (TX applet and container) asks to
+//                take transmit as its MOX and TUNE do (requestDesktopKey).
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - J.J. Boyd (KG4VCF). Fix wave GUI-I5: the container's MON
+//                and PS-A hooks carry the transmit holder's reason, as the
+//                TX applet's do. GUI-I1: abandonTxBadgeTake rejects the
+//                badge's open take question. AI-assisted via Anthropic
+//                Claude Code.
 //   2026-09-30 - J.J. Boyd (KG4VCF). Station VOX: a hosting window's VOX
 //                (the TX applet's button, Setup's Enable VOX) is disabled,
 //                naming the holder, while another device holds transmit.
@@ -2426,6 +2442,10 @@ void MainWindow::refreshDesktopStationState()
                 [this] { return desktopOwnsTransmit() && m_radioModel
                     && m_radioModel->moxController() && m_radioModel->moxController()->isMox(); },
                 [this] { return desktopOwnsTransmit() && m_radioModel && m_radioModel->isTune(); });
+            // Fix wave (hosting 2-TONE parity): 2-TONE asks as MOX does.
+            m_txApplet->setDesktopTwoToneHandler([this](bool on) {
+                requestDesktopKey(DesktopStationController::Key::TwoTone, on);
+            });
             // Slice control plan Task 11: the TX applet's band, per-band
             // power and every transmit control follow the slice transmit is
             // bound to, never a slice this window only listens to.
@@ -2440,6 +2460,7 @@ void MainWindow::refreshDesktopStationState()
                 [this]() { return transmitSliceChoiceReason(); });
         } else {
             m_txApplet->setDesktopKeyHandlers({}, {}, {}, {});
+            m_txApplet->setDesktopTwoToneHandler({});
             m_txApplet->setTransmitSliceResolver({});
             m_txApplet->setTransmitSliceChoices({}, {}, {});
         }
@@ -2487,12 +2508,21 @@ void MainWindow::applyDesktopVoxHolderGate()
 
 void MainWindow::requestDesktopTransmit(bool tune, bool on)
 {
+    requestDesktopKey(tune ? DesktopStationController::Key::Tune
+                           : DesktopStationController::Key::Mox, on);
+}
+
+void MainWindow::requestDesktopKey(DesktopStationController::Key key, bool on)
+{
     if (!desktopHosting()) { return; }
     const QPointer<MainWindow> self(this);
     if (m_desktopTakeDialog) { m_desktopTakeDialog->close(); }
     if (!self || !desktopHosting()) { return; }
     const QPointer<DesktopStationController> controller(m_desktopStationController);
-    const auto result = tune ? controller->requestTune(on) : controller->requestMox(on);
+    using Key = DesktopStationController::Key;
+    const auto result = key == Key::Tune      ? controller->requestTune(on)
+                      : key == Key::TwoTone   ? controller->requestTwoTone(on)
+                                              : controller->requestMox(on);
     if (!self || !controller || controller != m_desktopStationController) { return; }
     handleDesktopTakeResult(result);
     if (!self) { return; }
@@ -2522,6 +2552,12 @@ void MainWindow::handleDesktopTakeResult(
         dialog->detailLabel()->setText(question.holderKeyed
             ? tr("The other device is on the air. Taking over unkeys it before tuning.")
             : tr("The other device holds transmit. Take it to begin tuning."));
+    } else if (question.key == DesktopStationController::Key::TwoTone) {
+        // Fix wave (hosting 2-TONE parity).
+        dialog->detailLabel()->setText(question.holderKeyed
+            ? tr("The other device is on the air. Taking over unkeys it before "
+                 "the 2-tone test starts.")
+            : tr("The other device holds transmit. Take it to start the 2-tone test."));
     }
     m_desktopTakeDialog = dialog;
     const QPointer<DesktopStationController> controller = m_desktopStationController;
@@ -7107,13 +7143,39 @@ void MainWindow::buildUI()
         };
         hooks.requestDesktopMox = [this](bool on) { requestDesktopTransmit(false, on); };
         hooks.requestDesktopTune = [this](bool on) { requestDesktopTransmit(true, on); };
+        // Fix wave (hosting 2-TONE parity): 2TONE asks as MOX does.
+        hooks.requestDesktopTwoTone = [this](bool on) {
+            requestDesktopKey(DesktopStationController::Key::TwoTone, on);
+        };
         hooks.transmitPermitted = [this] { return transmitControlsPermitted(); };
         // R-R3-49 (parity Task 2): MON is a transmit setting (version 2).
-        hooks.transmitSettingsPermitted = [this] { return transmitSettingsPermitted(2); };
-        hooks.transmitSettingsReason = [this] { return transmitSettingsReason(2); };
         // R-R3-49 (parity Task 7): PS-A arms PureSignal (version 7).
-        hooks.pureSignalArmingPermitted = [this] { return pureSignalArmingPermitted(); };
-        hooks.pureSignalArmingReason = [this] { return pureSignalArmingReason(); };
+        // Fix wave GUI-I5: with the holder rule applyRemoteRoleGating gives
+        // the TX applet's MON and PS-A (iPhone app plan Task 77, rulings
+        // 7.7 and 8.4): while another device holds transmit they are shown
+        // disabled with the Core's holder reason; a reason already shown
+        // (the setting not taken, the radio on the air) stays.
+        const auto otherHolder = [this] {
+            return m_stationClient && m_stationClient->knowsTransmitHolder()
+                ? m_stationClient->otherHolderReason()
+                : QString();
+        };
+        hooks.transmitSettingsPermitted = [this, otherHolder] {
+            return otherHolder().isEmpty() && transmitSettingsPermitted(2);
+        };
+        hooks.transmitSettingsReason = [this, otherHolder] {
+            const QString holder = otherHolder();
+            return holder.isEmpty() || !transmitSettingsPermitted(2) ? transmitSettingsReason(2)
+                                                                     : holder;
+        };
+        hooks.pureSignalArmingPermitted = [this, otherHolder] {
+            return otherHolder().isEmpty() && pureSignalArmingPermitted();
+        };
+        hooks.pureSignalArmingReason = [this, otherHolder] {
+            const QString holder = otherHolder();
+            return holder.isEmpty() || !pureSignalArmingPermitted() ? pureSignalArmingReason()
+                                                                    : holder;
+        };
         hooks.remoteTransmitReason =
             tr("Remote transmit controls are not available from this Core.");
         // Desktop remote transmit: the Core's own reason when it gave one.
@@ -7181,6 +7243,10 @@ void MainWindow::buildUI()
         connect(m_radioModel, &RadioModel::txInhibitReasonChanged, this, refresh);
         // TX safety (2026-09-30): and a lost radio link, until it is back.
         connect(m_radioModel, &RadioModel::radioLinkDownChanged, this, refresh);
+        // Fix round 1 (minor 4): the link-down words follow the window's
+        // link to the Core and the Core's waiting for a radio.
+        connect(m_radioModel, &RadioModel::stationLinkStateChanged, this, refresh);
+        connect(m_radioModel, &RadioModel::stationRadioWaitingChanged, this, refresh);
         if (MoxController* mox = m_radioModel->moxController()) {
             connect(mox, &MoxController::moxStateChanged, this, refresh);
             connect(mox, &MoxController::moxRejected, this, refresh);
@@ -15068,8 +15134,15 @@ void MainWindow::abandonTxBadgeTake()
     m_txBadgeCommandId = 0;
     m_txBadgeGranted = false;
     m_txBadgeAwaitingHolder = false;
+    // Fix wave GUI-I1: the take question the badge opened goes with the
+    // take, so its Take can no longer send tx.take for a take abandoned.
+    // After the serial moves on, so its own rejected handler does nothing.
+    const QPointer<QDialog> ask = m_txBadgeAsk;
     m_txBadgeAsk.clear();
     ++m_txBadgeSerial;
+    if (ask && ask->isVisible()) {
+        ask->reject();
+    }
 }
 
 void MainWindow::refreshFlagTransmitGates()
@@ -16649,16 +16722,18 @@ void MainWindow::onConnectionStateChanged()
         // disconnect.  Re-evaluated via updatePsaIndicatorVisibility on
         // next reconnect (which now also checks PureSignal::isAutoCalEnabled).
         updatePsaIndicatorVisibility();
-        // Phase 3M-4 Task 13: hide PureSignalApplet + TxApplet [PS-A] on
-        // disconnect.  Same lifetime model as the PSA indicator above.
-        // Re-evaluation happens on next reconnect via the connected-branch
-        // gating block.
+        // Phase 3M-4 Task 13: hide PureSignalApplet on disconnect and push
+        // the unknown board to TxApplet [PS-A].  Same lifetime model as the
+        // PSA indicator above.  Re-evaluation happens on next reconnect via
+        // the connected-branch gating block.
         if (m_pureSignalApplet) {
             m_pureSignalApplet->setVisible(false);
         }
         if (m_txApplet) {
-            // Push the unknown-board defaults (hasPureSignal == false) so
-            // [PS-A] hides.  RadioModel::boardCapabilities() returns the
+            // Push the unknown-board defaults (hasPureSignal == false).
+            // Fix round 1 (minor 5): [PS-A] then shows disabled with its
+            // reason until the board is known; only a known board without
+            // PureSignal hides it.  RadioModel::boardCapabilities() returns the
             // unknown-board fallback when m_hardwareProfile.caps is null
             // (RadioModel.cpp:1016 [v2.10.3.13] equivalent).
             m_txApplet->setBoardCapabilities(m_radioModel->boardCapabilities());

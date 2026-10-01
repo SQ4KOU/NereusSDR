@@ -9,6 +9,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - Fix round 1 (minor 4): transmitLinkDownReason picks the
+//                 link-down words by state (the window's link to the Core,
+//                 the Core without a radio, the radio's link). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - RADE reason: RadeStartFault, beginRadeStart/endRadeStart,
 //                 refreshRadeReasons and radeStartReason, so a RADE slice
 //                 with no working decoder says why on its radeReason.
@@ -1648,6 +1652,17 @@ public:
     // restarts the window or the Core run, so a new radio starts unlocked.
     bool isRadioLinkDown() const { return m_radioLinkDown; }
     static QString radioLinkDownReason();
+    // TX-parity-linkdown (fix wave): the link-down lock transmitButtonsLocked,
+    // transmitLockCoversMox and transmitLockReasonAlongside use: a lost
+    // link here, or, on a remote window, a Core not connected to its radio.
+    bool transmitLinkDown() const;
+    // Fix round 1 (minor 4): the words for that lock, by state. A lost
+    // link here, or the Core's link to its radio lost or being rebuilt:
+    // radioLinkDownReason(). On a remote window whose own link to the Core
+    // is down: "Not connected to the Core." On a remote window whose Core
+    // waits for a radio (stationRadioWaiting): "The Core has no radio
+    // ready."
+    QString transmitLinkDownReason() const;
 
     // ── Remote-window parity Task 16 (R-R3-49, R-R3-21, R-R3-40) ──────────
     // Which noise reduction runs is nrCannotRunReason's (DspAssetService,
@@ -6048,6 +6063,9 @@ private slots:
     void onSliceBandChanged(SliceModel* source, NereusSDR::Band band);
 
 private:
+    // Fix round 1 (minor 4): a remote window whose own link to the Core
+    // is down (no link, or stationLinkReady() false).
+    bool remoteCoreLinkDown() const;
     void updateAutoAgc();
 
     // RADE end-of-over callsigns (MoxController::setEndOfOverTail). Starts
@@ -6056,6 +6074,10 @@ private:
     // FreeDV Reporter uses, on the TX-bound slice's RADE channel and arms
     // the TX worker's drained notice. False (no tail) otherwise.
     bool startRadeEndOfOverTail();
+    // Fix wave (RADE EOO): after the EOO's samples leave the channel (now,
+    // or once the decoder releases the codec): flush the 24 -> 48 kHz
+    // stage and arm the TX worker's drained notice.
+    void finishRadeEndOfOverTailQueue();
     // The TX worker's RADE connections: the path latch on MOX-on and the
     // tail's drained notice. Called where the worker is created.
     void wireTxWorkerRade(TxWorkerThread* worker);

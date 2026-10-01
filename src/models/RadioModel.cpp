@@ -14,6 +14,23 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - Fix round 1: a remote window's locked keys still name
+//                 receive only alongside the Core's own refusal while its
+//                 link is down. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-30 - Fix round 1 (minor 4): transmitLinkDownReason picks the
+//                 link-down words by state (the window's link to the Core,
+//                 the Core without a radio, the radio's link). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - TX-parity-linkdown (fix wave): a remote window whose Core
+//                 has no connection to the radio locks MOX, TUN and 2TONE
+//                 with the link-down reason (transmitLinkDown). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Fix wave (RADE EOO): startRadeEndOfOverTail finishes in
+//                 queueEndOfOver's callback (finishRadeEndOfOverTailQueue),
+//                 so a decoder holding the codec never blocks the main
+//                 thread. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-09-30 - RADE reason: a RADE slice with no working decoder (its
 //                 create or start failed, its model file is missing, its
 //                 receiver is not running, or a saved layout started RADE on
@@ -8009,11 +8026,24 @@ bool RadioModel::startRadeEndOfOverTail()
     const bool reporting = m_spotSourceHost
         && m_spotSourceHost->freedvReporterState() != SpotSourceHost::kOff;
     const QString callsign = reporting ? SpotSourceHost::freedvCallsign() : QString();
-    // queueEndOfOver emits txModemReady synchronously; wireRadeChannel's
-    // lambda queues the samples to the worker, so the notice below lands
-    // behind them.
-    if (!channel->queueEndOfOver(callsign)) {
-        return false;
+    // queueEndOfOver emits txModemReady (the speech recorded before the
+    // release, then the EOO) and runs the callback right after it, on this
+    // thread; wireRadeChannel's lambda queues the samples to the worker, so
+    // the notice below lands behind them. Fix wave (RADE EOO): with the
+    // decoder holding the codec this happens once it lets go, not here;
+    // MoxController's tail limit still bounds the wait.
+    QPointer<RadioModel> self(this);
+    return channel->queueEndOfOver(callsign, [self]() {
+        if (self) {
+            self->finishRadeEndOfOverTailQueue();
+        }
+    });
+}
+
+void RadioModel::finishRadeEndOfOverTailQueue()
+{
+    if (!m_txWorker) {
+        return;
     }
     // Review Minor 1: the 24 -> 48 kHz stage holds back its latency too
     // (about 70 ms); push that much silence through it so the worker gets
@@ -8030,7 +8060,6 @@ bool RadioModel::startRadeEndOfOverTail()
     }
     QMetaObject::invokeMethod(m_txWorker.get(), "armRadeAudioDrainedNotice",
                               Qt::QueuedConnection);
-    return true;
 }
 
 void RadioModel::dropRadeTxAudio()
@@ -27416,12 +27445,50 @@ QString RadioModel::rxOnlyReasonAlongside(const QString& otherReason) const
 
 bool RadioModel::transmitButtonsLocked() const
 {
-    return m_radioLinkDown || m_rxOnlyEffective || isTxInhibited();
+    return transmitLinkDown() || m_rxOnlyEffective || isTxInhibited();
+}
+
+bool RadioModel::transmitLinkDown() const
+{
+    // TX-parity-linkdown (fix wave): a remote window locks MOX, TUN and
+    // 2TONE while its Core has no connection to the radio (the Core's
+    // mirrored `connected`), as the Core's own window does while its link
+    // is down. From Thetis console.cs:27488-27493 [v2.10.3.15]:
+    //   chkMOX.Checked = false;
+    //   chkMOX.Enabled = false;
+    //   chkTUN.Checked = false;
+    //   chkTUN.Enabled = false;
+    //   chk2TONE.Checked = false;  // MW0LGE_21a
+    //   chk2TONE.Enabled = false;
+    // chkVOX is left alone there; transmitLockCoversVox does not use this.
+    return m_radioLinkDown || (m_role == Role::Remote && !isConnected());
 }
 
 QString RadioModel::radioLinkDownReason()
 {
     return TxRefusals::radioLinkDown().text;
+}
+
+bool RadioModel::remoteCoreLinkDown() const
+{
+    return m_role == Role::Remote && (m_station == nullptr || !m_station->stationLinkReady());
+}
+
+QString RadioModel::transmitLinkDownReason() const
+{
+    // Fix round 1 (minor 4): the reason follows the state. A lost link
+    // here, or the Core's own link to its radio lost or being rebuilt
+    // (the Core reports no radio and no waiting reason), is the radio's.
+    if (m_radioLinkDown) {
+        return radioLinkDownReason();
+    }
+    if (remoteCoreLinkDown()) {
+        return QStringLiteral("Not connected to the Core.");
+    }
+    if (m_role == Role::Remote && !isConnected() && !m_stationRadioWaiting.isEmpty()) {
+        return QStringLiteral("The Core has no radio ready.");
+    }
+    return radioLinkDownReason();
 }
 
 bool RadioModel::transmitLockCoversVox() const
@@ -27438,7 +27505,7 @@ bool RadioModel::transmitLockCoversMox() const
     // TX safety (2026-09-30): a lost link disables MOX in every mode.
     //   From Thetis console.cs:27489 [v2.10.3.15]
     //     chkMOX.Enabled = false;
-    if (m_radioLinkDown) {
+    if (transmitLinkDown()) {
         return true;
     }
     if (m_rxOnlyEffective) {
@@ -27463,6 +27530,23 @@ QString RadioModel::transmitLockReasonAlongside(const QString& otherReason) cons
     // matters until it is back.
     if (m_radioLinkDown) {
         return radioLinkDownReason();
+    }
+    // TX-parity-linkdown (fix wave): on a remote window the Core's own
+    // refusal (no permission confirmed, receive only) says why first, as
+    // the container's reasons always have; the link-down reason otherwise.
+    // Fix round 1 (minor 4): a window whose link to the Core has closed or
+    // is not yet up says so alone; its other reasons are about a Core it
+    // cannot reach. Otherwise the link-down words follow the state.
+    if (transmitLinkDown() && m_station != nullptr && remoteCoreLinkDown()) {
+        return transmitLinkDownReason();
+    }
+    if (transmitLinkDown()) {
+        if (otherReason.isEmpty()) {
+            return transmitLinkDownReason();
+        }
+        // Fix round 1: and receive only alongside it, as before the
+        // link-down lock (a window does not lose a reason it showed).
+        return m_rxOnlyEffective ? rxOnlyReasonAlongside(otherReason) : otherReason;
     }
     if (m_rxOnlyEffective) {
         return rxOnlyReasonAlongside(otherReason);

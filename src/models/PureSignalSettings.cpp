@@ -14,6 +14,21 @@ namespace NereusSDR {
 
 namespace {
 
+// Fix wave RD-I7: Thetis udPSMoxDelay's range.
+// From Thetis PSForm.Designer.cs:346-372 [v2.10.3.15]: DecimalPlaces 1,
+// Increment 0.1, Maximum 1.0, Minimum 0.1, Value 0.2.
+constexpr double kMoxDelayMinSeconds = 0.1;
+constexpr double kMoxDelayMaxSeconds = 1.0;
+
+// Before the fix wave the auto-calibrate preference was saved under a
+// camelCase leaf; it is still read so a saved preference survives.
+constexpr auto kLegacyAutoCalLeaf = "autoCalEnabled";
+
+QString settingsBool(bool value)
+{
+    return value ? QStringLiteral("True") : QStringLiteral("False");
+}
+
 bool parseStoredBool(const QVariant& stored, bool* value)
 {
     const QString text = stored.toString().trimmed().toLower();
@@ -37,8 +52,8 @@ bool PureSignalSettingsValues::isValid(QString* reason) const
         return false;
     };
     if (!std::isfinite(moxDelaySeconds)
-        || moxDelaySeconds < 0.1 || moxDelaySeconds > 10.0) {
-        return reject(QStringLiteral("MOX delay must be finite and within 0.1 to 10 seconds."));
+        || moxDelaySeconds < kMoxDelayMinSeconds || moxDelaySeconds > kMoxDelayMaxSeconds) {
+        return reject(QStringLiteral("MOX delay must be finite and within 0.1 to 1 seconds."));
     }
     if (!std::isfinite(loopDelaySeconds)
         || loopDelaySeconds < 0.0 || loopDelaySeconds > 100.0) {
@@ -223,7 +238,11 @@ bool PureSignalSettings::load()
         else rejected.append(leaf);
     };
 
-    restoreBool(QStringLiteral("autoCalEnabled"), restored.autoCalEnabled);
+    if (app.contains(prefix + QStringLiteral("AutoCalEnabled"))) {
+        restoreBool(QStringLiteral("AutoCalEnabled"), restored.autoCalEnabled);
+    } else {
+        restoreBool(QString::fromLatin1(kLegacyAutoCalLeaf), restored.autoCalEnabled);
+    }
     restoreBool(QStringLiteral("RunCalibrationProcessing"),
                 restored.runCalibrationProcessing);
     restoreBool(QStringLiteral("AutoAttenuate"), restored.autoAttenuate);
@@ -267,17 +286,24 @@ bool PureSignalSettings::save() const
     const QString prefix = settingsPrefix();
     if (prefix.isEmpty() || !m_values.isValid()) return false;
     auto& app = AppSettings::instance();
-    app.setValue(prefix + QStringLiteral("autoCalEnabled"), m_values.autoCalEnabled);
+    // PascalCase keys and "True"/"False" booleans, as every AppSettings
+    // key is (CLAUDE.md, Settings). The old camelCase leaf goes once the
+    // new one is written.
+    app.setValue(prefix + QStringLiteral("AutoCalEnabled"),
+                 settingsBool(m_values.autoCalEnabled));
+    app.remove(prefix + QString::fromLatin1(kLegacyAutoCalLeaf));
     app.setValue(prefix + QStringLiteral("RunCalibrationProcessing"),
-                 m_values.runCalibrationProcessing);
-    app.setValue(prefix + QStringLiteral("AutoAttenuate"), m_values.autoAttenuate);
-    app.setValue(prefix + QStringLiteral("QuickAttenuate"), m_values.quickAttenuate);
+                 settingsBool(m_values.runCalibrationProcessing));
+    app.setValue(prefix + QStringLiteral("AutoAttenuate"),
+                 settingsBool(m_values.autoAttenuate));
+    app.setValue(prefix + QStringLiteral("QuickAttenuate"),
+                 settingsBool(m_values.quickAttenuate));
     app.setValue(prefix + QStringLiteral("MoxDelaySeconds"), m_values.moxDelaySeconds);
     app.setValue(prefix + QStringLiteral("LoopDelaySeconds"), m_values.loopDelaySeconds);
     app.setValue(prefix + QStringLiteral("RequestedTxDelayNs"),
                  m_values.requestedTxDelayNs);
     app.setValue(prefix + QStringLiteral("HardwarePeakOverrideEnabled"),
-                 m_values.hardwarePeakOverrideEnabled);
+                 settingsBool(m_values.hardwarePeakOverrideEnabled));
     app.setValue(prefix + QStringLiteral("HardwarePeakOverride"),
                  m_values.hardwarePeakOverride);
     return true;
