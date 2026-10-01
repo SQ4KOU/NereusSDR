@@ -35,9 +35,12 @@
 //   keepalives and this watchdog, is never taken for a quiet link. The
 //   watchdog cannot run during such a stall: a link that went quiet in it
 //   is caught when the stall ends, as the 400 ms are counted from the last
-//   keepalive's receipt. A check that fires late (behind a stall) first
-//   lets the keepalives waiting behind it in, one turn of the event loop,
-//   and then judges by when they came.
+//   keepalive's receipt. A check that fires late (more than
+//   kLateCheckSlackMs behind its time: a stall) first lets the keepalives
+//   waiting behind it in, one turn of the event loop, and then judges by
+//   when they came. That turn is given once for each device's overdue
+//   period (fix round 2): the check after it judges the device, whatever
+//   else rescheduled the timer in between.
 // - More than 400 ms without one: stop(), which the Core makes StopAllTx
 //   with "The link to <device> went quiet, so the Core stopped
 //   transmitting." and the VOX that device armed turned off. The device is
@@ -70,6 +73,11 @@
 //               receipt (keepalive's ageMs), and a late check lets the
 //               waiting keepalives in first. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX mic thread fix round 2: the late check's turn is one
+//               per device per overdue period (another device's keepalives
+//               can no longer hold a dead link's key), and only for a check
+//               more than kLateCheckSlackMs late. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -92,6 +100,14 @@ public:
     static constexpr int kKeepaliveIntervalMs = 100;
     /// How long without a keepalive before the Core stops transmitting.
     static constexpr int kLinkLossDeadlineMs = 400;
+    /// TX mic thread fix round 2: how late a check may fire and still be on
+    /// time. The check is a precise timer (about 1 ms of slack) and the
+    /// media transports hand over what they received every 2 ms, so a
+    /// keepalive can wait up to 3 ms behind an event loop that is merely
+    /// busy; a check later than 5 ms ran behind a stall, the only case
+    /// whose waiting keepalives get a turn before the judgement. The
+    /// bench's shortest logged stall was 30 ms, far above it.
+    static constexpr int kLateCheckSlackMs = 5;
     /// A client's first reconnect after a loss (the desktop's backoff unit,
     /// StationClient::kDefaultReconnectBackoffUnitMs).
     static constexpr int kFirstReconnectMs = 1000;
@@ -194,6 +210,11 @@ private:
         /// The last keepalive that counted, or when watching began.
         qint64 lastMs{0};
         quint64 lastSequence{0};
+        // TX mic thread fix round 2: this overdue period's one turn for
+        // the keepalives behind a stall has been given; the next check
+        // judges. Cleared when a keepalive brings the device back within
+        // its deadline.
+        bool lateTurnGiven{false};
     };
 
     void update(const QByteArray& deviceId, bool keyed, bool keyedChanged, quint32 epoch,
@@ -204,10 +225,8 @@ private:
 
     Hooks m_hooks;
     QHash<QByteArray, Watch> m_devices;
-    // TX mic thread: when the check timer was asked to fire, and whether
-    // this check already gave the waiting keepalives their turn.
+    // TX mic thread: when the check timer was asked to fire.
     qint64 m_checkDueMs{-1};
-    bool m_lateCheckDeferred{false};
 };
 
 } // namespace NereusSDR

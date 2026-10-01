@@ -32,6 +32,11 @@
 //               keepalive, or at the end of a stall that outlasts that. By
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-10-01: TX mic thread fix round 2: another device's keepalives
+//               arriving on every turn after a stall cannot hold a dead
+//               link's key past one turn, and a check only a few ms late
+//               is judged at once. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/safety/RemoteTxWatchdog.h"
@@ -118,6 +123,9 @@ private slots:
     void aStallWithKeepalivesArrivingKeepsTheKey_data();
     void aStallWithKeepalivesArrivingKeepsTheKey();
     void aSilentLinkStillStopsInTime();
+    void anotherDevicesKeepalivesCannotHoldADeadLinksKey_data();
+    void anotherDevicesKeepalivesCannotHoldADeadLinksKey();
+    void aCheckOnlySlightlyLateJudgesAtOnce();
 };
 
 void TestRemoteTxWatchdog::theNumbersAreStatedTogether()
@@ -405,6 +413,93 @@ void TestRemoteTxWatchdog::aSilentLinkStillStopsInTime()
         // 650 ms and handed over after the stop, does not bring it back.
         QVERIFY(!rig.watchdog.keepalive(kPhone, 2, 3, RemoteTxWatchdog::Path::TxChannel, 50));
         QCOMPARE(rig.stops.size(), size_t(1));
+    }
+}
+
+// TX mic thread fix round 2 (the reviewer's harness): both links last
+// heard at 100 ms, then an owner stall to 700 ms. The phone's link died
+// in it; the tablet's is alive, its keepalives received during the stall
+// are handed over at its end and a new one arrives on every turn of the
+// event loop after it, each rescheduling the check. The late check gives
+// the waiting keepalives their one turn, and the phone stops by the stall's
+// end plus one turn, not never. With 10 ms turns every later check fires
+// more than kLateCheckSlackMs late too.
+void TestRemoteTxWatchdog::anotherDevicesKeepalivesCannotHoldADeadLinksKey_data()
+{
+    QTest::addColumn<qint64>("turnMs");
+    QTest::newRow("2 ms turns") << qint64(2);
+    QTest::newRow("10 ms turns") << qint64(10);
+}
+
+void TestRemoteTxWatchdog::anotherDevicesKeepalivesCannotHoldADeadLinksKey()
+{
+    QFETCH(qint64, turnMs);
+    Rig rig;
+    rig.watchdog.setKeyed(kPhone, true, 3);
+    rig.watchdog.setKeyed(kTablet, true, 5);
+    rig.advanceTo(100);
+    QVERIFY(rig.watchdog.keepalive(kPhone, 1, 3, RemoteTxWatchdog::Path::TxChannel));
+    QVERIFY(rig.watchdog.keepalive(kTablet, 1, 5, RemoteTxWatchdog::Path::TxChannel));
+    QCOMPARE(rig.timerDue, std::optional<qint64>(501));
+
+    // The stall: 100 to 700. The check due at 501 fires at its end.
+    constexpr qint64 kStallEndMs = 700;
+    rig.nowMs = kStallEndMs;
+    rig.timerDue.reset();
+    rig.watchdog.onTimer();
+    QVERIFY(rig.stops.empty());
+    quint64 tabletSequence = 1;
+    // The tablet's keepalives received during the stall, heard at receipt.
+    for (qint64 received = 200; received <= 600; received += 100) {
+        QVERIFY(rig.watchdog.keepalive(kTablet, ++tabletSequence, 5, RemoteTxWatchdog::Path::TxChannel,
+                                       kStallEndMs - received));
+    }
+    for (int turn = 0; turn < 1000 && rig.stops.empty(); ++turn) {
+        rig.nowMs += turnMs;
+        if (rig.timerDue && *rig.timerDue <= rig.nowMs) {
+            rig.timerDue.reset();
+            rig.watchdog.onTimer();
+        }
+        // The tablet's keepalive comes in on every turn.
+        QVERIFY(rig.watchdog.keepalive(kTablet, ++tabletSequence, 5, RemoteTxWatchdog::Path::TxChannel));
+    }
+    QCOMPARE(rig.stops.size(), size_t(1));
+    QCOMPARE(rig.stops.front().device, kPhone);
+    QVERIFY2(rig.stops.front().atMs <= kStallEndMs + turnMs,
+             qPrintable(QStringLiteral("stopped at %1").arg(rig.stops.front().atMs)));
+    QVERIFY(!rig.watchdog.isWatching(kPhone));
+    QVERIFY(rig.watchdog.isWatching(kTablet));
+}
+
+// TX mic thread fix round 2: a check within kLateCheckSlackMs of its time
+// is the timer's ordinary slack, not a stall, and judges at once; one more
+// ms and it is late and gives the waiting keepalives their turn first.
+void TestRemoteTxWatchdog::aCheckOnlySlightlyLateJudgesAtOnce()
+{
+    static_assert(RemoteTxWatchdog::kLateCheckSlackMs == 5);
+    {
+        Rig rig;
+        rig.watchdog.setKeyed(kPhone, true, 3);
+        rig.advanceTo(100);
+        QVERIFY(rig.watchdog.keepalive(kPhone, 1, 3, RemoteTxWatchdog::Path::TxChannel));
+        QCOMPARE(rig.timerDue, std::optional<qint64>(501));
+        rig.nowMs = 501 + RemoteTxWatchdog::kLateCheckSlackMs;
+        rig.watchdog.onTimer();
+        QCOMPARE(rig.stops.size(), size_t(1));
+        QCOMPARE(rig.stops.front().atMs, 506);
+    }
+    {
+        Rig rig;
+        rig.watchdog.setKeyed(kPhone, true, 3);
+        rig.advanceTo(100);
+        QVERIFY(rig.watchdog.keepalive(kPhone, 1, 3, RemoteTxWatchdog::Path::TxChannel));
+        rig.nowMs = 501 + RemoteTxWatchdog::kLateCheckSlackMs + 1;
+        rig.watchdog.onTimer();
+        QVERIFY(rig.stops.empty());
+        QCOMPARE(rig.timerDue, std::optional<qint64>(507));
+        rig.advanceTo(507);
+        QCOMPARE(rig.stops.size(), size_t(1));
+        QCOMPARE(rig.stops.front().atMs, 507);
     }
 }
 
