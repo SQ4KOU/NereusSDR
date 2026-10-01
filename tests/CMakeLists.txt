@@ -7880,6 +7880,10 @@ nereus_add_test(tst_data_channel_transport
     EXTRA_LABELS session)
 target_compile_definitions(tst_data_channel_transport PRIVATE
     NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
+# A lingering close's context object is deleted by every application's
+# teardown, including one closed during that teardown, and nothing is left
+# for the next application (three applications in one process).
+nereus_add_test(tst_data_channel_linger_teardown EXTRA_LABELS session)
 # iPhone app plan Task 27: one end of a connection through the remote
 # access service, for the traversal harness below. Not linked with the test
 # sandbox: it reaches a service in another network namespace, which a

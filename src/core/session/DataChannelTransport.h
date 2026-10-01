@@ -74,6 +74,8 @@
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27: separate bounded transmit-watch DTLS channel; AI-assisted
 //               implementation via OpenAI Codex for J.J. Boyd (KG4VCF).
+//   2026-10-01: lingerTargetExistsForTest(). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -268,6 +270,10 @@ public:
     using SelectedPathOverride =
         std::function<std::optional<MediaIcePath>(const DataChannelTransport*)>;
     static void setSelectedPathOverrideForTest(SelectedPathOverride override);
+    /// Test seam: whether the object a lingering close's deadline timers
+    /// live on exists. The application's teardown deletes it; one left
+    /// after an application has gone is a leak.
+    static bool lingerTargetExistsForTest();
     /// The ICE settings it was started with, the relay included once known.
     std::optional<IceConfiguration> iceConfiguration() const { return m_options.ice; }
     /// The ICE settings the session's media connection uses (the Task 28
