@@ -242,6 +242,9 @@
 //   2026-09-30  J.J. Boyd / KG4VCF  RADE reason: radeStartReason (a
 //                                    slice's radeReason) is scanned.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-01  J.J. Boyd / KG4VCF  DaemonApp's radioChangeStoppedReason
+//                                    is scanned.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -1213,10 +1216,12 @@ const QList<ReasonSource>& reasonSources()
         // the other app's network address (WebSocketTransport::peerDescription).
         // The operator's ruling of 2026-09-26: the session.end every app
         // gets when the Core restarts its run on another radio; the radio's
-        // name as it reports itself.
+        // name as it reports itself. The chooser's refusal when the run
+        // stops before the change could run (radioChangeStoppedReason).
         {"src/core/daemon/DaemonApp.cpp",
-         {QStringLiteral("radioChangeReason"), QStringLiteral("tryCompleteStationRelease")}, {}, 2,
-         {QStringLiteral("radioName")}},
+         {QStringLiteral("radioChangeReason"), QStringLiteral("radioChangeStoppedReason"),
+          QStringLiteral("tryCompleteStationRelease")},
+         {}, 3, {QStringLiteral("radioName")}},
         {"src/core/session/SessionEndReasons.cpp",
          {QStringLiteral("takenOver"), QStringLiteral("versionRefused")}, {}, 4,
          {QStringLiteral("coreNewest"), QStringLiteral("appNewest"), QStringLiteral("update"),

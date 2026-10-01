@@ -148,6 +148,9 @@
 //               finished stop or station release stays finished; the
 //               chooser is answered refused and the choice is dropped.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: radioChangeStoppedReason's words match the Core's other
+//               radio change message. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -1295,7 +1298,7 @@ QString DaemonApp::radioChangeReason(const QString& radioName)
 
 QString DaemonApp::radioChangeStoppedReason()
 {
-    return QStringLiteral("The Core stopped its radio before the change could run.");
+    return QStringLiteral("The Core stopped its radio before it could switch.");
 }
 
 void DaemonApp::stopRadioRecovery()
