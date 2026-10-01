@@ -929,6 +929,104 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!mox.isManualKey(), 2000);
     }
 
+    // ── Fix wave RD-I4: never committed while unkeyed ──────────────────────
+    // The holder gate admits the start, then takes transmit at the key
+    // itself (a take answers without moxRejected). Thetis setup.cs:11165-
+    // 11170 [v2.10.3.15]: if (!console.MOX) { chkTestIMD.Checked = false;
+    // return; }
+    void setActive_keyTakenWithoutRefusal_doesNotCommit()
+    {
+        TransmitModel tx;
+        tx.setTwoTonePulsed(false);
+        tx.setTwoToneFreq2Delay(0);
+        RecordingTxChannel tc(kTxChannelId);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        int asked = 0;
+        mox.setKeyingGate([&asked](PttMode, const KeyerIdentity&) {
+            KeyingAnswer answer;
+            // admitKey asks first; the key itself is taken.
+            answer.verdict = (asked++ == 0) ? KeyingVerdict::Admit : KeyingVerdict::Take;
+            return answer;
+        });
+        SliceModel slice;
+
+        TwoToneController ctrl;
+        ctrl.setTransmitModel(&tx);
+        ctrl.setTxChannel(&tc);
+        ctrl.setMoxController(&mox);
+        ctrl.setSliceModel(&slice);
+        ctrl.setSettleDelaysMs(0, 0);
+        QSignalSpy activeSpy(&ctrl, &TwoToneController::twoToneActiveChanged);
+
+        ctrl.setActive(true);
+        for (int i = 0; i < 10; ++i) QCoreApplication::processEvents();
+
+        QCOMPARE(asked, 2);
+        QVERIFY(!mox.isMox());
+        QVERIFY2(!ctrl.isActive(), "two-tone committed as active while unkeyed");
+        QVERIFY(!ctrl.isActivationInFlight());
+        QVERIFY(!tx.isTwoToneActive());
+        QVERIFY(!activeSpy.isEmpty());
+        QCOMPARE(activeSpy.last().at(0).toBool(), false);
+        QCOMPARE(tc.calls.last().method, QStringLiteral("setTxPostGenRun"));
+        QCOMPARE(tc.calls.last().arg1, 0.0);
+        QTRY_VERIFY_WITH_TIMEOUT(!mox.isManualKey(), 2000);
+    }
+
+    // ── Fix wave RD-I4: the stop releases only its own device's key ────────
+    // After a take another device may hold the key when the station's
+    // two-tone stops; console.MOX = false there must not unkey it.
+    void setActive_stop_leavesAnotherDevicesKey_data()
+    {
+        QTest::addColumn<bool>("powerOff");
+        QTest::newRow("stop") << false;
+        QTest::newRow("power off") << true;
+    }
+
+    void setActive_stop_leavesAnotherDevicesKey()
+    {
+        QFETCH(bool, powerOff);
+        TransmitModel tx;
+        RecordingTxChannel tc(kTxChannelId);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        SliceModel slice;
+
+        TwoToneController ctrl;
+        ctrl.setTransmitModel(&tx);
+        ctrl.setTxChannel(&tc);
+        ctrl.setMoxController(&mox);
+        ctrl.setSliceModel(&slice);
+        ctrl.setSettleDelaysMs(0, 0);
+
+        ctrl.setActive(true);
+        QCoreApplication::processEvents();
+        QVERIFY(ctrl.isActive());
+        QVERIFY(mox.isMox());
+
+        // The station's key ends (another device took transmit) and that
+        // device keys.
+        mox.setMox(false);
+        KeyerIdentity phone;
+        phone.deviceId = QByteArray("phone");
+        mox.setMox(true, phone);
+        QVERIFY(mox.isMox());
+        QCOMPARE(mox.currentKeyer().deviceId, QByteArray("phone"));
+
+        if (powerOff) {
+            ctrl.stopNow();
+        } else {
+            ctrl.setActive(false);
+        }
+        for (int i = 0; i < 10; ++i) QCoreApplication::processEvents();
+        QTRY_VERIFY_WITH_TIMEOUT(!ctrl.isActive(), 2000);
+        QVERIFY2(mox.isMox(), "the two-tone stop unkeyed another device's key");
+        QCOMPARE(mox.currentKeyer().deviceId, QByteArray("phone"));
+        mox.setMox(false, phone);
+        QVERIFY(!mox.isMox());
+    }
+
     // ── Idempotent: setActive(true) twice is safe ────────────────────────
     void setActive_idempotent_doesNotRepeat()
     {

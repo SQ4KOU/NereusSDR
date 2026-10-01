@@ -311,9 +311,7 @@ void TwoToneController::setActive(bool on)
         m_tuneReleaseSettleTimer.stop();
         m_freq2DelayTimer.stop();
 
-        if (m_moxController) {
-            m_moxController->setMox(false);
-        }
+        releaseOwnKey();
         // From Thetis setup.cs:11151-11152 [v2.10.3.13]:
         //   console.MOX = false;
         //   await Task.Delay(200); // MW0LGE_21a
@@ -348,10 +346,19 @@ void TwoToneController::stopNow()
     m_freq2DelayTimer.stop();
     m_deactivationSettleTimer.stop();
 
-    if (m_moxController && m_moxController->isMox()) {
-        m_moxController->setMox(false);
-    }
+    releaseOwnKey();
     continueDeactivation();
+}
+
+void TwoToneController::releaseOwnKey()
+{
+    // Fix wave RD-I4: console.MOX = false ends this two-tone's key. With
+    // several devices one may have keyed since (after a take), and a
+    // bare setMox(false) would unkey it; the keyer overload releases only
+    // a key of this two-tone's device.
+    if (m_moxController && m_moxController->isMox()) {
+        m_moxController->setMox(false, m_keyer);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -641,6 +648,19 @@ void TwoToneController::continueActivation()
         // onMoxRejected fired synchronously; nothing more to do.
         return;
     }
+    // Fix wave RD-I4: a key the holder gate took or refused without a
+    // word (moxRejected is not emitted then) leaves MOX off, or on for
+    // another device. Thetis setup.cs:11165-11170 [v2.10.3.15]:
+    //   if (!console.MOX)
+    //   {
+    //       chkTestIMD.Checked = false;
+    //       return;
+    //   }
+    if (!m_moxController->isMox()
+        || m_moxController->currentKeyer().deviceId != m_keyer.deviceId) {
+        abandonUnkeyedStart();
+        return;
+    }
 
     // ── Stage 9: Freq2Delay deferred Mag2.  From Thetis setup.cs:11134-11142
     //     [v2.10.3.13]:
@@ -811,7 +831,11 @@ void TwoToneController::onMoxRejected(const QString& reason)
     if (!m_keyingMox) {
         return;
     }
+    abandonUnkeyedStart();
+}
 
+void TwoToneController::abandonUnkeyedStart()
+{
     // Stop any in-flight activation timers.
     m_moxReleaseSettleTimer.stop();
     m_tuneReleaseSettleTimer.stop();
