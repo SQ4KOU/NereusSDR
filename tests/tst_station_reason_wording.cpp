@@ -1346,6 +1346,9 @@ const QList<ReasonSource>& reasonSources()
           // beginTgxlAutotune's transmit block, with its own literal
           // alongside (both scanned: MoxController.cpp and here).
           QStringLiteral("transmitBlockReasonAlongside(remoteReason)")}},
+        // Tune-ended lane: the words a device's Tuner Genius autotune that
+        // ended before its carrier keyed is told (notice tuneEnded).
+        {"src/models/RadioModel.cpp", {QStringLiteral("tunerTuneEndedReason")}, {}, 6},
         // A receiver count, and a frequency in MHz.
         {"src/core/SliceStreamAllocator.cpp", {}, {}, 4,
          {QStringLiteral("count"),

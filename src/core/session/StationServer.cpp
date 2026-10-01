@@ -4972,7 +4972,9 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         // for ends with its session, keyed or still waiting for the
         // amplifier, so it never keys for a device that is gone.
         if (m_radioModel) {
-            m_radioModel->cancelTgxlAutotuneFor(sessionDevice);
+            m_radioModel->cancelTgxlAutotuneFor(
+                sessionDevice,
+                RadioModel::tunerTuneEndedReason(RadioModel::TunerTuneEnd::LinkLost));
             if (!self) { return; }
         }
         if (leaving || sessionDevice.startsWith("token:")) {

@@ -40,6 +40,11 @@
 //   2026-10-01: TX diagnostics lane: the keying lines name the device by
 //               its id in hex, as the unkey line does, not its raw bytes.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Tune-ended lane: a device's tunerTune that ends before its
+//               carrier keyed is always told (the path's reason, else a
+//               backstop), except when the device's own stop ended it; a
+//               take's end names the take. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RemoteKeying.h"
@@ -51,6 +56,8 @@
 #include "core/safety/TransmitHolder.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+
+#include <QScopedValueRollback>
 
 #include <limits>
 #include <memory>
@@ -159,8 +166,18 @@ RemoteKeying::RemoteKeying(RadioModel* model, TransmitHolder* holder, QObject* p
             if (!deviceId.isEmpty() && m_pending.has_value() && m_pending->deviceId == deviceId
                 && !moxKeyedFor(deviceId)) {
                 m_pending.reset();
-                if (!unkeyedReason.isEmpty()) {
-                    emit tunerTuneEndedUnkeyed(deviceId, unkeyedReason);
+                // Tune-ended lane: every such end is told, so the device
+                // never shows a tune that is over; its own stop is not (its
+                // answer says it). An end with no reason gets the backstop.
+                if (m_endingOwnAutotune != deviceId) {
+                    QString reason = unkeyedReason;
+                    if (reason.isEmpty()) {
+                        qCWarning(lcDsp) << "Tuner autotune of" << deviceId.toHex().constData()
+                                         << "ended before keying with no reason given";
+                        reason = RadioModel::tunerTuneEndedReason(
+                            RadioModel::TunerTuneEnd::NoReasonGiven);
+                    }
+                    emit tunerTuneEndedUnkeyed(deviceId, reason);
                 }
                 emit pendingKeyEnded();
             }
@@ -317,7 +334,9 @@ void RemoteKeying::endAutotuneFor(const QByteArray& deviceId)
     if (!autotuneRunningFor(deviceId)) {
         return;
     }
-    m_model->cancelTgxlAutotuneFor(deviceId);
+    // Tune-ended lane: the device is told its tune stopped for the take.
+    m_model->cancelTgxlAutotuneFor(
+        deviceId, RadioModel::tunerTuneEndedReason(RadioModel::TunerTuneEnd::TransmitTaken));
     if (m_pending.has_value() && m_pending->deviceId == deviceId) {
         m_pending.reset();
     }
@@ -566,6 +585,8 @@ RemoteKeying::Result RemoteKeying::tune(const Command& command)
         // Task 77: TUNE off also ends this device's Tuner Genius cycle,
         // keyed or still waiting for the amplifier.
         if (autotuneRunningFor(command.deviceId) && !moxKeyedFor(command.deviceId)) {
+            // Tune-ended lane: the device's own stop; its answer tells it.
+            const QScopedValueRollback<QByteArray> own(m_endingOwnAutotune, command.deviceId);
             m_model->cancelTgxlAutotuneFor(command.deviceId);
             if (m_pending.has_value() && m_pending->deviceId == command.deviceId) {
                 m_pending.reset();
@@ -665,6 +686,8 @@ RemoteKeying::Result RemoteKeying::tunerTune(const Command& command)
     // watchdog watches it as any key of the device's.
     if (!command.on) {
         if (autotuneRunningFor(command.deviceId)) {
+            // Tune-ended lane: the device's own stop; its answer tells it.
+            const QScopedValueRollback<QByteArray> own(m_endingOwnAutotune, command.deviceId);
             m_model->cancelTgxlAutotuneFor(command.deviceId);
             if (m_pending.has_value() && m_pending->deviceId == command.deviceId) {
                 m_pending.reset();
