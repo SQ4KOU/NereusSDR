@@ -213,6 +213,9 @@ public:
     bool tgxlWhole{false};
     QStringList tgxlRequests;
     bool tgxlControlAvailable() const override { return tgxlControl; }
+    // Task 77: the Core runs TUNE for this window (tx.tunerTune).
+    bool autotune{false};
+    bool tgxlAutotuneAvailable() const override { return autotune; }
     bool tgxlOperateAppliesWhole() const override { return tgxlControl && tgxlWhole; }
     CommandOutcome requestTgxlAntenna(int port) override
     {
@@ -615,6 +618,7 @@ private slots:
     void advancedAndInterlockEntriesOpenTheirFourO3ATab();
     void olderCoreLeavesTheTunerSwitchesGreyed();
     void aWindowThatMayTransmitNeverFallsBackToItsOwnTuner();
+    void remoteTuneWaitsWhileTheCoresTuneIsOn();
     void operateFromStandbyIsOneRequestOnACoreThatAppliesItWhole();
     void remoteWindowOperatesTheAmpThroughTheCore();
     void remoteWindowScansAndKeepsTheAmpAddressOnTheCore();
@@ -3688,6 +3692,41 @@ void RemotePeripheralsTest::aWindowThatMayTransmitNeverFallsBackToItsOwnTuner()
         QCOMPARE(applet.relayBarForTesting(relay)->toolTip(), TunerApplet::noRemoteRelayReason());
     }
     QVERIFY(link.tgxlRequests.isEmpty());
+    model.detachStation();
+}
+
+// Fix round 1 (minor 1): in a remote window on a Core that runs TUNE for
+// it, the Core's TUN on leaves TUNE disabled with the on-air reason, and a
+// click that gets through anyway starts nothing here (no local cycle, no
+// request) and puts the reason back.
+void RemotePeripheralsTest::remoteTuneWaitsWhileTheCoresTuneIsOn()
+{
+    RadioModel model(RadioModel::Role::Remote);
+    RecordingTgxlLink link;
+    link.linkReady = true;
+    link.tgxlControl = true;
+    link.autotune = true;
+    model.attachStation(&link);
+    TunerApplet applet(&model, model.tunerModel());
+    applet.setTransmitPermitted(true, QString());
+    model.reportStationLinkStateChanged();
+    QVERIFY(applet.tuneButtonForTesting()->isEnabled());
+
+    model.transmitModel().setTune(true);   // the Core's TUN, mirrored
+    NEREUS_TRY_VERIFY(model.isCoreOnAir());
+    NEREUS_TRY_VERIFY(!applet.tuneButtonForTesting()->isEnabled());
+    QCOMPARE(applet.tuneButtonForTesting()->toolTip(), TunerApplet::onAirReason());
+
+    applet.tuneButtonForTesting()->setEnabled(true);   // gets through anyway
+    emit applet.tuneButtonForTesting()->clicked();
+    QVERIFY(!model.isTgxlAutotuneInProgress());
+    QVERIFY(!model.isTune());
+    QVERIFY(link.tgxlRequests.isEmpty());
+    QVERIFY(!applet.tuneButtonForTesting()->isEnabled());
+    QCOMPARE(applet.tuneButtonForTesting()->toolTip(), TunerApplet::onAirReason());
+
+    model.transmitModel().setTune(false);
+    NEREUS_TRY_VERIFY(applet.tuneButtonForTesting()->isEnabled());
     model.detachStation();
 }
 

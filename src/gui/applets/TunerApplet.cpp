@@ -61,6 +61,13 @@
 //                 R-IOS-13): TUNE waits on the air with the reason, as
 //                 OPERATE and ANT do, by J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: Fix wave GUI-I4, GUI-M3, GUI-M4: a remote window never
+//               falls back to this computer's own Tuner Genius (TUNE,
+//               ANT, OPERATE, relays wait with the reason); the context
+//               menu shows its tooltips; plain stale label. Fix round 1:
+//               a remote TUNE click while the Core is on the air starts
+//               nothing and puts the reason back. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TunerApplet.h"
@@ -254,6 +261,14 @@ void TunerApplet::buildUI()
         if (!m_transmitPermitted || !m_tunerModel || transmitBlocked()) { return; }
         // GUI-I4 (fix wave): a remote window tunes only through the Core.
         if (remoteWindow() && !remoteTuneControl()) { return; }
+        // Fix round 1 (minor 1): the Core's radio on the air (its TUN among
+        // it) leaves TUNE disabled with the reason; a click that still gets
+        // through puts the reason back rather than falling to this
+        // computer's own tuner.
+        if (remoteWindow() && coreOnAir()) {
+            updateActuatingControls();
+            return;
+        }
         // Engage local CW tune carrier via the G.4 orchestrator
         // RadioModel::setTune(true). That call configures the gen1 PostGen
         // tone (TxChannel::setTuneTone), swaps CW->LSB/USB if needed,
