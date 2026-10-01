@@ -48,6 +48,12 @@
 //               text, and a Core started by hand still found first
 //               (R-IOS-08, R-R3-26). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: fix wave (INFRA-I4): every wait's result is checked. A
+//               console request that outlives its deadline stops the test
+//               with a named stage instead of a join that blocks to the
+//               ctest timeout; the other waits say which stage did not
+//               arrive. J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -177,7 +183,13 @@ StationControlReply ask(const QString& path, const QStringList& args)
         reply = StationControlSocket::request(path, args, 10000);
         done = true;
     });
-    [[maybe_unused]] const bool waited1 = QTest::qWaitFor([&done]() { return done.load(); }, 15000);
+    const bool waited = QTest::qWaitFor([&done]() { return done.load(); }, 15000);
+    if (!waited) {
+        // The request has its own 10 s deadline. Joining a thread that has
+        // outlived it would block to the ctest timeout with no word of where.
+        qFatal("ask(%s): the console request did not return within 15 s",
+               qPrintable(args.join(QLatin1Char(' '))));
+    }
     client.join();
     return reply;
 }
@@ -191,7 +203,12 @@ StationControlReply ask(const QStringList& paths, const QStringList& args)
         reply = StationControlSocket::request(paths, args, 10000);
         done = true;
     });
-    [[maybe_unused]] const bool waited = QTest::qWaitFor([&done]() { return done.load(); }, 15000);
+    const bool waited = QTest::qWaitFor([&done]() { return done.load(); }, 15000);
+    if (!waited) {
+        // As above: never join a request that has outlived its own deadline.
+        qFatal("ask(%s): the console request did not return within 15 s",
+               qPrintable(args.join(QLatin1Char(' '))));
+    }
     client.join();
     return reply;
 }
@@ -241,7 +258,7 @@ struct RawApp {
     QJsonObject waitFor(const QString& type, qint64 id = -1)
     {
         QJsonObject found;
-        [[maybe_unused]] const bool arrived = QTest::qWaitFor([&]() {
+        const bool arrived = QTest::qWaitFor([&]() {
             for (const QJsonObject& o : std::as_const(received)) {
                 if (o.value(QStringLiteral("type")).toString() == type
                     && (id < 0 || o.value(QStringLiteral("id")).toInteger() == id)) {
@@ -251,6 +268,9 @@ struct RawApp {
             }
             return false;
         }, 10000);
+        if (!arrived) {
+            qWarning() << "RawApp::waitFor: no" << type << "within 10 s";
+        }
         return found;
     }
 
@@ -348,7 +368,9 @@ struct Core {
         station->linkTo(client);
         clients.append(client);
         server()->acceptTransport(station);
-        [[maybe_unused]] const bool waited2 = QTest::qWaitFor([client]() { return !client->received().isEmpty(); }, 5000);
+        if (!QTest::qWaitFor([client]() { return !client->received().isEmpty(); }, 5000)) {
+            qWarning() << "open: the station sent nothing within 5 s";
+        }
         return client;
     }
 
@@ -358,12 +380,15 @@ struct Core {
             kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("NereusSDR iPhone"),
             {kSessionProtocolMajor}, {{"deviceAuth", 1}})));
         client->sendText(SessionMessages::encode(auth));
-        [[maybe_unused]] const bool waited3 = QTest::qWaitFor(
-            [client]() {
-                return client->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"))
-                    || !client->isOpen();
-            },
-            5000);
+        if (!QTest::qWaitFor(
+                [client]() {
+                    return client->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"))
+                        || !client->isOpen();
+                },
+                5000)) {
+            qWarning() << "signIn: no snapshot.complete and no close within 5 s"
+                       << client->receivedKinds();
+        }
         return client->isOpen()
                && client->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"));
     }
@@ -392,7 +417,9 @@ struct Core {
 
 bool endedWithCode(LoopbackTransport* client, const QString& code)
 {
-    [[maybe_unused]] const bool waited4 = QTest::qWaitFor([client]() { return !client->isOpen(); }, 5000);
+    if (!QTest::qWaitFor([client]() { return !client->isOpen(); }, 5000)) {
+        qWarning() << "endedWithCode: the session was still open after 5 s";
+    }
     const QJsonObject end = firstOfType(client->received(), QStringLiteral("session.end"));
     if (end.value(QStringLiteral("code")).toString() != code) {
         qWarning() << "ended with" << end << "open" << client->isOpen() << client->receivedKinds();
@@ -411,9 +438,13 @@ int runHelper(const QStringList& args, QString* out)
     process.setProcessChannelMode(QProcess::MergedChannels);
     process.start(QCoreApplication::applicationFilePath(),
                   QStringList{QStringLiteral("--daemon-helper")} + args);
-    [[maybe_unused]] const bool finished = QTest::qWaitFor(
+    const bool finished = QTest::qWaitFor(
         [&process]() { return process.state() == QProcess::NotRunning; }, 30000);
     *out = QString::fromUtf8(process.readAll());
+    if (!finished) {
+        qWarning() << "runHelper" << args << "did not exit within 30 s; output:" << *out;
+        return -2;
+    }
     return process.exitStatus() == QProcess::NormalExit ? process.exitCode() : -1;
 }
 
@@ -1207,10 +1238,14 @@ private slots:
             env.insert(QStringLiteral("HOME"), QStringLiteral("/nonexistent-home-for-this-test"));
             process.setProcessEnvironment(env);
             process.start();
-            [[maybe_unused]] const bool waited5 = QTest::qWaitFor([&process]() { return process.state() == QProcess::NotRunning; },
-                            30000);
+            const bool finished = QTest::qWaitFor(
+                [&process]() { return process.state() == QProcess::NotRunning; }, 30000);
             *out = QString::fromUtf8(process.readAllStandardOutput()
                                      + process.readAllStandardError());
+            if (!finished) {
+                qWarning() << "nereusd" << args << "did not exit within 30 s; output:" << *out;
+                return -2;
+            }
             return process.exitStatus() == QProcess::NormalExit ? process.exitCode() : -1;
         };
 
@@ -1258,9 +1293,13 @@ private slots:
             process.setProcessChannelMode(QProcess::MergedChannels);
             process.start(QCoreApplication::applicationFilePath(),
                           QStringList{QStringLiteral("--daemon-helper")} + args);
-            [[maybe_unused]] const bool finished = QTest::qWaitFor(
+            const bool finished = QTest::qWaitFor(
                 [&process]() { return process.state() == QProcess::NotRunning; }, 30000);
             *out = QString::fromUtf8(process.readAll());
+            if (!finished) {
+                qWarning() << "helper" << args << "did not exit within 30 s; output:" << *out;
+                return -2;
+            }
             return process.exitStatus() == QProcess::NormalExit ? process.exitCode() : -1;
         };
         QString out;
