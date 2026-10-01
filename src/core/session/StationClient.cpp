@@ -9,6 +9,15 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling lane: a pending write
+//                                    keeps the operator's value, and an
+//                                    inbound apply that moves it as a side
+//                                    effect (a Core mode change rewriting
+//                                    the filter edges) puts it back
+//                                    (restoreOperatorValues), so the flush
+//                                    sends the operator's value, not the
+//                                    Core's. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Shared-input filters (ruling (d)): the
 //                                    hello declares rxFilterLowPass 1, so
 //                                    the CH label, WIDE badge and Filter
@@ -979,7 +988,10 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
                     }
                     m_outboundCoalescer.update(objectKey, update);
                     if (propertyResultsAvailable()) {
-                        m_propertyWriteIds[objectKey].insert(update.name, 0);
+                        // The operator's value, held until the Core
+                        // answers this write (restoreOperatorValues).
+                        m_pendingWrites[objectKey].insert(
+                            update.name, PendingWrite{0, update, m_nextPendingWriteOrder++});
                     }
                 }
             });
@@ -2130,7 +2142,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         m_radioModel->setStationMayCloseLastSlice(false);
     }
     m_forwardLocalChanges = false;
-    m_propertyWriteIds.clear();
+    m_pendingWrites.clear();
     // Desktop remote transmit: the Core unkeys this device when the link
     // drops and never keys it again by itself; nothing of it is kept.
     refreshRemoteTransmit();
@@ -4067,7 +4079,7 @@ void StationClient::handleObjectDestroy(const SessionMessage& message)
     }
     const int sliceId = idFromKey(message.objectKey, kSliceKeyPrefix);
     m_objects.remove(message.objectKey);
-    m_propertyWriteIds.remove(message.objectKey);
+    m_pendingWrites.remove(message.objectKey);
     m_outboundMirror->unwatch(message.objectKey);
     if (sliceId >= 0 && !m_radioModel.isNull()) {
         InboundGuard guard(m_applyingInbound);
@@ -4102,7 +4114,7 @@ void StationClient::handleDelta(const SessionMessage& message)
         return;
     }
     QList<MirrorUpdate> current;
-    const auto pending = m_propertyWriteIds.value(message.objectKey);
+    const auto pending = m_pendingWrites.value(message.objectKey);
     for (const auto& value : message.updates) {
         if (!pending.contains(value.name)) {
             current.append(value);
@@ -4117,15 +4129,15 @@ void StationClient::handlePropertyResult(const SessionMessage& message)
     if (!target || message.writeId == 0) {
         return;
     }
-    auto pending = m_propertyWriteIds.find(message.objectKey);
-    if (pending == m_propertyWriteIds.end()) {
+    auto pending = m_pendingWrites.find(message.objectKey);
+    if (pending == m_pendingWrites.end()) {
         return;
     }
     QList<MirrorUpdate> acceptedValues;
     QList<SessionPropertyResult> currentResults;
     for (const auto& result : message.propertyResults) {
         if (!pending->contains(result.property)
-            || pending->value(result.property) != message.writeId) {
+            || pending->value(result.property).writeId != message.writeId) {
             continue;
         }
         pending->remove(result.property);
@@ -4135,7 +4147,7 @@ void StationClient::handlePropertyResult(const SessionMessage& message)
         currentResults.append(result);
     }
     if (pending->isEmpty()) {
-        m_propertyWriteIds.erase(pending);
+        m_pendingWrites.erase(pending);
     }
     applyUpdates(target, message.objectKey, acceptedValues);
     for (const auto& result : currentResults) {
@@ -4152,7 +4164,9 @@ void StationClient::handlePropertyResult(const SessionMessage& message)
 void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
                                  const QList<MirrorUpdate>& updates)
 {
-    Q_UNUSED(objectKey)
+    if (updates.isEmpty()) {
+        return;
+    }
     const MirrorSchema& schema = MirrorSchema::forObject(target);
     const QByteArray className =
         MirrorSchema::shortClassName(target->metaObject()->className());
@@ -4163,7 +4177,9 @@ void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
     // suppressed too.
     InboundGuard guard(m_applyingInbound);
 
+    QSet<QByteArray> applied;
     for (const MirrorUpdate& update : updates) {
+        applied.insert(update.name);
         const MirrorProperty* prop = schema.byName(update.name);
         if (prop == nullptr) {
             // A property this build does not declare. Already recorded by
@@ -4185,6 +4201,68 @@ void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
                     << "-- this property will read stale on this client";
             }
         }
+    }
+
+    // Still under the guard: putting the operator's values back is not a
+    // change of theirs to send again.
+    restoreOperatorValues(objectKey, applied);
+}
+
+void StationClient::restoreOperatorValues(const QByteArray& appliedKey,
+                                          const QSet<QByteArray>& applied)
+{
+    // The guard suppresses the observer, not the change. A Core value a
+    // setter applies can move a DIFFERENT property as a side effect
+    // (SliceModel::setDspMode rewrites both filter edges; a TransmitModel
+    // CFC scalar re-encodes the paired curve). When that property holds
+    // an operator edit the Core has not answered, the flush would read
+    // the moved value and send the Core's state back as the operator's
+    // choice. So the operator's value goes back now: it wins until the
+    // Core answers that write, and the window shows what it will send.
+    // A property the Core's message named keeps the Core's value (only an
+    // object.create names one with a pending write; a delta skips them,
+    // and a result ends the hold before it applies).
+    struct Held {
+        quint64 order;
+        QByteArray key;
+        QByteArray name;
+    };
+    QList<Held> held;
+    for (auto object = m_pendingWrites.cbegin(); object != m_pendingWrites.cend(); ++object) {
+        for (auto write = object->cbegin(); write != object->cend(); ++write) {
+            held.append(Held{write->order, object.key(), write.key()});
+        }
+    }
+    std::sort(held.begin(), held.end(),
+              [](const Held& a, const Held& b) { return a.order < b.order; });
+    for (const Held& h : held) {
+        QObject* object = m_objects.value(h.key).data();
+        auto writes = m_pendingWrites.find(h.key);
+        if (object == nullptr || writes == m_pendingWrites.end()) {
+            continue;
+        }
+        auto write = writes->find(h.name);
+        if (write == writes->end()) {
+            continue;
+        }
+        const MirrorSchema& schema = MirrorSchema::forObject(object);
+        const MirrorProperty* prop = schema.byName(h.name);
+        if (prop == nullptr) {
+            continue;
+        }
+        const QVariant live = schema.read(*prop, object);
+        if (!live.isValid()) {
+            continue;
+        }
+        if (h.key == appliedKey && applied.contains(h.name)) {
+            write->value.value = live;
+            continue;
+        }
+        if (live == write->value.value) {
+            continue;
+        }
+        const MirrorUpdate operatorValue = write->value;
+        applyOne(object, *prop, operatorValue);
     }
 }
 
@@ -4618,6 +4696,10 @@ void StationClient::onWriteFlushTick()
             // property again since it was marked dirty (the guard
             // suppresses the observer, not the change), and sending the
             // stale one would tell the station to undo its own value.
+            // Where the Core answers writes, an inbound SIDE EFFECT on a
+            // pending property has already been undone by
+            // restoreOperatorValues(), so the live value is the
+            // operator's.
             const MirrorProperty* prop = schema.byName(pendingUpdate.name);
             if (prop == nullptr) {
                 continue;
@@ -4635,8 +4717,20 @@ void StationClient::onWriteFlushTick()
                 if (m_nextPropertyWriteId == 0) {
                     ++m_nextPropertyWriteId;
                 }
+                auto& writes = m_pendingWrites[batch.first];
                 for (const auto& update : resolved) {
-                    m_propertyWriteIds[batch.first].insert(update.name, writeId);
+                    // The value sent is the operator's: an inbound side
+                    // effect since the edit was put back by
+                    // restoreOperatorValues(). It is held until this
+                    // write's answer.
+                    auto entry = writes.find(update.name);
+                    if (entry == writes.end()) {
+                        writes.insert(update.name,
+                                      PendingWrite{writeId, update, m_nextPendingWriteOrder++});
+                    } else {
+                        entry->writeId = writeId;
+                        entry->value = update;
+                    }
                 }
             }
             send(SessionMessages::propertyWrite(batch.first, resolved, writeId));

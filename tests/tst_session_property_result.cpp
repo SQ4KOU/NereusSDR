@@ -14,6 +14,7 @@
 #include "models/RadioModel.h"
 #include "models/PureSignalSettings.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
 
@@ -281,6 +282,163 @@ private slots:
         QVERIFY(!result.accepted);
         QVERIFY2(result.reason.contains("their own controls"), qPrintable(result.reason));
         QCOMPARE(settings.value(key).toDouble(), 1.75);
+    }
+
+    // Inbound sibling lane: a Core mode change lands while the operator's
+    // filter edge is still waiting for the window's flush. The mode's
+    // side effect (SliceModel::setDspMode moves both edges) must not
+    // replace the operator's edge, and the flush must send the operator's.
+    void coreModeChangeKeepsTheOperatorsUnsentFilterEdge()
+    {
+        QTemporaryDir security;
+        QVERIFY(security.isValid());
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::HermesLite);
+        RadioInfo info;
+        info.macAddress = "AA:BB:CC:DD:EE:01";
+        info.boardType = HPSDRHW::HermesLite;
+        station.setLastRadioInfoForTest(info);
+        const int id = station.addSlice();
+        auto* coreSlice = station.sliceById(id);
+        coreSlice->setDspMode(DSPMode::USB);
+        StationServer server(&station, AppSettings::instance(), NereusSDR::Test::seedUpgradedCoreToken(security.path()));
+        RadioModel gui(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&gui, &proxy);
+        auto* coreEnd = new HoldingTransport;
+        auto* guiEnd = new LoopbackTransport("gui");
+        coreEnd->linkTo(guiEnd);
+        client.startSession(guiEnd, server.token());
+        server.acceptTransport(coreEnd);
+        QTRY_VERIFY(client.isHandshakeComplete());
+        auto* slice = gui.sliceById(id);
+        QVERIFY(slice);
+        QCOMPARE(slice->dspMode(), DSPMode::USB);
+        client.pauseWriteFlushForTest();
+
+        // The operator's edge, not yet sent.
+        const int operatorLow = slice->filterLow() + 170;
+        const int operatorHigh = slice->filterHigh();
+        slice->setFilterLow(operatorLow);
+        QCOMPARE(slice->filterLow(), operatorLow);
+
+        // The Core changes mode before the window's next flush.
+        coreSlice->setDspMode(DSPMode::CWU);
+        QVERIFY(coreSlice->filterLow() != operatorLow);
+        QTRY_COMPARE(slice->dspMode(), DSPMode::CWU);
+
+        // The flush sends the operator's edges, and the Core keeps its mode.
+        client.flushWritesForTest();
+        QTRY_COMPARE(coreSlice->filterLow(), operatorLow);
+        QCOMPARE(coreSlice->filterHigh(), operatorHigh);
+        QCOMPARE(coreSlice->dspMode(), DSPMode::CWU);
+        // And the window showed them throughout.
+        QCOMPARE(slice->dspMode(), DSPMode::CWU);
+        QCOMPARE(slice->filterLow(), operatorLow);
+        QCOMPARE(slice->filterHigh(), operatorHigh);
+    }
+
+    // The same side effect on an edge already SENT and not yet answered.
+    // The two edges share filterChanged, so the operator's next edge
+    // re-reads both: the one in flight must still be the operator's, not
+    // the edge the Core's mode change left on the window.
+    void coreModeChangeKeepsTheOperatorsUnansweredFilterEdge()
+    {
+        QTemporaryDir security;
+        QVERIFY(security.isValid());
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::HermesLite);
+        RadioInfo info;
+        info.macAddress = "AA:BB:CC:DD:EE:01";
+        info.boardType = HPSDRHW::HermesLite;
+        station.setLastRadioInfoForTest(info);
+        const int id = station.addSlice();
+        auto* coreSlice = station.sliceById(id);
+        coreSlice->setDspMode(DSPMode::USB);
+        StationServer server(&station, AppSettings::instance(), NereusSDR::Test::seedUpgradedCoreToken(security.path()));
+        RadioModel gui(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&gui, &proxy);
+        auto* coreEnd = new HoldingTransport;
+        auto* guiEnd = new LoopbackTransport("gui");
+        coreEnd->linkTo(guiEnd);
+        client.startSession(guiEnd, server.token());
+        server.acceptTransport(coreEnd);
+        QTRY_VERIFY(client.isHandshakeComplete());
+        auto* slice = gui.sliceById(id);
+        QVERIFY(slice);
+        QCOMPARE(slice->dspMode(), DSPMode::USB);
+        client.pauseWriteFlushForTest();
+
+        // The operator's edge leaves the window and is still on its way.
+        const int operatorLow = slice->filterLow() + 170;
+        slice->setFilterLow(operatorLow);
+        guiEnd->setHoldsOutgoing(true);
+        client.flushWritesForTest();
+
+        // The Core changes mode first; its delta reaches the window.
+        coreSlice->setDspMode(DSPMode::CWU);
+        QVERIFY(coreSlice->filterLow() != operatorLow);
+        QTRY_COMPARE(slice->dspMode(), DSPMode::CWU);
+
+        // The operator's next edge re-reads both edges.
+        const int operatorHigh = slice->filterHigh() + 230;
+        slice->setFilterHigh(operatorHigh);
+        guiEnd->setHoldsOutgoing(false);
+        client.flushWritesForTest();
+
+        QTRY_COMPARE(coreSlice->filterHigh(), operatorHigh);
+        QCOMPARE(coreSlice->filterLow(), operatorLow);
+        QCOMPARE(coreSlice->dspMode(), DSPMode::CWU);
+        QCOMPARE(slice->filterLow(), operatorLow);
+        QCOMPARE(slice->filterHigh(), operatorHigh);
+    }
+
+    // Another row: TransmitModel::setLineInBoost sets lineInGain to the
+    // boost's index. A Core boost change landing before the window sends
+    // the operator's own line-in gain must not replace that gain.
+    void coreLineInBoostKeepsTheOperatorsUnsentLineInGain()
+    {
+        QTemporaryDir security;
+        QVERIFY(security.isValid());
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::HermesLite);
+        RadioInfo info;
+        info.macAddress = "AA:BB:CC:DD:EE:01";
+        info.boardType = HPSDRHW::HermesLite;
+        station.setLastRadioInfoForTest(info);
+        station.addSlice();
+        TransmitModel& coreTx = station.transmitModel();
+        coreTx.setLineInBoost(0.0);
+        StationServer server(&station, AppSettings::instance(), NereusSDR::Test::seedUpgradedCoreToken(security.path()));
+        RadioModel gui(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&gui, &proxy);
+        auto* coreEnd = new HoldingTransport;
+        auto* guiEnd = new LoopbackTransport("gui");
+        coreEnd->linkTo(guiEnd);
+        client.startSession(guiEnd, server.token());
+        server.acceptTransport(coreEnd);
+        QTRY_VERIFY(client.isHandshakeComplete());
+        TransmitModel& windowTx = gui.transmitModel();
+        QCOMPARE(windowTx.lineInGain(), coreTx.lineInGain());
+        client.pauseWriteFlushForTest();
+
+        // The operator's gain, not yet sent.
+        const int operatorGain = 7;
+        QVERIFY(windowTx.lineInGain() != operatorGain);
+        windowTx.setLineInGain(operatorGain);
+
+        // The Core's boost changes before the window's next flush.
+        coreTx.setLineInBoost(6.0);
+        QVERIFY(coreTx.lineInGain() != operatorGain);
+        QTRY_COMPARE(windowTx.lineInBoost(), 6.0);
+
+        client.flushWritesForTest();
+        QTRY_COMPARE(coreTx.lineInGain(), operatorGain);
+        QCOMPARE(coreTx.lineInBoost(), 6.0);
+        QCOMPARE(windowTx.lineInGain(), operatorGain);
+        QCOMPARE(windowTx.lineInBoost(), 6.0);
     }
 };
 

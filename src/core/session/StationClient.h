@@ -438,6 +438,11 @@
 //               coreSliceTakeUnavailableReason(); the hello declares
 //               sliceAccess 3. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-30: inbound sibling lane: a pending write keeps the operator's
+//               value (PendingWrite), restoreOperatorValues() puts it back
+//               when an inbound apply moves it as a side effect, and the
+//               pauseWriteFlushForTest / flushWritesForTest seams.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -957,6 +962,12 @@ public:
     {
         m_capabilities.transmitSettingsVersion = version;
     }
+    /// Test seam: stops the write-flush timer, so a test decides when the
+    /// window's pending writes leave (flushWritesForTest). After the
+    /// handshake; the next SnapshotComplete starts the timer again.
+    void pauseWriteFlushForTest() { m_writeFlushTimer->stop(); }
+    /// Test seam: one write-flush tick, now.
+    void flushWritesForTest() { onWriteFlushTick(); }
 
     /// The minor version both ends agreed on (section 7.0: negotiate down
     /// to the lower). Meaningful once the station's Hello has arrived.
@@ -1797,6 +1808,13 @@ private:
     /// comment's three-strategy list.
     void applyUpdates(QObject* target, const QByteArray& objectKey,
                       const QList<MirrorUpdate>& updates);
+    /// After an inbound apply: every property with a pending write whose
+    /// live value the apply moved as a side effect (it was not one of
+    /// `applied`, the properties the Core's message named for
+    /// `appliedKey`) gets the operator's value back, under the echo
+    /// guard. Oldest operator change first, so the newest one wins.
+    void restoreOperatorValues(const QByteArray& appliedKey,
+                               const QSet<QByteArray>& applied);
     bool applyOne(QObject* target, const MirrorProperty& prop, const MirrorUpdate& update);
 
     /// Client-side adapter for daemon-to-client-only properties whose
@@ -1996,9 +2014,20 @@ private:
     QTimer* m_settingsBackupReplyTimer = nullptr;
     QTimer* m_settingsBackupOverallTimer = nullptr;
     quint32 m_nextPropertyWriteId = 1;
-    // Zero marks an edit waiting for the coalescer; nonzero marks its most
-    // recent sent batch. Both protect the value from an older answer.
-    QHash<QByteArray, QHash<QByteArray, quint32>> m_propertyWriteIds;
+    /// One property the operator changed that the Core has not answered.
+    /// writeId zero marks an edit waiting for the coalescer; nonzero marks
+    /// its most recent sent batch. Both protect the value from an older
+    /// answer. `value` is the operator's value (what the observer read
+    /// when the property went dirty, then what the flush sent); `order`
+    /// is when the operator last changed it.
+    struct PendingWrite {
+        quint32 writeId = 0;
+        MirrorUpdate value;
+        quint64 order = 0;
+    };
+    /// Object key -> property name -> its pending write.
+    QHash<QByteArray, QHash<QByteArray, PendingWrite>> m_pendingWrites;
+    quint64 m_nextPendingWriteOrder = 1;
 
     /// What each in-flight command was about, keyed by the commandId the
     /// station echoes back. A CommandResult carries the verb but no slice
