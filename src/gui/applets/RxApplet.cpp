@@ -2149,6 +2149,13 @@ void RxApplet::connectSlice(SliceModel* s)
     // ATT/S-ATT: wire to StepAttenuatorController if available.
     // R-R3-46: a remote window's row follows the Core's `stepAtt` object
     // instead (wireRemoteStepAtt); its own controller has no radio.
+    // GUI-M5 (fix wave): this block runs on every slice change; the
+    // previous slice's attenuator connections go first so they never
+    // pile up (each would otherwise set the attenuator again per edit).
+    for (const QMetaObject::Connection& c : std::as_const(m_stepAttConnections)) {
+        disconnect(c);
+    }
+    m_stepAttConnections.clear();
     auto* attCtrl = m_model && m_model->ownsLocalDsp() ? m_model->stepAttController() : nullptr;
     if (attCtrl) {
         // Populate preamp combo from board capabilities when radio is connected.
@@ -2175,7 +2182,7 @@ void RxApplet::connectSlice(SliceModel* s)
         }
 
         // R-R3-46 / R-R3-11: the attenuator of this slice's own ADC.
-        connect(m_stepAttSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+        m_stepAttConnections << connect(m_stepAttSpin, QOverload<int>::of(&QSpinBox::valueChanged),
                 this, [this, attCtrl](int val) {
             if (isListening()) { return; }  // TX rulings (item 3)
             const int sliceId = m_slice ? m_slice->sliceIndex() : 0;
@@ -2187,7 +2194,7 @@ void RxApplet::connectSlice(SliceModel* s)
             }
         });
 
-        connect(m_preampCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+        m_stepAttConnections << connect(m_preampCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this, attCtrl](int idx) {
             if (idx < 0) { return; }  // guard during clear/repopulate
             if (isListening()) { return; }  // TX rulings (item 3)
@@ -2201,16 +2208,16 @@ void RxApplet::connectSlice(SliceModel* s)
             }
         });
 
-        connect(attCtrl, &StepAttenuatorController::attenuationChanged,
+        m_stepAttConnections << connect(attCtrl, &StepAttenuatorController::attenuationChanged,
                 this, [this](int) { showStepAttValueForSlice(); });
-        connect(attCtrl, &StepAttenuatorController::rx2AttenuationChanged,
+        m_stepAttConnections << connect(attCtrl, &StepAttenuatorController::rx2AttenuationChanged,
                 this, [this](int) { showStepAttValueForSlice(); });
-        connect(attCtrl, &StepAttenuatorController::adcRoutingChanged,
+        m_stepAttConnections << connect(attCtrl, &StepAttenuatorController::adcRoutingChanged,
                 this, [this]() { showStepAttValueForSlice(); });
 
-        connect(attCtrl, &StepAttenuatorController::preampModeChanged,
+        m_stepAttConnections << connect(attCtrl, &StepAttenuatorController::preampModeChanged,
                 this, [this](PreampMode) { showPreampModeForSlice(); });
-        connect(attCtrl, &StepAttenuatorController::rx2PreampModeChanged,
+        m_stepAttConnections << connect(attCtrl, &StepAttenuatorController::rx2PreampModeChanged,
                 this, [this](PreampMode) { showPreampModeForSlice(); });
 
         // Helper: pick label text for the current (stepOn, autoOn) tuple.
@@ -2241,18 +2248,18 @@ void RxApplet::connectSlice(SliceModel* s)
         auto refreshAttLabel = [this]() { refreshAttForSlice(); };
         for (auto signal : {&StepAttenuatorController::rx2StepAttEnabledChanged,
                             &StepAttenuatorController::rx2AutoAttEnabledChanged}) {
-            connect(attCtrl, signal, this, [refreshAttLabel](bool) { refreshAttLabel(); });
+            m_stepAttConnections << connect(attCtrl, signal, this, [refreshAttLabel](bool) { refreshAttLabel(); });
         }
-        connect(attCtrl, &StepAttenuatorController::adcRoutingChanged,
+        m_stepAttConnections << connect(attCtrl, &StepAttenuatorController::adcRoutingChanged,
                 this, [refreshAttLabel]() { refreshAttLabel(); });
 
         // React to step-att-enabled changes (ATT ↔ S-ATT/A-ATT mode switch)
-        connect(attCtrl, &StepAttenuatorController::stepAttEnabledChanged,
+        m_stepAttConnections << connect(attCtrl, &StepAttenuatorController::stepAttEnabledChanged,
                 this, [refreshAttLabel](bool) { refreshAttLabel(); });
 
         // React to auto-att enable toggles — drives S-ATT ↔ A-ATT on HL2.
         // From mi0bot-Thetis console.cs:21342-21365 [v2.10.3.13-beta2].
-        connect(attCtrl, &StepAttenuatorController::autoAttEnabledChanged,
+        m_stepAttConnections << connect(attCtrl, &StepAttenuatorController::autoAttEnabledChanged,
                 this, [refreshAttLabel](bool) { refreshAttLabel(); });
 
         // Sync initial state from controller
@@ -2263,7 +2270,7 @@ void RxApplet::connectSlice(SliceModel* s)
         // Phase 3P-B Task 10: wire per-ADC OVL badges to overloadStatusChanged.
         // The signal is already per-ADC (index 0..2); we drive each badge
         // independently so dual-ADC boards show two discrete indicators.
-        connect(attCtrl, &StepAttenuatorController::overloadStatusChanged,
+        m_stepAttConnections << connect(attCtrl, &StepAttenuatorController::overloadStatusChanged,
                 this, [this](int adcIndex, OverloadLevel level) {
             if (adcIndex < 0 || adcIndex >= 3) { return; }
             QLabel* badge = m_ovlBadges[adcIndex];

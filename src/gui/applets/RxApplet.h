@@ -445,6 +445,9 @@ private:
     NereusSDR::HPSDRHW m_preampBoard{NereusSDR::HPSDRHW::Hermes};
     bool            m_preampAlex{false};
     bool            m_preampShowsRx2{false};
+    // GUI-M5 (fix wave): connectSlice's attenuator connections, dropped
+    // before the next slice's are made.
+    QList<QMetaObject::Connection> m_stepAttConnections;
     QSpinBox*       m_stepAttSpin{nullptr};   // Page 1: S-ATT mode
 
     // Controls 9 + 10: AGC
