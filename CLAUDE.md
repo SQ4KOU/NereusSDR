@@ -61,6 +61,7 @@ comment on the nearest equivalent line with
   `../TAPR-OpenHPSDR-Firmware/` (`e7c6584`) or `../n1gp-Anvelina_PROIII/`
   (`8e86a61`), both pinned; never pull. Cite facts only; ask before porting
   Verilog logic. Details in HOW-TO-PORT.md.
+* piHPSDR (`../pihpsdr/`, pinned `4aa95c5`) and deskHPSDR (`../deskhpsdr/`, pinned `f3d857c`) are references like Thetis: facts cite them, and code ported from them keeps their GPL headers and attribution (HOW-TO-PORT.md).
 
 ## Agent boundaries
 
@@ -98,8 +99,10 @@ Full conventions in [CONTRIBUTING.md](CONTRIBUTING.md). Non-negotiables:
 `~/.config/NereusSDR/NereusSDR.settings`). PascalCase keys; booleans are the
 strings `"True"` / `"False"`.
 
-* Radio-authoritative, never persisted: ADC attenuation, preamp, TX power,
-  antenna selection.
+* Radio-authoritative, never persisted: antenna selection.
+* Saved and sent to the radio on connect, as Thetis does: ADC attenuation and
+  preamp (console.cs:2174-2179), per-band TX power (console.cs:3089-3093,
+  4903-4910, 17528-17542). Connecting never keys.
 * Per-MAC under `hardware/<mac>/...`: sample rate, active RX count.
 * Client-authoritative, persisted: VFO, mode, filter, DSP settings, layout, UI
   and display preferences.
@@ -115,6 +118,10 @@ main (GUI + all models), connection (UDP), audio (WDSP + output), spectrum
 (FFT). Cross-thread traffic is auto-queued signals only. Details and data flow:
 [docs/architecture/overview.md](docs/architecture/overview.md).
 
+**Rule R1: nothing under `src/core/` or `src/models/` includes a GUI header.**
+`tst_core_has_no_gui_includes` enforces it; extract an interface instead (as
+`ISpectrumSink` did).
+
 ## Build and test
 
 ```
@@ -123,6 +130,8 @@ cmake --build build -j$(nproc)
 ./build/NereusSDR
 ```
 
+The build also produces the headless `nereusd`, installed only with
+`--component nereusd`; install notes in [README.md](README.md).
 Dependencies: [README.md](README.md) "Building from Source". **Read
 [docs/development/fast-test-loop.md](docs/development/fast-test-loop.md)
 before running tests**; build single tests, never the whole suite by default.
@@ -138,7 +147,7 @@ First launch generates FFTW wisdom (~15 min), cached in `~/.config/NereusSDR/`.
   (github.com/dl1bz/deskhpsdr), `../n1gp-Anvelina_PROIII/`
   (github.com/n1gp/Anvelina_PROIII, pinned), `../TAPR-OpenHPSDR-Firmware/`
   (github.com/TAPR/OpenHPSDR-Firmware, pinned).
-* Vendored: `third_party/wdsp/` (TAPR v1.29), `third_party/rade/` (radae_nopy
+* Vendored: `third_party/wdsp/` (WDSP 2.10, TAPR b02d5bac), `third_party/rade/` (radae_nopy
   b289102, BSD-2), `third_party/r8brain/` (MIT resampler), `third_party/fftw3/`
   (Windows DLL).
 * Version: `CMakeLists.txt`. Phase status, release history, plan index:

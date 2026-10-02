@@ -31,14 +31,10 @@
 
 using namespace NereusSDR;
 
-// Path resolver: the fixture lives in tests/fixtures/adif/sample.adi.
-// __FILE__ resolves to .../tests/tst_adif_parser.cpp inside the
-// source tree (same approach as tst_cty_dat_parser).
+// Use Qt's source-directory-aware lookup; __FILE__ may be relative under ccache.
 static QString resolveFixturePath()
 {
-    const QString file = QString::fromUtf8(__FILE__);
-    const QString testsDir = QFileInfo(file).dir().path();
-    return testsDir + "/fixtures/adif/sample.adi";
+    return QFINDTESTDATA("fixtures/adif/sample.adi");
 }
 
 class TestAdifParser : public QObject {

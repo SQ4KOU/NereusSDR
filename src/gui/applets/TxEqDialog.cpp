@@ -66,6 +66,8 @@
 //                 "TxEqDialog/UsingLegacyEQ" to preserve user choice
 //                 across launches (mirrors Thetis's
 //                 _state.UsingLegacyEQ Common.RestoreForm round-trip).
+//                 (R-R3-49 parity Task 4, 2026-09-25: superseded; see
+//                 the entry below.)
 //                 Legacy band-column sliders / spinboxes / headers now
 //                 pick up Style::sliderVStyle() + kSpinBoxStyle +
 //                 kTextPrimary — fixes a styling regression where they
@@ -80,6 +82,36 @@
 //                 columns retain their per-widget specificity.  J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 4): the Legacy EQ box is the
+//                 model's txEqUseLegacy (Thetis EQUseLegacy); the dialog
+//                 only writes the model and no longer pushes curves to
+//                 WDSP (RadioModel does, with the sampling now in
+//                 ParaEqCurve); a remote window's settings gate greys the
+//                 controls with the reason. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: a blank or unreadable
+//                 txEqParaEqData shows Thetis's GetDefaults curve (the
+//                 one the Core applies) instead of keeping the panel's
+//                 previous points, and a load sets the band count,
+//                 low/high and Use Q Factors controls as setParaEQData
+//                 does (eqform.cs:3312-3368 [v2.10.3.15]). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49 (follow-up): the panel loads the
+//                 model's value through ParaEqCurve (PointsFromJson with
+//                 its rounding, GetDefaults when it fails), as Thetis's
+//                 ParaEQTXData setter does, not through the widget's
+//                 LoadFromJson, so it always equals the Core's txEqCurve.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
+//   2026-10-01 - The Low / High spread guard follows Thetis's
+//                 nudParaEQ_low / nudParaEQ_high handlers
+//                 (eqform.cs:3539-3577 [v2.10.3.15]): the clamped value
+//                 re-fires and reaches the curve, and the range change's
+//                 rescaled points reach the model through pointsChanged.
+//                 Low and High take typed input on commit (Enter or
+//                 leaving the box), as Thetis's NumericUpDowns do.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -126,13 +158,14 @@
 #include "TxEqDialog.h"
 
 #include "core/AppSettings.h"
+#include "core/ParaEqCurve.h"
 #include "core/ParaEqEnvelope.h"
-#include "core/TxChannel.h"
 #include "gui/StyleConstants.h"
 #include "gui/widgets/ParametricEqWidget.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
+#include <QApplication>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QCloseEvent>
@@ -163,10 +196,15 @@ namespace {
 // band fired.
 constexpr const char* kBandIndexProp = "txEqBandIndex";
 
-// AppSettings key for the legacy-vs-parametric toggle state.
-// Mirrors Thetis _state.UsingLegacyEQ (eqform.cs:2866) round-tripped
-// through Common.RestoreForm.
-constexpr const char* kLegacyToggleSettingsKey = "TxEqDialog/UsingLegacyEQ";
+// R-R3-49 (parity Task 4): the legacy-vs-parametric toggle is the
+// model's txEqUseLegacy (Thetis EQUseLegacy, kept with the TX profile).
+// The old per-computer key "TxEqDialog/UsingLegacyEQ" only seeds a
+// radio's value once (TransmitModel::loadFromSettings).
+
+// The settings gate for every TX EQ dialog in this window (a remote
+// window's MainWindow sets it).
+bool    s_settingsPermitted = true;
+QString s_settingsReason;
 
 // Parametric panel widget defaults — sourced byte-for-byte from
 // eqform.cs:928-967 [v2.10.3.13] (ucParametricEq1 widget property
@@ -192,10 +230,9 @@ constexpr int    kParaHighMinHz          =      0;         // cs:589
 constexpr int    kParaHighMaxHz          =  20000;         // cs:581
 constexpr int    kParaHighDefaultHz      =  16000;         // cs:595
 
-// 1 kHz minimum spread between Low and High — mirrors
-// frmCFCConfig.cs:122-138 [v2.10.3.13] guard (eqform doesn't expose
-// the same constant explicitly but enforces the same invariant via
-// nudParaEQ_low / nudParaEQ_high handlers; we copy CFC's threshold).
+// 1 kHz minimum spread between Low and High.
+// From Thetis eqform.cs:3543, 3545, 3563, 3565 [v2.10.3.15] — the literal
+// 1000 in nudParaEQ_low_ValueChanged / nudParaEQ_high_ValueChanged.
 constexpr int    kMinFreqSpreadHz        = 1000;
 
 // Edit-row preamp (nudParaEQ_preamp) — eqform.cs:671-699 [v2.10.3.13].
@@ -246,6 +283,7 @@ TxEqDialog::TxEqDialog(RadioModel* radio, QWidget* parent)
     buildUi();
     wireSignals();
     syncFromModel();
+    applySettingsPermitted();  // R-R3-49 (parity Task 4)
 }
 
 TxEqDialog::~TxEqDialog() = default;
@@ -269,21 +307,23 @@ void TxEqDialog::buildUi()
     outer->setContentsMargins(8, 8, 8, 8);
     outer->setSpacing(6);
 
+    // R-R3-49 (parity Task 4): why the controls are greyed, when they are.
+    m_settingsReasonLabel = new QLabel(this);
+    m_settingsReasonLabel->setObjectName(QStringLiteral("TxEqSettingsReason"));
+    m_settingsReasonLabel->setWordWrap(true);
+    m_settingsReasonLabel->setVisible(false);
+    outer->addWidget(m_settingsReasonLabel);
+
     // ── chkLegacyEQ at top — eqform.cs:969-981 [v2.10.3.13].
-    // Default checked (cs:972-973 chkLegacyEQ.Checked = true).  We
-    // override the default with the persisted user choice if present.
+    // Default checked (cs:972-973 chkLegacyEQ.Checked = true).
+    // R-R3-49 (parity Task 4): the model's txEqUseLegacy decides.
     m_legacyToggle = new QCheckBox(tr("Legacy EQ"), this);
     m_legacyToggle->setObjectName(QStringLiteral("TxEqLegacyToggle"));
     m_legacyToggle->setToolTip(tr(
         "When checked, show the original 10-band slider EQ.  When unchecked, "
         "show the parametric EQ — drag points on the curve to set frequency, "
         "gain, and Q per band."));
-    {
-        const QString persisted = AppSettings::instance().value(
-            QLatin1String(kLegacyToggleSettingsKey),
-            QStringLiteral("True")).toString();
-        m_legacyToggle->setChecked(persisted == QStringLiteral("True"));
-    }
+    m_legacyToggle->setChecked(m_radio ? m_radio->transmitModel().txEqUseLegacy() : true);
     outer->addWidget(m_legacyToggle);
 
     // ── Top strip: Enable + WDSP filter combos ──────────────────────
@@ -748,6 +788,13 @@ QWidget* TxEqDialog::buildParametricPanel()
         m_paraLowSpin->setRange(kParaLowMinHz, kParaLowMaxHz);
         m_paraLowSpin->setValue(kParaLowDefaultHz);
         m_paraLowSpin->setSuffix(QStringLiteral(" Hz"));
+        // From Thetis eqform.cs:3539-3577 [v2.10.3.15]: udParaEQ_low /
+        // udParaEQ_high are NumericUpDowns (NumericUpDownTS adds no text
+        // handling, numericupdownts.cs:33), which raise ValueChanged only
+        // when typed text is committed (Enter or leaving the box), so the
+        // spread guard and the curve's rescale run once per typed value,
+        // not per keystroke.
+        m_paraLowSpin->setKeyboardTracking(false);
         m_paraLowSpin->setToolTip(tr(
             "Lower edge of the visible parametric freq range (Hz).  "
             "Must be at least 1000 Hz below High."));
@@ -759,6 +806,7 @@ QWidget* TxEqDialog::buildParametricPanel()
         m_paraHighSpin->setRange(kParaHighMinHz, kParaHighMaxHz);
         m_paraHighSpin->setValue(kParaHighDefaultHz);
         m_paraHighSpin->setSuffix(QStringLiteral(" Hz"));
+        m_paraHighSpin->setKeyboardTracking(false);  // as Low above
         m_paraHighSpin->setToolTip(tr(
             "Upper edge of the visible parametric freq range (Hz).  "
             "Must be at least 1000 Hz above Low."));
@@ -915,6 +963,10 @@ void TxEqDialog::wireSignals()
     // overwrites the just-loaded curve.
     connect(&tx, &TransmitModel::txEqParaEqDataChanged,
             this, &TxEqDialog::syncParametricFromModel);
+    // R-R3-49 (parity Task 4): the Legacy EQ box follows the model (a
+    // profile load, or the Core's value in a remote window).
+    connect(&tx, &TransmitModel::txEqUseLegacyChanged,
+            this, &TxEqDialog::syncLegacyFromModel);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -993,28 +1045,63 @@ void TxEqDialog::onWintypeChanged(int wintype)
 // Legacy <-> Parametric panel toggle.
 // From Thetis chkLegacyEQ_CheckedChanged at eqform.cs:2862-2911 [v2.10.3.13].
 // We don't need to swap WDSP DSPRX paths (Thetis cs:2869-2871) — that
-// belongs to the DSP layer, not to this TX-only dialog.  We only flip
-// the visible panel and persist the user choice for the next launch.
+// belongs to the DSP layer, not to this TX-only dialog.
+// R-R3-49 (parity Task 4): the box writes the model's txEqUseLegacy;
+// RadioModel puts the curve it picks on the TX channel (Thetis's handler
+// calls setTXEQProfile or the para-EQ path), locally or on the Core. The
+// panel follows the model (syncLegacyFromModel), so a profile load or the
+// Core's value moves it too. NereusSDR's RX EQ has no parametric path, so
+// Thetis's GetDSPRX(..).LegacyEQ lines (cs:2887-2889) have nothing to set.
 // ─────────────────────────────────────────────────────────────────────
 
 void TxEqDialog::onLegacyToggled(bool legacy)
 {
     if (!m_panelStack) { return; }
     m_panelStack->setCurrentIndex(legacy ? 0 : 1);
-    AppSettings::instance().setValue(
-        QLatin1String(kLegacyToggleSettingsKey),
-        legacy ? QStringLiteral("True") : QStringLiteral("False"));
+    if (m_updatingFromModel || !m_radio) { return; }
+    m_radio->transmitModel().setTxEqUseLegacy(legacy);
+}
 
-    // Push the active mode's curve to WDSP immediately so toggling
-    // alone takes audible effect (without this the user would have
-    // to also nudge a control on the newly-active panel before the
-    // audio path picked up the curve).  See the
-    // pushParametricCurveToWdsp / pushLegacyCurveToWdsp comments for
-    // why each helper was needed.
-    if (legacy) {
-        pushLegacyCurveToWdsp();
-    } else {
-        pushParametricCurveToWdsp();
+void TxEqDialog::syncLegacyFromModel()
+{
+    if (!m_radio || !m_legacyToggle || !m_panelStack) { return; }
+    const bool legacy = m_radio->transmitModel().txEqUseLegacy();
+    QSignalBlocker b(m_legacyToggle);
+    m_legacyToggle->setChecked(legacy);
+    m_panelStack->setCurrentIndex(legacy ? 0 : 1);
+}
+
+void TxEqDialog::setSettingsPermitted(bool permitted, const QString& reason)
+{
+    s_settingsPermitted = permitted;
+    s_settingsReason = reason;
+    // Every TX EQ dialog this window has built (the singleton, and any
+    // built directly).
+    for (QWidget* w : QApplication::allWidgets()) {
+        if (auto* dlg = qobject_cast<TxEqDialog*>(w)) {
+            dlg->applySettingsPermitted();
+        }
+    }
+}
+
+bool TxEqDialog::settingsPermitted()
+{
+    return s_settingsPermitted;
+}
+
+void TxEqDialog::applySettingsPermitted()
+{
+    // A local window's dialog is never closed: the gate is a remote
+    // window's (its model does not own local DSP).
+    const bool local = m_radio && m_radio->ownsLocalDsp();
+    const bool open = local || s_settingsPermitted;
+    for (QWidget* child : findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly)) {
+        if (child == m_settingsReasonLabel) { continue; }
+        child->setEnabled(open);
+    }
+    if (m_settingsReasonLabel) {
+        m_settingsReasonLabel->setText(open ? QString() : s_settingsReason);
+        m_settingsReasonLabel->setVisible(!open && !s_settingsReason.isEmpty());
     }
 }
 
@@ -1105,28 +1192,30 @@ void TxEqDialog::onParametricBandCountChanged()
 void TxEqDialog::onParametricLowFreqChanged(int hz)
 {
     if (!m_parametricWidget || !m_paraHighSpin) { return; }
-    // Enforce the 1 kHz spread guard — clamp Low so it stays at least
-    // kMinFreqSpreadHz below High.
+    // From Thetis eqform.cs:3539-3557 [v2.10.3.15] (nudParaEQ_low_ValueChanged).
+    // The clamp sets the spin box with this handler still connected, so
+    // valueChanged re-fires with the clamped value and that call moves the
+    // curve. The range setter rescales the points and emits pointsChanged,
+    // which onParametricPointsChanged stores in the model, as Thetis's
+    // ucParametricEq1_PointsChanged does (eqform.cs:3197-3213 [v2.10.3.15]).
     const int hi = m_paraHighSpin->value();
-    if (hz + kMinFreqSpreadHz > hi) {
-        QSignalBlocker b(m_paraLowSpin);
+    if (hz > hi - kMinFreqSpreadHz) {
         m_paraLowSpin->setValue(hi - kMinFreqSpreadHz);
         return;  // valueChanged will re-fire with the clamped value
     }
-    QSignalBlocker b(m_parametricWidget);
     m_parametricWidget->setFrequencyMinHz(static_cast<double>(hz));
 }
 
 void TxEqDialog::onParametricHighFreqChanged(int hz)
 {
     if (!m_parametricWidget || !m_paraLowSpin) { return; }
+    // From Thetis eqform.cs:3559-3577 [v2.10.3.15] (nudParaEQ_high_ValueChanged),
+    // the same shape as Low above.
     const int lo = m_paraLowSpin->value();
     if (hz < lo + kMinFreqSpreadHz) {
-        QSignalBlocker b(m_paraHighSpin);
         m_paraHighSpin->setValue(lo + kMinFreqSpreadHz);
         return;
     }
-    QSignalBlocker b(m_parametricWidget);
     m_parametricWidget->setFrequencyMaxHz(static_cast<double>(hz));
 }
 
@@ -1282,100 +1371,13 @@ void TxEqDialog::pushParametricToModel()
     tx.setTxEqParaEqData(
         ParaEqEnvelope::encode(m_parametricWidget->saveToJson()));
 
-    // 2. Push the parametric curve directly to WDSP via
-    //    TxChannel::setTxEqProfile (Codex P1 #1 on PR #159 + the
-    //    follow-up self-review of dd03b70).  See
-    //    pushParametricCurveToWdsp for the F[10]/G[11] build rules.
-    //
-    //    Why NOT push via the legacy txEqBand/txEqFreq/txEqPreamp
-    //    setter chain (the dd03b70 approach):
-    //      - rounding to int loses parametric precision (4.6 dB -> 5)
-    //      - sampling at the LEGACY ISO grid discards the user's
-    //        chosen parametric band centers
-    //      - mutating tx.txEqBand[] etc. corrupts the user's legacy
-    //        settings on toggle-back
-    //      - 11 emissions per drag triggers 11 WDSP profile rebuilds
-    //        when only one is needed
-    //    Direct push avoids all four.
-    pushParametricCurveToWdsp();
+    // R-R3-49 (parity Task 4): the dialog no longer pushes the curve to
+    // WDSP itself. RadioModel puts it on the TX channel from the model
+    // (txEqParaEqData through ParaEqCurve, the sampling that was here),
+    // when the Legacy EQ box picks the parametric EQ, locally and on a
+    // Core.
 
     m_updatingFromModel = false;
-}
-
-// Build the WDSP (F[10], G[11]) shape from the parametric widget's
-// current state and push via TxChannel::setTxEqProfile.  Called on
-// every parametric edit (from pushParametricToModel) and on toggle
-// INTO parametric mode (from onLegacyToggled).
-//
-// WDSP TX EQ has a fixed 10-band shape; the parametric widget has
-// 5/10/18 bands with arbitrary centers + Q.  This helper resolves
-// the count mismatch:
-//   - 10-band parametric: 1:1 push of (freq, gain) -- parametric
-//     peaks land at the user's exact frequencies.
-//   - 5/18-band parametric: sample the curve at 10 equally-spaced
-//     freqs across the parametric range -- the curve's Gaussian-
-//     weighted-sum interpolation captures the Q effect at whatever
-//     resolution 10 sample points allow.
-// Q is intrinsically lost at the WDSP layer because WDSP TX EQ is
-// graphic-EQ topology; the curve sampling is the best Thetis-faithful
-// approximation (Thetis itself does the same -- ucParametricEq feeds
-// SetTXAEQProfile with sampled F+G arrays, never with biquad coeffs).
-void TxEqDialog::pushParametricCurveToWdsp()
-{
-    if (!m_radio || !m_parametricWidget) { return; }
-    auto* ch = m_radio->txChannel();
-    if (!ch) { return; }
-
-    std::vector<double> freqs(10);
-    std::vector<double> gains(11);
-    gains[0] = m_parametricWidget->globalGainDb();  // preamp slot
-
-    const int n = m_parametricWidget->bandCount();
-    if (n == 10) {
-        for (int i = 0; i < 10; ++i) {
-            double f = 0.0, g = 0.0, q = 0.0;
-            m_parametricWidget->getPointData(i, f, g, q);
-            freqs[i]   = f;
-            gains[i+1] = g;
-        }
-    } else {
-        const double minHz = m_parametricWidget->frequencyMinHz();
-        const double maxHz = m_parametricWidget->frequencyMaxHz();
-        const double step  = (maxHz > minHz) ? (maxHz - minHz) / 9.0 : 0.0;
-        for (int i = 0; i < 10; ++i) {
-            const double f = minHz + step * i;
-            freqs[i]   = f;
-            gains[i+1] = m_parametricWidget->responseDbAtFrequency(f);
-        }
-    }
-    ch->setTxEqProfile(freqs, gains);
-}
-
-// Build the WDSP (F[10], G[11]) shape from the legacy
-// txEqFreq/txEqBand/txEqPreamp model fields and push via
-// TxChannel::setTxEqProfile.  Called on toggle BACK to legacy mode
-// so WDSP restores the legacy curve immediately.
-//
-// Without this helper, the legacy-panel sliders' per-band setters
-// only push to WDSP on user edit (via RadioModel.cpp:1924-1939's
-// pushEqProfile lambda).  Toggling legacy with no edit would leave
-// the previous parametric curve on WDSP until the user nudged a
-// slider -- a confusing UX dead zone.
-void TxEqDialog::pushLegacyCurveToWdsp()
-{
-    if (!m_radio) { return; }
-    auto* ch = m_radio->txChannel();
-    if (!ch) { return; }
-    TransmitModel& tx = m_radio->transmitModel();
-
-    std::vector<double> freqs(10);
-    std::vector<double> gains(11);
-    gains[0] = static_cast<double>(tx.txEqPreamp());
-    for (int i = 0; i < 10; ++i) {
-        freqs[i]   = static_cast<double>(tx.txEqFreq(i));
-        gains[i+1] = static_cast<double>(tx.txEqBand(i));
-    }
-    ch->setTxEqProfile(freqs, gains);
 }
 
 // Codex P1 #2 on PR #159: profile activation fires
@@ -1389,32 +1391,82 @@ void TxEqDialog::syncParametricFromModel()
 {
     if (!m_radio || !m_parametricWidget || m_updatingFromModel) { return; }
     const QString blob = m_radio->transmitModel().txEqParaEqData();
-    if (blob.isEmpty()) { return; }
 
-    // From Thetis eqform.cs:3269-3271 + Common.cs:1764-1790
-    // [v2.10.3.13] — Decompress_gzip(value) before loading points.
-    QString json;
-    const std::optional<QString> decoded = ParaEqEnvelope::decode(blob);
-    if (decoded.has_value()) {
-        json = *decoded;
-    } else if (blob.trimmed().startsWith(QLatin1Char('{'))) {
-        // Compatibility for profiles saved by pre-fix PR #159 builds that
-        // briefly stored raw JSON before the Thetis envelope was wired here.
-        json = blob;
-    } else {
-        return;
-    }
+    // R-IOS-13 / R-R3-49: the TX panel loads the model's value as Thetis's
+    // does, through the Core's own reader, so the panel and the Core's
+    // txEqCurve never disagree. From Thetis eqform.cs:3276-3317
+    // [v2.10.3.15] (ParaEQTXData's setter: Decompress_gzip, PointsFromJson
+    // with its rounding and clamping, GetDefaults when that fails) and
+    // eqform.cs:3344-3349 [v2.10.3.15] (setParaEQData's TX branch:
+    // ParametricEQ, BandCount, GlobalGainDb, FrequencyMinHz,
+    // FrequencyMaxHz, SetPointsData). The points go in as the panel orders
+    // them (ParaEqCurve::txEqDisplayPoints, the same enforceOrdering
+    // SetPointsData runs), so a tie in frequency lands as the Core draws it
+    // whatever band ids the widget holds from an earlier curve.
+    const ParaEqCurve::TxEqPoints shown = ParaEqCurve::txEqDisplayPoints(
+        ParaEqCurve::txEqPointsFromParaEqData(blob));
 
     m_updatingFromModel = true;
-    bool loaded = false;
     {
         QSignalBlocker b(m_parametricWidget);
-        loaded = m_parametricWidget->loadFromJson(json);
+        m_parametricWidget->setParametricEq(shown.parametricEq);
+        m_parametricWidget->setBandCount(shown.bandCount);
+        m_parametricWidget->setGlobalGainDb(shown.preampDb);
+        // Thetis sets FrequencyMinHz then FrequencyMaxHz; each setter
+        // ignores a value on the wrong side of the other end, so a new
+        // range wholly above the old one would keep the old low end.
+        // Setting the high end first in that case lands the saved range.
+        if (shown.minHz >= m_parametricWidget->frequencyMaxHz()) {
+            m_parametricWidget->setFrequencyMaxHz(shown.maxHz);
+            m_parametricWidget->setFrequencyMinHz(shown.minHz);
+        } else {
+            m_parametricWidget->setFrequencyMinHz(shown.minHz);
+            m_parametricWidget->setFrequencyMaxHz(shown.maxHz);
+        }
+        m_parametricWidget->setPointsData(QVector<double>(shown.f.begin(), shown.f.end()),
+                                          QVector<double>(shown.g.begin(), shown.g.end()),
+                                          QVector<double>(shown.q.begin(), shown.q.end()));
     }
-    if (loaded) {
-        updateEditRowFromSelection();
-    }
+    syncParametricControlsFromWidget();
+    updateEditRowFromSelection();
     m_updatingFromModel = false;
+}
+
+// From Thetis eqform.cs:3352-3368 [v2.10.3.15] (setParaEQData, after the
+// points): the band count buttons (18 and 10 by count, 5 otherwise), the
+// low and high limits, Use Q Factors and the selected band's maximum, set
+// with their handlers detached. R-IOS-13 / R-R3-49: a curve loaded from
+// the model moved the panel's range and band count without them.
+void TxEqDialog::syncParametricControlsFromWidget()
+{
+    if (!m_parametricWidget) { return; }
+    const int count = m_parametricWidget->bandCount();
+    if (m_bandCountGroup) {
+        QSignalBlocker bg(m_bandCountGroup);
+        QRadioButton* radio = count == 10 ? m_paraBands10Radio
+                            : count == 18 ? m_paraBands18Radio
+                                          : m_paraBands5Radio;
+        if (radio) {
+            QSignalBlocker br(radio);
+            radio->setChecked(true);
+        }
+    }
+    if (m_paraLowSpin) {
+        QSignalBlocker b(m_paraLowSpin);
+        m_paraLowSpin->setValue(static_cast<int>(m_parametricWidget->frequencyMinHz()));
+    }
+    if (m_paraHighSpin) {
+        QSignalBlocker b(m_paraHighSpin);
+        m_paraHighSpin->setValue(static_cast<int>(m_parametricWidget->frequencyMaxHz()));
+    }
+    if (m_paraUseQFactorsChk) {
+        QSignalBlocker b(m_paraUseQFactorsChk);
+        m_paraUseQFactorsChk->setChecked(m_parametricWidget->parametricEq());
+    }
+    if (m_paraSelectedBandSpin) {
+        QSignalBlocker b(m_paraSelectedBandSpin);
+        m_paraSelectedBandSpin->setMaximum(count);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1468,6 +1520,7 @@ void TxEqDialog::syncFromModel()
     }
 
     m_updatingFromModel = false;
+    syncLegacyFromModel();  // R-R3-49 (parity Task 4)
 
     // Hydrate the parametric widget from the stored JSON blob (Codex P1 #2
     // on PR #159).  Initial profile-load path -- subsequent updates fire

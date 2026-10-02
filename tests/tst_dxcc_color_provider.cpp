@@ -37,24 +37,16 @@
 
 using namespace NereusSDR;
 
-// Path resolvers mirror C1 / C2 conventions: the cty.dat lives at
-// the worktree root; the ADIF sample fixture lives at
-// tests/fixtures/adif/sample.adi. __FILE__ resolves to
-// .../tests/tst_dxcc_color_provider.cpp inside the source tree.
+// Qt's configured source-directory lookup survives relative __FILE__ paths
+// produced by compiler caching in an isolated worktree.
 static QString resolveCtyDatPath()
 {
-    const QString file = QString::fromUtf8(__FILE__);
-    // __FILE__ = .../<worktree>/tests/tst_dxcc_color_provider.cpp
-    // strip the last two components -> .../<worktree>/
-    const QString root = QFileInfo(QFileInfo(file).dir().path()).path();
-    return root + "/cty.dat";
+    return QFINDTESTDATA("../cty.dat");
 }
 
 static QString resolveAdifPath()
 {
-    const QString file = QString::fromUtf8(__FILE__);
-    const QString testsDir = QFileInfo(file).dir().path();
-    return testsDir + "/fixtures/adif/sample.adi";
+    return QFINDTESTDATA("fixtures/adif/sample.adi");
 }
 
 class TestDxccColorProvider : public QObject {

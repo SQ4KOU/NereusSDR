@@ -106,9 +106,9 @@ sha256sum -c SHA256SUMS.txt
 
 **Current release: v0.5.2** (2026-05-24). Substantial release on top of v0.5.1 (and v0.5.0 underneath). One major epic plus a new SKU port, a new UI subsystem, and a polish tail: **Phase 3P-II External RF accessories** (AetherSDR 1:1 PGXL + TGXL baseline, Thetis analog S-Meter port with 4 RX modes, connection robustness with exponential auto-reconnect / keepalive / RTT-correlated ping / full PGXL pairing flow, advanced UI with Fault Log / Tune Memory / TX Interlock Policy / power-cap toast); **ANAN-G2E (HermesC10) SKU port** (new board enum, hardware profile verified against Thetis v2.10.3.15, codec wrappers, BPF1 algorithm, PA telemetry, P2 RX unblock + crash fix); **Applet visibility controller** (hamburger menu on AppletPanel banner, View → Containers → Applets show/hide, capability-gated availability, persistence); **polish tail** (4O3A integration cleanup, TCI live-state fixes + 5 review issues, PS-A persistence, PA profile / quit handling). v0.5.2's 3P-II bench-verification matrix (36 rows) is pending live PGXL + TGXL hardware; the ANAN-G2E matrix (12 rows) is pending live G2E hardware. **v0.5.1** (2026-05-15) was the patch before: three ship-blocking release-artifact fixes (Windows `rade.dll`, macOS x86_64 `Qt6::WebSockets`, HL2 + Win11 waterfall slider persistence), three correctness fixes (orphan `.bak` recovery, connect-state-stuck-green, VOX prime-on-connect), and two CodeQL pipeline maintenance fixes. v0.5.0 detail below.
 
-**Phase 3J-1: TCI v2.0 WebSocket server.** External programs (WSJT-X, JTDX, FreeDV, Quisk, ESDR3, N1MM, Log4OM, contest software) can now drive NereusSDR over Thetis-compatible TCI. Setup > CAT/Network > TCI Server configures bind interface, port, and sensor intervals; Tools > TCI Server opens the log viewer; the bottom-bar TCI indicator shows live state. The audio pipeline negotiates 8 / 12 / 16 / 44.1 / 48 kHz with per-stream resampling, so FreeDV 8 kHz, Quisk, and JTDX 12 kHz all work end-to-end. 15 closeout items shipped after the initial port stabilized the on-bench behaviour against real clients.
+**Phase 3J-1: TCI v2.0 WebSocket server.** External programs (WSJT-X, JTDX, FreeDV, Quisk, ESDR3, N1MM, Log4OM, contest software) can now drive NereusSDR over Thetis-compatible TCI. Setup > CAT/Network > TCI Server configures bind interface, port, and sensor intervals; Tools > TCI Server opens the log viewer; the bottom-bar TCI indicator shows live state. The audio pipeline negotiates 8 / 12 / 16 / 44.1 / 48 kHz with per-stream resampling, so FreeDV 8 kHz, Quisk, and JTDX 12 kHz all work end-to-end. 15 closeout items shipped after the initial port stabilized the on-bench behavior against real clients.
 
-**Phase 3J-2: Spot system, FreeDV Reporter, PSK Reporter.** Seven spot-source clients in one place: DX cluster, RBN, WSJT-X UDP, SpotCollector / DXLab UDP, POTA HTTPS, FreeDV Reporter Socket.IO, PSK Reporter IPFIX. Tools > Spot Hub (Ctrl+Shift+S) opens a 10-tab modeless dialog; Tools > FreeDV Reporter (Ctrl+Shift+R) opens the 14-column live station view with TX/RX highlights, QSY support, and 2-hour idle auto-removal. Spots render on the panadapter with collision-avoidance stacking and click-to-tune, coloured by a DXCC 4-tier resolver against cty.dat plus the operator's ADIF log.
+**Phase 3J-2: Spot system, FreeDV Reporter, PSK Reporter.** Seven spot-source clients in one place: DX cluster, RBN, WSJT-X UDP, SpotCollector / DXLab UDP, POTA HTTPS, FreeDV Reporter Socket.IO, PSK Reporter IPFIX. Tools > Spot Hub (Ctrl+Shift+S) opens a 10-tab modeless dialog; Tools > FreeDV Reporter (Ctrl+Shift+R) opens the 14-column live station view with TX/RX highlights, QSY support, and 2-hour idle auto-removal. Spots render on the panadapter with collision-avoidance stacking and click-to-tune, colored by a DXCC 4-tier resolver against cty.dat plus the operator's ADIF log.
 
 **Phase 3R: RADE as a true peer mode (RX + TX end-to-end).** RADE is wired as a first-class DSP mode (`DSPMode::RADE_U` / `DSPMode::RADE_L`) and not as a DIGU pretense, a virtual audio bus, or a slice-mute hack. RX decodes through a dedicated RadeChannel; the VFO flag gains a mode-aware SNR row and shows the EOO-decoded speaker callsign when known. TX is end-to-end: TxWorkerThread feeds the RADE encoder and `sendTxIq` carries the 24 kHz stereo modem output. RadeApplet docks in the right column when RADE is the active mode. Vendored `radae_nopy` (BSD-2-Clause) plus Opus with LPCNet/FARGAN add about 9 MB to the binary on every platform; neural-net weights are compiled into librade, so no external model file ships.
 
@@ -118,7 +118,7 @@ sha256sum -c SHA256SUMS.txt
 
 ### What's working end-to-end today
 
-- **Radio connection — every OpenHPSDR P1 and P2 board.** ANAN-G2 (Saturn / Protocol 2), ANAN-10/10E/100/100B/100D/200D, Hermes, Hermes Lite 2, Angelia, Orion, Metis, Red Pitaya — all discover, connect, stream I/Q, demodulate through WDSP, and persist per-radio settings keyed by MAC. `BoardCapabilities` registry drives per-board DDC count, ADC count, BPF, Alex filter, and sample-rate support; `HardwareProfile` engine overlays Thetis `clsHardwareSpecific.cs` behaviour for ambiguous discovery bytes (user-selectable radio-model override in ConnectionPanel).
+- **Radio connection — every OpenHPSDR P1 and P2 board.** ANAN-G2 (Saturn / Protocol 2), ANAN-10/10E/100/100B/100D/200D, Hermes, Hermes Lite 2, Angelia, Orion, Metis, Red Pitaya — all discover, connect, stream I/Q, demodulate through WDSP, and persist per-radio settings keyed by MAC. `BoardCapabilities` registry drives per-board DDC count, ADC count, BPF, Alex filter, and sample-rate support; `HardwareProfile` engine overlays Thetis `clsHardwareSpecific.cs` behavior for ambiguous discovery bytes (user-selectable radio-model override in ConnectionPanel).
 - **Sample-rate wiring** — P1 48 / 96 / 192 kHz (+ 384 on Red Pitaya); P2 48 / 96 / 192 / 384 / 768 / 1536 kHz. Per-MAC persistence under `hardware/<mac>/radioInfo/`. Inline reconnect banner on RadioInfoTab when the selected rate differs from the active wire rate.
 - **Full Display parity** — `Setup → Display` (Spectrum / Waterfall / Grid & Scales) is wired end-to-end to the renderer on both the QPainter fallback and the QRhi/Metal/Vulkan/D3D12 GPU path. 47-control verification matrix at `docs/architecture/phase3g8-verification/README.md`. Per-band grid state persists across all 14 bands (160m–6m + GEN + WWV + XVTR) via the first-class `Band` enum on `PanadapterModel`.
 - **Clarity adaptive display** — Clarity Blue waterfall palette, `ClarityController` with cadence / EWMA / deadband, `NoiseFloorEstimator` percentile, Reset-to-Smooth-Defaults button, Re-tune button + Clarity status badge in the spectrum overlay panel, per-band Clarity memory. Zoom persistence across restarts.
@@ -154,14 +154,16 @@ sha256sum -c SHA256SUMS.txt
 **Working now:**
 - OpenHPSDR Protocol 1 and Protocol 2 radio discovery, connection, and per-MAC persistence across the full ANAN / Hermes / Metis / Red Pitaya family
 - Per-MAC hardware sample-rate selection (P1 up to 192 / 384 kHz; P2 up to 1536 kHz)
-- WDSP v1.29 DSP engine — USB/LSB/AM/CW/DIGI/FM demodulation with full RX DSP parity (AGC advanced, EMNR, SNB, APF, 3-variant squelch, NB1/NB2 advanced, RIT/XIT, mute/pan/binaural, frequency lock, mode containers)
+- WDSP 2.10 DSP engine — USB/LSB/AM/CW/DIGI/FM demodulation with full RX DSP parity (AGC advanced, EMNR, SNB, APF, 3-variant squelch, NB1/NB2 advanced, RIT/XIT, mute/pan/binaural, frequency lock, mode containers)
+- NNR Standard/Premium noise reduction with per-radio/per-slice persistent tuning, right-click controls, and station-owned model assets
+- PureSignal 3 settings, correction assets, and AmpView shared by local and remote GUI sessions; remote actuation awaits R4. See the [operator notes](docs/architecture/wdsp210-operator-notes.md) and [software/hardware verification status](docs/architecture/wdsp210-verification/README.md)
 - Per-slice-per-band persistence of DSP state (`Slice<N>/Band<key>/*`)
 - Auto AGC-T with noise-floor tracker + MOX guard
 - Step attenuator (Classic + Adaptive auto-attenuation) and ADC-overload OVL badge
 - Real-time audio output via QAudioSink (48kHz stereo Int16)
 - FFTW wisdom caching with first-run progress dialog; audio device selection and persistence
 - GPU-accelerated spectrum + waterfall (QRhi — Metal, Vulkan, D3D12, OpenGL fallback); 4096-point FFTW3 FFT, Blackman-Harris window, 30 FPS, FFT-shift + mirror
-- Full `Setup → Display` wiring — 47 Spectrum / Waterfall / Grid controls live on both render paths; 7 colour schemes; per-band grid state across all 14 bands (160m–6m + GEN + WWV + XVTR)
+- Full `Setup → Display` wiring — 47 Spectrum / Waterfall / Grid controls live on both render paths; 7 color schemes; per-band grid state across all 14 bands (160m–6m + GEN + WWV + XVTR)
 - Clarity Blue waterfall palette + Clarity adaptive auto-tune, Re-tune button, per-band Clarity memory, zoom persistence
 - VFO flag widget — 4-tab layout (Audio / DSP / Mode / X-RIT), 4×2 DSP grid, AGC 5-button row, integrated S-meter level bar with dBm readout
 - CTUN panadapter — independent pan center and VFO, WDSP shift offsets, bin-subset zoom with hybrid FFT replan, off-screen VFO indicator with double-click recenter
@@ -169,7 +171,7 @@ sha256sum -c SHA256SUMS.txt
 - Phase word NCO tuning with Alex HPF/LPF/BPF filters, P1 full 17-bank C&C round-robin
 - Dockable / floatable containers with axis-lock, hover-reveal title bar, XML serialization
 - GPU-rendered meter engine (QRhi 3-pipeline), 31 `MeterItem` types, 38+ ItemGroup presets, ANANMM 7-needle with exact Thetis calibration, CrossNeedle dual fwd/rev, Magic Eye, History, Edge mode
-- Full Thetis-parity Container Settings Dialog — 3-column layout, per-item property editors (~155 fields), snapshot+revert, container-level Lock/Notes/Highlight/Minimises/Auto-height, Duplicate, Copy/Paste item settings
+- Full Thetis-parity Container Settings Dialog — 3-column layout, per-item property editors (~155 fields), snapshot+revert, container-level Lock/Notes/Highlight/Minimizes/Auto-height, Duplicate, Copy/Paste item settings
 - MMIO (Multi-Meter I/O) external-data subsystem — UDP / TCP-listen / TCP-client / Serial transports, JSON / XML / RAW formats, endpoint manager, variable picker, 10 fps polled bindings
 - VAX multi-channel audio bus — 5 platform backends, Windows virtual-cable auto-detect (VB-Audio / VAC / Voicemeeter / Dante / DAX), MasterOutputWidget, per-slice VAX channel routing
 - Interactive button grids — band (14), mode, filter, antenna, tuning step, macro — with hover/click feedback
@@ -276,12 +278,12 @@ sudo apt install qt6-base-dev qt6-base-private-dev \
   cmake ninja-build pkg-config \
   libfftw3-dev libgl1-mesa-dev \
   libasound2-dev libjack-jackd2-dev \
-  libpipewire-0.3-dev
+  libpipewire-0.3-dev libssl-dev
 
 # Arch / CachyOS / Manjaro
 sudo pacman -S qt6-base qt6-multimedia qt6-svg qt6-websockets \
   cmake ninja pkgconf fftw \
-  alsa-lib jack2 pipewire
+  alsa-lib jack2 pipewire openssl
 
 # macOS (Homebrew)
 brew install qt@6 ninja cmake pkgconf fftw
@@ -293,6 +295,8 @@ don't use those audio backends at runtime. `libpipewire-0.3-dev` (≥ 0.3.50) is
 strongly recommended on PipeWire-default distributions (Ubuntu 24.04+, Fedora 39+,
 Arch) — without it the Linux audio path falls back from the native libpipewire-0.3
 bridge to the older pactl route.
+
+`openssl` / `libssl-dev` (≥ 3.0) is hard-required (`find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)`) since Remote Daemon R2 Task 17: `src/core/security/CertificateStore` links libcrypto directly to mint nereusd's self-signed TLS certificate, because Qt6 has no certificate-*generation* API. macOS resolves this through Homebrew's `openssl@3` formula with no extra hints; it is not keg-only (verified via `brew info --json=v2 openssl@3` fix round 3), its files are ordinary live symlinks into `${HOMEBREW_PREFIX}/lib` and `.../include`, the same path already searched for every other Homebrew library. The macOS Intel release row (no arm64 keg to link against) and both Windows rows source OpenSSL differently; see the `find_package(OpenSSL)` block in `CMakeLists.txt` and `vcpkg.json` for the full per-platform acquisition story.
 
 ### Windows (FFTW3 Setup)
 
@@ -307,6 +311,21 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j$(nproc)
 ./build/NereusSDR
 ```
+
+The build produces **two** binaries. `NereusSDR` is the GUI. `nereusd` is the
+headless daemon added in remote-daemon R1: it links `NereusCore` only, no GUI
+object code, and is guarded by `tst_core_has_no_gui_includes`. It is installed
+separately so the GUI's release artifacts are unaffected:
+
+```
+cmake --install build --component nereusd
+```
+
+A plain `cmake --install` deliberately installs neither `nereusd` nor its
+systemd unit. Note that `release.yml` is the only workflow that runs
+`cmake --install` and it triggers only on `v*` tags, so **the daemon's install
+path has no PR-CI coverage**. Always pass `--profile <name>` when running
+`nereusd` by hand, or it writes the same settings the GUI reads.
 
 On first run, NereusSDR generates FFTW wisdom (optimized FFT plans). This takes ~15 minutes and shows a progress dialog. The wisdom file is cached for subsequent launches.
 
