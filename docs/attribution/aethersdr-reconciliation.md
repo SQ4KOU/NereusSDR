@@ -1446,3 +1446,28 @@ Claude Code assistance.
 | `src/models/SpotModeResolver.{h,cpp}` | `src/core/SpotModeResolver.{h,cpp}` | A: the four resolver functions copied (namespace AetherSDR -> NereusSDR, braces added). `dspModeForSpot()` is NereusSDR's: AetherSDR's radio mode names become `DSPMode` values (CW on the sideband AetherSDR's SSB rule uses, NFM as FM) and a FreeDV spot becomes RADE on the band default's sideband, as AetherSDR picks DIGU or DIGL for RADE (`src/gui/MainWindow_DigitalModes.cpp:340-350`). |
 | `src/gui/MainWindow.cpp` | `src/gui/MainWindow_Wiring.cpp:4382-4437` | `applySpotModeToSlice()` and the per-pan `spotTriggered` connect: the auto-mode half of AetherSDR's spot click for the clicked pan's slice. The Memory branch, the TCI spot notice and the FlexRadio `spot trigger` command have no NereusSDR counterpart. |
 | `src/gui/SpotHubDialog.cpp` | `src/gui/DxClusterDialog.cpp:2375, 2452-2457` | The Display tab's Auto mode toggle (`SpotAutoSwitchMode`, on by default), in the tab's Enabled/Disabled style. |
+
+## Per-slice panadapter marker colours
+
+Added 2026-09-23. Extends two existing AetherSDR-derived surfaces: the slice
+marker paint in `SpectrumWidget` (`drawSliceMarker`, already ported from
+AetherSDR's `drawSliceMarkers`) and the slice palette in `VfoWidget`. Before
+this change every slice's marker was painted in slice A's cyan. The colour
+rule follows current AetherSDR (JJ's choice, 2026-09-23), which differs from
+the `[@0cd4559]` revision the earlier ports were pinned to: at `[@0cd4559]` an
+unselected slice's edges were dimmed along with its centre line, and AetherSDR
+commit `7ca6bacf` (#3547) moved them to a neutral colour because dimmed
+passbands were hard to see.
+
+Rebased onto the landed Core/GUI trunk on 2026-10-01 by J.J. Boyd (KG4VCF),
+with AI assistance via OpenAI Codex. The bright palette stays in the shared
+`ControlRanges::kSliceColours` table; `VfoWidget::sliceColor()` indexes that
+table by slice id % 8. The dim palette and selected-last paint rule are
+added beside the trunk's station-presentation gates and foreign markers.
+
+| NereusSDR file | AetherSDR counterpart | Port notes | Mod-history wording |
+|---|---|---|---|
+| `src/gui/SpectrumWidget.h` (marker colours) | `src/gui/SpectrumWidget.cpp:7922-7926, 17454-17466` [@9f81dc00] | `SliceMarkerGeometry` gains `sliceIndex`, `active`, `lineColor`, `edgeColor`, the NereusSDR form of AetherSDR's per-overlay `isActive` plus `sliceColorForOverlay`. `sliceMarkerGeometry()` returns markers in paint order (unselected first, selected last). | "Per-slice marker colours: the selected slice in its slice colour, others with a dim centre line and triangle and neutral edges, selected slice painted last, following AetherSDR `src/gui/SpectrumWidget.cpp` drawSliceMarkers [@9f81dc00]." |
+| `src/gui/SpectrumWidget.cpp` (marker colours) | `src/gui/SpectrumWidget.cpp:7922-7926, 17454-17466, 17539-17544, 17587, 17590-17594, 17710-17714` [@9f81dc00] | Colour rule, alphas (edges 130, centre line 220, opaque triangle) and paint order preserved. NereusSDR divergences: the shaded passband stays the operator's `m_rxFilterColor` rather than the slice colour; the neutral colour is NereusSDR's `Style::kTextSecondary` rather than AetherSDR's theme `color.text.secondary`; the centre line keeps NereusSDR's 2 px width narrowing to 1 px near a filter edge, where AetherSDR uses a per-slice marker width setting; "selected" is RadioModel's active slice carried on each flag. Not ported: custom slice colours (`SliceColorManager`), radio-indexed letter colours (`SliceLabel::displayColorIndex`). The default A to H palette is included, as recorded below. | "Same as `.h`." |
+| `src/gui/widgets/VfoWidget.h` | `src/gui/SliceColors.h:5, 16-26` [@0cd4559] | `sliceDimColor(int)` beside `sliceColor(int)`, and `kSliceColorCount` (8); `setActiveSlice(bool)` / `isActiveSlice()` / `activeSliceChanged(bool)` carry the selection to the pan that draws the marker. | "Dim slice palette from AetherSDR `src/gui/SliceColors.h` [@0cd4559] (unchanged as `color.slice.dim.a-h` in `resources/themes/default-dark.json:227-234` [@9f81dc00])." |
+| `src/gui/widgets/VfoWidget.cpp` | `src/gui/SliceColors.h:5, 16-23` [@0cd4559] | All eight entries, A to H, bright and dim, preserved verbatim and indexed by slice % 8 as there. The earlier port carried only A to D, so slice E on the five-slice radios fell back to slice A's cyan; E is now orange (`#ffa000`, dim `#805000`), with F teal, G coral and H lavender. Current AetherSDR holds the same values as `color.slice.a-h` and `color.slice.dim.a-h` in `resources/themes/default-dark.json:217-234` [@9f81dc00]. | "Same as `.h`." |

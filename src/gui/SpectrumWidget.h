@@ -89,6 +89,15 @@
 //   2026-09-30 : VFO flag crash lane: test seams for the VFO marker and
 //                 passband. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-10-01: Completed attribution for per-slice marker colors
+//                 and selected-last paint order
+//                 by J.J. Boyd (KG4VCF), with AI assistance via
+//                 OpenAI Codex. Port introduced 2026-09-23.
+//                 Source: AetherSDR src/gui/SpectrumWidget.cpp [@9f81dc00].
+//                 Upstream has no per-file copyright header.
+//                 Copyright (C) 2024-2026 Jeremy (KK7GWY) and
+//                 AetherSDR contributors. GPLv3; project source:
+//                 https://github.com/ten9876/AetherSDR
 // =================================================================
 
 /*  enums.cs
@@ -1508,11 +1517,24 @@ public:
     /// One RX marker's inputs: a slice centre, that slice's own signed filter
     /// edges, and the flag whose bottom edge its triangle hangs from (null
     /// when the pan is drawing its own VFO with no flag created yet).
+    ///
+    /// Also which slice the marker belongs to, whether that slice is the one
+    /// the operator has selected (VfoWidget::isActiveSlice), and the two
+    /// colours that follow from those. The selected slice draws everything in
+    /// its own slice colour. Any other slice draws its centre line and
+    /// triangle in the darker partner of its colour and its filter edges in
+    /// a neutral grey. Both colours are opaque; drawSliceMarker applies each
+    /// element's own alpha. The shaded passband is not here: it stays the
+    /// operator's m_rxFilterColor for every slice.
     struct SliceMarkerGeometry {
         double centreHz{0.0};
         int    filterLowHz{0};
         int    filterHighHz{0};
         const VfoWidget* flag{nullptr};
+        int    sliceIndex{0};
+        bool   active{true};
+        QColor lineColor;  // VFO centre line and triangle
+        QColor edgeColor;  // filter edge lines
     };
 
     /// iPhone app plan Task 78 (the several-devices design, section 12
@@ -1550,8 +1572,9 @@ public:
     void drawForeignMarkersForTest(QPainter& p, const QRect& specRect, const QRect& wfRect)
     { drawForeignMarkers(p, specRect, wfRect); }
 
-    /// Every RX marker this pan must paint, one per hosted slice, in slice
-    /// order.
+    /// Every RX marker this pan must paint, one per hosted slice, in paint
+    /// order: the slices the operator has not selected first, in slice order,
+    /// then the selected slice, so its marker lands on top where two overlap.
     ///
     /// This is drawVfoMarker()'s whole decision, split out so it is reachable
     /// without a shown QRhiWidget. See tests/tst_pan_flag_positions.cpp.
