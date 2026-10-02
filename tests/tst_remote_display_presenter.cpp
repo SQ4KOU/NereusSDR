@@ -15,6 +15,7 @@
 // =================================================================
 
 #include "gui/RemoteDisplayPresenter.h"
+#include "core/session/media/SpectrumEndpoint.h"
 
 #include <QtTest>
 
@@ -98,6 +99,116 @@ class TstRemoteDisplayPresenter : public QObject {
     Q_OBJECT
 
 private slots:
+    void captureSnapshot_survivesDelayBlendRepeatAndRenewal()
+    {
+        RemoteDisplayPresenter presenter;
+        presenter.setRowPeriodNs(kPeriodNs);
+        auto first = frameAt(0, kPeriodNs, -100);
+        first.context.wideSamples = 8;
+        first.wideDbm = QVector<float>(8, -90);
+        SpectrumEndpointContext context;
+        context.codec = first.context;
+        context.source = {7, FftTier::Fine};
+        context.sourceGeneration = 0; // Unavailable on the existing wire.
+        context.exactCentreHz = 14e6;
+        context.exactSpanHz = 24000;
+        context.wideCentreHz = 14.001e6;
+        context.wideSpanHz = 96000;
+        context.wideband = {true, true, 1, 2, 17, 122880000};
+        const RemoteSpectrumCapture accepted{context, 14.002e6, 192000};
+        presenter.push(first, accepted);
+        context.wideCentreHz += 5000; // The next context cannot mutate a queued capture.
+        QVERIFY(presenter.takeDue(kPeriodNs, kPeriodNs).empty());
+        auto due = presenter.takeDue(2 * kPeriodNs, kPeriodNs);
+        QCOMPARE(due.size(), size_t(1));
+        QVERIFY(due.front().capture == accepted);
+        presenter.noteLoss();
+        due = presenter.takeDue(3 * kPeriodNs, kPeriodNs);
+        QCOMPARE(due.size(), size_t(1));
+        QCOMPARE(due.front().kind, RemoteDisplayPresenter::Kind::Repeated);
+        QVERIFY(due.front().capture == accepted);
+        auto next = first;
+        next.producerTimestamp = 5 * kPeriodNs;
+        next.waterfallDbm.fill(-60);
+        next.wideDbm.fill(-50);
+        presenter.push(next, accepted);
+        due = presenter.takeDue(6 * kPeriodNs, kPeriodNs);
+        QCOMPARE(due.size(), size_t(3)); // Two remaining gap slots plus the frame.
+        QCOMPARE(due.front().kind, RemoteDisplayPresenter::Kind::Blended);
+        for (const auto& item : due) { QVERIFY(item.capture == accepted); }
+        presenter.push(next, accepted);
+        presenter.restartChain(); // Renewal retains every queued immutable capture.
+        due = presenter.takeDue(6 * kPeriodNs, kPeriodNs);
+        QCOMPARE(due.size(), size_t(1));
+        QVERIFY(due.front().capture == accepted);
+        presenter.reset();
+        QCOMPARE(presenter.queued(), 0);
+    }
+
+    void changedCaptureIdentity_neverBlends_data()
+    {
+        QTest::addColumn<int>("change");
+        for (int i = 0; i < 7; ++i) { QTest::newRow(qPrintable(QString::number(i))) << i; }
+    }
+    void changedCaptureIdentity_neverBlends()
+    {
+        QFETCH(int, change);
+        RemoteDisplayPresenter presenter;
+        presenter.setRowPeriodNs(kPeriodNs);
+        auto frame = frameAt(0, kPeriodNs, -40);
+        SpectrumEndpointContext context;
+        context.codec = frame.context;
+        context.exactCentreHz = 14e6;
+        context.exactSpanHz = 24000;
+        context.wideCentreHz = 14e6;
+        context.wideSpanHz = 96000;
+        double sourceCentreHz = 14e6;
+        presenter.push(frame, RemoteSpectrumCapture{context, sourceCentreHz, 192000});
+        presenter.takeDue(kPeriodNs, std::nullopt);
+        switch (change) {
+        case 0: ++context.source.streamIndex; break;
+        case 1: context.source.tier = FftTier::Fine; break;
+        case 2: ++context.sourceGeneration; break;
+        case 3: context.wideCentreHz += 1000; break;
+        case 4: context.wideSpanHz *= 2; break;
+        case 5: sourceCentreHz += 1000; break;
+        case 6: ++context.wideband.sourceGeneration; break;
+        }
+        frame.producerTimestamp = 4 * kPeriodNs;
+        const RemoteSpectrumCapture capture{context, sourceCentreHz, 192000};
+        presenter.push(frame, capture);
+        const auto due = presenter.takeDue(4 * kPeriodNs, std::nullopt);
+        QCOMPARE(due.size(), size_t(1));
+        QVERIFY(due.front().capture == capture);
+    }
+
+    void changedCodecOrWideGeometry_neverBlendsEqualSizedExactRows_data()
+    {
+        QTest::addColumn<bool>("codecChange");
+        QTest::newRow("generation") << true;
+        QTest::newRow("wide-count") << false;
+    }
+    void changedCodecOrWideGeometry_neverBlendsEqualSizedExactRows()
+    {
+        QFETCH(bool, codecChange);
+        RemoteDisplayPresenter presenter;
+        presenter.setRowPeriodNs(kPeriodNs);
+        auto first = frameAt(0, kPeriodNs, -40);
+        first.context.wideSamples = 8;
+        first.wideDbm = QVector<float>(8, -30);
+        presenter.push(first, 14e6, 24000);
+        QCOMPARE(presenter.takeDue(kPeriodNs, std::nullopt).size(), size_t(1));
+        auto next = first;
+        next.producerTimestamp = 4 * kPeriodNs;
+        if (codecChange) { ++next.context.contextGeneration; }
+        else { next.context.wideSamples = 4; next.wideDbm.resize(4); }
+        presenter.push(next, 14e6, 24000);
+        const auto due = presenter.takeDue(4 * kPeriodNs, std::nullopt);
+        QCOMPARE(due.size(), size_t(1));
+        QCOMPARE(due.front().kind, RemoteDisplayPresenter::Kind::Frame);
+        QCOMPARE(presenter.counters().rowsBlended, quint64(0));
+    }
+
     // A display frame stamped at the same Core time as an audio sample is
     // presented when that sample plays, whatever the clock estimate's error.
     void mapPresentsWithTheAudioAndCancelsTheOffsetError()

@@ -2784,7 +2784,18 @@ public:
     // constructing each view. Not owned, not lifetime-tracked — MainWindow
     // outlives both.
     class SpectrumWidget* spectrumWidget() const { return m_spectrumWidget; }
-    void setSpectrumWidget(class SpectrumWidget* w) { m_spectrumWidget = w; }
+    void setSpectrumWidget(class SpectrumWidget* w) {
+        if (m_spectrumWidget == w) { return; }
+        m_spectrumWidget = w;
+        emit spectrumWidgetChanged(w);
+    }
+signals:
+    // 3D Stacked-Trace Spectrum Plan Task 22: lets a surface that follows
+    // the active panadapter (DisplayApplet) rebind when MainWindow
+    // repoints this view hook, instead of only ever reading it once at
+    // construction.
+    void spectrumWidgetChanged(class SpectrumWidget* w);
+public:
 
     // R1 Task 4: the abstract counterpart of m_spectrumWidget above.
     // RadioModel's own DSP-facing calls (SwrProtectionController overlay

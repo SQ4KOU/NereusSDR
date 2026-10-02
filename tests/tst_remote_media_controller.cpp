@@ -1324,6 +1324,8 @@ private slots:
         widget.setConnectionState(ConnectionState::Connected);
         widget.setExtendedViewAllowed(true);
         widget.setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+        // This single-frame identity fixture uses one 3D row per accepted frame.
+        widget.setDssRowDivider(1);
         widget.setWfUpdatePeriodMs(20);
         QSignalSpy localDemand(&widget, &SpectrumWidget::widebandExtensionStateChanged);
 
@@ -4232,6 +4234,8 @@ private slots:
         const float savedHigh = widget->wfHighThreshold();
         widget->setDisplayWindowPreservingHistory(14225000, 24000);
         widget->setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+        // This single-frame identity fixture uses one 3D row per accepted frame.
+        widget->setDssRowDivider(1);
         widget->setWfUpdatePeriodMs(20);
         stack.resize(600, 400);
         // Budget mechanics: fixed waterfall levels, so no pan asks the

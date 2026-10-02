@@ -32,6 +32,47 @@ private slots:
                  static_cast<int>(SpectrumRenderMode::Mode2D));
     }
 
+#ifdef NEREUS_GPU_SPECTRUM
+    // Once the ring wraps, two producer pushes between paints overwrite two
+    // texture rows. Uploading only the latest head leaves one stale ridge.
+    void skippedPaint_uploadsEveryChangedHeightRow() {
+        SpectrumWidget w;
+        w.resize(400, 200);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        w.setSpectrumRenderMode(static_cast<int>(SpectrumRenderMode::Mode3D));
+        w.setDssRowDivider(1);
+        for (int i = 0; i < kDssRows; ++i) {
+            w.pushWaterfallRowForTest(row(768, -100.0f));
+        }
+        QCOMPARE(w.m_dss.rowCount(), kDssRows);
+
+        w.m_dssUploadedRowGeneration = w.m_dss.rowGeneration();
+        w.m_dssLastUploadedHead = w.m_dss.headRing();
+        QVERIFY(w.dssHeightRowsToUpload().isEmpty());
+
+        w.pushWaterfallRowForTest(row(768, -90.0f));
+        QCOMPARE(w.dssHeightRowsToUpload(), QVector<int>{w.m_dss.headRing()});
+        w.m_dssUploadedRowGeneration = w.m_dss.rowGeneration();
+        w.m_dssLastUploadedHead = w.m_dss.headRing();
+
+        w.pushWaterfallRowForTest(row(768, -80.0f));
+        w.pushWaterfallRowForTest(row(768, -70.0f));
+        QVector<int> allRows;
+        for (int ring = 0; ring < kDssRows; ++ring) {
+            allRows.append(ring);
+        }
+        QCOMPARE(w.dssHeightRowsToUpload(), allRows);
+
+        w.m_dssUploadedRowGeneration = w.m_dss.rowGeneration();
+        w.m_dssLastUploadedHead = w.m_dss.headRing();
+        for (int i = 0; i < kDssRows; ++i) {
+            w.pushWaterfallRowForTest(row(768, -60.0f));
+        }
+        QCOMPARE(w.dssHeightRowsToUpload(), allRows);
+    }
+#endif
+
     void controlDefaults_matchUpstream() {
         SpectrumWidget w;
         QCOMPARE(w.dssFloorDepth(), 6);
