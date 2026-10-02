@@ -251,7 +251,7 @@ void TestDisplaySetupBinding::spectrumFillAlpha_pushReachesModelAndWidget()
 {
     RadioModel radioModel;
     SpectrumWidget w;
-    FFTEngine fftEngine(0);
+    NereusSDR::FFTEngine fftEngine(0);
     radioModel.setSpectrumWidget(&w);
     radioModel.setFftEngine(&fftEngine);
     SpectrumDefaultsPage page(&radioModel);
@@ -268,7 +268,7 @@ void TestDisplaySetupBinding::spectrumFillAlpha_loadReadsModel()
 {
     RadioModel radioModel;
     SpectrumWidget w;
-    FFTEngine fftEngine(0);
+    NereusSDR::FFTEngine fftEngine(0);
     radioModel.setSpectrumWidget(&w);
     radioModel.setFftEngine(&fftEngine);
     w.displaySettings()->setFillAlpha(0.25f);  // set before page construction
@@ -283,7 +283,7 @@ void TestDisplaySetupBinding::spectrumFillTrace_pushReachesModelAndWidget()
 {
     RadioModel radioModel;
     SpectrumWidget w;
-    FFTEngine fftEngine(0);
+    NereusSDR::FFTEngine fftEngine(0);
     radioModel.setSpectrumWidget(&w);
     radioModel.setFftEngine(&fftEngine);
     SpectrumDefaultsPage page(&radioModel);
@@ -301,7 +301,7 @@ void TestDisplaySetupBinding::spectrumFillTrace_loadReadsModel()
 {
     RadioModel radioModel;
     SpectrumWidget w;
-    FFTEngine fftEngine(0);
+    NereusSDR::FFTEngine fftEngine(0);
     radioModel.setSpectrumWidget(&w);
     radioModel.setFftEngine(&fftEngine);
     w.displaySettings()->setPanFill(false);  // set before page construction

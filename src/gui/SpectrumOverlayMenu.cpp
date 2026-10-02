@@ -31,6 +31,8 @@
 //   2026-09-29 - R-IOS-18: 3D Floor says what it does (how far below the
 //                 noise floor the 3D surface starts; kept per band).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-02: Restored pinned upstream comments during integration.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 
 #include "SpectrumOverlayMenu.h"
@@ -266,7 +268,7 @@ void SpectrumOverlayMenu::buildUI()
     dssLabel->setStyleSheet(QStringLiteral("font-weight: bold; color: #00b4d8; margin-top: 6px;"));
     layout->addWidget(dssLabel);
 
-    // ── Spectrum render mode (2D waterfall vs 3DSS) ─────────────────────
+    // ── Spectrum render mode (2D waterfall vs 3DSS) ───────────────────────
     auto* modeRow = new QHBoxLayout;
     modeRow->addWidget(new QLabel(QStringLiteral("Spectrum:"), this));
     m_renderModeCombo = new QComboBox(this);
@@ -282,7 +284,7 @@ void SpectrumOverlayMenu::buildUI()
     connect(m_renderModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int idx) { emit spectrumRenderModeChanged(idx); });
 
-    // ── 3D floor depth — how far below the noise floor to surface (dB) ──
+    // ── 3D floor depth — how far below the noise floor to surface (dB) ────
     auto* dssFloorRow = new QHBoxLayout;
     dssFloorRow->addWidget(new QLabel(QStringLiteral("3D Floor:"), this));
     m_dssFloorSlider = new QSlider(Qt::Horizontal, this);
@@ -303,7 +305,7 @@ void SpectrumOverlayMenu::buildUI()
         emit dssFloorDepthChanged(v);
     });
 
-    // ── 3D gain — how far down the strength range the colormap reaches ──
+    // ── 3D gain — how far down the strength range the colormap reaches ────
     auto* dssGainRow = new QHBoxLayout;
     dssGainRow->addWidget(new QLabel(QStringLiteral("3D Gain:"), this));
     m_dssGainSlider = new QSlider(Qt::Horizontal, this);
@@ -324,7 +326,7 @@ void SpectrumOverlayMenu::buildUI()
         emit dssGainChanged(v);
     });
 
-    // ── 3D span — how far the near rows overhang the plot edges ─────────
+    // ── 3D span — how far the near rows overhang the plot edges ───────────
     // Caps how much of the radio's offscreen spectrum the surface may use to
     // close the empty wedges beside it. 100 spends everything available, so a
     // source that ships no overhang is unaffected at any setting.

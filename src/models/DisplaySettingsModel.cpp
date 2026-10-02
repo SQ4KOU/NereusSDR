@@ -7,6 +7,8 @@
 // NereusSDR - DisplaySettingsModel implementation.
 //
 // Modification history (NereusSDR)
+//   2026-10-02: Lossless completed-grid reflection and selected RX snapshot
+//     persistence. J.J. Boyd / KG4VCF, AI-assisted via OpenAI Codex.
 //   Created 2026-08-09 by J.J. Boyd / KG4VCF, 3D Stacked-Trace Spectrum
 //     Plan Task 17. AI tooling: Claude Code.
 
@@ -18,6 +20,7 @@
 #include <QStringLiteral>
 
 #include <algorithm>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -74,6 +77,9 @@ void DisplaySettingsModel::setWfBlackLevel(int level)
 
 void DisplaySettingsModel::setRefLevel(float dBm)
 {
+    // Native Thetis strip editors now accept -200..200. The historical
+    // Task 18 rationale below remains; runtime reflection bypasses this
+    // editor clamp and assigns a completed pair atomically.
     // -180.0f..80.0f, not the popup slider's -160..20: SpectrumWidget's
     // Task 19 Ctrl-drag gesture (mouseMoveEvent's m_draggingDbmRange
     // branch) can legitimately drive refLevel up to upstream's own
@@ -83,7 +89,7 @@ void DisplaySettingsModel::setRefLevel(float dBm)
     // refLevel() == 60.0f, which a -160..20 model clamp would silently
     // narrow to 20.0f on the round trip back into the widget. Same
     // never-narrower-than-any-widget-write-path rule as Dyn Range above.
-    const float clamped = std::clamp(dBm, -180.0f, 80.0f);
+    const float clamped = std::clamp(dBm, -200.0f, 200.0f);
     if (qFuzzyCompare(m_refLevel + 1.0f, clamped + 1.0f)) { return; }
     m_refLevel = clamped;
     emit refLevelChanged(m_refLevel);
@@ -100,6 +106,17 @@ void DisplaySettingsModel::setDynamicRange(float dB)
     if (qFuzzyCompare(m_dynamicRange, clamped)) { return; }
     m_dynamicRange = clamped;
     emit dynamicRangeChanged(m_dynamicRange);
+}
+
+void DisplaySettingsModel::reflectDbmRange(float refLevel, float dynamicRange)
+{
+    if (!std::isfinite(refLevel) || !std::isfinite(dynamicRange)) { return; }
+    const bool refChanged = m_refLevel != refLevel;
+    const bool rangeChanged = m_dynamicRange != dynamicRange;
+    m_refLevel = refLevel;
+    m_dynamicRange = dynamicRange;
+    if (refChanged) { emit refLevelChanged(m_refLevel); }
+    if (rangeChanged) { emit dynamicRangeChanged(m_dynamicRange); }
 }
 
 void DisplaySettingsModel::setFillAlpha(float alpha)
@@ -233,8 +250,7 @@ void DisplaySettingsModel::load()
 
     const float gridMax = readFloat(QStringLiteral("DisplayGridMax"), -48.0f);
     const float gridMin = readFloat(QStringLiteral("DisplayGridMin"), -116.0f);
-    setRefLevel(gridMax);
-    setDynamicRange(gridMax - gridMin);
+    reflectDbmRange(gridMax, gridMax - gridMin);
 
     setFillAlpha(readFloat(QStringLiteral("DisplayFftFillAlpha"), 0.70f));
     setPanFill(readBool(QStringLiteral("DisplayPanFill"), true));
@@ -252,6 +268,11 @@ void DisplaySettingsModel::load()
 }
 
 void DisplaySettingsModel::save()
+{
+    save(m_refLevel, m_dynamicRange);
+}
+
+void DisplaySettingsModel::save(float receiveRefLevel, float receiveDynamicRange)
 {
     auto& s = AppSettings::instance();
 
@@ -275,8 +296,8 @@ void DisplaySettingsModel::save()
     // computed DisplayGridMin (refLevel - dynamicRange), not as its own
     // key -- there is no "DisplayGridDynamicRange" key anywhere in this
     // codebase.
-    writeFloat(QStringLiteral("DisplayGridMax"), m_refLevel);
-    writeFloat(QStringLiteral("DisplayGridMin"), m_refLevel - m_dynamicRange);
+    writeFloat(QStringLiteral("DisplayGridMax"), receiveRefLevel);
+    writeFloat(QStringLiteral("DisplayGridMin"), receiveRefLevel - receiveDynamicRange);
 
     writeFloat(QStringLiteral("DisplayFftFillAlpha"), m_fillAlpha);
     writeBool(QStringLiteral("DisplayPanFill"), m_panFill);

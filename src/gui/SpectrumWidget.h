@@ -112,7 +112,7 @@
 //   2026-10-02 - Integrated the display bindings and speed fold with
 //                landed remote capture, RX/TX and marker paths for
 //                NereusSDR by J.J. Boyd (KG4VCF), with AI-assisted
-//                conflict resolution via OpenAI Codex.
+//                integration via OpenAI Codex.
 //   2026-08-08 - Adapted the AetherSDR 3D controls and renderer state
 //                for NereusSDR by J.J. Boyd (KG4VCF), with AI-assisted
 //                transformation via Anthropic Claude Code. The 3D Speed
@@ -253,6 +253,8 @@ mw0lge@grange-lane.co.uk
 // its original terms and is not affected by this dual-licensing statement in any way.        //
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
+
+#include "gui/RemoteSpectrumCapture.h"
 
 #include <QWidget>
 #include <QVector>
@@ -480,6 +482,8 @@ public:
                                   double sourceCentreHz, double sampleRateHz,
                                   int grantedFftSize = 0);
     bool updateRemoteSpectrum(const DisplayCodecFrame& frame);
+    bool updateRemoteSpectrum(const DisplayCodecFrame& frame,
+                              const NereusSDR::RemoteSpectrumCapture& capture);
     /// R-R3-21 / R-R3-08: one remote waterfall row, captured at centreHz and
     /// spanHz, queued for the ticker without touching the trace: a gap row
     /// (blended or repeated) or a row presented after its pan was tuned. It
@@ -488,6 +492,9 @@ public:
     bool enqueueRemoteWaterfallRow(const QVector<float>& pixelsDbm,
                                    const QVector<float>& wideDbm,
                                    double centreHz, double spanHz);
+    bool enqueueRemoteWaterfallRow(const QVector<float>& pixelsDbm,
+                                   const QVector<float>& wideDbm,
+                                   const NereusSDR::RemoteSpectrumCapture& capture);
     /// Rows the ticker has not drawn yet; beyond this the oldest is dropped.
     static constexpr int kMaxRemoteRowQueue = 32;
     /// R-R3-21: a remote trace captured at centreHz and spanHz, drawn on the
@@ -2885,6 +2892,8 @@ private:
     bool                  m_txExternalWaterfall{false};
     bool m_remoteSpectrum{false};
     DisplayCodecContext m_remoteCodec;
+    NereusSDR::RemoteSpectrumCapture m_remoteCapture;
+    NereusSDR::RemoteSpectrumCapture m_pendingRemoteCapture;
     double m_remoteExactCentreHz{0.0};
     double m_remoteExactSpanHz{0.0};
     // Parity Task 17: the Core's granted FFT size and frame rate for this
@@ -2904,6 +2913,7 @@ private:
         QVector<float> wideDbm;
         double centreHz{0.0};
         double spanHz{0.0};
+        NereusSDR::RemoteSpectrumCapture capture;
     };
     QList<RemoteWaterfallRow> m_remoteRowQueue;
     quint64 m_remoteRowsDropped{0};
@@ -2952,7 +2962,8 @@ private:
     // 3DSS floor depth: how far below the measured noise floor the surface
     // baseline sits, in dB. Persisted per band (design doc section 6.3).
     int  m_dssFloorDepth{6};
-    int  m_dssGain{70};        // colour gamma 0-100
+    // colour gamma 0-100
+    int  m_dssGain{70};   // 3DSS colour floor 0-100 (gamma of palette lookup)
     // [original inline comment from AetherSDR src/gui/SpectrumWidget.h:1485-1492 @1872028c]
     // 3DSS wedge close-in 0-100 (see setDssRowSpan). Defaults to 100 -- fully
     // ON -- by deliberate product decision, not by omission: three reviewers
@@ -2973,7 +2984,14 @@ private:
     // rows -- see accumulateDssRow() and design doc section 4.5.
     int  m_dssRowDivider{0};
     QVector<float> m_dssFoldRow;
-    QVector<float> m_dssFoldFullBins;
+    QVector<float> m_dssFoldFullBins; // Actual calibrated wide plane, not raw DDC bins.
+    double m_dssFoldWideCenterMhz{0.0};
+    double m_dssFoldWideBandwidthMhz{0.0};
+    NereusSDR::RemoteSpectrumCapture m_dssFoldCapture;
+    bool m_dssFoldRemote{false};
+    bool m_dssFoldTx{false};
+    int m_localSpectrumSource{-1};
+    int m_dssFoldLocalSource{-1};
     int  m_dssFoldCount{0};
     double m_dssFoldCenterHz{0.0};
     double m_dssFoldBandwidthHz{0.0};
@@ -3143,6 +3161,7 @@ private:
     // see displaySettingsApplyCountForTest().
     DisplaySettingsModel* m_displaySettings{nullptr};
     int                   m_displaySettingsApplyCount{0};
+    bool                  m_reflectingDisplaySettings{false};
 
     // ---- VFO flag widgets ----
     QMap<int, VfoWidget*> m_vfoWidgets;

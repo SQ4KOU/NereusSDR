@@ -4,16 +4,52 @@
 // no-port-check: NereusSDR-original. See RemoteDisplayPresenter.h.
 //
 // Modification history (NereusSDR):
+//   2026-10-02: Capture identity separates incompatible presentation chains.
+//               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-26: created for R-R3-21 / R-R3-08 (display in step with audio).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/RemoteDisplayPresenter.h"
+#include "core/session/media/SpectrumEndpoint.h"
 
 #include <algorithm>
 #include <cmath>
 
 namespace NereusSDR {
+
+RemoteSpectrumCapture::RemoteSpectrumCapture(const SpectrumEndpointContext& context,
+                                               double centreHz, double sampleRateHz)
+    : sourceCentreHz(centreHz), sourceSampleRateHz(sampleRateHz),
+      m_context(std::make_shared<const SpectrumEndpointContext>(context))
+{
+}
+
+const SpectrumEndpointContext& RemoteSpectrumCapture::context() const
+{
+    static const SpectrumEndpointContext unavailable;
+    return m_context ? *m_context : unavailable;
+}
+
+bool RemoteSpectrumCapture::operator==(const RemoteSpectrumCapture& other) const
+{
+    if (sourceCentreHz != other.sourceCentreHz
+        || sourceSampleRateHz != other.sourceSampleRateHz) { return false; }
+    if (m_context == other.m_context) { return true; }
+    const auto& a = context();
+    const auto& b = other.context();
+    return a.codec.endpointId == b.codec.endpointId
+        && a.codec.contextGeneration == b.codec.contextGeneration
+        && a.codec.minDbm == b.codec.minDbm && a.codec.maxDbm == b.codec.maxDbm
+        && a.codec.traceSamples == b.codec.traceSamples
+        && a.codec.waterfallSamples == b.codec.waterfallSamples
+        && a.codec.wideSamples == b.codec.wideSamples
+        && a.source == b.source && a.sourceGeneration == b.sourceGeneration
+        && a.exactCentreHz == b.exactCentreHz && a.exactSpanHz == b.exactSpanHz
+        && a.wideCentreHz == b.wideCentreHz && a.wideSpanHz == b.wideSpanHz
+        && a.targetFps == b.targetFps && a.framesPerLine == b.framesPerLine
+        && a.wideband == b.wideband;
+}
 
 std::optional<qint64> audioPresentationMapNs(const AudioDelayInputs& inputs)
 {
@@ -99,16 +135,31 @@ void RemoteDisplayPresenter::enqueue(Item item)
 void RemoteDisplayPresenter::push(const DisplayCodecFrame& frame, double centreHz,
                                   double spanHz)
 {
+    SpectrumEndpointContext context;
+    context.codec = frame.context;
+    context.exactCentreHz = centreHz;
+    context.exactSpanHz = spanHz;
+    push(frame, RemoteSpectrumCapture{context, 0.0, 0.0});
+}
+
+void RemoteDisplayPresenter::push(const DisplayCodecFrame& frame,
+                                  const RemoteSpectrumCapture& capture)
+{
+    const double centreHz = capture.context().exactCentreHz;
+    const double spanHz = capture.context().exactSpanHz;
     Item item;
     item.kind = Kind::Frame;
     item.frame = frame;
+    item.capture = capture;
     item.centreHz = centreHz;
     item.spanHz = spanHz;
     item.producerNs = qint64(frame.producerTimestamp);
     if (frame.waterfallAdvance) {
         const bool sameChain = m_lastRow && m_rowPeriodNs > 0
             && m_lastRow->centreHz == centreHz && m_lastRow->spanHz == spanHz
+            && m_lastRow->capture == capture
             && m_lastRow->waterfallDbm.size() == frame.waterfallDbm.size()
+            && m_lastRow->wideDbm.size() == frame.wideDbm.size()
             && item.producerNs > m_lastRow->producerNs;
         if (sameChain) {
             // The row gapSlots between the last good row and this one: a lost
@@ -130,6 +181,7 @@ void RemoteDisplayPresenter::push(const DisplayCodecFrame& frame, double centreH
                     const float weight = float(double(slot) / double(gapSlots + 1));
                     Item row;
                     row.kind = Kind::Blended;
+                    row.capture = capture;
                     row.centreHz = centreHz;
                     row.spanHz = spanHz;
                     row.producerNs = m_lastRow->producerNs + gapNs * slot / (gapSlots + 1);
@@ -156,8 +208,9 @@ void RemoteDisplayPresenter::push(const DisplayCodecFrame& frame, double centreH
                 }
             }
         }
+        if (!sameChain) { m_rowDebt = 0; }
         m_lastRow = LastRow{item.producerNs, frame.waterfallDbm, frame.wideDbm,
-                            frame.context, centreHz, spanHz, std::nullopt};
+                            frame.context, capture, centreHz, spanHz, std::nullopt};
         m_repeats = 0;
         if (m_rowDebt > 0) {
             // Its slot was already drawn by a repeat: the trace only.
@@ -219,6 +272,7 @@ std::vector<RemoteDisplayPresenter::Item> RemoteDisplayPresenter::takeDue(
         ++m_repeats;
         Item row;
         row.kind = Kind::Repeated;
+        row.capture = m_lastRow->capture;
         row.centreHz = m_lastRow->centreHz;
         row.spanHz = m_lastRow->spanHz;
         row.producerNs = m_lastRow->producerNs + qint64(m_repeats) * m_rowPeriodNs;

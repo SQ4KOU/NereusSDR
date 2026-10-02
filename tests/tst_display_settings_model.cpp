@@ -309,9 +309,9 @@ private slots:
         QCOMPARE(m.wfBlackLevel(), 125);
 
         m.setRefLevel(-9999.0f);
-        QVERIFY(qFuzzyCompare(m.refLevel() + 1000.0f, -180.0f + 1000.0f));
+        QVERIFY(qFuzzyCompare(m.refLevel() + 1000.0f, -200.0f + 1000.0f));
         m.setRefLevel(9999.0f);
-        QVERIFY(qFuzzyCompare(m.refLevel() + 1000.0f, 80.0f + 1000.0f));
+        QVERIFY(qFuzzyCompare(m.refLevel() + 1000.0f, 200.0f + 1000.0f));
 
         m.setDynamicRange(-9999.0f);
         QVERIFY(qFuzzyCompare(m.dynamicRange(), 10.0f));

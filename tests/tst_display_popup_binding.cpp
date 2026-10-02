@@ -54,6 +54,7 @@
 
 #include <QtTest/QtTest>
 #include <QMouseEvent>
+#include <QMetaMethod>
 #include <QSignalSpy>
 #include <QSlider>
 #include <QComboBox>
@@ -288,10 +289,9 @@ private slots:
     // reading the popup back cannot alone tell "setValues() reads the
     // model" apart from "setValues() reads the widget" -- both would
     // show the right number. This test forces a real disagreement first:
-    // it severs one plain-pointer leg of bindDisplaySettings()'s
-    // model-to-widget bridge for wfColorGain (the "eight" group, pushed
-    // by a plain connect straight to SpectrumWidget::setWfColorGain) and
-    // for dssGain (one of the "six" 3D group, same shape), so the
+    // it severs one signal/receiver leg of bindDisplaySettings()'s
+    // model-to-widget bridge for wfColorGain (the "eight" group) and
+    // for dssGain (one of the "six" 3D group), so the
     // widget's own member is provably stale by the time the popup opens.
     //
     // Catches: setValues()/setDssValues() still reading SpectrumWidget's
@@ -303,10 +303,12 @@ private slots:
         setUpWidget(w);
         DisplaySettingsModel* m = w.displaySettings();
 
-        QVERIFY(QObject::disconnect(m, &DisplaySettingsModel::wfColorGainChanged,
-                                     &w, &SpectrumWidget::setWfColorGain));
-        QVERIFY(QObject::disconnect(m, &DisplaySettingsModel::dssGainChanged,
-                                     &w, &SpectrumWidget::setDssGain));
+        // Reflection guards use lambda appliers now. Sever the same two
+        // signal/receiver legs, independently of their callable representation.
+        QVERIFY(QObject::disconnect(m, QMetaMethod::fromSignal(&DisplaySettingsModel::wfColorGainChanged),
+                                     &w, QMetaMethod()));
+        QVERIFY(QObject::disconnect(m, QMetaMethod::fromSignal(&DisplaySettingsModel::dssGainChanged),
+                                     &w, QMetaMethod()));
 
         m->setWfColorGain(81);
         m->setDssGain(22);

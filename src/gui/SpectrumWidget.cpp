@@ -140,7 +140,7 @@
 //   2026-10-02 - Integrated the display bindings and speed fold with
 //                landed remote capture, RX/TX and marker paths for
 //                NereusSDR by J.J. Boyd (KG4VCF), with AI-assisted
-//                conflict resolution via OpenAI Codex.
+//                integration via OpenAI Codex.
 //   2026-08-08 - Adapted the AetherSDR 3D renderer and GPU upload path
 //                for NereusSDR by J.J. Boyd (KG4VCF), with AI-assisted
 //                transformation via Anthropic Claude Code. The 3D Speed
@@ -1204,8 +1204,8 @@ void SpectrumWidget::saveSettings()
     // the persister for its own fourteen fields (Colour Scheme,
     // Colour Gain, Black Level, Ref Level, Dyn Range, Fill Alpha, Fill
     // trace, Spectrum mode, 3D Gain, 3D Span, 3D Angle, 3D Speed, 3D
-    // Slice Shadow, split fraction). The native receive-grid protection below
-    // remains during integration. syncDisplaySettingsFromWidget()
+    // Slice Shadow, split fraction). The receive snapshot below preserves
+    // the native keyed-save protection. syncDisplaySettingsFromWidget()
     // pushes this widget's current values into the model one more time
     // first (every write site already pushes on change, so this is
     // normally a no-op; not relied upon to be, since a caller could in
@@ -1215,7 +1215,6 @@ void SpectrumWidget::saveSettings()
     // persists per band on PanadapterModel (see the class-header comment
     // on setDssFloorDepth()/dssFloorDepth()).
     syncDisplaySettingsFromWidget();
-    m_displaySettings->save();
 
     // The RECEIVE store, not the live pair. While transmitting the live pair
     // IS the transmit grid, so writing it here would put transmit values
@@ -1224,8 +1223,7 @@ void SpectrumWidget::saveSettings()
     {
         const float rxRef   = m_moxOverlay ? m_rxRefLevel     : m_refLevel;
         const float rxRange = m_moxOverlay ? m_rxDynamicRange : m_dynamicRange;
-        writeFloat(QStringLiteral("DisplayGridMax"), rxRef);
-        writeFloat(QStringLiteral("DisplayGridMin"), rxRef - rxRange);
+        m_displaySettings->save(rxRef, rxRange);
     }
     // The RECEIVE span, for the same reason as the grid above. While keyed
     // m_bandwidthHz is the TRANSMIT span, so a save landing mid-transmission
@@ -1503,6 +1501,10 @@ void SpectrumWidget::clearRemoteSpectrum()
     m_remoteFps = 0;
     recomputeExtendedMode();
     m_dss.clear();
+    m_dssFoldCount = 0;
+    m_dssFoldRow.clear();
+    m_dssFoldFullBins.clear();
+    m_pendingRemoteCapture = {};
     m_dssRowsPushed = 0;
     m_dssScrollProgressRows = 0.0f;
     // R-R3-21: rows not yet drawn go with the history. A renewal
@@ -1532,6 +1534,7 @@ void SpectrumWidget::setRemoteSpectrumContext(const SpectrumEndpointContext& con
                            context.exactCentreHz, context.exactSpanHz);
     }
     m_remoteCodec = context.codec;
+    m_remoteCapture = {context, sourceCentreHz, sampleRateHz};
     m_remoteExactCentreHz = context.exactCentreHz;
     m_remoteExactSpanHz = context.exactSpanHz;
     m_remoteWidebandAvailable = context.wideband.available;
@@ -1592,6 +1595,13 @@ void SpectrumWidget::onWaterfallTick()
 
 bool SpectrumWidget::updateRemoteSpectrum(const DisplayCodecFrame& frame)
 {
+    return updateRemoteSpectrum(frame, m_remoteCapture);
+}
+
+bool SpectrumWidget::updateRemoteSpectrum(const DisplayCodecFrame& frame,
+                                          const RemoteSpectrumCapture& capture)
+{
+    if (!(capture == m_remoteCapture)) { return false; }
     const auto& context = frame.context;
     if (!m_remoteSpectrum || m_remoteCodec.traceSamples == 0
         || !qFuzzyCompare(m_centerHz, m_remoteExactCentreHz)
@@ -1633,7 +1643,7 @@ bool SpectrumWidget::updateRemoteSpectrum(const DisplayCodecFrame& frame)
         // R-R3-21: queued, not one overwritten slot, so every row the Core
         // sent is drawn in its own place.
         m_remoteRowQueue.append({m_wfRenderedPixels, frame.wideDbm,
-                                 m_remoteExactCentreHz, m_remoteExactSpanHz});
+                                 m_remoteExactCentreHz, m_remoteExactSpanHz, capture});
         while (m_remoteRowQueue.size() > kMaxRemoteRowQueue) {
             m_remoteRowQueue.removeFirst();
             ++m_remoteRowsDropped;
@@ -1648,6 +1658,20 @@ bool SpectrumWidget::enqueueRemoteWaterfallRow(const QVector<float>& pixelsDbm,
                                                const QVector<float>& wideDbm,
                                                double centreHz, double spanHz)
 {
+    SpectrumEndpointContext context = m_remoteCapture.context();
+    context.exactCentreHz = centreHz;
+    context.exactSpanHz = spanHz;
+    return enqueueRemoteWaterfallRow(pixelsDbm, wideDbm,
+        RemoteSpectrumCapture{context, m_remoteCapture.sourceCentreHz,
+                              m_remoteCapture.sourceSampleRateHz});
+}
+
+bool SpectrumWidget::enqueueRemoteWaterfallRow(const QVector<float>& pixelsDbm,
+                                               const QVector<float>& wideDbm,
+                                               const RemoteSpectrumCapture& capture)
+{
+    const double centreHz = capture.context().exactCentreHz;
+    const double spanHz = capture.context().exactSpanHz;
     const auto finite = [](const QVector<float>& plane) {
         return std::all_of(plane.cbegin(), plane.cend(),
                            [](float value) { return std::isfinite(value); });
@@ -1661,7 +1685,7 @@ bool SpectrumWidget::enqueueRemoteWaterfallRow(const QVector<float>& pixelsDbm,
         && qFuzzyCompare(spanHz, m_bandwidthHz)) {
         applyVisualNotchDent(pixels);
     }
-    m_remoteRowQueue.append({std::move(pixels), wideDbm, centreHz, spanHz});
+    m_remoteRowQueue.append({std::move(pixels), wideDbm, centreHz, spanHz, capture});
     while (m_remoteRowQueue.size() > kMaxRemoteRowQueue) {
         m_remoteRowQueue.removeFirst();
         ++m_remoteRowsDropped;
@@ -1757,7 +1781,10 @@ void SpectrumWidget::drainRemoteWaterfallRows()
             row.wideDbm.clear();
         }
         m_pendingRemoteWide = row.wideDbm;
+        m_pendingRemoteCapture = row.capture;
         pushWaterfallRow(row.pixelsDbm);
+        m_pendingRemoteWide.clear();
+        m_pendingRemoteCapture = {};
         ++m_remoteRowsPushed;
         m_lastRemoteRowPushed = row.pixelsDbm;
     }
@@ -1791,39 +1818,41 @@ void SpectrumWidget::setDisplayWindowPreservingHistory(double centerHz,
 // push through syncDisplaySettingsFromWidget(), called explicitly from
 // every one of their write sites instead (see that method and its
 // call sites).
+// Integration: renderer reflection still emits to controls, but every
+// model-to-renderer applier is suppressed while publishing native state.
 void SpectrumWidget::bindDisplaySettings()
 {
     // ---- Model -> widget (all fifteen) ----
     connect(m_displaySettings, &DisplaySettingsModel::wfColorSchemeChanged,
-            this, [this](int v) { setWfColorScheme(static_cast<WfColorScheme>(v)); });
+            this, [this](int v) { if (!m_reflectingDisplaySettings) { setWfColorScheme(static_cast<WfColorScheme>(v)); } });
     connect(m_displaySettings, &DisplaySettingsModel::wfColorGainChanged,
-            this, &SpectrumWidget::setWfColorGain);
+            this, [this](auto v) { if (!m_reflectingDisplaySettings) { setWfColorGain(v); } });
     connect(m_displaySettings, &DisplaySettingsModel::wfBlackLevelChanged,
-            this, &SpectrumWidget::setWfBlackLevel);
+            this, [this](auto v) { if (!m_reflectingDisplaySettings) { setWfBlackLevel(v); } });
     connect(m_displaySettings, &DisplaySettingsModel::refLevelChanged,
-            this, &SpectrumWidget::setRefLevel);
+            this, [this](auto v) { if (!m_reflectingDisplaySettings) { setRefLevel(v); } });
     connect(m_displaySettings, &DisplaySettingsModel::dynamicRangeChanged,
-            this, &SpectrumWidget::setDynamicRange);
+            this, [this](auto v) { if (!m_reflectingDisplaySettings) { setDynamicRange(v); } });
     connect(m_displaySettings, &DisplaySettingsModel::fillAlphaChanged,
-            this, &SpectrumWidget::setFillAlpha);
+            this, [this](auto v) { if (!m_reflectingDisplaySettings) { setFillAlpha(v); } });
     connect(m_displaySettings, &DisplaySettingsModel::panFillChanged,
-            this, &SpectrumWidget::setPanFillEnabled);
+            this, [this](auto v) { if (!m_reflectingDisplaySettings) { setPanFillEnabled(v); } });
     connect(m_displaySettings, &DisplaySettingsModel::spectrumFracChanged,
-            this, &SpectrumWidget::setSpectrumFrac);
+            this, [this](auto v) { if (!m_reflectingDisplaySettings) { setSpectrumFrac(v); } });
     connect(m_displaySettings, &DisplaySettingsModel::spectrumRenderModeChanged,
-            this, &SpectrumWidget::setSpectrumRenderMode);
+            this, [this](auto v) { if (!m_reflectingDisplaySettings) { setSpectrumRenderMode(v); } });
     connect(m_displaySettings, &DisplaySettingsModel::dssFloorDepthChanged,
-            this, &SpectrumWidget::setDssFloorDepth);
+            this, [this](auto v) { if (!m_reflectingDisplaySettings) { setDssFloorDepth(v); } });
     connect(m_displaySettings, &DisplaySettingsModel::dssGainChanged,
-            this, &SpectrumWidget::setDssGain);
+            this, [this](auto v) { if (!m_reflectingDisplaySettings) { setDssGain(v); } });
     connect(m_displaySettings, &DisplaySettingsModel::dssRowSpanChanged,
-            this, &SpectrumWidget::setDssRowSpan);
+            this, [this](auto v) { if (!m_reflectingDisplaySettings) { setDssRowSpan(v); } });
     connect(m_displaySettings, &DisplaySettingsModel::dssAngleChanged,
-            this, &SpectrumWidget::setDssAngle);
+            this, [this](auto v) { if (!m_reflectingDisplaySettings) { setDssAngle(v); } });
     connect(m_displaySettings, &DisplaySettingsModel::dssRowDividerChanged,
-            this, &SpectrumWidget::setDssRowDivider);
+            this, [this](auto v) { if (!m_reflectingDisplaySettings) { setDssRowDivider(v); } });
     connect(m_displaySettings, &DisplaySettingsModel::threeDSliceDepthChanged,
-            this, &SpectrumWidget::setThreeDSliceDepth);
+            this, [this](auto v) { if (!m_reflectingDisplaySettings) { setThreeDSliceDepth(v); } });
 
     // ---- Widget -> model (3D seven only; the other eight push explicitly
     //      via syncDisplaySettingsFromWidget()) ----
@@ -1865,11 +1894,11 @@ void SpectrumWidget::bindDisplaySettings()
 // has a value for (the Task 17 per-band bridge keeps it current).
 void SpectrumWidget::syncDisplaySettingsFromWidget()
 {
+    const QScopedValueRollback<bool> reflecting(m_reflectingDisplaySettings, true);
     m_displaySettings->setWfColorScheme(static_cast<int>(m_wfColorScheme));
     m_displaySettings->setWfColorGain(m_wfColorGain);
     m_displaySettings->setWfBlackLevel(m_wfBlackLevel);
-    m_displaySettings->setRefLevel(m_refLevel);
-    m_displaySettings->setDynamicRange(m_dynamicRange);
+    m_displaySettings->reflectDbmRange(m_refLevel, m_dynamicRange);
     m_displaySettings->setFillAlpha(m_fillAlpha);
     m_displaySettings->setPanFill(m_panFill);
     m_displaySettings->setSpectrumFrac(m_spectrumFrac);
@@ -2059,11 +2088,14 @@ void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
 // went red, because the model-to-widget round trip this task adds
 // narrowed 60.0f back down to 20.0f. Same never-narrower-than-any-
 // widget-write-path rule as Dyn Range.
+// Integration: native editor bounds are now -200..200; reflection of
+// already accepted state bypasses this editing applier entirely.
 void SpectrumWidget::setRefLevel(float dBm)
 {
-    const float clamped = qBound(-180.0f, dBm, 80.0f);
+    const float clamped = qBound(-200.0f, dBm, 200.0f);
     if (std::abs(m_refLevel - clamped) < 1e-6f) { return; }
     m_refLevel = clamped;
+    markOverlayDirty();
     update();
     scheduleSettingsSave();
     ++m_displaySettingsApplyCount;
@@ -2075,6 +2107,7 @@ void SpectrumWidget::setDynamicRange(float dB)
     const float clamped = qBound(10.0f, dB, 200.0f);
     if (std::abs(m_dynamicRange - clamped) < 1e-6f) { return; }
     m_dynamicRange = clamped;
+    markOverlayDirty();
     update();
     scheduleSettingsSave();
     ++m_displaySettingsApplyCount;
@@ -2088,6 +2121,7 @@ void SpectrumWidget::setSpectrumFrac(float frac)
     const float clamped = qBound(0.10f, frac, 0.90f);
     if (std::abs(m_spectrumFrac - clamped) < 1e-6f) { return; }
     m_spectrumFrac = clamped;
+    markOverlayDirty();
     update();
     scheduleSettingsSave();
     ++m_displaySettingsApplyCount;
@@ -3417,7 +3451,7 @@ void SpectrumWidget::setTxExternalWaterfall(bool on)
 void SpectrumWidget::pushTxWaterfallRow(int receiverId,
                                         const QVector<float>& binsDbm)
 {
-    Q_UNUSED(receiverId);
+    m_localSpectrumSource = receiverId;
     pushWaterfallRow(txWaterfallRow(binsDbm));
 }
 
@@ -4206,7 +4240,7 @@ void SpectrumWidget::updateSpectrumLinear(int receiverId,
                                           double windowEnb,
                                           double dbmOffset)
 {
-    Q_UNUSED(receiverId);
+    m_localSpectrumSource = receiverId;
     if (m_remoteSpectrum || binsLinear.isEmpty()) { return; }
 
     // FFT size change detection.  When the FFTEngine replans (e.g. via
@@ -5038,7 +5072,13 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& specRect)
     // runs, so nothing is wasted by leaving that call site alone.
     // From AetherSDR SpectrumWidget.cpp:14915-14933 [@1872028c] (paintEvent's
     // is3D branch).
+    // Spectrum region: the 3DSS surface, or the classic bg + grid + FFT trace.
+    // 3DSS replaces ONLY the spectrum trace — the divider, freq scale, waterfall,
+    // overlays, and scales below run identically in both modes.
     if (m_spectrumRenderMode == SpectrumRenderMode::Mode3D) {
+        // Cap the software surface (like the GPU path) so a HiDPI/maximized
+        // window doesn't rebuild a multi-megapixel QImage every frame; the
+        // surface is intrinsically low-res, so stretch it on draw.
         const QImage& surf = buildDssImage(
             specRect.size().boundedTo(QSize(kDssFallbackMaxW, kDssFallbackMaxH)),
             0);
@@ -5785,7 +5825,7 @@ void SpectrumWidget::drawDbmScaleLabels(QPainter& p, const QRect& specRect,
     }
 }
 
-// ─── dBm scale strip for 3D stacked-trace mode ───────────────────────────
+// ─── dBm scale strip for 3D stacked-trace mode ───────────────────────────────
 // From AetherSDR SpectrumWidget.cpp:17320-17335 [@1872028c]
 //
 // In 3D mode, a single right-side axis cannot be pixel-exact for every
@@ -7153,30 +7193,64 @@ QVector<SpectrumWidget::DssShadowBand> SpectrumWidget::buildDssShadowBands() con
 // A size or frequency-frame change on either channel discards whatever was
 // accumulated and starts a fresh fold at count 1, rather than combining
 // bin indices that now represent different frequencies.
+// Integration: the full-DDC snapshot is cropped and calibrated per tick,
+// then the actual exact and wide planes are folded. Remote wide planes
+// retain their accepted capture metadata through the native presentation queue.
 void SpectrumWidget::accumulateDssRow(const QVector<float>& wfPixelsDbm)
 {
-    if (m_dssFoldCount == 0
-        || wfPixelsDbm.size() != m_dssFoldRow.size()
-        || m_lastFullBinsDbm.size() != m_dssFoldFullBins.size()
+    // Fold the planes that this tick actually supplied, after calibration.
+    // A remote wide plane already carries Core calibration and its capture axes.
+    QVector<float> wide;
+    double wideCenterMhz = 0.0;
+    double wideBandwidthMhz = 0.0;
+    const RemoteSpectrumCapture capture = m_remoteSpectrum
+        ? m_pendingRemoteCapture : RemoteSpectrumCapture{};
+    if (!m_moxOverlay) {
+        if (m_remoteSpectrum) {
+            wide = m_pendingRemoteWide;
+            wideCenterMhz = capture.context().wideCentreHz / 1.0e6;
+            wideBandwidthMhz = capture.context().wideSpanHz / 1.0e6;
+        } else {
+            wide = buildDssWideRow(m_lastFullBinsDbm, wideCenterMhz, wideBandwidthMhz);
+            const float offset = displayCalOffsetDb();
+            for (float& dbm : wide) { dbm += offset; }
+        }
+    }
+    const bool incompatible = wfPixelsDbm.size() != m_dssFoldRow.size()
+        || wide.size() != m_dssFoldFullBins.size()
         || m_centerHz != m_dssFoldCenterHz
         || m_bandwidthHz != m_dssFoldBandwidthHz
         || m_ddcCenterHz != m_dssFoldDdcCenterHz
-        || m_sampleRateHz != m_dssFoldSampleRateHz) {
+        || m_sampleRateHz != m_dssFoldSampleRateHz
+        || wideCenterMhz != m_dssFoldWideCenterMhz
+        || wideBandwidthMhz != m_dssFoldWideBandwidthMhz
+        || m_remoteSpectrum != m_dssFoldRemote || m_moxOverlay != m_dssFoldTx
+        || (m_remoteSpectrum ? !(capture == m_dssFoldCapture)
+                             : m_localSpectrumSource != m_dssFoldLocalSource);
+    if (incompatible) {
+        // Keep painted history, but do not smooth a new source against it.
+        m_dss.resetInputSmoothing();
+    }
+    if (m_dssFoldCount == 0 || incompatible) {
         m_dssFoldRow = wfPixelsDbm;
-        m_dssFoldFullBins = m_lastFullBinsDbm;
+        m_dssFoldFullBins = wide;
         m_dssFoldCount = 1;
         m_dssFoldCenterHz = m_centerHz;
         m_dssFoldBandwidthHz = m_bandwidthHz;
         m_dssFoldDdcCenterHz = m_ddcCenterHz;
         m_dssFoldSampleRateHz = m_sampleRateHz;
+        m_dssFoldWideCenterMhz = wideCenterMhz;
+        m_dssFoldWideBandwidthMhz = wideBandwidthMhz;
+        m_dssFoldCapture = capture;
+        m_dssFoldRemote = m_remoteSpectrum;
+        m_dssFoldTx = m_moxOverlay;
+        m_dssFoldLocalSource = m_localSpectrumSource;
     } else {
-        const int n = m_dssFoldRow.size();
-        for (int i = 0; i < n; ++i) {
+        for (int i = 0; i < m_dssFoldRow.size(); ++i) {
             m_dssFoldRow[i] = std::max(m_dssFoldRow[i], wfPixelsDbm[i]);
         }
-        const int fullN = m_dssFoldFullBins.size();
-        for (int i = 0; i < fullN; ++i) {
-            m_dssFoldFullBins[i] = std::max(m_dssFoldFullBins[i], m_lastFullBinsDbm[i]);
+        for (int i = 0; i < wide.size(); ++i) {
+            m_dssFoldFullBins[i] = std::max(m_dssFoldFullBins[i], wide[i]);
         }
         ++m_dssFoldCount;
     }
@@ -7194,28 +7268,10 @@ void SpectrumWidget::pushDssRow(const QVector<float>& wfPixelsDbm)
 {
     const double centerMhz    = m_centerHz    / 1.0e6;
     const double bandwidthMhz = m_bandwidthHz / 1.0e6;
-    double wideCenterMhz = 0.0;
-    double wideBandwidthMhz = 0.0;
-    // Task 24: sourced from the folded m_dssFoldFullBins, not
-    // m_lastFullBinsDbm directly -- see accumulateDssRow() and this
-    // method's own header comment.
-    QVector<float> wide;
-    if (m_remoteSpectrum && !m_moxOverlay) {
-        wide = m_pendingRemoteWide;
-        wideCenterMhz = m_remoteWideCentreHz / 1.0e6;
-        wideBandwidthMhz = m_remoteWideSpanHz / 1.0e6;
-    } else if (!m_moxOverlay) {
-        wide = buildDssWideRow(
-            m_dssFoldFullBins, wideCenterMhz, wideBandwidthMhz);
-        // The off-screen DDC bins share the local receive row's raw dBm
-        // scale; calibrate this 3D continuation once as well.
-        const float offset = displayCalOffsetDb();
-        if (offset != 0.0f) {
-            for (float& dbm : wide) {
-                dbm += offset;
-            }
-        }
-    }
+    const double wideCenterMhz = m_dssFoldWideCenterMhz;
+    const double wideBandwidthMhz = m_dssFoldWideBandwidthMhz;
+    // This is the actual calibrated peak-held plane. Never crop or calibrate it again.
+    const QVector<float>& wide = m_dssFoldFullBins;
     if (wide.isEmpty()) {
         m_dss.pushRow(wfPixelsDbm, centerMhz, bandwidthMhz);
     } else {
@@ -8034,6 +8090,13 @@ void SpectrumWidget::setMoxOverlay(bool isTx)
     // where both grids get written.
 
     m_moxOverlay = isTx;
+    //-KG4VCF [v0.5.2] Retire the partial fold on either ownership edge,
+    // including DUP with unchanged axes and stop-on-TX with no keyed row.
+    m_dssFoldCount = 0;
+    m_dssFoldRow.clear();
+    m_dssFoldFullBins.clear();
+    m_dss.resetInputSmoothing();
+    syncDisplaySettingsFromWidget();
     // The active peak hold's transmit gate follows the same local_mox
     // (Thetis display.cs:5011 [v2.10.3.15]:
     //   bSpectralPeakHold = (!local_mox || _activePeakInTxRX1) && m_bSpectralPeakHoldRX1 && ...).
@@ -10389,6 +10452,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* event)
         // Bench 2026-08-05.
         newRef = qBound(-200.0f + m_dynamicRange, newRef, 200.0f);
         m_refLevel = newRef;
+        syncDisplaySettingsFromWidget();
         // The scale labels and grid lines live in the CACHED overlay texture
         // (renderGpuFrame draws them only under `if (m_overlayStaticDirty)`),
         // while the trace is vertex geometry rebuilt every frame. update()
@@ -11269,6 +11333,9 @@ void SpectrumWidget::initOverlayPipeline()
                m_overlayDynamic.sizeInBytes(),
                "SpectrumWidget::m_overlayDynamic (init)");
 
+    // 3DSS surface layer — parallel texture + SRB so the overlay pipeline can
+    // paint the cached 3D image as a full-screen quad in 3D mode. The image is
+    // built/uploaded on demand in renderGpuFrame().
     // 3DSS CPU-fallback quad (Task 10). Parallel texture + SRB so the same
     // overlay pipeline can paint the cached CPU 3D surface as a quad in the
     // spectrum viewport when the GPU mesh path is unavailable (RGBA16F
@@ -11674,6 +11741,9 @@ void SpectrumWidget::writeDssMeshUbo(QRhiResourceUpdateBatch* batch,
 
     std::array<float, kDssMeshUboFloats> ubo{};
     int i = 0;
+            // rowOffset carries a half-texel so the shader (texY = fract(rowOffset
+            // + v), v = rr/rows) samples row (head+rr) CENTRES, not boundaries —
+            // avoids Nearest off-by-one. Column centring uses texCols in the shader.
     // rowOffset: ring scroll plus a half texel so Nearest lands on centres.
     ubo[i++] = (m_dss.headRing() + 0.5f) / static_cast<float>(m_dss.rows());
     ubo[i++] = dssFloorDbm();
@@ -11709,6 +11779,8 @@ void SpectrumWidget::writeDssMeshUbo(QRhiResourceUpdateBatch* batch,
     ubo[i++] = specRect.height() * dpr;
     ubo[i++] = dssRowSpanTarget(targetBwMhz);
     ubo[i++] = static_cast<float>(m_dssMeshCols);
+                // std140 rounds the 22-float scalar run up to bgFill's vec4
+                // alignment. These two are the hole, not fields.
     ubo[i++] = 0.0f;                                  // std140 pad
     ubo[i++] = 0.0f;                                  // std140 pad
 
@@ -11716,7 +11788,7 @@ void SpectrumWidget::writeDssMeshUbo(QRhiResourceUpdateBatch* batch,
     ubo[i++] = bg.redF();
     ubo[i++] = bg.greenF();
     ubo[i++] = bg.blueF();
-    ubo[i++] = 1.0f;
+    ubo[i++] = 1.0f;                                         // bgFill vec4
 
     // shadowBands / shadowStyles: buildDssShadowBands() already returns
     // empty when 3D Slice Shadow is off, so both loops below fall straight
@@ -11777,6 +11849,8 @@ void SpectrumWidget::writeDssMeshUbo(QRhiResourceUpdateBatch* batch,
 // perfEnabled PerfTelemetry::recordGpuUpload() call is dropped, no
 // NereusSDR PerfMonitor equivalent exists for this specific texture-upload
 // event and adding one is out of this task's scope.
+            // CPU cached-image fallback (no mesh pipeline). Rendered at a capped
+            // resolution and stretched to the specRect viewport.
 void SpectrumWidget::uploadDssFallbackImage(QRhiResourceUpdateBatch* batch,
                                             const QRect& specRect, float dpr)
 {

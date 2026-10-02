@@ -1,5 +1,7 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 // Modification history (NereusSDR):
+//   2026-10-02: Carry accepted capture metadata to delayed display presentation.
+//               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-29: a refused replace keeps the session move it carried: a
 //               move folded into a waiting fallback, or one that came
 //               while the fallback's replace was under way, stays pending
@@ -824,6 +826,7 @@ struct RemoteMediaController::Private {
         DisplayBudgetCharge acceptedCharge;
         std::optional<Pending> pending;
         SpectrumEndpointContext context;
+        RemoteSpectrumCapture capture;
         /// What Core granted, as the accepted minor-9 context reported it.
         std::optional<SpectrumContextGrant> grant;
         /// R-R3-01/R-R3-08/R-R3-37: Core granted fewer pixels than asked
@@ -6101,6 +6104,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         binding.context = context;
         binding.contextRevision = revision;
         binding.sourceCentreHz = sourceCentre;
+        binding.capture = {context, sourceCentre, rate};
         binding.grant = decoded->grant;
         binding.decoder.reset();
         binding.presenter.restartChain();
@@ -6156,6 +6160,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     binding.context = context;
     binding.contextRevision = revision;
     binding.sourceCentreHz = sourceCentre;
+    binding.capture = {context, sourceCentre, rate};
     binding.decoder.reset();
     binding.presenter.restartChain();
     binding.accepted = true;
@@ -6321,7 +6326,7 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
         binding.presenter.setRowPeriodNs(context.targetFps > 0 && context.framesPerLine > 0
             ? qint64(context.framesPerLine) * 1'000'000'000LL / context.targetFps : 0);
         const quint64 droppedBefore = binding.presenter.counters().itemsDropped;
-        binding.presenter.push(decoded.frame, context.exactCentreHz, context.exactSpanHz);
+        binding.presenter.push(decoded.frame, binding.capture);
         d->displayCounters.itemsDropped += binding.presenter.counters().itemsDropped - droppedBefore;
         reconcileClockProbe();
         presentDueDisplay();
@@ -6504,7 +6509,7 @@ void RemoteMediaController::presentDueDisplay()
             const QPointer<SpectrumWidget> widget = it->second.widget;
             if (item.kind != RemoteDisplayPresenter::Kind::Frame) {
                 if (widget->enqueueRemoteWaterfallRow(item.frame.waterfallDbm, item.frame.wideDbm,
-                                                      item.centreHz, item.spanHz)) {
+                                                      item.capture)) {
                     if (item.kind == RemoteDisplayPresenter::Kind::Blended) {
                         ++d->displayCounters.rowsBlended;
                     } else {
@@ -6513,7 +6518,7 @@ void RemoteMediaController::presentDueDisplay()
                 }
                 continue;
             }
-            const bool rendered = widget->updateRemoteSpectrum(item.frame);
+            const bool rendered = widget->updateRemoteSpectrum(item.frame, item.capture);
             // Rendering emits application signals; a receiver may end this session.
             if (!self || d->connectionId != connectionId) { return; }
             if (!rendered) {
@@ -6527,7 +6532,7 @@ void RemoteMediaController::presentDueDisplay()
                 if (item.frame.waterfallAdvance && widget) {
                     widget->enqueueRemoteWaterfallRow(item.frame.waterfallDbm,
                                                       item.frame.wideDbm,
-                                                      item.centreHz, item.spanHz);
+                                                      item.capture);
                 }
                 continue;
             }

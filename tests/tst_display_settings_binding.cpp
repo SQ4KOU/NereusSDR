@@ -18,12 +18,19 @@
 
 #include <QtTest/QtTest>
 #include <QMouseEvent>
+#include <QWheelEvent>
 #include <QSignalSpy>
 #include <cmath>
 
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
+#define private public
 #include "gui/SpectrumWidget.h"
+#include "gui/applets/DisplayApplet.h"
+#include "gui/SpectrumOverlayMenu.h"
+#undef private
+#include "models/RadioModel.h"
+#include <QLabel>
 #include "models/DisplaySettingsModel.h"
 
 using namespace NereusSDR;
@@ -96,6 +103,225 @@ class TestDisplaySettingsBinding : public QObject
 private slots:
     void init()    { AppSettings::instance().clear(); }
     void cleanup() { AppSettings::instance().clear(); }
+
+#ifdef NEREUS_GPU_SPECTRUM
+    void modelGridEditors_invalidateCachedOverlayWithoutNoOpRebuild_data()
+    {
+        QTest::addColumn<int>("mode");
+        QTest::addColumn<int>("field");
+        for (int mode : {0, 1}) {
+            for (int field : {0, 1, 2}) {
+                QTest::newRow(qPrintable(QStringLiteral("mode%1-field%2").arg(mode).arg(field)))
+                    << mode << field;
+            }
+        }
+    }
+    void modelGridEditors_invalidateCachedOverlayWithoutNoOpRebuild()
+    {
+        QFETCH(int, mode);
+        QFETCH(int, field);
+        SpectrumWidget w;
+        setUpWidget(w);
+        w.setSpectrumRenderMode(mode);
+        auto* model = w.displaySettings();
+        const int applies = w.displaySettingsApplyCountForTest();
+        w.clearOverlayStaticDirtyForTest();
+        const auto edit = [&] {
+            if (field == 0) { model->setRefLevel(-32.0f); }
+            if (field == 1) { model->setDynamicRange(87.0f); }
+            if (field == 2) { model->setSpectrumFrac(0.65f); }
+        };
+        edit();
+        if (field == 0) { QCOMPARE(w.refLevel(), -32.0f); }
+        if (field == 1) { QCOMPARE(w.dynamicRange(), 87.0f); }
+        if (field == 2) { QCOMPARE(w.spectrumFrac(), 0.65f); }
+        QCOMPARE(w.displaySettingsApplyCountForTest(), applies + 1);
+        QVERIFY2(w.overlayStaticDirtyForTest(),
+                 "model grid edits must rebuild the cached grid, labels and divider layout");
+        w.clearOverlayStaticDirtyForTest();
+        edit();
+        QCOMPARE(w.displaySettingsApplyCountForTest(), applies + 1);
+        QVERIFY(!w.overlayStaticDirtyForTest());
+    }
+#endif
+
+    void nativeStripGestures_useSettledMathAndReflectWithoutApplying_data()
+    {
+        QTest::addColumn<bool>("right");
+        QTest::addColumn<bool>("tx");
+        QTest::addColumn<float>("ref");
+        QTest::addColumn<float>("range");
+        QTest::addColumn<int>("dy");
+        QTest::addColumn<int>("height");
+        QTest::addColumn<float>("expectedRef");
+        QTest::addColumn<float>("expectedRange");
+        QTest::newRow("plain-half-db-600") << false << false << -55.f << 70.f << 14 << 600 << -48.f << 70.f;
+        QTest::newRow("plain-half-db-1000") << false << false << -55.f << 140.f << 14 << 1000 << -48.f << 140.f;
+        QTest::newRow("plain-min") << false << false << -188.5f << 10.f << -80 << 1000 << -190.f << 10.f;
+        QTest::newRow("plain-max-tx") << false << true << 195.f << 20.f << 40 << 1000 << 200.f << 20.f;
+        QTest::newRow("right-half-db-rx") << true << false << -55.f << 70.f << 18 << 1000 << -46.f << 79.f;
+        QTest::newRow("right-half-db-tx") << true << true << -55.f << 70.f << 18 << 1000 << -46.f << 79.f;
+        QTest::newRow("right-min-range") << true << false << -55.f << 70.f << -200 << 1000 << -115.f << 10.f;
+        QTest::newRow("right-max-range") << true << true << -55.f << 70.f << 400 << 1000 << 75.f << 200.f;
+        QTest::newRow("right-max-ref") << true << true << 195.f << 20.f << 40 << 1000 << 200.f << 25.f;
+    }
+    void nativeStripGestures_useSettledMathAndReflectWithoutApplying()
+    {
+        QFETCH(bool, right); QFETCH(bool, tx); QFETCH(float, ref); QFETCH(float, range);
+        QFETCH(int, dy); QFETCH(int, height); QFETCH(float, expectedRef); QFETCH(float, expectedRange);
+        SpectrumWidget w;
+        setUpWidget(w);
+        w.resize(1000, height);
+        w.setMoxOverlay(tx);
+        w.setDbmRange(ref - range, ref);
+        const int applies = w.displaySettingsApplyCountForTest();
+        const auto button = right ? Qt::RightButton : Qt::LeftButton;
+        const int x = w.width() - 18;
+        sendMouse(&w, QEvent::MouseButtonPress, QPoint(x, 60), button, button);
+        sendMouse(&w, QEvent::MouseMove, QPoint(x, 60 + dy), Qt::NoButton, button);
+        QCOMPARE(w.refLevel(), expectedRef);
+        QCOMPARE(w.dynamicRange(), expectedRange);
+        QCOMPARE(w.displaySettings()->refLevel(), expectedRef);
+        QCOMPARE(w.displaySettings()->dynamicRange(), expectedRange);
+        QCOMPARE(w.displaySettingsApplyCountForTest(), applies);
+        QVERIFY(!w.m_settingsSaveScheduled); // Only gesture completion owns its save.
+        if (right) { QCOMPARE(w.refLevel() - w.dynamicRange(), ref - range); }
+        sendMouse(&w, QEvent::MouseButtonRelease, QPoint(x, 60 + dy), button, Qt::NoButton);
+        QVERIFY(w.m_settingsSaveScheduled);
+    }
+
+    void arrowAndWheel_keepNativeFiniteStateBeyondEditorBounds()
+    {
+        SpectrumWidget w;
+        setUpWidget(w);
+        w.setDbmRange(-5, 195);
+        sendMouse(&w, QEvent::MouseButtonPress, QPoint(w.width() - 27, 7),
+                  Qt::LeftButton, Qt::LeftButton);
+        QCOMPARE(w.refLevel(), 205.0f);
+        QCOMPARE(w.dynamicRange(), 210.0f);
+        QCOMPARE(w.displaySettings()->refLevel(), 205.0f);
+        QCOMPARE(w.displaySettings()->dynamicRange(), 210.0f);
+        w.setDbmRange(-308.5f, -208.5f);
+        const QPointF pos(w.width() - 18, 60);
+        QWheelEvent wheel(pos, w.mapToGlobal(pos), {}, QPoint(0, 120), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(&w, &wheel);
+        QCOMPARE(w.refLevel(), -213.5f);
+        QCOMPARE(w.dynamicRange(), 95.0f);
+        QCOMPARE(w.displaySettings()->refLevel(), -213.5f);
+        QCOMPARE(w.displaySettings()->dynamicRange(), 95.0f);
+    }
+
+    void noiseFloorReflection_andMoxDoNotPersistTrackingDrift()
+    {
+        auto& settings = AppSettings::instance();
+        settings.setValue("DisplayGridMax", "-43.5");
+        settings.setValue("DisplayGridMin", "-116.5");
+        settings.setValue("DisplayMaintainNFAdjustDelta", "True");
+        settings.setValue("DisplayAdjustGridMinToNoiseFloor", "True");
+        settings.setValue("DisplayNFOffsetGridFollow", "-5");
+        SpectrumWidget w;
+        w.loadSettings();
+        QVERIFY(!w.m_settingsSaveScheduled);
+        const int applies = w.displaySettingsApplyCountForTest();
+        w.testApplyNoiseFloor(100.0f);
+        QCOMPARE(w.displaySettings()->refLevel(), w.refLevel());
+        QCOMPARE(w.displaySettings()->dynamicRange(), w.dynamicRange());
+        QVERIFY(w.refLevel() > 80.0f);
+        QCOMPARE(w.displaySettingsApplyCountForTest(), applies);
+        QVERIFY(!w.m_settingsSaveScheduled);
+        const float trackedRef = w.refLevel();
+        w.setMoxOverlay(true);
+        w.setMoxOverlay(false);
+        QCOMPARE(w.refLevel(), trackedRef);
+        QVERIFY(!w.m_settingsSaveScheduled);
+        QCOMPARE(settings.value("DisplayGridMax").toString(), QStringLiteral("-43.5"));
+        QCOMPARE(settings.value("DisplayGridMin").toString(), QStringLiteral("-116.5"));
+    }
+
+    void nativeGridRoundTrip_preservesFiniteAcceptedState_data()
+    {
+        QTest::addColumn<float>("ref");
+        QTest::addColumn<float>("range");
+        QTest::newRow("high-interior") << 123.5f << 67.0f;
+        QTest::newRow("low-interior") << -188.5f << 10.0f;
+        QTest::newRow("native-arrow-beyond-editor") << 205.0f << 210.0f;
+    }
+    void nativeGridRoundTrip_preservesFiniteAcceptedState()
+    {
+        QFETCH(float, ref);
+        QFETCH(float, range);
+        SpectrumWidget w;
+        const int applies = w.displaySettingsApplyCountForTest();
+        QSignalSpy refs(w.displaySettings(), &DisplaySettingsModel::refLevelChanged);
+        bool completed = false;
+        connect(w.displaySettings(), &DisplaySettingsModel::refLevelChanged, &w, [&] {
+            completed = w.displaySettings()->refLevel() == ref
+                && w.displaySettings()->dynamicRange() == range;
+        });
+        w.setDbmRange(ref - range, ref);
+        QCOMPARE(w.refLevel(), ref);
+        QCOMPARE(w.dynamicRange(), range);
+        QCOMPARE(w.displaySettings()->refLevel(), ref);
+        QCOMPARE(w.displaySettings()->dynamicRange(), range);
+        QVERIFY(completed);
+        QCOMPARE(refs.size(), 1);
+        QCOMPARE(w.displaySettingsApplyCountForTest(), applies);
+        QVERIFY(!w.m_settingsSaveScheduled);
+        w.setDbmRange(ref - range, ref);
+        QCOMPARE(refs.size(), 1);
+        w.setDssGain(33);
+        w.saveSettings();
+        QCOMPARE(w.refLevel(), ref);
+        auto& s = AppSettings::instance();
+        QCOMPARE(s.value("DisplayGridMax").toString(), QString::number(double(ref)));
+        QCOMPARE(s.value("DisplayGridMin").toString(), QString::number(double(ref - range)));
+        SpectrumWidget restored;
+        restored.loadSettings();
+        QCOMPARE(restored.refLevel(), ref);
+        QCOMPARE(restored.dynamicRange(), range);
+        QCOMPARE(restored.displaySettings()->refLevel(), ref);
+        QCOMPARE(restored.displaySettingsApplyCountForTest(), 0);
+        QVERIFY(!restored.m_settingsSaveScheduled);
+    }
+    void moxReflection_followsLivePairWithoutApplyOrSave()
+    {
+        auto& s = AppSettings::instance();
+        s.setValue("DisplayGridMax", "-43.5");
+        s.setValue("DisplayGridMin", "-116.5");
+        s.setValue("DisplayTxGridRefLevel", "123.5");
+        s.setValue("DisplayTxGridDynamicRange", "91");
+        SpectrumWidget w;
+        w.loadSettings();
+        setUpWidget(w);
+        RadioModel radio;
+        radio.setSpectrumWidget(&w);
+        DisplayApplet applet(&radio);
+        sendMouse(&w, QEvent::MouseButtonPress, QPoint(300, 60),
+                  Qt::RightButton, Qt::RightButton);
+        auto* popup = w.findChild<SpectrumOverlayMenu*>();
+        QVERIFY(popup);
+        const int applies = w.displaySettingsApplyCountForTest();
+        QSignalSpy refs(w.displaySettings(), &DisplaySettingsModel::refLevelChanged);
+        for (bool tx : {true, false}) {
+            w.setMoxOverlay(tx);
+            QCOMPARE(w.displaySettings()->refLevel(), tx ? 123.5f : -43.5f);
+            QCOMPARE(w.displaySettings()->dynamicRange(), tx ? 91.0f : 73.0f);
+            QCOMPARE(w.displaySettingsApplyCountForTest(), applies);
+            QVERIFY(!w.m_settingsSaveScheduled);
+            // Both surfaces see the live value even when their handles clip.
+            QCOMPARE(applet.m_refLevelValue->text(),
+                     QStringLiteral("%1 dBm").arg(static_cast<int>(tx ? 123.5f : -43.5f)));
+            QCOMPARE(popup->m_refLevelLabel->text(),
+                     QStringLiteral("%1 dBm").arg(static_cast<int>(tx ? 123.5f : -43.5f)));
+            const int count = refs.size();
+            w.setMoxOverlay(tx);
+            QCOMPARE(refs.size(), count);
+        }
+        QCOMPARE(refs.size(), 2);
+        QCOMPARE(s.value("DisplayGridMax").toString(), QStringLiteral("-43.5"));
+        radio.setSpectrumWidget(nullptr);
+    }
 
     // Acceptance: "Model to widget, all fourteen: setting a non-default
     // in-range value on the model makes the matching widget getter

@@ -21,6 +21,8 @@
 //                 `src/gui/DssRenderer.cpp`.
 //   2026-10-01 - Fixed CPU viewport mapping during PR review by
 //                 J.J. Boyd (KG4VCF), with AI assistance via OpenAI Codex.
+//   2026-10-02: Restored pinned upstream comments during integration.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 
 #include "gui/DssRenderer.h"
@@ -36,6 +38,10 @@ namespace NereusSDR {
 
 namespace {
 
+// CPU-only tunables. The perspective geometry (back-width / depth-span /
+// front-ridge / haze) lives in DssGeometry.h as shared constants so the GPU
+// mesh uses the same values; these are extra CPU-render touches the GPU frag
+// doesn't replicate (depth dimming floor, smoothing, slope shading).
 // CPU-only tunables (image()/rebuild()). The perspective geometry (back-width
 // / depth-span / front-ridge / haze) lives in DssGeometry.h as shared
 // constants so the GPU mesh uses the same values -- upstream's equivalent

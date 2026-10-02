@@ -50,6 +50,68 @@ private slots:
     void init()    { AppSettings::instance().clear(); }
     void cleanup() { AppSettings::instance().clear(); }
 
+    void saveDuringMox_preservesSelectedGridsAndSpans_data()
+    {
+        QTest::addColumn<bool>("duplex");
+        QTest::addColumn<int>("pan");
+        QTest::newRow("pan0-tx-axis") << false << 0;
+        QTest::newRow("pan0-rx-axis") << true << 0;
+        QTest::newRow("pan2-inherited-tx-axis") << false << 2;
+        QTest::newRow("pan2-inherited-rx-axis") << true << 2;
+    }
+    void saveDuringMox_preservesSelectedGridsAndSpans()
+    {
+        QFETCH(bool, duplex);
+        QFETCH(int, pan);
+        auto& s = AppSettings::instance();
+        s.setValue("DisplayGridMax", "-43.5");
+        s.setValue("DisplayGridMin", "-116.5");
+        s.setValue("DisplayBandwidth", "192000");
+        s.setValue("DisplayTxGridRefLevel", "123.5");
+        s.setValue("DisplayTxGridDynamicRange", "91");
+        s.setValue("DisplayTxViewBandwidth", "12500");
+        SpectrumWidget w;
+        w.setPanIndex(pan);
+        w.loadSettings();
+        const auto key = [pan](const QString& base) {
+            return pan == 0 ? base : base + QStringLiteral("_%1").arg(pan);
+        };
+        if (pan) { QVERIFY(!s.contains(key("DisplayGridMax"))); }
+        w.setDisplayDuplex(duplex);
+        w.setMoxOverlay(true);
+        QCOMPARE(w.refLevel(), 123.5f);
+        w.setDbmRange(34.5f, 125.5f);
+        w.displaySettings()->setDssGain(31);
+        w.saveSettings();
+        QCOMPARE(w.displaySettings()->refLevel(), 125.5f);
+        QCOMPARE(s.value(key("DisplayGridMax")).toString(), QStringLiteral("-43.5"));
+        QCOMPARE(s.value(key("DisplayGridMin")).toString(), QStringLiteral("-116.5"));
+        QCOMPARE(s.value(key("DisplayBandwidth")).toString(), QStringLiteral("192000"));
+        QCOMPARE(s.value(key("DisplayTxGridRefLevel")).toString(), QStringLiteral("125.5"));
+        QCOMPARE(s.value(key("DisplayTxGridDynamicRange")).toString(), QStringLiteral("91"));
+        QCOMPARE(s.value(key("DisplayTxViewBandwidth")).toString(), QStringLiteral("12500"));
+        // A keyed DUP toggle changes span ownership without changing grid ownership.
+        w.setDisplayDuplex(!duplex);
+        w.saveSettings();
+        QCOMPARE(s.value(key("DisplayBandwidth")).toString(), QStringLiteral("192000"));
+        QCOMPARE(s.value(key("DisplayTxViewBandwidth")).toString(), QStringLiteral("12500"));
+        if (pan) { QCOMPARE(s.value("DisplayTxGridRefLevel").toString(), QStringLiteral("123.5")); }
+        SpectrumWidget restarted;
+        restarted.setPanIndex(pan);
+        restarted.loadSettings();
+        QCOMPARE(restarted.refLevel(), -43.5f);
+        QCOMPARE(restarted.dynamicRange(), 73.0f);
+        QCOMPARE(restarted.bandwidth(), 192000.0);
+        restarted.setDisplayDuplex(false);
+        restarted.setMoxOverlay(true);
+        QCOMPARE(restarted.refLevel(), 125.5f);
+        QCOMPARE(restarted.dynamicRange(), 91.0f);
+        QCOMPARE(restarted.bandwidth(), 12500.0);
+        restarted.setMoxOverlay(false);
+        QCOMPARE(restarted.refLevel(), -43.5f);
+        QCOMPARE(restarted.bandwidth(), 192000.0);
+    }
+
     // ============================================================
     // Task 23 Acceptance, verbatim: "It sets all fourteen values to
     // non-defaults through the widget's setters, calls saveSettings(),

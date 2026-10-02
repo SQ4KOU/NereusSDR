@@ -97,6 +97,8 @@
 // moves it onto this model last, behind a golden test.
 //
 // Modification history (NereusSDR)
+//   2026-10-02: Completed-grid reflection and selected receive persistence.
+//     J.J. Boyd / KG4VCF, AI-assisted via OpenAI Codex.
 //   Created 2026-08-09 by J.J. Boyd / KG4VCF, 3D Stacked-Trace Spectrum
 //     Plan Task 17. AI tooling: Claude Code.
 
@@ -153,6 +155,9 @@ public:
 
     // ---- Spectrum ----
 
+    // Native editor bounds are [-200, 200]. Completed native state is
+    // reflected losslessly by reflectDbmRange(), including arrow values
+    // beyond the editor bounds. Historical Task 18 rationale follows.
     // Top of display, dBm. Range [-180, 80] -- widened in Task 18 from
     // the popup slider's [-160, 20]. SpectrumOverlayMenu's m_refLevelSlider
     // is not the widest source: SpectrumWidget's Task 19 Ctrl-drag gesture
@@ -173,6 +178,10 @@ public:
     // model would narrow a value the widget itself allows).
     float dynamicRange() const { return m_dynamicRange; }
     void  setDynamicRange(float dB);
+
+    // Reflect a completed native grid without narrowing it to editor bounds.
+    // Both fields are assigned before either signal reaches an observer.
+    void reflectDbmRange(float refLevel, float dynamicRange);
 
     // 0.0 .. 1.0.
     float fillAlpha() const { return m_fillAlpha; }
@@ -236,6 +245,8 @@ public:
     // entirely on PanadapterModel.
     void load();
     void save();
+    // Persist the selected receive snapshot while the live grid may be TX.
+    void save(float receiveRefLevel, float receiveDynamicRange);
 
 signals:
     void wfColorSchemeChanged(int scheme);
