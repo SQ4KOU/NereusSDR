@@ -938,13 +938,12 @@ QJsonArray bandsArray()
     return bands;
 }
 
-// SliceModel's tune-step list (today the six-entry stand-in the STEP
-// buttons cycle; the catalogue follows whatever SliceModel holds).
+// SliceModel's tune-step list; the catalogue follows the STEP controls.
 QList<int> sliceTuneSteps()
 {
     QList<int> steps;
-    for (int i = 0; i < kStageOneStepLadderSize; ++i) {
-        steps.append(kStageOneStepLadder[i]);
+    for (int i = 0; i < kTuneStepListSize; ++i) {
+        steps.append(kTuneStepList[i].stepHz);
     }
     return steps;
 }

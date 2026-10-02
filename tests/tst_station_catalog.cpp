@@ -209,8 +209,8 @@ StationCatalog::Inputs inputsFor(HPSDRModel model, ProtocolVersion protocol,
         const auto mode = static_cast<DSPMode>(id);
         inputs.filterPresets.append({mode, FilterPresetStore().presetsForMode(mode)});
     }
-    for (int i = 0; i < kStageOneStepLadderSize; ++i) {
-        inputs.tuneStepsHz.append(kStageOneStepLadder[i]);
+    for (int i = 0; i < kTuneStepListSize; ++i) {
+        inputs.tuneStepsHz.append(kTuneStepList[i].stepHz);
     }
     for (const BandPlanManager::PlanData& plan : plans.plans()) {
         inputs.bandPlans.append(
@@ -284,15 +284,30 @@ void checkDesktopValues(const QJsonObject& catalog, HPSDRModel model, ProtocolVe
 
     // Tune steps: SliceModel's list.
     const QJsonArray steps = catalog.value(QStringLiteral("tuneSteps")).toArray();
-    QCOMPARE(steps.size(), kStageOneStepLadderSize);
-    for (int i = 0; i < kStageOneStepLadderSize; ++i) {
+    QCOMPARE(steps.size(), kTuneStepListSize);
+    for (int i = 0; i < kTuneStepListSize; ++i) {
         QCOMPARE(steps.at(i).toObject().value(QStringLiteral("hz")).toInt(),
-                 kStageOneStepLadder[i]);
+                 kTuneStepList[i].stepHz);
     }
-    QCOMPARE(steps.at(0).toObject().value(QStringLiteral("label")).toString(),
-             QStringLiteral("1 Hz"));
-    QCOMPARE(steps.at(4).toObject().value(QStringLiteral("label")).toString(),
-             QStringLiteral("1 kHz"));
+    const QStringList expectedStepLabels{
+        QStringLiteral("1 Hz"), QStringLiteral("2 Hz"), QStringLiteral("10 Hz"),
+        QStringLiteral("25 Hz"), QStringLiteral("50 Hz"), QStringLiteral("100 Hz"),
+        QStringLiteral("250 Hz"), QStringLiteral("500 Hz"), QStringLiteral("1 kHz"),
+        QStringLiteral("2 kHz"), QStringLiteral("2.5 kHz"), QStringLiteral("5 kHz"),
+        QStringLiteral("6.25 kHz"), QStringLiteral("9 kHz"), QStringLiteral("10 kHz"),
+        QStringLiteral("12.5 kHz"), QStringLiteral("15 kHz"), QStringLiteral("20 kHz"),
+        QStringLiteral("25 kHz"), QStringLiteral("30 kHz"), QStringLiteral("50 kHz"),
+        QStringLiteral("100 kHz"), QStringLiteral("250 kHz"), QStringLiteral("500 kHz"),
+        QStringLiteral("1 MHz"), QStringLiteral("10 MHz")};
+    QCOMPARE(steps.size(), expectedStepLabels.size());
+    for (int i = 0; i < steps.size(); ++i) {
+        QCOMPARE(steps.at(i).toObject().value(QStringLiteral("label")).toString(),
+                 expectedStepLabels.at(i));
+        if (i > 0) {
+            QVERIFY(steps.at(i - 1).toObject().value(QStringLiteral("hz")).toInt()
+                    < steps.at(i).toObject().value(QStringLiteral("hz")).toInt());
+        }
+    }
 
     // AGC: the flag's five modes and its AGC-T range.
     const QJsonObject agc = catalog.value(QStringLiteral("agc")).toObject();
