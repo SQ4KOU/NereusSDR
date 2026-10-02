@@ -25,12 +25,17 @@
 //      connection's run flag is on again. P2 carries the flag on the wire
 //      only while keyed (the DDC frequency override and the PS DDC enable),
 //      so this test reads the flag the next key would send.
+//
+// Modification history (NereusSDR):
+//   2026-10-01  J.J. Boyd / KG4VCF: run the P2 peer on its own thread so
+//               GUI pauses cannot silence it. AI-assisted via OpenAI Codex.
 
 #include <QtTest/QtTest>
 #include <QFile>
 #include <QScopeGuard>
 #include <QSemaphore>
 #include <QTimer>
+#include <QThread>
 
 #include <atomic>
 #include <memory>
@@ -220,42 +225,77 @@ private slots:
 
     void p2LinkBackPutsPsRunBack()
     {
+        QThread peerThread;
+        peerThread.setObjectName(QStringLiteral("P2FakeRadio"));
         P2FakeRadio fake;
-        QVERIFY(fake.start());
-        const RadioInfo info = fake.radioInfo();
-
-        RadioModel model;
-        model.audioEngine()->setStartInitializerForTest(installOpenAudioBuses);
-        model.wdspEngine()->setSynchronousInitForTest(true);
-        model.configureP2TransportForTest(fake.outboundPortBase(), fake.inputRolePortBase(),
-                                          1000, 200);
-        QTimer ingress;
+        QTimer ingress(&fake);
         ingress.setInterval(5);
-        connect(&ingress, &QTimer::timeout, this, [&fake]() {
+        connect(&ingress, &QTimer::timeout, &fake, [&fake]() {
             if (fake.hasClient()) {
                 fake.sendDdc(2);
                 fake.sendDdc(3);
                 fake.sendStatus();
             }
         });
-        ingress.start();
+        // A real radio's ingress continues independently of the GUI. All
+        // peer sockets, its timer, and its mutable state stay on this thread.
+        QThread* const ownerThread = QThread::currentThread();
+        fake.moveToThread(&peerThread);
+        peerThread.start();
+        const auto stopPeer = qScopeGuard([&fake, &ingress, &peerThread, ownerThread]() {
+            QMetaObject::invokeMethod(&fake, [&fake, &ingress, ownerThread]() {
+                ingress.stop();
+                fake.stop();
+                fake.moveToThread(ownerThread);
+            }, Qt::BlockingQueuedConnection);
+            peerThread.quit();
+            peerThread.wait();
+        });
+        const auto onPeer = [&fake](auto work) {
+            QMetaObject::invokeMethod(&fake, work, Qt::BlockingQueuedConnection);
+        };
+        bool started = false;
+        RadioInfo info;
+        quint16 outboundPortBase = 0;
+        quint16 inputRolePortBase = 0;
+        onPeer([&]() {
+            started = fake.start();
+            info = fake.radioInfo();
+            outboundPortBase = fake.outboundPortBase();
+            inputRolePortBase = fake.inputRolePortBase();
+            ingress.start();
+        });
+        QVERIFY(started);
+
+        RadioModel model;
+        model.audioEngine()->setStartInitializerForTest(installOpenAudioBuses);
+        model.wdspEngine()->setSynchronousInitForTest(true);
+        model.configureP2TransportForTest(outboundPortBase, inputRolePortBase, 1000, 200);
 
         model.connectToRadio(info);
         QTRY_VERIFY_WITH_TIMEOUT(model.isConnected(), 15000);
         QVERIFY(waitLanesIdle(model));
+        // A radio keeps sending while the GUI event loop is occupied. This
+        // bounded pause reproduces a main-thread fake starving its own
+        // ingress timer past the unchanged 200 ms connection watchdog.
+        QThread::msleep(250);
+        QCoreApplication::processEvents();
+        QVERIFY2(model.isConnected(), "the fake radio went silent during a GUI pause");
         QVERIFY2(startPsA(model), "PS-A could not start");
         QVERIFY2(waitPsEnabled(model, true), "PS-A never reported PureSignal enabled");
         QTRY_VERIFY_WITH_TIMEOUT(connectionPsRun(model.connection()), 5000);
 
         // The link goes silent: P2 sends one unkeyed stop and stays down,
         // and PureSignal turns itself off.
-        fake.stopIngress();
+        onPeer([&fake]() { fake.stopIngress(); });
         QTRY_COMPARE_WITH_TIMEOUT(model.connectionState(), ConnectionState::LinkLost, 5000);
-        QCOMPARE(fake.moxAssertedCount(), 0);
+        int moxAssertedCount = 0;
+        onPeer([&]() { moxAssertedCount = fake.moxAssertedCount(); });
+        QCOMPARE(moxAssertedCount, 0);
         QVERIFY2(waitPsEnabled(model, false), "PureSignal stayed on with the link down");
 
         // The link is rebuilt as the hosted retry does it.
-        fake.resumeIngress();
+        onPeer([&fake]() { fake.resumeIngress(); });
         model.retireConnectionForRecovery();
         model.connectToRadio(info);
         QTRY_VERIFY_WITH_TIMEOUT(model.isConnected(), 15000);
@@ -265,11 +305,11 @@ private slots:
         // PS-A re-arms by itself, and the rebuilt link's run flag follows.
         QVERIFY2(waitPsEnabled(model, true), "PS-A did not re-arm after the link came back");
         QTRY_VERIFY_WITH_TIMEOUT(connectionPsRun(model.connection()), 5000);
-        QCOMPARE(fake.moxAssertedCount(), 0);
+        onPeer([&]() { moxAssertedCount = fake.moxAssertedCount(); });
+        QCOMPARE(moxAssertedCount, 0);
 
-        ingress.stop();
+        onPeer([&ingress]() { ingress.stop(); });
         model.disconnectFromRadio();
-        fake.stop();
     }
 };
 
