@@ -7303,6 +7303,10 @@ endif()
 #         sections 8.1 and 8.2.
 nereus_add_test(tst_notch_hit_test)
 
+# Issues #141/#147: actual paint and mouse behavior share the GPU layout
+# on both CPU-only and GPU spectrum builds.
+nereus_add_test(tst_spectrum_layout_parity)
+
 # ── PR #291 Codex review fixes ────────────────────────────────────────────
 # Capture-path helpers behind the native-rate mic resampling path.  The
 # defects only appear on a device whose native rate differs from the
