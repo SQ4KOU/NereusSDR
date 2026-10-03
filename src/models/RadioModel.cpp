@@ -19097,7 +19097,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                                 : info.macAddress;
         m_flexBroadcaster->setMacAddress(mac);
         m_flexBroadcaster->setSerial(derivedFlexSerial(mac));
-        m_flexBroadcaster->setVersion(QStringLiteral(NEREUSSDR_VERSION));
+        // The beacon reports its frozen version; never give it NEREUSSDR_VERSION.
         m_flexBroadcaster->setCallsign(
             as.value(QStringLiteral("StationCallsign"),
                      QStringLiteral("NEREUS")).toString());
