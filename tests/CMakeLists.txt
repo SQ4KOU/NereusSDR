@@ -3899,6 +3899,13 @@ target_compile_definitions(tst_radio_model_link_lost_unkey PRIVATE NEREUS_BUILD_
 nereus_add_test(tst_amp_changeover_gate)
 target_compile_definitions(tst_amp_changeover_gate PRIVATE NEREUS_BUILD_TESTS)
 
+# Related to #300: reconnect and repeated keying wiring deliver each phase
+# once; an earlier session's interlock failsafe cannot key its replacement.
+nereus_add_test(tst_radio_model_keying_reconnect)
+if(TARGET tst_radio_model_keying_reconnect)
+    target_compile_definitions(tst_radio_model_keying_reconnect PRIVATE NEREUS_BUILD_TESTS)
+endif()
+
 # ── iPhone app plan Task 38 (R-IOS-04, D29): the transmit time-out ─────────
 # TxTimeOutTimer (Thetis TimeOutTimerManager) with an injected clock and
 # pinger: the MOX time-out from the rising edge, the ping time-out, the
