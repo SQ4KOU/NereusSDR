@@ -24,6 +24,7 @@ class TestDssDbmScale : public QObject {
     Q_OBJECT
 
 private slots:
+#ifdef NEREUS_GPU_SPECTRUM
     // I2 fix (final review): the GPU-path 3D dBm-scale overlay cache must
     // dirty when the noise floor drifts far enough to change the rounded
     // label set drawDbmScaleLabels() draws, but must NOT dirty on every
@@ -73,6 +74,8 @@ private slots:
                  "see the perf rationale in "
                  "SpectrumWidget::updateDssScaleOverlayFreshness()");
     }
+
+#endif
 
     // In 3D the scale is anchored to the drifting noise floor, not to the
     // Ref level, so its labels must move when the floor moves. This is the

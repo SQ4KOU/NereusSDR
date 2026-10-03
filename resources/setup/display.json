@@ -1787,14 +1787,14 @@
             {
               "id": "display.threeD.reset",
               "label": "Reset 3D to defaults",
-              "tooltip": "Restore Spectrum render mode, 3D Floor, 3D Gain, 3D Span, 3D Angle and 3D Slice Shadow to their ship defaults (2D Waterfall / 6 dB / 70% / 100% / 50% / off).",
+              "tooltip": "Restore Spectrum render mode, 3D Floor, 3D Gain, 3D Span, 3D Angle, 3D Speed and 3D Slice Shadow to their ship defaults (2D Waterfall / 6 dB / 70% / 100% / 50% / Match / off).",
               "kind": "button",
               "binding": {
                 "phone": "reset3d"
               },
               "applies": "live",
               "requiresDescriptionVersion": 12,
-              "confirm": "This will restore Spectrum render mode, 3D Floor, 3D Gain, 3D Span, 3D Angle and 3D Slice Shadow to their ship defaults.\n\nContinue?"
+              "confirm": "This will restore Spectrum render mode, 3D Floor, 3D Gain, 3D Span, 3D Angle, 3D Speed and 3D Slice Shadow to their ship defaults.\n\nContinue?"
             },
             {
               "id": "display.threeD.renderMode",

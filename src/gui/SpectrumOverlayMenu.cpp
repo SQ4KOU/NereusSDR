@@ -31,6 +31,8 @@
 //   2026-09-29 - R-IOS-18: 3D Floor says what it does (how far below the
 //                 noise floor the 3D surface starts; kept per band).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-02: Restored pinned upstream comments during integration.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 
 #include "SpectrumOverlayMenu.h"
@@ -266,7 +268,7 @@ void SpectrumOverlayMenu::buildUI()
     dssLabel->setStyleSheet(QStringLiteral("font-weight: bold; color: #00b4d8; margin-top: 6px;"));
     layout->addWidget(dssLabel);
 
-    // ── Spectrum render mode (2D waterfall vs 3DSS) ─────────────────────
+    // ── Spectrum render mode (2D waterfall vs 3DSS) ───────────────────────
     auto* modeRow = new QHBoxLayout;
     modeRow->addWidget(new QLabel(QStringLiteral("Spectrum:"), this));
     m_renderModeCombo = new QComboBox(this);
@@ -282,7 +284,7 @@ void SpectrumOverlayMenu::buildUI()
     connect(m_renderModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int idx) { emit spectrumRenderModeChanged(idx); });
 
-    // ── 3D floor depth — how far below the noise floor to surface (dB) ──
+    // ── 3D floor depth — how far below the noise floor to surface (dB) ────
     auto* dssFloorRow = new QHBoxLayout;
     dssFloorRow->addWidget(new QLabel(QStringLiteral("3D Floor:"), this));
     m_dssFloorSlider = new QSlider(Qt::Horizontal, this);
@@ -303,7 +305,7 @@ void SpectrumOverlayMenu::buildUI()
         emit dssFloorDepthChanged(v);
     });
 
-    // ── 3D gain — how far down the strength range the colormap reaches ──
+    // ── 3D gain — how far down the strength range the colormap reaches ────
     auto* dssGainRow = new QHBoxLayout;
     dssGainRow->addWidget(new QLabel(QStringLiteral("3D Gain:"), this));
     m_dssGainSlider = new QSlider(Qt::Horizontal, this);
@@ -324,7 +326,7 @@ void SpectrumOverlayMenu::buildUI()
         emit dssGainChanged(v);
     });
 
-    // ── 3D span — how far the near rows overhang the plot edges ─────────
+    // ── 3D span — how far the near rows overhang the plot edges ───────────
     // Caps how much of the radio's offscreen spectrum the surface may use to
     // close the empty wedges beside it. 100 spends everything available, so a
     // source that ships no overhang is unaffected at any setting.
@@ -377,6 +379,37 @@ void SpectrumOverlayMenu::buildUI()
     connect(m_dssAngleSlider, &QSlider::valueChanged, this, [this](int v) {
         if (m_dssAngleLabel) { m_dssAngleLabel->setText(QString::number(v)); }
         emit dssAngleChanged(v);
+    });
+
+    // ── 3D speed, row cadence divider (Task 24, NereusSDR-original) ─────
+    // How many waterfall rows each pushed 3D row covers. 0 is Match
+    // (automatic -- SpectrumWidget::effectiveDssRowDivider()), 1 is the
+    // pre-Task-24 one-row-per-tick behaviour, 2..10 fold that many rows
+    // per column by peak-hold. Design doc section 4.5.
+    auto* dssSpeedRow = new QHBoxLayout;
+    dssSpeedRow->addWidget(new QLabel(QStringLiteral("3D Speed:"), this));
+    m_dssSpeedSlider = new QSlider(Qt::Horizontal, this);
+    m_dssSpeedSlider->setObjectName(QStringLiteral("dssSpeedSlider"));
+    m_dssSpeedSlider->setRange(0, 10);
+    m_dssSpeedSlider->setValue(0);
+    m_dssSpeedSlider->setAccessibleName(tr("3D Speed"));
+    m_dssSpeedSlider->setToolTip(tr(
+        "How many waterfall rows each 3D row covers. Match keeps the 3D "
+        "history the same length in time as the waterfall. 1:1 pushes "
+        "every row, the fastest look. Higher values fold more rows into "
+        "each 3D row, keeping peaks, so the surface recedes more slowly."));
+    m_dssSpeedLabel = new QLabel(QStringLiteral("Match"), this);
+    m_dssSpeedLabel->setObjectName(QStringLiteral("dssSpeedLabel"));
+    dssSpeedRow->addWidget(m_dssSpeedSlider);
+    dssSpeedRow->addWidget(m_dssSpeedLabel);
+    layout->addLayout(dssSpeedRow);
+
+    connect(m_dssSpeedSlider, &QSlider::valueChanged, this, [this](int v) {
+        if (m_dssSpeedLabel) {
+            m_dssSpeedLabel->setText(v == 0 ? QStringLiteral("Match")
+                                             : QStringLiteral("1:%1").arg(v));
+        }
+        emit dssRowDividerChanged(v);
     });
 
     // ── 3D slice shadow, perspective decal for slice passbands ──────────
@@ -472,12 +505,13 @@ void SpectrumOverlayMenu::setCtunState(bool pinned)
     m_ctunCheck->blockSignals(blocked);
 }
 
-// Seeds the 3D VIEW section's six widgets without emitting: the same
+// Seeds the 3D VIEW section's seven widgets without emitting: the same
 // blockSignals(true)/blockSignals(false) idiom setValues() above uses, so
 // opening the menu cannot echo the seeded values back out through the
 // change signals and rewrite the operator's live SpectrumWidget state.
+// rowDivider (Task 24) is the trailing seventh argument.
 void SpectrumOverlayMenu::setDssValues(int mode, int floor, int gain, int span,
-                                        int angle, bool sliceShadow)
+                                        int angle, bool sliceShadow, int rowDivider)
 {
     if (m_renderModeCombo) {
         m_renderModeCombo->blockSignals(true);
@@ -512,6 +546,17 @@ void SpectrumOverlayMenu::setDssValues(int mode, int floor, int gain, int span,
         m_dssAngleSlider->setValue(angle);
         if (m_dssAngleLabel) { m_dssAngleLabel->setText(QString::number(angle)); }
         m_dssAngleSlider->blockSignals(false);
+    }
+
+    if (m_dssSpeedSlider) {
+        m_dssSpeedSlider->blockSignals(true);
+        m_dssSpeedSlider->setValue(rowDivider);
+        if (m_dssSpeedLabel) {
+            m_dssSpeedLabel->setText(rowDivider == 0
+                ? QStringLiteral("Match")
+                : QStringLiteral("1:%1").arg(rowDivider));
+        }
+        m_dssSpeedSlider->blockSignals(false);
     }
 
     if (m_dssSliceShadowChk) {

@@ -195,6 +195,9 @@
 //                keying steps reach it through wireTxChannelKeying
 //                (setRunningAsync). NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - Related to #300: scope keying connections and interlock
+//                failsafes to the current TX channel/session. NereusSDR-
+//                original. J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-25 - Task 33 (R-IOS-03): stopTransmitNow (the emergency
 //                stop, NereusSDR-original), stopAllTx (ported from Thetis
 //                console.cs StopAllTx), transmitStopped, onMoxRxReady.
@@ -2784,7 +2787,18 @@ public:
     // constructing each view. Not owned, not lifetime-tracked — MainWindow
     // outlives both.
     class SpectrumWidget* spectrumWidget() const { return m_spectrumWidget; }
-    void setSpectrumWidget(class SpectrumWidget* w) { m_spectrumWidget = w; }
+    void setSpectrumWidget(class SpectrumWidget* w) {
+        if (m_spectrumWidget == w) { return; }
+        m_spectrumWidget = w;
+        emit spectrumWidgetChanged(w);
+    }
+signals:
+    // 3D Stacked-Trace Spectrum Plan Task 22: lets a surface that follows
+    // the active panadapter (DisplayApplet) rebind when MainWindow
+    // repoints this view hook, instead of only ever reading it once at
+    // construction.
+    void spectrumWidgetChanged(class SpectrumWidget* w);
+public:
 
     // R1 Task 4: the abstract counterpart of m_spectrumWidget above.
     // RadioModel's own DSP-facing calls (SwrProtectionController overlay
@@ -4419,6 +4433,7 @@ public:
 
 #ifdef NEREUS_BUILD_TESTS
 public:
+    friend class TstRadioModelKeyingReconnect;
     // R-R3-16: the radio name a local model learns on connect
     // (m_name = info.displayName()). MainWindow's automatic Connections
     // open on a Disconnected state keys on a non-empty name, and a test has
@@ -7025,6 +7040,10 @@ private:
     std::unique_ptr<DspControlThread> m_txLane;
     // MoxController's txReady / txaFlushed to m_txChannel (connect path).
     void wireTxChannelKeying();
+    void disconnectTxChannelKeying();
+    QList<QMetaObject::Connection> m_txKeyingConnections;
+    QPointer<TxChannel> m_txKeyingChannel;
+    quint64 m_txKeyingGeneration{0};
     struct RxWorkerTarget {
         std::mutex mutex;
         RxDspWorker* worker{nullptr};

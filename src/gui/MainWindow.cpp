@@ -931,6 +931,7 @@ warren@wpratt.com
 #include "core/TwoToneController.h"
 #include "applets/PhoneCwApplet.h"
 #include "applets/RadeApplet.h"
+#include "applets/DisplayApplet.h"
 #include "applets/EqApplet.h"
 #include "applets/VaxApplet.h"
 #include "applets/DigitalApplet.h"
@@ -4595,6 +4596,12 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         });
         refreshRemoteDeviceScreens();
     }
+    // Which slice is selected decides this flag's marker colours on the pan.
+    // Seeded here because the selection can predate the flag (a slice that
+    // migrated pans, or one selected before its flag was built); the
+    // RadioModel::activeSliceChanged fan-out in buildUI(), next to the TX
+    // badge's, keeps it current after that.
+    newFlag->setActiveSlice(m_radioModel->activeSlice() == slice);
 
     // --- Intent signals (Sub-Epic C T9 + Sub-Epic E T4 mirror) ---
     // Slice control plan Task 11 fix: the TX applet's letters' path, so a
@@ -4947,18 +4954,13 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     connect(newFlag, &VfoWidget::xitHzChanged, slice, [slice](int hz) {
         slice->setXitHz(hz);
     });
+    // From Thetis console.cs:29034-29038 [v2.10.3.15]: a left click on the
+    // step display (WheelTune_MouseDown) calls ChangeTuneStepUp, which wraps
+    // from the last tune_step_list entry back to the first.
+    // changeTuneStepUp emits stepHzChanged, which updates this flag's STEP
+    // label through the stepHzChanged connection made earlier in createSliceFlag.
     connect(newFlag, &VfoWidget::stepCycleRequested, slice, [slice]() {
-        int current = slice->stepHz();
-        int next = kStageOneStepLadder[0];
-        for (int i = 0; i < kStageOneStepLadderSize; ++i) {
-            if (kStageOneStepLadder[i] == current) {
-                next = kStageOneStepLadder[(i + 1) % kStageOneStepLadderSize];
-                break;
-            }
-        }
-        // setStepHz emits stepHzChanged which the :1626-1629 handler uses to
-        // propagate to activeSpectrumWidget()->setStepSize and newFlag->setStepHz.
-        slice->setStepHz(next);
+        slice->changeTuneStepUp();
     });
     connect(newFlag, &VfoWidget::lockChanged, slice, [slice](bool locked) {
         slice->setLocked(locked);
@@ -8579,6 +8581,27 @@ void MainWindow::buildUI()
                 [this](bool) { if (desktopHosting()) { refreshDesktopFlags(); } });
     }
 
+    // Same fan-out for the selected slice, which colours the markers on the
+    // pans: the selected slice draws in its full colour, every other slice
+    // darker (SpectrumWidget::sliceMarkerGeometry). Every flag on every pan
+    // is told, not only the ones on the pan hosting the selection, because a
+    // pan that does not host it draws all of its slices darker. The flag
+    // invalidates its own pan's cached overlay when its state flips.
+    //
+    // activeSliceChanged carries a list position, so the selection is
+    // resolved through activeSlice()->sliceIndex(), as the handler that
+    // fronts the selected flag does.
+    connect(m_radioModel, &RadioModel::activeSliceChanged, this, [this](int) {
+        const SliceModel* active = m_radioModel->activeSlice();
+        const int activeId = active ? active->sliceIndex() : -1;
+        for (auto it = m_vfoWidgetsBySlice.constBegin();
+             it != m_vfoWidgetsBySlice.constEnd(); ++it) {
+            if (VfoWidget* flag = it.value()) {
+                flag->setActiveSlice(flag->sliceIndex() == activeId);
+            }
+        }
+    });
+
     // MOX transition fast-attack trigger — Thetis display.cs:889-892:
     //   if (rx == 1) FastAttackNoiseFloorRX1 = true;
     // Fires on both RX→TX and TX→RX transitions; the buffer-clear pulse on
@@ -9390,6 +9413,13 @@ void MainWindow::populateDefaultMeter()
     connect(m_radioModel, &RadioModel::sliceRemoved, this,
             [refreshSliceTabs](int) { refreshSliceTabs(); });
 
+    // DisplayApplet, 3D Stacked-Trace Spectrum Plan Task 22. Sits
+    // immediately after RxApplet in the panel add order. Follows the
+    // active panadapter via RadioModel::spectrumWidget() /
+    // spectrumWidgetChanged; no further wiring needed here.
+    m_displayApplet = new DisplayApplet(m_radioModel, nullptr);
+    panel->addApplet(m_displayApplet);
+
     // TxApplet — NYI shell (Phase 3I-1)
     // 3M-3a-ii Batch 6: cache pointer in m_txApplet so SetupDialog
     // instances can wire CfcSetupPage's [Configure CFC bands…] button
@@ -9791,6 +9821,7 @@ void MainWindow::populateDefaultMeter()
     m_appletVis = new AppletVisibilityController(this);
 
     m_appletsById[QStringLiteral("Rx")]         = m_rxApplet;
+    m_appletsById[QStringLiteral("Display")]    = m_displayApplet;
     m_appletsById[QStringLiteral("Tx")]         = m_txApplet;
     m_appletsById[QStringLiteral("PhoneCw")]    = m_phoneCwApplet;
     m_appletsById[QStringLiteral("Rade")]       = m_radeApplet;
@@ -9820,6 +9851,8 @@ void MainWindow::populateDefaultMeter()
     // PS immediately without having to discover the menu toggle.
     m_appletVis->registerApplet(QStringLiteral("Rx"),
                                 QStringLiteral("RX"),           true);
+    m_appletVis->registerApplet(QStringLiteral("Display"),
+                                QStringLiteral("Display"),      true);
     m_appletVis->registerApplet(QStringLiteral("Tx"),
                                 QStringLiteral("TX"),           true);
     m_appletVis->registerApplet(QStringLiteral("PhoneCw"),

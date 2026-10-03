@@ -21,6 +21,8 @@
 //                 via Anthropic Claude Code.
 //                 Row ring store ported from AetherSDR
 //                 `src/gui/DssRenderer.h`.
+//   2026-10-01 - Fixed CPU viewport mapping during PR review by
+//                 J.J. Boyd (KG4VCF), with AI assistance via OpenAI Codex.
 // =================================================================
 
 #include <QColor>
@@ -96,10 +98,15 @@ public:
     // fixed perspective and needs no equivalent parameter. Ours moves with the
     // runtime 3D Angle control, so it is also part of what "something
     // relevant changed" means below -- see m_cacheShape.
+    // The CPU surface samples each retained capture into the current viewport
+    // without changing stored bins. Omitted viewport values use the newest
+    // captured frame, preserving standalone callers.
     const QImage& image(const QSize& px, int scaleStripPx,
                         float floorDbm, float rangeDb, float zCurve,
                         const PaletteFn& palette, quint64 paletteToken,
-                        const QColor& bgFill, const DssShape& shape);
+                        const QColor& bgFill, const DssShape& shape,
+                        double targetCenterMhz = 0.0,
+                        double targetBandwidthMhz = 0.0);
 
     void invalidate() { m_dirty = true; }
     bool hasData() const { return m_count > 0; }
@@ -159,7 +166,8 @@ private:
     int ringAtAge(int age) const;
     void rebuild(const QSize& px, int scaleStripPx, float floorDbm,
                 float rangeDb, float zCurve, const PaletteFn& palette,
-                const QColor& bgFill, const DssShape& shape);
+                const QColor& bgFill, const DssShape& shape,
+                double targetCenterMhz, double targetBandwidthMhz);
 
     // Circular store: m_head indexes the newest row.
     std::array<std::array<float, kDssCols>, kDssRows> m_rows{};
@@ -219,6 +227,8 @@ private:
     //-KG4VCF [v0.5.3] The perspective shape is a runtime value here, so it
     // is part of the cache key. Upstream can omit it: its shape is constant.
     DssShape m_cacheShape{0.0f, 0.0f, 0.0f};
+    double m_cacheCenterMhz = 0.0;
+    double m_cacheBandwidthMhz = 0.0;
 };
 
 // Painter's-algorithm occlusion for the CPU depth-shadow overlay drawn on top

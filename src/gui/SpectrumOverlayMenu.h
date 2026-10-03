@@ -21,6 +21,12 @@
 //                 via Anthropic Claude Code.
 //                 Overlay-menu pattern from AetherSDR
 //                 `src/gui/SpectrumOverlayMenu.{h,cpp}`.
+//   2026-08-08 - Adapted the 3D VIEW declarations from AetherSDR
+//                 src/gui/SpectrumOverlayMenu.h:380-387 [@1872028c]
+//                 for NereusSDR by J.J. Boyd (KG4VCF), with AI assistance
+//                 via Anthropic Claude Code.
+//   2026-10-01 - Completed 3D port history during PR review by
+//                 J.J. Boyd (KG4VCF), with AI assistance via OpenAI Codex.
 // =================================================================
 
 #include <QWidget>
@@ -63,7 +69,7 @@ public:
 
     // Set the 3D VIEW section's current values, called before showing
     // alongside setValues() above.  Must not emit: opening the menu seeds
-    // these six widgets from the live SpectrumWidget state, and an echo
+    // these seven widgets from the live SpectrumWidget state, and an echo
     // would immediately rewrite that state with whatever the widgets
     // happened to already hold. From plan Task 13 / AetherSDR
     // SpectrumOverlayMenu "3D VIEW" section (SpectrumOverlayMenu.cpp:
@@ -71,8 +77,11 @@ public:
     // name -- upstream's own seeding function for this range is the much
     // larger syncDisplaySettings(), which also covers Panadapter/
     // Waterfall/Background/Appearance/System rows NereusSDR does not have.
+    // rowDivider (3D Stacked-Trace Spectrum Plan Task 24, NereusSDR-
+    // original) is a trailing seventh parameter, added after the original
+    // six-arg signature: 0..10, seeds m_dssSpeedSlider/m_dssSpeedLabel.
     void setDssValues(int mode, int floor, int gain, int span, int angle,
-                       bool sliceShadow);
+                       bool sliceShadow, int rowDivider);
 
     // Grey out the 3D Span row (slider + label + title) when the running
     // render path is the CPU fallback, which cannot honor it. Ported
@@ -107,6 +116,8 @@ signals:
     void dssGainChanged(int pct);
     void dssRowSpanChanged(int pct);
     void dssAngleChanged(int pct);
+    // 3D Speed (Task 24, NereusSDR-original): row cadence divider, 0..10.
+    void dssRowDividerChanged(int n);
     void dssSliceShadowChanged(bool on);
 
 private:
@@ -144,6 +155,9 @@ private:
     bool         m_dssRowSpanSupported{true};
     QSlider*     m_dssAngleSlider{nullptr};  // 3DSS viewing angle (NereusSDR-original)
     QLabel*      m_dssAngleLabel{nullptr};
+    // 3D Speed (Task 24, NereusSDR-original): row cadence divider.
+    QSlider*     m_dssSpeedSlider{nullptr};
+    QLabel*      m_dssSpeedLabel{nullptr};
     QCheckBox*   m_dssSliceShadowChk{nullptr};
 };
 

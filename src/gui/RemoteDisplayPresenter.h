@@ -12,12 +12,15 @@
 // session.
 //
 // Modification history (NereusSDR):
+//   2026-10-02: Capture metadata retained through frame, blend and repeat presentation.
+//               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-26: created for R-R3-21 / R-R3-08 (display in step with audio).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/DisplayCodec.h"
 #include "gui/AudioClockEstimator.h"
+#include "gui/RemoteSpectrumCapture.h"
 
 #include <QtGlobal>
 
@@ -76,6 +79,7 @@ public:
         /// Frame: as decoded. Blended and Repeated: a waterfall row only
         /// (waterfallDbm, wideDbm, waterfallAdvance true), no trace.
         DisplayCodecFrame frame;
+        RemoteSpectrumCapture capture;
         /// The RF window the row was captured at (the accepted context's
         /// exact centre and span), so it is drawn at that frequency even
         /// after a tune.
@@ -116,6 +120,7 @@ public:
     /// A decoded frame. A waterfall row after a gap first queues the blended
     /// rows for the gap's slots that have not already repeated.
     void push(const DisplayCodecFrame& frame, double centreHz, double spanHz);
+    void push(const DisplayCodecFrame& frame, const RemoteSpectrumCapture& capture);
     /// A lost message: the decoder waits for a keyframe. While it waits,
     /// each row slot that passes with nothing to show repeats the last row.
     /// A keyframe later than the slots already repeated owes those rows back:
@@ -138,6 +143,7 @@ private:
         QVector<float> waterfallDbm;
         QVector<float> wideDbm;
         DisplayCodecContext context;
+        RemoteSpectrumCapture capture;
         double centreHz = 0;
         double spanHz = 0;
         /// Local time it (or its latest repeat's slot) was taken for

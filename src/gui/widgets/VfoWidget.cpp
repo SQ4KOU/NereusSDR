@@ -25,6 +25,8 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-10-01: Added approved compact STEP units during PR review by
+//                 J.J. Boyd (KG4VCF), with AI assistance via OpenAI Codex.
 //   2026-09-23 - R-R3-21: the VAX tab's channel selector is disabled with a
 //                 plain reason on a remote-station model. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
@@ -133,6 +135,14 @@
 //                 take (TxBadgeOffer) it is enabled, says what a click will
 //                 do, and a click emits txTakeRequested. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Completed attribution for bright and dim slice palette, A through H
+//                 by J.J. Boyd (KG4VCF), with AI assistance via
+//                 OpenAI Codex. Port introduced 2026-09-23.
+//                 Source: AetherSDR src/gui/SliceColors.h [@0cd4559].
+//                 Upstream has no per-file copyright header.
+//                 Copyright (C) 2024-2026 Jeremy (KK7GWY) and
+//                 AetherSDR contributors. GPLv3; project source:
+//                 https://github.com/ten9876/AetherSDR
 // =================================================================
 
 //=================================================================
@@ -379,6 +389,7 @@ warren@wpratt.com
 */
 
 #include "VfoWidget.h"
+#include "gui/TuneStepLabel.h"
 #include "DspParamPopup.h"
 #include "NnrControls.h"
 #include "VaxChannelSelector.h"
@@ -2113,9 +2124,10 @@ void VfoWidget::buildXRitTab()
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
-        // Step cycle button — NOT NYI (wires to live SliceModel::setStepHz)
+        // Step cycle button: emits stepCycleRequested, which
+        // MainWindow::createSliceFlag routes to SliceModel::changeTuneStepUp().
         m_stepCycleBtn = new QPushButton(
-            QStringLiteral("%1 Hz").arg(m_stepHz), ritWidget);
+            formatTuneStepLabel(m_stepHz), ritWidget);
         m_stepCycleBtn->setFlat(true);
         m_stepCycleBtn->setStyleSheet(
             QStringLiteral("QPushButton {"
@@ -2124,8 +2136,13 @@ void VfoWidget::buildXRitTab()
                            "}"
                            "QPushButton:hover { border: 1px solid #0090e0; }"));
         m_stepCycleBtn->setFixedHeight(22);
-        // NereusSDR native — Thetis has no equivalent step-cycle button
-        // (Thetis uses wheel on the VFO display directly; step size is implicit)
+        // From Thetis console.cs:29034-29038 [v2.10.3.15]: a left click on the step
+        // display (txtWheelTune, whose MouseDown is bound to WheelTune_MouseDown at
+        // console.Designer.cs:2870) calls ChangeTuneStepUp, which advances the step
+        // and wraps. Thetis also has larger / smaller step buttons,
+        // btnChangeTuneStepLarger_Click and btnChangeTuneStepSmaller_Click
+        // (console.cs:30635-30643). This single button mirrors the left-click
+        // behaviour.
         m_stepCycleBtn->setToolTip(QStringLiteral("Cycle tuning step size (click to advance to next step)"));
         row->addWidget(m_stepCycleBtn, 1);
 
@@ -2548,7 +2565,7 @@ void VfoWidget::setStepHz(int hz)
         m_xitLabel->setStep(hz);
     }
     if (m_stepCycleBtn) {
-        m_stepCycleBtn->setText(QStringLiteral("%1 Hz").arg(hz));
+        m_stepCycleBtn->setText(formatTuneStepLabel(hz));
     }
 }
 
@@ -2653,6 +2670,15 @@ void VfoWidget::setInUseByRadio(bool inUse)
         m_txBadge->setProperty(kSavedTransmitDescription, m_txBadge->accessibleDescription());
         updateTransmitControlAvailability();
     }
+}
+
+void VfoWidget::setActiveSlice(bool active)
+{
+    if (m_activeSlice == active) {
+        return;
+    }
+    m_activeSlice = active;
+    emit activeSliceChanged(active);
 }
 
 void VfoWidget::setAntennaList(const QStringList& ants)
@@ -3778,7 +3804,29 @@ QColor VfoWidget::sliceColor(int index)
 {
     // From AetherSDR SliceColors.h (the table is ControlRanges.h's
     // kSliceColours, which the Core's catalogue reads too).
-    return QColor(static_cast<QRgb>(ControlRanges::sliceColour(index)));
+    // From AetherSDR src/gui/SliceColors.h:5, 16-23 [@0cd4559]:
+    // index all eight bright entries by slice id % 8.
+    return QColor(static_cast<QRgb>(ControlRanges::sliceColour(index % kSliceColorCount)));
+}
+
+QColor VfoWidget::sliceDimColor(int index)
+{
+    // From AetherSDR src/gui/SliceColors.h:5, 16-23 [@0cd4559]: the dim half
+    // (dr, dg, db) of all eight kSliceColors entries, indexed by slice id % 8
+    // as there. Current AetherSDR carries the same eight values as
+    // color.slice.dim.a-h in resources/themes/default-dark.json:227-234
+    // [@9f81dc00].
+    switch (index % kSliceColorCount) {
+    case 0: return QColor(0x00, 0x60, 0x80);  // A = cyan
+    case 1: return QColor(0x80, 0x20, 0x80);  // B = magenta
+    case 2: return QColor(0x20, 0x80, 0x20);  // C = green
+    case 3: return QColor(0x80, 0x80, 0x00);  // D = yellow
+    case 4: return QColor(0x80, 0x50, 0x00);  // E = orange
+    case 5: return QColor(0x00, 0x70, 0x60);  // F = teal
+    case 6: return QColor(0x80, 0x30, 0x40);  // G = coral
+    case 7: return QColor(0x58, 0x40, 0x80);  // H = lavender
+    default: return QColor(0x00, 0x60, 0x80);
+    }
 }
 
 // Phase 3P-I-a T15 — gate RX/TX ANT buttons on Alex presence and antenna count.

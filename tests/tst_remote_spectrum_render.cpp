@@ -25,6 +25,241 @@ using namespace NereusSDR;
 class TestRemoteSpectrumRender : public QObject {
     Q_OBJECT
 private slots:
+    void localStreamIdentity_restartsPartialAtTheActualFftInput()
+    {
+        SpectrumWidget widget;
+        widget.m_waterfall = QImage(8, 2, QImage::Format_RGB32);
+        widget.setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+        widget.setDssRowDivider(2);
+        widget.m_bandwidthHz = 24000;
+        const QVector<float> bins(4096, 1e-12f);
+        widget.updateSpectrumLinear(0, bins, 2.0, -10.0);
+        widget.pushWaterfallRow(QVector<float>(8, -40));
+        QCOMPARE(widget.m_dssFoldCount, 1);
+        widget.updateSpectrumLinear(1, bins, 2.0, -10.0);
+        widget.pushWaterfallRow(QVector<float>(8, -130));
+        QCOMPARE(widget.m_dssFoldCount, 1);
+        QCOMPARE(widget.dssRowsPushedForTest(), 0);
+        widget.pushWaterfallRow(QVector<float>(8, -130));
+        QCOMPARE(widget.dssRowsPushedForTest(), 1);
+        const int ring = widget.m_dss.headRing();
+        QCOMPARE(widget.m_dss.rowDataRing(ring)[widget.m_dss.cols() / 2], -130.0f);
+    }
+
+    void moxEdges_retirePartialReceiveFoldEvenWhenNoTxRowAdvances()
+    {
+        SpectrumWidget widget;
+        widget.m_waterfall = QImage(8, 2, QImage::Format_RGB32);
+        widget.setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+        widget.setDssRowDivider(2);
+        widget.setDisplayDuplex(true); // The visible axes do not change on either edge.
+        widget.setWaterfallStopOnTx(true);
+        widget.pushWaterfallRow(QVector<float>(8, -40));
+        QCOMPARE(widget.m_dssFoldCount, 1);
+        widget.setMoxOverlay(true);
+        QCOMPARE(widget.m_dssFoldCount, 0);
+        widget.pushWaterfallRow(QVector<float>(8, -30));
+        QCOMPARE(widget.dssRowsPushedForTest(), 0);
+        widget.setMoxOverlay(false);
+        widget.pushWaterfallRow(QVector<float>(8, -130));
+        QCOMPARE(widget.m_dssFoldCount, 1);
+        QCOMPARE(widget.dssRowsPushedForTest(), 0);
+        widget.pushWaterfallRow(QVector<float>(8, -130));
+        QCOMPARE(widget.dssRowsPushedForTest(), 1);
+        const int ring = widget.m_dss.headRing();
+        QCOMPARE(widget.m_dss.rowDataRing(ring)[widget.m_dss.cols() / 2], -130.0f);
+    }
+
+    void queuedCapture_keepsWideAxesAndConsumesSuppressedWide()
+    {
+        SpectrumWidget widget;
+        widget.m_waterfall = QImage(8, 2, QImage::Format_RGB32);
+        widget.m_waterfallTickerPausedForTest = true;
+        widget.setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+        widget.setDssRowDivider(1);
+        SpectrumEndpointContext context;
+        context.codec = {43, 1, -180, 0, 8, 8, 8};
+        context.exactCentreHz = 14225000;
+        context.exactSpanHz = 24000;
+        context.wideCentreHz = 14225000;
+        context.wideSpanHz = 96000;
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000);
+        const RemoteSpectrumCapture accepted = widget.m_remoteCapture;
+        DisplayCodecFrame frame;
+        frame.context = context.codec;
+        frame.traceDbm = QVector<float>(8, -100);
+        frame.waterfallDbm = QVector<float>(8, -110);
+        frame.wideDbm = QVector<float>(8, -120);
+        frame.waterfallAdvance = true;
+        QVERIFY(widget.updateRemoteSpectrum(frame, accepted));
+        ++context.codec.contextGeneration;
+        context.wideCentreHz += 1000;
+        context.wideSpanHz *= 2;
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000);
+        QVERIFY(widget.m_remoteRowQueue.front().capture == accepted);
+        widget.drainRemoteWaterfallRows();
+        QCOMPARE(widget.m_dss.rowWideCenterMhzAtAge(0), 14.225);
+        QCOMPARE(widget.m_dss.rowWideBandwidthMhzAtAge(0), 0.096);
+        QVERIFY(widget.m_pendingRemoteWide.isEmpty());
+        QVERIFY(!widget.updateRemoteSpectrum(frame, accepted));
+        widget.setWaterfallStopOnTx(true);
+        widget.setMoxOverlay(true);
+        QVERIFY(widget.enqueueRemoteWaterfallRow(frame.waterfallDbm, frame.wideDbm, accepted));
+        widget.drainRemoteWaterfallRows();
+        QVERIFY(widget.m_pendingRemoteWide.isEmpty());
+        QCOMPARE(widget.dssRowsPushedForTest(), 1);
+        widget.setMoxOverlay(false);
+        QVERIFY(widget.enqueueRemoteWaterfallRow(frame.waterfallDbm, {}, widget.m_remoteCapture));
+        widget.drainRemoteWaterfallRows();
+        QCOMPARE(widget.dssRowsPushedForTest(), 2);
+        QCOMPARE(widget.m_dss.rowWideBandwidthMhzAtAge(0), 0.0);
+        widget.clearRemoteSpectrum();
+        QVERIFY(widget.m_remoteRowQueue.isEmpty());
+        QCOMPARE(widget.m_dssFoldCount, 0);
+    }
+
+    void partialFoldIdentity_resetsWithoutBlankingPaintedHistory_data()
+    {
+        QTest::addColumn<int>("change");
+        QTest::newRow("codec-generation") << 0;
+        QTest::newRow("source-generation") << 1;
+        QTest::newRow("source-stream") << 2;
+        QTest::newRow("wide-axis") << 3;
+        QTest::newRow("source-axis") << 4;
+        QTest::newRow("adc-generation") << 5;
+    }
+    void partialFoldIdentity_resetsWithoutBlankingPaintedHistory()
+    {
+        QFETCH(int, change);
+        SpectrumWidget widget;
+        widget.m_waterfall = QImage(8, 2, QImage::Format_RGB32);
+        widget.m_waterfallTickerPausedForTest = true;
+        widget.setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+        widget.setDssRowDivider(2);
+        SpectrumEndpointContext context;
+        context.codec = {42, 1, -180, 0, 8, 8, 8};
+        context.source.streamIndex = 0;
+        context.sourceGeneration = 10;
+        context.exactCentreHz = 14225000;
+        context.exactSpanHz = 24000;
+        context.wideCentreHz = context.exactCentreHz;
+        context.wideSpanHz = 96000;
+        double sourceCentre = context.exactCentreHz;
+        widget.setRemoteSpectrumContext(context, sourceCentre, 192000);
+        const auto row = [&](float level) {
+            DisplayCodecFrame frame;
+            frame.context = context.codec;
+            frame.traceDbm = QVector<float>(8, level);
+            frame.waterfallDbm = QVector<float>(8, level);
+            frame.wideDbm = QVector<float>(8, level);
+            frame.waterfallAdvance = true;
+            QVERIFY(widget.updateRemoteSpectrum(frame));
+            widget.drainRemoteWaterfallRows();
+        };
+        row(-120); row(-120);
+        QCOMPARE(widget.dssRowsPushedForTest(), 1);
+        row(-40);
+        switch (change) {
+        case 0: ++context.codec.contextGeneration; break;
+        case 1: ++context.sourceGeneration; break;
+        case 2: ++context.source.streamIndex; break;
+        case 3: context.wideCentreHz += 1000; break;
+        case 4: sourceCentre += 1000; break;
+        case 5: ++context.wideband.sourceGeneration; break;
+        }
+        widget.setRemoteSpectrumContext(context, sourceCentre, 192000);
+        QCOMPARE(widget.dssRowsPushedForTest(), 1);
+        row(-130);
+        QCOMPARE(widget.dssRowsPushedForTest(), 1);
+        QCOMPARE(widget.m_dssFoldCount, 1);
+        row(-130);
+        QCOMPARE(widget.dssRowsPushedForTest(), 2);
+        const int ring = widget.m_dss.headRing();
+        QCOMPARE(widget.m_dss.rowDataRing(ring)[widget.m_dss.cols() / 2], -130.0f);
+        row(-30);
+        widget.clearRemoteSpectrum();
+        QCOMPARE(widget.m_dssFoldCount, 0);
+    }
+
+    void localPeakFold_calibratesEachActualPlaneBeforeMaximum()
+    {
+        SpectrumWidget widget;
+        widget.m_waterfall = QImage(8, 2, QImage::Format_RGB32);
+        widget.setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+        widget.setDssRowDivider(2);
+        widget.m_bandwidthHz = 24000;
+        widget.setDbmCalOffset(18);
+        widget.m_lastFullBinsDbm = QVector<float>(4096, -100);
+        widget.pushWaterfallRow(QVector<float>(8, -100));
+        widget.setDbmCalOffset(0);
+        widget.m_lastFullBinsDbm.fill(-90);
+        widget.pushWaterfallRow(QVector<float>(8, -90));
+        QCOMPARE(widget.dssRowsPushedForTest(), 1);
+        const int ring = widget.m_dss.headRing();
+        QCOMPARE(widget.m_dss.rowDataRing(ring)[widget.m_dss.cols() / 2], -82.0f);
+        bool sawWide = false;
+        for (int c = 0; c < widget.m_dss.cols(); ++c) {
+            if (widget.m_dss.rowWideCoverageRing(ring)[c]) {
+                QCOMPARE(widget.m_dss.rowWideDataRing(ring)[c], -82.0f);
+                sawWide = true;
+            }
+        }
+        QVERIFY(sawWide);
+    }
+
+    void suppliedWidePeakFold_keepsFirstTickAndResetsOnRenewal()
+    {
+        SpectrumWidget widget;
+        widget.m_waterfall = QImage(8, 2, QImage::Format_RGB32);
+        widget.m_waterfallTickerPausedForTest = true;
+        widget.setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+        widget.setDssRowDivider(3);
+        widget.setDbmCalOffset(18.0f); // Supplied remote planes are calibrated already.
+        SpectrumEndpointContext context;
+        context.codec = {41, 1, -180, 0, 8, 8, 8};
+        context.exactCentreHz = 14225000;
+        context.exactSpanHz = 24000;
+        context.wideCentreHz = context.exactCentreHz;
+        context.wideSpanHz = 96000;
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000);
+        const auto row = [&](float exact, float wide) {
+            DisplayCodecFrame frame;
+            frame.context = context.codec;
+            frame.traceDbm = QVector<float>(8, -80);
+            frame.waterfallDbm = QVector<float>(8, exact);
+            frame.wideDbm = QVector<float>(8, wide);
+            frame.waterfallAdvance = true;
+            QVERIFY(widget.updateRemoteSpectrum(frame));
+            widget.drainRemoteWaterfallRows();
+        };
+        row(-60, -50);
+        row(-130, -120);
+        row(-130, -120);
+        QCOMPARE(widget.dssRowsPushedForTest(), 1);
+        const int ring = widget.m_dss.headRing();
+        bool sawWide = false;
+        for (int c = 0; c < widget.m_dss.cols(); ++c) {
+            if (widget.m_dss.rowWideCoverageRing(ring)[c]) {
+                QCOMPARE(widget.m_dss.rowWideDataRing(ring)[c], -50.0f);
+                sawWide = true;
+            }
+        }
+        QVERIFY(sawWide);
+        QCOMPARE(widget.m_dss.rowDataRing(ring)[widget.m_dss.cols() / 2], -60.0f);
+        row(-40, -30); // A partial fold must not cross a generation renewal.
+        ++context.codec.contextGeneration;
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000);
+        row(-130, -120);
+        QCOMPARE(widget.m_dssFoldCount, 1);
+        row(-130, -120);
+        row(-130, -120);
+        QCOMPARE(widget.dssRowsPushedForTest(), 2);
+        const int renewed = widget.m_dss.headRing();
+        QCOMPARE(widget.m_dss.rowDataRing(renewed)[widget.m_dss.cols() / 2], -130.0f);
+        widget.clearRemoteSpectrum();
+        QCOMPARE(widget.m_dssFoldCount, 0);
+    }
+
     void remoteFrequencyScaleDragStopsAtAvailableSourceBandwidth()
     {
         SpectrumWidget widget;
@@ -97,6 +332,7 @@ private slots:
         widget.show();
         QVERIFY(QTest::qWaitForWindowExposed(&widget));
         widget.setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+        widget.setDssRowDivider(1);
         widget.setDbmCalOffset(18.0f); // A remote client-local value is ignored.
         widget.setWfUpdatePeriodMs(20);
         widget.setActivePeakHoldEnabled(true);
@@ -277,6 +513,7 @@ private slots:
         widget.show();
         QVERIFY(QTest::qWaitForWindowExposed(&widget));
         widget.setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+        widget.setDssRowDivider(1);
         widget.setWfUpdatePeriodMs(20);
         SpectrumEndpointContext context;
         context.codec = {7, 1, -180, 0, 128, 128, 0};
