@@ -201,6 +201,12 @@ namespace NereusSDR {
 
 namespace {
 
+bool sq4kouTciRuntimeEnabled()
+{
+    const QByteArray gate = qgetenv("NEREUS_SQ4KOU_TCI").trimmed().toLower();
+    return gate != "0" && gate != "false" && gate != "off" && gate != "no";
+}
+
 QString sq4kouBandToken(Band band)
 {
     switch (band) {
@@ -650,7 +656,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
 void TciServer::sendSq4kouState(const std::shared_ptr<TciClientSession>& only,
                                 bool force)
 {
-    if (!m_model) { return; }
+    if (!sq4kouTciRuntimeEnabled() || !m_model) { return; }
 
     const auto pushFrame = [this, &only](const QString& frame) {
         if (only) {
@@ -2075,7 +2081,9 @@ bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
     m_drainTimer->start();
 
     // SQ4KOU extension runs only while the TCI listener is active.
-    m_sq4kouHardwareTimer->start();
+    if (sq4kouTciRuntimeEnabled()) {
+        m_sq4kouHardwareTimer->start();
+    }
 
     // Phase 19: start sensor broadcast timers.
     // From Thetis: RxSensorsTimerCallback / TxSensorsTimerCallback are started
@@ -2458,6 +2466,7 @@ void TciServer::onNewConnection()
             }
 
             // Existing ESP32 hardware extension: complete state on connect.
+            // sendSq4kouState() itself also checks the runtime A/B gate.
             sendSq4kouState(session, true);
         }
     }
