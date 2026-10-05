@@ -1640,24 +1640,6 @@ bool P2RadioConnection::withinMoxOffGrace() const
 //   NetworkIO.SetAntBits(rx_only_ant, trx_ant, tx_ant, rx_out, tx);
 // MOX coupling (the `tx` arg) deferred to Phase 3M-1.
 // ---------------------------------------------------------------------------
-bool P2RadioConnection::readSq4kouHardwareState(Sq4kouHardwareState& out) const
-{
-    const CodecContext ctx = buildCodecContext();
-    out.valid       = 0x7f;
-    out.rxOnlyAnt   = ctx.rxOnlyAnt;
-    out.trxAnt      = ctx.p2AlexRxAnt;
-    out.txAnt       = ctx.p2AlexTxAnt;
-    out.rxOut       = ctx.rxOut ? 1 : 0;
-    out.tx          = ctx.mox ? 1 : 0;
-    out.ocBits      = static_cast<int>(ctx.ocByte);
-    out.txStepAtt   = ctx.txStepAttn[0];
-    out.adc1Att     = ctx.rxStepAttn[0];
-    out.drive       = ctx.p2DriveLevel;
-    out.paEnabled   = m_paDisabled ? 0 : 1;
-    out.alexHpfBits = static_cast<int>(ctx.alexHpfBits);
-    return true;
-}
-
 void P2RadioConnection::setAntennaRouting(AntennaRouting r)
 {
     // trxAnt drives the Alex0 RX antenna; txAnt drives the Alex1 TX.
@@ -4414,6 +4396,24 @@ CodecContext P2RadioConnection::buildCodecContext() const
     // Per clsHardwareSpecific.cs:85-191 — forwarded to WDSP, not a P2 wire byte.
     ctx.adcSupplyVoltage = m_hardwareProfile.adcSupplyVoltage;
     ctx.lrAudioSwap      = m_hardwareProfile.lrAudioSwap;
+
+    // SQ4KOU TCI: publish only from the Connection worker thread, after the
+    // complete P2 wire image has been resolved. The TCI thread reads the
+    // atomic mirror through RadioConnection::readSq4kouHardwareState().
+    Sq4kouHardwareState sq4kou;
+    sq4kou.valid       = 0x7f;
+    sq4kou.rxOnlyAnt   = ctx.rxOnlyAnt;
+    sq4kou.trxAnt      = ctx.p2AlexRxAnt;
+    sq4kou.txAnt       = ctx.p2AlexTxAnt;
+    sq4kou.rxOut       = ctx.rxOut ? 1 : 0;
+    sq4kou.tx          = ctx.mox ? 1 : 0;
+    sq4kou.ocBits      = static_cast<int>(ctx.ocByte);
+    sq4kou.txStepAtt   = ctx.txStepAttn[0];
+    sq4kou.adc1Att     = ctx.rxStepAttn[0];
+    sq4kou.drive       = ctx.p2DriveLevel;
+    sq4kou.paEnabled   = m_paDisabled ? 0 : 1;
+    sq4kou.alexHpfBits = static_cast<int>(ctx.alexHpfBits);
+    publishSq4kouHardwareState(sq4kou);
 
     return ctx;
 }
