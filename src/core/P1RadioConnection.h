@@ -165,7 +165,6 @@ public:
     int protocolVersion() const override { return 1; }
     // SQ4KOU TCI reads the final hardware-bound state; this is deliberately
     // not a Qt slot because it is a synchronous read-only snapshot API.
-    bool readSq4kouHardwareState(Sq4kouHardwareState& out) const override;
 
     // Wire-format compose helpers — static, testable in isolation.
     // Each implementation cites its Thetis source line.
