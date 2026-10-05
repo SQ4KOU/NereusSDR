@@ -1,0 +1,226 @@
+name: SQ4KOU HOT Windows MSI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [SQ4KOU-work]
+    paths:
+      - 'src/**'
+      - 'third_party/rade/**'
+      - 'third_party/wdsp/**'
+      - 'resources/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/sq4kou-hot-windows-msi.yml'
+
+concurrency:
+  group: sq4kou-hot-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NEREUS_DEPENDENCY_ARCHIVE_DIR: ${{ github.workspace }}/.nereus-deps
+  SCCACHE_DIR: ${{ github.workspace }}\.sccache
+  SCCACHE_CACHE_SIZE: 1G
+
+jobs:
+  hot-msi:
+    runs-on: windows-2022
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Qt 6.8
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: 'qtmultimedia qtserialport qtwebsockets qtshadertools'
+          cache: true
+
+      - name: Verify fast tools
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja -y --no-progress
+          }
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            choco install wixtoolset -y --no-progress
+            $wix = Get-ChildItem "${env:ProgramFiles(x86)}\WiX Toolset*" -Directory |
+              Sort-Object Name -Descending | Select-Object -First 1
+            if ($wix) { "$(Join-Path $wix.FullName 'bin')" | Out-File $env:GITHUB_PATH -Append }
+          }
+          ninja --version
+
+      - name: Restore native Nereus dependency cache
+        id: deps
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.nereus-deps
+          key: nereus-deps-Windows-${{ hashFiles('cmake/NereusDependencyArchives.cmake', 'cmake/FetchDependencyArchives.cmake') }}
+          restore-keys: |
+            nereus-deps-Windows-
+
+      - name: Prepare dependency mirrors
+        shell: bash
+        run: |
+          mirrors="$(cd "$RUNNER_TEMP" && (pwd -W 2>/dev/null || pwd))/nereus-git-mirrors.gitconfig"
+          cmake -DNEREUS_DEPENDENCY_ARCHIVE_DIR="$NEREUS_DEPENDENCY_ARCHIVE_DIR" \
+                -DNEREUS_GIT_MIRROR_CONFIG="$mirrors" \
+                -P cmake/FetchDependencyArchives.cmake
+          git config --global --add include.path "$mirrors"
+
+      - name: Save native dependency cache
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.nereus-deps
+          key: ${{ steps.deps.outputs.cache-primary-key }}
+
+      - name: Prepare FFTW for MSVC
+        shell: pwsh
+        run: |
+          $fftw = "third_party\fftw3"
+          New-Item -ItemType Directory -Force -Path "$fftw\include","$fftw\lib","$fftw\bin" | Out-Null
+          Expand-Archive ".nereus-deps\fftw-3.3.5-dll64.zip" -DestinationPath "$env:RUNNER_TEMP\fftw" -Force
+          Copy-Item "$env:RUNNER_TEMP\fftw\fftw3.h" "$fftw\include\" -Force
+          Copy-Item "$env:RUNNER_TEMP\fftw\libfftw3-3.dll" "$fftw\bin\" -Force
+          & lib /def:"$env:RUNNER_TEMP\fftw\libfftw3-3.def" /out:"$fftw\lib\fftw3.lib" /machine:x64
+          if ($LASTEXITCODE -ne 0) { throw "FFTW import library generation failed" }
+
+      - name: Locate preinstalled OpenSSL
+        shell: pwsh
+        run: |
+          $roots = @(
+            "C:\Program Files\OpenSSL",
+            "C:\Program Files\OpenSSL-Win64",
+            "C:\Program Files\OpenSSL-Win64\"
+          )
+          $root = $roots | Where-Object { Test-Path (Join-Path $_ "include\openssl\evp.h") } | Select-Object -First 1
+          if (-not $root) {
+            $hdr = Get-ChildItem "C:\Program Files" -Filter evp.h -Recurse -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match '\\include\\openssl\\evp\.h$' } | Select-Object -First 1
+            if ($hdr) { $root = Split-Path (Split-Path (Split-Path $hdr.FullName -Parent) -Parent) -Parent }
+          }
+          if (-not $root) { throw "Preinstalled OpenSSL 3 development tree not found" }
+          $crypto = Get-ChildItem $root -Filter '*crypto*.lib' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $crypto) { throw "OpenSSL headers found at $root but no libcrypto .lib" }
+          Write-Host "Using OpenSSL: $root"
+          "OPENSSL_ROOT_DIR=$root" | Out-File $env:GITHUB_ENV -Append
+
+      - name: Install sccache
+        shell: pwsh
+        run: |
+          if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) {
+            choco install sccache -y --no-progress
+          }
+
+      - name: Restore compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}\.sccache
+          key: sq4kou-hot-sccache-win2022-${{ github.sha }}
+          restore-keys: |
+            sq4kou-hot-sccache-win2022-
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DNEREUS_BUILD_TESTS=OFF \
+            -DENABLE_DFNR=OFF \
+            -DNEREUSSDR_ENABLE_LTO=OFF \
+            -DNEREUS_GPU_SPECTRUM=ON \
+            -DOPENSSL_ROOT_DIR="$OPENSSL_ROOT_DIR" \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build GUI only
+        shell: bash
+        run: |
+          sccache --start-server
+          sccache --zero-stats
+          cmake --build build -j${NUMBER_OF_PROCESSORS} --target NereusSDR
+
+      - name: Save compiler cache
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}\.sccache
+          key: sq4kou-hot-sccache-win2022-${{ github.sha }}
+
+      - name: Stage GUI
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force deploy | Out-Null
+          Copy-Item build\NereusSDR.exe deploy\
+          windeployqt deploy\NereusSDR.exe --release --no-translations --no-system-d3d-compiler
+          foreach ($file in @(
+            'build\NereusSDRLib.dll',
+            'build\NereusCore.dll',
+            'build\third_party\rade\src\rade.dll',
+            'third_party\fftw3\bin\libfftw3-3.dll',
+            'third_party\fftw3\bin\libfftw3f-3.dll'
+          )) {
+            if (-not (Test-Path $file)) { throw "Missing runtime file: $file" }
+            Copy-Item $file deploy\ -Force
+          }
+          Copy-Item -Recurse packaging\third-party-licenses deploy\licenses
+          Copy-Item LICENSE deploy\licenses\
+          Copy-Item LICENSE-DUAL-LICENSING deploy\licenses\
+          New-Item -ItemType Directory -Force deploy\models\rnnoise | Out-Null
+          Copy-Item third_party\rnnoise\models\Default_large.bin deploy\models\rnnoise\
+          Copy-Item third_party\rnnoise\models\Default_small.bin deploy\models\rnnoise\
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          $short = "${{ github.sha }}".Substring(0,8)
+          $version = "0.5.${{ github.run_number }}"
+          $msi = "NereusSDR-SQ4KOU-HOT-$short-Windows-x64.msi"
+          @"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+            <Product Id="*" Name="NereusSDR SQ4KOU HOT" Language="1045"
+                     Version="$version" Manufacturer="SQ4KOU"
+                     UpgradeCode="E63F5B10-94F6-4C0B-AE5A-96F72DE52A31">
+              <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"
+                       Platform="x64" Description="NereusSDR SQ4KOU hot test build"/>
+              <MediaTemplate EmbedCab="yes"/>
+              <MajorUpgrade DowngradeErrorMessage="A newer SQ4KOU test build is installed."/>
+              <Directory Id="TARGETDIR" Name="SourceDir">
+                <Directory Id="ProgramFiles64Folder">
+                  <Directory Id="INSTALLFOLDER" Name="NereusSDR SQ4KOU TEST"/>
+                </Directory>
+              </Directory>
+              <Feature Id="MainFeature" Title="NereusSDR SQ4KOU HOT" Level="1">
+                <ComponentGroupRef Id="AppFiles"/>
+              </Feature>
+            </Product>
+          </Wix>
+          "@ | Set-Content -Encoding UTF8 Product.wxs
+
+          heat.exe dir deploy -nologo -gg -sfrag -srd -sreg -dr INSTALLFOLDER -cg AppFiles -var var.DeployDir -out Harvest.wxs
+          candle.exe -nologo -arch x64 -dDeployDir="$((Resolve-Path deploy).Path)" Product.wxs Harvest.wxs
+          light.exe -nologo -out $msi Product.wixobj Harvest.wixobj
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $msi)) { throw "MSI packaging failed" }
+          Get-FileHash $msi -Algorithm SHA256
+          "HOT_MSI=$msi" | Out-File $env:GITHUB_ENV -Append
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: NereusSDR-SQ4KOU-HOT-MSI
+          path: ${{ env.HOT_MSI }}
+          retention-days: 7
+          if-no-files-found: error
