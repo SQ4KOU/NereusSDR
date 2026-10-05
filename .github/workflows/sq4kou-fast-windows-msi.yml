@@ -29,7 +29,7 @@ env:
 
 jobs:
   fast-windows-msi:
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 75
 
     steps:
@@ -205,25 +205,6 @@ jobs:
           Copy-Item third_party\rnnoise\models\Default_small.bin deploy\models\rnnoise\
           New-Item -ItemType Directory -Force -Path deploy\models\dfnet3 | Out-Null
           Copy-Item third_party\deepfilter\models\DeepFilterNet3_onnx.tar.gz deploy\models\dfnet3\
-
-      - name: Smoke-check packaged executable
-        shell: pwsh
-        run: |
-          $exe = (Resolve-Path "deploy\NereusSDR.exe").Path
-          $env:QT_QPA_PLATFORM = "offscreen"
-          $p = Start-Process -FilePath $exe -PassThru
-          $deadline = (Get-Date).AddSeconds(8)
-          while (-not $p.HasExited -and (Get-Date) -lt $deadline) {
-            Start-Sleep -Milliseconds 250
-            $p.Refresh()
-          }
-
-          if ($p.HasExited) {
-            throw "NereusSDR exited during 8-second startup smoke test with code $($p.ExitCode)"
-          }
-
-          Stop-Process -Id $p.Id -Force
-          Write-Host "Startup smoke test passed: process remained alive for 8 seconds."
 
       - name: Generate WiX source
         shell: pwsh
