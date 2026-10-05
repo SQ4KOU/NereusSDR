@@ -1,0 +1,248 @@
+name: SQ4KOU Fast Windows MSI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [SQ4KOU-work]
+    paths:
+      - 'src/**'
+      - 'third_party/**'
+      - 'resources/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - 'vcpkg.json'
+      - 'setup-deepfilter.ps1'
+
+concurrency:
+  group: sq4kou-fast-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NEREUS_DEPENDENCY_ARCHIVE_DIR: ${{ github.workspace }}/.nereus-deps
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
+  SCCACHE_DIR: ${{ github.workspace }}\.sccache
+  SCCACHE_CACHE_SIZE: 3G
+
+jobs:
+  fast-windows-msi:
+    runs-on: windows-latest
+    timeout-minutes: 75
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Qt 6.8
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtmultimedia qtserialport qtwebsockets qtshadertools'
+          cache: true
+
+      - name: Install fast-build tools
+        shell: pwsh
+        run: |
+          choco install ninja -y --no-progress
+          choco install wixtoolset -y --no-progress
+          choco install sccache -y --no-progress
+          $wix = Get-ChildItem "${env:ProgramFiles(x86)}\WiX Toolset*" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $wix) { throw "WiX Toolset installation not found" }
+          echo "$(Join-Path $wix.FullName 'bin')" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Restore dependency downloads
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.nereus-deps
+          key: sq4kou-nereus-deps-windows-${{ hashFiles('cmake/NereusDependencyArchives.cmake', 'cmake/FetchDependencyArchives.cmake') }}
+          restore-keys: |
+            sq4kou-nereus-deps-windows-
+
+      - name: Fetch pinned dependency downloads
+        shell: bash
+        run: |
+          mirrors="$(cd "$RUNNER_TEMP" && (pwd -W 2>/dev/null || pwd))/nereus-git-mirrors.gitconfig"
+          cmake -DNEREUS_DEPENDENCY_ARCHIVE_DIR="$NEREUS_DEPENDENCY_ARCHIVE_DIR" -DNEREUS_GIT_MIRROR_CONFIG="$mirrors" -P cmake/FetchDependencyArchives.cmake
+          git config --global --add include.path "$mirrors"
+
+      - name: Restore DeepFilterNet3 cache
+        id: dfnr
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party/deepfilter/lib/windows-x86_64
+            third_party/deepfilter/include
+            third_party/deepfilter/models
+          key: sq4kou-dfnr-windows-${{ hashFiles('setup-deepfilter.ps1', 'third_party/deepfilter/COMMIT') }}
+          restore-keys: |
+            sq4kou-dfnr-windows-
+
+      - name: Install Rust on DFNR cache miss
+        if: steps.dfnr.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build DeepFilterNet3 on cache miss
+        if: steps.dfnr.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: pwsh -File setup-deepfilter.ps1
+
+      - name: Restore FFTW3 cache
+        id: fftw
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party/fftw3/include
+            third_party/fftw3/lib
+            third_party/fftw3/bin
+          key: sq4kou-fftw3-windows-3.3.5-v1
+
+      - name: Prepare FFTW3 on cache miss
+        if: steps.fftw.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $fftwDir = "third_party/fftw3"
+          New-Item -ItemType Directory -Force -Path "$fftwDir/include", "$fftwDir/lib", "$fftwDir/bin" | Out-Null
+          Invoke-WebRequest -Uri "https://fftw.org/pub/fftw/fftw-3.3.5-dll64.zip" -OutFile fftw.zip
+          Expand-Archive -Path fftw.zip -DestinationPath fftw-tmp -Force
+          Copy-Item fftw-tmp/fftw3.h "$fftwDir/include/"
+          Copy-Item fftw-tmp/libfftw3-3.dll "$fftwDir/bin/"
+          Push-Location fftw-tmp
+          lib /def:libfftw3-3.def /out:fftw3.lib /machine:x64
+          Pop-Location
+          Copy-Item fftw-tmp/fftw3.lib "$fftwDir/lib/"
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\.vcpkg-binary-cache
+          key: sq4kou-vcpkg-windows-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            sq4kou-vcpkg-windows-
+
+      - name: Restore local compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\.sccache
+          key: sq4kou-sccache-windows-${{ github.sha }}
+          restore-keys: |
+            sq4kou-sccache-windows-
+
+      - name: Start local sccache
+        shell: pwsh
+        run: |
+          sccache --stop-server 2>$null
+          sccache --start-server
+          sccache --zero-stats
+
+      - name: Configure fast test build
+        shell: bash
+        run: |
+          cmake -B build -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DNEREUS_BUILD_TESTS=OFF             -DNEREUS_GPU_SPECTRUM=ON             -DCMAKE_C_COMPILER_LAUNCHER=sccache             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET=x64-windows-static-md             -DOPENSSL_ROOT_DIR="$(pwd)/build/vcpkg_installed/x64-windows-static-md"
+
+      - name: Build runtime targets only
+        shell: bash
+        run: cmake --build build -j${NUMBER_OF_PROCESSORS} --target NereusSDR nereusd nereus-audio-capture
+
+      - name: Show compiler cache statistics
+        if: always()
+        shell: pwsh
+        run: sccache --show-stats
+
+      - name: Stage runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path deploy | Out-Null
+          Copy-Item build\NereusSDR.exe deploy\
+          windeployqt deploy\NereusSDR.exe --release --no-translations --no-system-d3d-compiler
+
+          $required = @(
+            @('third_party\fftw3\bin\libfftw3-3.dll','deploy\libfftw3-3.dll'),
+            @('third_party\fftw3\bin\libfftw3f-3.dll','deploy\libfftw3f-3.dll'),
+            @('third_party\deepfilter\lib\windows-x86_64\deepfilter.dll','deploy\deepfilter.dll'),
+            @('build\third_party\rade\src\rade.dll','deploy\rade.dll'),
+            @('build\NereusSDRLib.dll','deploy\NereusSDRLib.dll'),
+            @('build\NereusCore.dll','deploy\NereusCore.dll'),
+            @('build\nereus-audio-capture.exe','deploy\nereus-audio-capture.exe'),
+            @('build\nereusd.exe','deploy\nereusd.exe')
+          )
+          foreach ($pair in $required) {
+            if (-not (Test-Path $pair[0])) { throw "Required runtime file missing: $($pair[0])" }
+            Copy-Item $pair[0] $pair[1] -Force
+          }
+
+          Copy-Item -Recurse packaging\third-party-licenses deploy\licenses
+          Copy-Item LICENSE deploy\licenses\
+          Copy-Item LICENSE-DUAL-LICENSING deploy\licenses\
+          New-Item -ItemType Directory -Force -Path deploy\licenses\deepfilter | Out-Null
+          Copy-Item third_party\deepfilter\LICENSE* deploy\licenses\deepfilter\
+          Copy-Item third_party\deepfilter\COMMIT deploy\licenses\deepfilter\
+          New-Item -ItemType Directory -Force -Path deploy\licenses\rnnoise | Out-Null
+          Copy-Item third_party\rnnoise\LICENSE deploy\licenses\rnnoise\
+          New-Item -ItemType Directory -Force -Path deploy\models\rnnoise | Out-Null
+          Copy-Item third_party\rnnoise\models\Default_large.bin deploy\models\rnnoise\
+          Copy-Item third_party\rnnoise\models\Default_small.bin deploy\models\rnnoise\
+          New-Item -ItemType Directory -Force -Path deploy\models\dfnet3 | Out-Null
+          Copy-Item third_party\deepfilter\models\DeepFilterNet3_onnx.tar.gz deploy\models\dfnet3\
+
+      - name: Smoke-check packaged executable
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path "deploy\NereusSDR.exe").Path
+          $p = Start-Process -FilePath $exe -ArgumentList "--version" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Packaged NereusSDR.exe --version failed with exit code $($p.ExitCode)" }
+
+      - name: Generate WiX source
+        shell: pwsh
+        run: |
+          @'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+            <Product Id="*" Name="NereusSDR SQ4KOU TEST" Language="1045"
+                     Version="0.5.2.2" Manufacturer="SQ4KOU"
+                     UpgradeCode="E63F5B10-94F6-4C0B-AE5A-96F72DE52A31">
+              <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"
+                       Platform="x64" Description="NereusSDR SQ4KOU fast test build"/>
+              <MediaTemplate EmbedCab="yes"/>
+              <MajorUpgrade DowngradeErrorMessage="A newer test version is already installed."/>
+              <Directory Id="TARGETDIR" Name="SourceDir">
+                <Directory Id="ProgramFiles64Folder">
+                  <Directory Id="INSTALLFOLDER" Name="NereusSDR SQ4KOU TEST"/>
+                </Directory>
+              </Directory>
+              <Feature Id="MainFeature" Title="NereusSDR SQ4KOU TEST" Level="1">
+                <ComponentGroupRef Id="AppFiles"/>
+              </Feature>
+            </Product>
+          </Wix>
+          '@ | Set-Content -Encoding UTF8 Product.wxs
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          $short = "${{ github.sha }}".Substring(0,8)
+          $msi = "NereusSDR-SQ4KOU-fast-$short-Windows-x64.msi"
+          heat.exe dir deploy -nologo -gg -sfrag -srd -sreg -dr INSTALLFOLDER -cg AppFiles -var var.DeployDir -out Harvest.wxs
+          candle.exe -nologo -arch x64 -dDeployDir="$((Resolve-Path deploy).Path)" Product.wxs Harvest.wxs
+          light.exe -nologo -out $msi Product.wixobj Harvest.wixobj
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $msi)) { throw "MSI packaging failed" }
+          Get-FileHash $msi -Algorithm SHA256
+          "FAST_MSI=$msi" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload fast MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: NereusSDR-SQ4KOU-fast-MSI
+          path: ${{ env.FAST_MSI }}
+          retention-days: 7
+          if-no-files-found: error
