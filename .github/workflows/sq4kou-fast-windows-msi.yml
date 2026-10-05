@@ -2,17 +2,6 @@ name: SQ4KOU Fast Windows MSI
 
 on:
   workflow_dispatch:
-  push:
-    branches: [SQ4KOU-work]
-    paths:
-      - 'src/**'
-      - 'third_party/**'
-      - 'resources/**'
-      - 'cmake/**'
-      - 'CMakeLists.txt'
-      - 'vcpkg.json'
-      - 'setup-deepfilter.ps1'
-      - '.github/workflows/sq4kou-fast-windows-msi.yml'
 
 concurrency:
   group: sq4kou-fast-windows-${{ github.ref }}
