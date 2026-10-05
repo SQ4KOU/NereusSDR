@@ -620,6 +620,16 @@ private:
 
     QTimer* m_pingTimer{nullptr};
 
+    // SQ4KOU hardware publisher. Hardware changes are sampled at 200 ms;
+    // CMD07 remains throttled to approximately 1 Hz.
+    QTimer* m_sq4kouHardwareTimer{nullptr};
+    QString m_sq4kouLastHwPayload;
+    QString m_sq4kouLastRxAntennaFrame;
+    QString m_sq4kouLastTxAntennaFrame;
+    quint32 m_sq4kouHardwareSeq{0};
+    quint32 m_sq4kouCmd07HeartbeatSeq{0};
+    QElapsedTimer m_sq4kouCmd07Clock;
+
     // Phase 14: shared drain timer; fires every 5ms and pumps queued frames
     // from each client's TciSendQueue in priority order (Urgent > Binary >
     // Control), capped at kDrainMaxPerTick frames per client per tick.
@@ -632,6 +642,10 @@ private:
     // app, each through its own update gap (TciClientSession::updateGap).
     // Called from the drain tick and after each handled command.
     void broadcastPendingNotifications();
+
+    // SQ4KOU hardware TCI extension. Standard clients ignore these bespoke
+    // text commands; the station ESP32 consumes them.
+    void sendSq4kouState(const std::shared_ptr<TciClientSession>& only, bool force);
 
     // Task 10 (R-R3-49): the update gap every app gets, and the clock its
     // gates read (milliseconds since this server was built).

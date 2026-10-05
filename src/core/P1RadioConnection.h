@@ -335,6 +335,7 @@ public slots:
     // preamp bits), Thetis SetRX2Preamp.
     void setRx2Preamp(bool enabled) override;
     void setTxDrive(int level) override;
+    bool readSq4kouHardwareState(Sq4kouHardwareState& out) const override;
     void setMox(bool enabled) override;
     void setAntennaRouting(AntennaRouting routing) override;
     void setAlexRxBpf(AlexRxBpf bpf) override;
@@ -982,6 +983,9 @@ private:
     int     m_antennaIdx{0};
     int     m_rxOnlyAnt{0};   // RX-only input mux (0..3). Bank 0 C3 bits 5-6.
     bool    m_rxOut{false};   // _Rx_1_Out relay. Bank 0 C3 bit 7.
+    // P1 wire has shared ANT bits, but the SQ4KOU extension also publishes
+    // the independently selected TX antenna passed through SetAntBits logic.
+    AntennaRouting m_sq4kouLastAntennaRouting{};
     // Alex attenuator _20_dB_Atten / _10_dB_Atten. Bank 0 C3 bits 1 / 0.
     bool    m_alex20dB{false};
     bool    m_alex10dB{false};

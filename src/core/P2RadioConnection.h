@@ -358,6 +358,7 @@ public slots:
     void setTxDrive(int level) override;
     void setMox(bool enabled) override;
     void setAntennaRouting(AntennaRouting routing) override;
+    bool readSq4kouHardwareState(Sq4kouHardwareState& out) const override;
     void setAlexRxBpf(AlexRxBpf bpf) override;
     // Level Cal: the Alex receive attenuator (Thetis SetAlexAtten).
     void setAlexAtten(int bits) override;
