@@ -1,0 +1,78 @@
+name: "CodeQL"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-24.04
+    permissions:
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["cpp"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        # System libs only. Qt itself comes from install-qt-action below
+        # so CodeQL matches ci.yml + release.yml (Qt 6.8.*). Apt qt6-*
+        # on ubuntu-24.04 ships Qt 6.4.2, which is too old for
+        # QRhiWidget and used to force -DNEREUS_GPU_SPECTRUM=OFF here;
+        # aligning Qt versions across all three workflows removes that
+        # workaround and stops CodeQL drifting from CI behavior.
+        #
+        # libssl-dev added fix round 3 minor C (Remote Daemon R2, Task
+        # 17): the one Linux configure site the reviewer found still
+        # missing it after fix round 1's Important 1 point 2 pass over
+        # CLAUDE.md, ci.yml, release.yml and the CI Dockerfile. Benign
+        # today only because ubuntu-24.04 happens to preinstall OpenSSL
+        # 3.0.13; CLAUDE.md records that the ORIGINAL Qt6::WebSockets
+        # REQUIRED flip this whole finding is modelled on needed two
+        # follow-up PRs specifically to keep this exact workflow green,
+        # so closing the gap now rather than waiting for it to bite.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config g++ \
+            libgl1-mesa-dev libfftw3-dev \
+            libasound2-dev libjack-jackd2-dev \
+            libpipewire-0.3-dev \
+            libssl-dev
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          # Qt 6.8+ folds qtsvg into qtbase; not listable as a module.
+          modules: 'qtmultimedia qtshadertools qtwebsockets'
+          cache: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Build
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build -j$(nproc)
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
