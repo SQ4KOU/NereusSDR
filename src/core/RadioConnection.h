@@ -1199,6 +1199,14 @@ protected:
     // without blocking the radio sender.
     void publishSq4kouHardwareState(const Sq4kouHardwareState& state) const noexcept
     {
+        // Diagnostic A/B switch. With NEREUS_SQ4KOU_TCI=0 the SQ4KOU
+        // extension is completely inert at the hardware mirror boundary.
+        // Default is enabled so normal test builds keep the intended feature.
+        const QByteArray gate = qgetenv("NEREUS_SQ4KOU_TCI").trimmed().toLower();
+        if (gate == "0" || gate == "false" || gate == "off" || gate == "no") {
+            return;
+        }
+
         m_sq4kouSnapshotSeq.fetch_add(1u, std::memory_order_acq_rel); // odd = writer active
         m_sq4kouValid.store(state.valid, std::memory_order_relaxed);
         m_sq4kouRxOnlyAnt.store(state.rxOnlyAnt, std::memory_order_relaxed);
