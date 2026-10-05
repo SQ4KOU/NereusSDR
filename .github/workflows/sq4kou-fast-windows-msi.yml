@@ -210,8 +210,20 @@ jobs:
         shell: pwsh
         run: |
           $exe = (Resolve-Path "deploy\NereusSDR.exe").Path
-          $p = Start-Process -FilePath $exe -ArgumentList "--version" -PassThru -Wait
-          if ($p.ExitCode -ne 0) { throw "Packaged NereusSDR.exe --version failed with exit code $($p.ExitCode)" }
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $p = Start-Process -FilePath $exe -PassThru
+          $deadline = (Get-Date).AddSeconds(8)
+          while (-not $p.HasExited -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 250
+            $p.Refresh()
+          }
+
+          if ($p.HasExited) {
+            throw "NereusSDR exited during 8-second startup smoke test with code $($p.ExitCode)"
+          }
+
+          Stop-Process -Id $p.Id -Force
+          Write-Host "Startup smoke test passed: process remained alive for 8 seconds."
 
       - name: Generate WiX source
         shell: pwsh
