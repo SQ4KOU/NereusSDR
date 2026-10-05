@@ -133,6 +133,15 @@ jobs:
           restore-keys: |
             sq4kou-hot-sccache-win2022-
 
+      - name: Restore incremental build tree
+        id: buildtree
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}\build
+          key: sq4kou-hot-buildtree-win2022-v1-${{ github.sha }}
+          restore-keys: |
+            sq4kou-hot-buildtree-win2022-v1-
+
       - name: Configure
         shell: bash
         run: |
@@ -154,10 +163,18 @@ jobs:
           cmake --build build -j${NUMBER_OF_PROCESSORS} --target NereusSDR
 
       - name: Save compiler cache
+        if: always()
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}\.sccache
           key: sq4kou-hot-sccache-win2022-${{ github.sha }}
+
+      - name: Save incremental build tree
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}\build
+          key: sq4kou-hot-buildtree-win2022-v1-${{ github.sha }}
 
       - name: Stage GUI
         shell: pwsh
