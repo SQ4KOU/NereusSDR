@@ -706,7 +706,11 @@ void TciServer::sendSq4kouState(const std::shared_ptr<TciClientSession>& only,
     // Stage 2: effective hardware state at the codec/radio boundary.
     Sq4kouHardwareState hw;
     RadioConnection* connection = m_model->connection();
-    if (connection && connection->readSq4kouHardwareState(hw)) {
+    // Match the old ChannelMaster validity contract: do not publish a
+    // full-valid hardware image merely because a connection object exists.
+    // The radio must have completed its handshake first.
+    if (m_model->connectionState() == ConnectionState::Connected
+        && connection && connection->readSq4kouHardwareState(hw)) {
         const int cmd05Tatt = sq4kouCmd05TattFromDrive(hw.drive);
         const int lna6 = (hw.alexHpfBits & 0x40) != 0 ? 1 : 0;
         const QString payload =
