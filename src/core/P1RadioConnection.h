@@ -163,6 +163,9 @@ public:
 
     // Protocol identifier — 1 for OpenHPSDR P1.  See RadioConnection::protocolVersion.
     int protocolVersion() const override { return 1; }
+    // SQ4KOU TCI reads the final hardware-bound state; this is deliberately
+    // not a Qt slot because it is a synchronous read-only snapshot API.
+    bool readSq4kouHardwareState(Sq4kouHardwareState& out) const override;
 
     // Wire-format compose helpers — static, testable in isolation.
     // Each implementation cites its Thetis source line.
@@ -335,7 +338,6 @@ public slots:
     // preamp bits), Thetis SetRX2Preamp.
     void setRx2Preamp(bool enabled) override;
     void setTxDrive(int level) override;
-    bool readSq4kouHardwareState(Sq4kouHardwareState& out) const override;
     void setMox(bool enabled) override;
     void setAntennaRouting(AntennaRouting routing) override;
     void setAlexRxBpf(AlexRxBpf bpf) override;
