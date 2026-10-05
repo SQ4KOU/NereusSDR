@@ -2640,24 +2640,6 @@ void P1RadioConnection::setAntennaRouting(AntennaRouting r)
     // antenna fields via buildCodecContext() → P1Codec::bank0.
 }
 
-bool P1RadioConnection::readSq4kouHardwareState(Sq4kouHardwareState& out) const
-{
-    const CodecContext ctx = buildCodecContext();
-    out.valid       = 0x7f;
-    out.rxOnlyAnt   = ctx.rxOnlyAnt;
-    out.trxAnt      = m_sq4kouLastAntennaRouting.trxAnt;
-    out.txAnt       = m_sq4kouLastAntennaRouting.txAnt;
-    out.rxOut       = ctx.rxOut ? 1 : 0;
-    out.tx          = ctx.mox ? 1 : 0;
-    out.ocBits      = static_cast<int>(ctx.ocByte);
-    out.txStepAtt   = ctx.txStepAttn[0];
-    out.adc1Att     = ctx.rxStepAttn[0];
-    out.drive       = ctx.txDrive;
-    out.paEnabled   = m_paDisabled ? 0 : 1;
-    out.alexHpfBits = static_cast<int>(ctx.alexHpfBits);
-    return true;
-}
-
 // ---------------------------------------------------------------------------
 // setAlexRxBpf — Phase 3F. Per-ADC RX band-pass decision.
 //
@@ -4348,6 +4330,25 @@ CodecContext P1RadioConnection::buildCodecContext() const
     // Per clsHardwareSpecific.cs:85-191 — forwarded to WDSP, not a P1 wire byte.
     ctx.adcSupplyVoltage = m_hardwareProfile.adcSupplyVoltage;
     ctx.lrAudioSwap      = m_hardwareProfile.lrAudioSwap;
+
+    // SQ4KOU TCI: publish from the Connection worker thread after the final
+    // wire-bound CodecContext has been composed. TCI only reads the atomic
+    // mirror and never reaches back into this connection object's live state.
+    Sq4kouHardwareState sq4kou;
+    sq4kou.valid       = 0x7f;
+    sq4kou.rxOnlyAnt   = ctx.rxOnlyAnt;
+    sq4kou.trxAnt      = m_sq4kouLastAntennaRouting.trxAnt;
+    sq4kou.txAnt       = m_sq4kouLastAntennaRouting.txAnt;
+    sq4kou.rxOut       = ctx.rxOut ? 1 : 0;
+    sq4kou.tx          = ctx.mox ? 1 : 0;
+    sq4kou.ocBits      = static_cast<int>(ctx.ocByte);
+    sq4kou.txStepAtt   = ctx.txStepAttn[0];
+    sq4kou.adc1Att     = ctx.rxStepAttn[0];
+    sq4kou.drive       = ctx.txDrive;
+    sq4kou.paEnabled   = m_paDisabled ? 0 : 1;
+    sq4kou.alexHpfBits = static_cast<int>(ctx.alexHpfBits);
+    publishSq4kouHardwareState(sq4kou);
+
     return ctx;
 }
 
