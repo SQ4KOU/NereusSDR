@@ -203,8 +203,11 @@ namespace {
 
 bool sq4kouTciRuntimeEnabled()
 {
+    // SQ4KOU hardware extension is opt-in during crash isolation.
+    // Standard TCI remains untouched. Enable explicitly with
+    // NEREUS_SQ4KOU_TCI=1 after the base application is proven stable.
     const QByteArray gate = qgetenv("NEREUS_SQ4KOU_TCI").trimmed().toLower();
-    return gate != "0" && gate != "false" && gate != "off" && gate != "no";
+    return gate == "1" || gate == "true" || gate == "on" || gate == "yes";
 }
 
 QString sq4kouBandToken(Band band)
