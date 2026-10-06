@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -171,6 +172,41 @@ public:
         m_dropSamples.store(0, std::memory_order_relaxed);
         m_underrunEvents.store(0, std::memory_order_relaxed);
     }
+
+    // SQ4KOU RX-audio diagnostic build (2026-10-07).
+    // Hot-path instrumentation is passive: atomic counters plus
+    // producer-owned last-sample state. The owner thread takes one
+    // snapshot per second; taking it never moves ring cursors or changes
+    // the callback, buffer, routing, or DSP state.
+    struct OutputDiagSnapshot {
+        quint64 pushBlocks{0};
+        quint64 pushFrames{0};
+        quint64 pushSamples{0};
+        quint64 pushNonFinite{0};
+        double  pushSquareSum{0.0};
+        float   pushPeak{0.0f};
+        float   pushMaxBoundaryStep{0.0f};
+        int     pushMinQueuedFrames{-1};
+        int     pushMaxQueuedFrames{-1};
+
+        quint64 callbackCalls{0};
+        quint64 callbackRequestedFrames{0};
+        quint64 callbackSilentFrames{0};
+        int     callbackMinQueuedFrames{-1};
+        int     callbackMaxQueuedFrames{-1};
+        int     callbackQuantumFrames{0};
+
+        int     sampleRate{0};
+        int     channels{0};
+        int     ringCapacityFrames{0};
+
+        quint32 ringOverrunEvents{0};
+        quint64 ringOverrunSamples{0};
+        quint32 ringUnderrunEvents{0};
+        quint32 paOutputUnderflowEvents{0};
+        quint32 paOutputOverflowEvents{0};
+    };
+    OutputDiagSnapshot takeOutputDiagSnapshot();
 
     // ---- Capture-path helpers (pure; unit-tested directly) ----
     //
@@ -315,6 +351,29 @@ private:
     // looks like.
     std::atomic<quint32> m_paOutputUnderflowEvents{0};
     std::atomic<quint32> m_paOutputOverflowEvents{0};
+
+    // SQ4KOU passive output-path diagnostics. Interval counters are
+    // exchanged by takeOutputDiagSnapshot(); cumulative production
+    // counters above retain their established semantics.
+    static constexpr int kDiagMinUnset = std::numeric_limits<int>::max();
+    std::atomic<quint64> m_diagPushBlocks{0};
+    std::atomic<quint64> m_diagPushFrames{0};
+    std::atomic<quint64> m_diagPushSamples{0};
+    std::atomic<quint64> m_diagPushNonFinite{0};
+    std::atomic<double>  m_diagPushSquareSum{0.0};
+    std::atomic<float>   m_diagPushPeak{0.0f};
+    std::atomic<float>   m_diagPushMaxBoundaryStep{0.0f};
+    std::atomic<int>     m_diagPushMinQueuedFrames{kDiagMinUnset};
+    std::atomic<int>     m_diagPushMaxQueuedFrames{0};
+    float m_diagPushLastL{0.0f};
+    float m_diagPushLastR{0.0f};
+    bool  m_diagPushHaveLast{false};
+
+    std::atomic<quint64> m_diagCallbackCalls{0};
+    std::atomic<quint64> m_diagCallbackRequestedFrames{0};
+    std::atomic<quint64> m_diagCallbackSilentFrames{0};
+    std::atomic<int>     m_diagCallbackMinQueuedFrames{kDiagMinUnset};
+    std::atomic<int>     m_diagCallbackMaxQueuedFrames{0};
 
     // Crossfade state for discontinuity smoothing in paCallback.  Only
     // read / written from the audio callback (single-threaded by
