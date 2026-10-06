@@ -352,7 +352,7 @@ jobs:
               <MajorUpgrade DowngradeErrorMessage="A newer SQ4KOU test build is installed."/>
               <Directory Id="TARGETDIR" Name="SourceDir">
                 <Directory Id="ProgramFiles64Folder">
-                  <Directory Id="INSTALLFOLDER" Name="NereusSDR SQ4KOU TEST"/>
+                  <Directory Id="INSTALLFOLDER" Name="NereusSDR"/>
                 </Directory>
               </Directory>
               <Feature Id="MainFeature" Title="NereusSDR SQ4KOU HOT" Level="1">
