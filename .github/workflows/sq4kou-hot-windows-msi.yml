@@ -1,4 +1,4 @@
-name: SQ4KOU HOT Windows MSI
+name: NereusSDR Windows MSI
 
 on:
   workflow_dispatch:
@@ -339,23 +339,23 @@ jobs:
         run: |
           $short = "${{ github.sha }}".Substring(0,8)
           $version = "0.5.${{ github.run_number }}"
-          $msi = "NereusSDR-SQ4KOU-HOT-$short-Windows-x64.msi"
+          $msi = "NereusSDR-$short-Windows-x64.msi"
           @"
           <?xml version="1.0" encoding="UTF-8"?>
           <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-            <Product Id="*" Name="NereusSDR SQ4KOU HOT" Language="1045"
-                     Version="$version" Manufacturer="SQ4KOU"
+            <Product Id="*" Name="NereusSDR" Language="1045"
+                     Version="$version" Manufacturer="NereusSDR"
                      UpgradeCode="E63F5B10-94F6-4C0B-AE5A-96F72DE52A31">
               <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"
-                       Platform="x64" Description="NereusSDR SQ4KOU hot test build"/>
+                       Platform="x64" Description="NereusSDR Windows build"/>
               <MediaTemplate EmbedCab="yes"/>
-              <MajorUpgrade DowngradeErrorMessage="A newer SQ4KOU test build is installed."/>
+              <MajorUpgrade DowngradeErrorMessage="A newer NereusSDR build is installed."/>
               <Directory Id="TARGETDIR" Name="SourceDir">
                 <Directory Id="ProgramFiles64Folder">
                   <Directory Id="INSTALLFOLDER" Name="NereusSDR"/>
                 </Directory>
               </Directory>
-              <Feature Id="MainFeature" Title="NereusSDR SQ4KOU HOT" Level="1">
+              <Feature Id="MainFeature" Title="NereusSDR" Level="1">
                 <ComponentGroupRef Id="AppFiles"/>
               </Feature>
             </Product>
@@ -372,7 +372,7 @@ jobs:
       - name: Upload MSI
         uses: actions/upload-artifact@v4
         with:
-          name: NereusSDR-SQ4KOU-HOT-MSI
+          name: NereusSDR-Windows-MSI
           path: ${{ env.HOT_MSI }}
           retention-days: 7
           if-no-files-found: error
