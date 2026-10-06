@@ -155,12 +155,12 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
-      - name: Build GUI only
+      - name: Build runtime only
         shell: bash
         run: |
           sccache --start-server
           sccache --zero-stats
-          cmake --build build -j${NUMBER_OF_PROCESSORS} --target NereusSDR
+          cmake --build build -j${NUMBER_OF_PROCESSORS} --target NereusSDR nereusd nereus-audio-capture
 
       - name: Save compiler cache
         if: always()
@@ -176,28 +176,141 @@ jobs:
           path: ${{ github.workspace }}\build
           key: sq4kou-hot-buildtree-win2022-v1-${{ github.sha }}
 
-      - name: Stage GUI
+      - name: Stage and audit complete Windows runtime
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force deploy | Out-Null
-          Copy-Item build\NereusSDR.exe deploy\
-          windeployqt deploy\NereusSDR.exe --release --no-translations --no-system-d3d-compiler
-          foreach ($file in @(
+
+          # IMPORTANT: put every project PE next to the EXE BEFORE windeployqt.
+          # NereusSDR.exe imports NereusSDRLib.dll, whose Qt imports include
+          # SerialPort/WebSockets; NereusCore.dll imports Multimedia.
+          $projectFiles = @(
+            'build\NereusSDR.exe',
             'build\NereusSDRLib.dll',
             'build\NereusCore.dll',
             'build\third_party\rade\src\rade.dll',
+            'build\nereus-audio-capture.exe',
+            'build\nereusd.exe',
             'third_party\fftw3\bin\libfftw3-3.dll',
             'third_party\fftw3\bin\libfftw3f-3.dll'
-          )) {
-            if (-not (Test-Path $file)) { throw "Missing runtime file: $file" }
+          )
+          foreach ($file in $projectFiles) {
+            if (-not (Test-Path $file)) { throw "Missing runtime file before deploy: $file" }
             Copy-Item $file deploy\ -Force
           }
+
+          # Scan all three load roots. This causes windeployqt to see the Qt
+          # imports carried by NereusSDRLib/NereusCore, not only the thin EXE.
+          foreach ($pe in @(
+            'deploy\NereusSDR.exe',
+            'deploy\NereusSDRLib.dll',
+            'deploy\NereusCore.dll',
+            'deploy\nereusd.exe',
+            'deploy\nereus-audio-capture.exe'
+          )) {
+            & windeployqt $pe --release --no-translations --no-system-d3d-compiler --compiler-runtime
+            if ($LASTEXITCODE -ne 0) { throw "windeployqt failed for $pe" }
+          }
+
+          # These are direct imports of our PE files and therefore mandatory.
+          $requiredQt = @(
+            'Qt6Core.dll',
+            'Qt6Gui.dll',
+            'Qt6Widgets.dll',
+            'Qt6Network.dll',
+            'Qt6Svg.dll',
+            'Qt6SerialPort.dll',
+            'Qt6WebSockets.dll',
+            'Qt6Multimedia.dll'
+          )
+          foreach ($dll in $requiredQt) {
+            if (-not (Test-Path "deploy\$dll")) { throw "Required Qt runtime missing after windeployqt: $dll" }
+          }
+
+          # Make the MSI independent of an already-installed VC++ Redistributable.
+          $crt = @(
+            'MSVCP140.dll',
+            'MSVCP140_1.dll',
+            'MSVCP140_2.dll',
+            'MSVCP140_ATOMIC_WAIT.dll',
+            'VCRUNTIME140.dll',
+            'VCRUNTIME140_1.dll'
+          )
+          foreach ($dll in $crt) {
+            if (-not (Test-Path "deploy\$dll")) {
+              $src = Join-Path $env:WINDIR "System32\$dll"
+              if (-not (Test-Path $src)) { throw "VC++ runtime missing on runner: $dll" }
+              Copy-Item $src "deploy\$dll" -Force
+            }
+          }
+
+          # Qt Multimedia is plugin-based on Windows. A bare Qt6Multimedia.dll
+          # without its backend is an incomplete package.
+          if (-not (Test-Path 'deploy\multimedia')) {
+            throw 'Qt Multimedia plugin directory missing after windeployqt'
+          }
+          $mmPlugins = @(Get-ChildItem 'deploy\multimedia' -Filter '*.dll' -File -ErrorAction SilentlyContinue)
+          if ($mmPlugins.Count -eq 0) {
+            throw 'Qt Multimedia plugin directory contains no backend DLL'
+          }
+
+          # Recursively validate PE imports. Any missing non-system DLL aborts
+          # packaging instead of producing another incomplete MSI.
+          $systemDlls = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+          @(
+            'KERNEL32.dll','KERNELBASE.dll','USER32.dll','GDI32.dll','GDI32FULL.dll',
+            'ADVAPI32.dll','SHELL32.dll','OLE32.dll','OLEAUT32.dll','COMDLG32.dll',
+            'COMCTL32.dll','SHLWAPI.dll','IMM32.dll','WINMM.dll','WS2_32.dll',
+            'CRYPT32.dll','BCRYPT.dll','bcryptprimitives.dll','NTDLL.dll','SETUPAPI.dll',
+            'AVRT.dll','DWMAPI.dll','VERSION.dll','UXTHEME.dll','USERENV.dll',
+            'IPHLPAPI.dll','DNSAPI.dll','POWRPROF.dll','PROPSYS.dll','WTSAPI32.dll',
+            'WINHTTP.dll','SECUR32.dll','NORMALIZ.dll','NETAPI32.dll','MPR.dll',
+            'DBGHELP.dll','RPCRT4.dll','MSIMG32.dll','OPENGL32.dll','GLU32.dll',
+            'DXGI.dll','D3D9.dll','D3D11.dll','D3D12.dll','DCOMP.dll','DWRITE.dll',
+            'SHCORE.dll','WSOCK32.dll','AUTHZ.dll','NCRYPT.dll','IMAGEHLP.dll',
+            'UIAutomationCore.dll','msvcrt.dll'
+          ) | ForEach-Object { [void]$systemDlls.Add($_) }
+
+          function Get-Imports([string]$file) {
+            $out = & dumpbin /dependents $file 2>$null
+            foreach ($line in $out) {
+              if ($line -match '^\s+([^\s]+\.dll)\s*$') { $matches[1] }
+            }
+          }
+
+          $missing = @{}
+          $allPE = @(Get-ChildItem deploy -Recurse -File | Where-Object { $_.Extension -in '.exe','.dll' })
+          foreach ($pe in $allPE) {
+            foreach ($dep in @(Get-Imports $pe.FullName)) {
+              if ($dep -like 'api-ms-win-*' -or $dep -like 'ext-ms-win-*' -or $systemDlls.Contains($dep)) { continue }
+              $local = @(Get-ChildItem deploy -Recurse -File -Filter $dep -ErrorAction SilentlyContinue)
+              if ($local.Count -eq 0) {
+                if (-not $missing.ContainsKey($dep)) { $missing[$dep] = @() }
+                $missing[$dep] += $pe.FullName.Substring((Resolve-Path deploy).Path.Length + 1)
+              }
+            }
+          }
+
+          if ($missing.Count -gt 0) {
+            Write-Host 'UNRESOLVED RUNTIME IMPORTS:'
+            foreach ($name in ($missing.Keys | Sort-Object)) {
+              Write-Host "  $name <- $($missing[$name] -join ', ')"
+            }
+            throw "Runtime dependency audit failed: $($missing.Count) unresolved DLL(s)"
+          }
+
           Copy-Item -Recurse packaging\third-party-licenses deploy\licenses
           Copy-Item LICENSE deploy\licenses\
           Copy-Item LICENSE-DUAL-LICENSING deploy\licenses\
           New-Item -ItemType Directory -Force deploy\models\rnnoise | Out-Null
           Copy-Item third_party\rnnoise\models\Default_large.bin deploy\models\rnnoise\
           Copy-Item third_party\rnnoise\models\Default_small.bin deploy\models\rnnoise\
+
+          Write-Host 'Runtime audit PASS'
+          Get-ChildItem deploy -Recurse -File |
+            Sort-Object FullName |
+            ForEach-Object { $_.FullName.Substring((Resolve-Path deploy).Path.Length + 1) }
 
       - name: Build MSI
         shell: pwsh
