@@ -868,9 +868,40 @@ std::unique_ptr<IAudioBus> AudioEngine::makeBus(const AudioDeviceConfig& cfg,
 #endif
     auto bus = std::make_unique<PortAudioBus>();
     PortAudioConfig pcfg;
-    pcfg.direction     = capture ? AudioDirection::Input
-                                 : AudioDirection::Output;
-    pcfg.hostApiIndex  = cfg.hostApiIndex;
+    pcfg.direction = capture ? AudioDirection::Input
+                             : AudioDirection::Output;
+
+    // AudioDeviceConfig persists the host API by name, while PortAudio needs
+    // the process-local numeric index.  loadFromSettings() intentionally
+    // leaves hostApiIndex at -1, so resolve the saved DriverApi here.
+    int resolvedHostApi = cfg.hostApiIndex;
+    if (resolvedHostApi < 0 && !cfg.driverApi.isEmpty()) {
+        const auto apis = PortAudioBus::hostApis();
+        for (const auto& api : apis) {
+            if (api.name.compare(cfg.driverApi, Qt::CaseInsensitive) == 0) {
+                resolvedHostApi = api.index;
+                break;
+            }
+        }
+    }
+
+#if defined(Q_OS_WIN)
+    // A fresh Windows profile previously fell through to PortAudio's global
+    // default and opened MME.  Bench logs from the SQ4KOU machine show that
+    // exact path together with severe crackling.  Prefer WASAPI for speakers;
+    // an explicitly saved DriverApi/hostApiIndex still wins.
+    if (!capture && resolvedHostApi < 0 && cfg.driverApi.isEmpty()) {
+        const auto apis = PortAudioBus::hostApis();
+        for (const auto& api : apis) {
+            if (api.name.contains(QStringLiteral("WASAPI"), Qt::CaseInsensitive)) {
+                resolvedHostApi = api.index;
+                break;
+            }
+        }
+    }
+#endif
+
+    pcfg.hostApiIndex  = resolvedHostApi;
     pcfg.deviceName    = cfg.deviceName;
     pcfg.bufferSamples = cfg.bufferSamples;
     pcfg.exclusiveMode = cfg.exclusiveMode;
@@ -1166,8 +1197,18 @@ void AudioEngine::ensureSpeakersOpen()
     // loadFromSettings returns a default-constructed AudioDeviceConfig
     // (empty deviceName) → makeBus treats it as "platform default" —
     // same behavior as the pre-Sub-Phase-12 code.
-    const AudioDeviceConfig cfg =
+    AudioDeviceConfig cfg =
         AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/Speakers"));
+
+#if defined(Q_OS_WIN)
+    // Stability-first Windows default.  128 frames was introduced primarily
+    // as a latency optimization; on a fresh SQ4KOU Windows profile it opens
+    // the MME path and crackles badly.  Do not override an operator-saved
+    // buffer size.
+    if (!AppSettings::instance().contains(QStringLiteral("audio/Speakers/BufferSamples"))) {
+        cfg.bufferSamples = 512;
+    }
+#endif
 
     {
         std::lock_guard<std::mutex> lk(m_speakersBusMutex);
