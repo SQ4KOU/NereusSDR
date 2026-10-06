@@ -362,10 +362,30 @@ AudioEngine::AudioEngine(QObject* parent)
     // touch the real audio devices. The device layer counts as ready
     // anyway, so the device paths still reach makeBus, which hands out the
     // test's fake devices or nothing (see setDeviceBusFactoryForTest).
+    bool sq4kouBarPortAudio = false;
+#if defined(Q_OS_WIN)
+    // SQ4KOU startup-crash isolation, 2026-10-06.
+    // Keep the entire PortAudio runtime out of the Windows startup path unless
+    // the operator explicitly opts it back in. This is a diagnostic A/B:
+    // if the application becomes stable, the access violation is inside the
+    // PortAudio / Windows-audio startup boundary rather than persistence,
+    // TCI, radio discovery or auto-connect.
+    const QByteArray diagPa = qgetenv("NEREUS_DIAG_PORTAUDIO").trimmed().toLower();
+    const bool enablePortAudio =
+        diagPa == "1" || diagPa == "true" || diagPa == "on" || diagPa == "yes";
+    sq4kouBarPortAudio = !enablePortAudio;
+#endif
+
     if (PortAudioBus::portAudioBarredForTestRun()) {
         m_paInitialized = false;
         m_deviceLayerReady = true;
         qCInfo(lcAudio) << "PortAudio not initialized: test run";
+    } else if (sq4kouBarPortAudio) {
+        m_paInitialized = false;
+        m_deviceLayerReady = true;
+        qCWarning(lcAudio)
+            << "SQ4KOU diagnostic: PortAudio initialization disabled on Windows."
+            << "Set NEREUS_DIAG_PORTAUDIO=1 to re-enable it.";
     } else {
         g_paInitializeCalls.fetch_add(1, std::memory_order_relaxed);
         const PaError err = Pa_Initialize();
@@ -866,6 +886,11 @@ std::unique_ptr<IAudioBus> AudioEngine::makeBus(const AudioDeviceConfig& cfg,
         return nullptr;
     }
 #endif
+    if (!m_paInitialized) {
+        qCWarning(lcAudio)
+            << "Audio device open skipped because PortAudio is not initialized";
+        return nullptr;
+    }
     auto bus = std::make_unique<PortAudioBus>();
     PortAudioConfig pcfg;
     pcfg.direction = capture ? AudioDirection::Input
