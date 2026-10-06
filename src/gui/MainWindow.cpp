@@ -17637,6 +17637,20 @@ void MainWindow::tryAutoReconnect()
 // NereusSDR-original; no Thetis equivalent.
 void MainWindow::checkVaxFirstRun()
 {
+#if defined(Q_OS_WIN)
+    // Pair with the SQ4KOU PortAudio startup A/B. Do not enumerate virtual
+    // cables while PortAudio is deliberately barred: the point of this build
+    // is to remove the complete Windows audio-discovery boundary from launch.
+    const QByteArray diagPa = qgetenv("NEREUS_DIAG_PORTAUDIO").trimmed().toLower();
+    const bool enablePortAudio =
+        diagPa == "1" || diagPa == "true" || diagPa == "on" || diagPa == "yes";
+    if (!enablePortAudio) {
+        qCWarning(lcAudio)
+            << "SQ4KOU diagnostic: VAX first-run scan skipped with PortAudio disabled.";
+        return;
+    }
+#endif
+
     // R-R3-44 (parity Task 11): runs in a remote window as in a local one.
     // The VAX outputs are this computer's in both (a remote window feeds
     // them from the Core's receiver streams), and audio/FirstRunComplete,
