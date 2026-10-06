@@ -10906,7 +10906,11 @@ void RadioModel::activateSliceChannel(SliceModel* slice)
 
     // Sub-Epic I invariant: WDSP RX channel id == slice index.
     const QPointer<RxChannel> ch(m_wdspEngine->rxChannel(slice->sliceIndex()));
-    if (!ch || ch->isActive()) {
+    if (!ch) {
+        return;
+    }
+    ch->setWdspEngine(m_wdspEngine);
+    if (ch->isActive()) {
         // Already live. Leave it alone: connectToRadio's WDSP-init lambda
         // gives Slice A's channel the full state push (NR, SNB, APF, squelch,
         // audio panel, the lot) and then activates it, and re-running the
@@ -10927,6 +10931,11 @@ void RadioModel::activateSliceChannel(SliceModel* slice)
     const auto current = [&] {
         return self && target && ch && self->sliceById(targetId) == target.data();
     };
+    // Apply mode-specific BufferSize/FilterSize/FilterType while the channel
+    // is still stopped.  This also fixes slices > 0, whose wrappers previously
+    // never received a WdspEngine pointer and therefore ignored onModeChanged().
+    ch->onModeChanged(slice->dspMode());
+    if (!current()) { return; }
     ch->setMode(slice->dspMode());
     if (!current()) { return; }
     ch->setFilterFreqs(slice->filterLow(), slice->filterHigh());
@@ -17831,6 +17840,11 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // preserves another receiver as the operator's active selection.
             SliceModel* const primarySlice = sliceById(0);
             if (primarySlice) {
+                // The saved DSP Options are part of channel construction, not a
+                // future mode-change side effect. Apply them while the channel is
+                // still stopped; drainReceiveLane() below completes them before
+                // AudioEngine or Protocol 1 can deliver a single sample.
+                rxCh->onModeChanged(primarySlice->dspMode());
                 rxCh->setMode(primarySlice->dspMode());
                 rxCh->setFilterFreqs(primarySlice->filterLow(),
                                      primarySlice->filterHigh());
@@ -18165,8 +18179,14 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             }
 
             // Task 4.2: give TxChannel a handle to WdspEngine so onModeChanged()
-            // can call rebuild() when the active mode's DSP-Options settings change.
+            // can apply the active mode's DSP-Options settings.
             m_txChannel->setWdspEngine(m_wdspEngine);
+            if (const SliceModel* const txSlice = txBoundSlice()) {
+                // Seed DSPTX BufferSize/FilterSize/FilterType before the TX
+                // startup drain.  This prevents the first band/mode change
+                // from being the first time the saved Phone settings reach WDSP.
+                m_txChannel->onModeChanged(txSlice->dspMode());
+            }
             // R-R3-39: with the transmit lane, onModeChanged returns at once
             // and the lane reports how long its WDSP work took. Same gate as
             // the RX path's.

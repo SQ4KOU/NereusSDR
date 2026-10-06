@@ -3459,7 +3459,16 @@ void RxChannel::setDspBufferSizeSamples(int size)
     // + rebuild with the new dsp_size.  Heavier than RXASetNC but still
     // safe to call from main thread while audio worker is alive.
     // R-R3-39: on the receive lane, in order with the filter size.
-    runOrdered([this, size]() { SetDSPBuffsize(m_channelId, size); });
+    // SetDSPBuffsize destroys/rebuilds channel internals; serialize it
+    // against the TX lane's equivalent structural work.
+    runOrdered([this, size]() {
+        const auto work = [this, size]() { SetDSPBuffsize(m_channelId, size); };
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(work);
+        } else {
+            work();
+        }
+    });
 #endif
 }
 
@@ -3480,25 +3489,33 @@ void RxChannel::setFilterSizeSamples(int nc)
     }
     m_filterSize = nc;
     // R-R3-39: the carries above change at once; the WDSP calls run on the
-    // receive lane, in this order.
+    // receive lane, in this order.  Keep the whole structural operation under
+    // the shared lifecycle gate so TX cannot re-plan another channel in parallel.
     runOrdered([this, nc, shrinkBuffer]() {
+        const auto work = [this, nc, shrinkBuffer]() {
 #ifdef HAVE_WDSP
-        if (shrinkBuffer) {
-            // From Thetis radio.cs:521 [v2.10.3.13] DSPRX.BufferSize setter.
-            SetDSPBuffsize(m_channelId, nc);
-        }
-        // From Thetis radio.cs:540 [v2.10.3.13] DSPRX.FilterSize setter.
-        RXASetNC(m_channelId, nc);
+            if (shrinkBuffer) {
+                // From Thetis radio.cs:521 [v2.10.3.13] DSPRX.BufferSize setter.
+                SetDSPBuffsize(m_channelId, nc);
+            }
+            // From Thetis radio.cs:540 [v2.10.3.13] DSPRX.FilterSize setter.
+            RXASetNC(m_channelId, nc);
 #else
-        Q_UNUSED(nc);
-        Q_UNUSED(shrinkBuffer);
+            Q_UNUSED(nc);
+            Q_UNUSED(shrinkBuffer);
 #endif
-        // RXASetNC reaches nbp0 through RXANBPSetNC (third_party/wdsp/src/RXA.c:1043),
-        // and min_notch_width divides by nc (nbp.c:82-96), so the narrowest
-        // realisable notch just moved. Thetis re-reads it at exactly this point
-        // in its own DSP-options apply path (console.cs:39052-39053 ->
-        // UpdateMinimumNotchWidthRX, :48787-48818 [v2.10.3.15]).
-        refreshMinNotchWidthOnLane();
+            // RXASetNC reaches nbp0 through RXANBPSetNC (third_party/wdsp/src/RXA.c:1043),
+            // and min_notch_width divides by nc (nbp.c:82-96), so the narrowest
+            // realisable notch just moved. Thetis re-reads it at exactly this point
+            // in its own DSP-options apply path (console.cs:39052-39053 ->
+            // UpdateMinimumNotchWidthRX, :48787-48818 [v2.10.3.15]).
+            refreshMinNotchWidthOnLane();
+        };
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(work);
+        } else {
+            work();
+        }
     });
 }
 
@@ -3519,7 +3536,14 @@ void RxChannel::setFilterTypeLinearPhase(bool linearPhase)
     // is its inverse (R-IOS-13, 2026-09-27: it used to be sent as is).
     // R-R3-39: on the receive lane, in order with the sizes.
     const int minimumPhase = linearPhase ? 0 : 1;
-    runOrdered([this, minimumPhase]() { RXASetMP(m_channelId, minimumPhase); });
+    runOrdered([this, minimumPhase]() {
+        const auto work = [this, minimumPhase]() { RXASetMP(m_channelId, minimumPhase); };
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(work);
+        } else {
+            work();
+        }
+    });
 #endif
 }
 

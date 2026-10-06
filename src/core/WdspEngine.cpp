@@ -1354,6 +1354,15 @@ void WdspEngine::drainReceiveLane()
     reapRetiredRxChannels();
 }
 
+void WdspEngine::runLifecycleSerialized(const std::function<void()>& work)
+{
+    if (!work) {
+        return;
+    }
+    std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
+    work();
+}
+
 // ---------------------------------------------------------------------------
 // Per-board ChannelMaster-layer WDSP calls — Phase B4'/B5'
 //

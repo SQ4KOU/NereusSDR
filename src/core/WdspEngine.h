@@ -447,6 +447,13 @@ public:
     // lane.
     void drainTransmitLane();
 
+    // Serialize WDSP operations that rebuild or re-plan channel internals
+    // (Open/CloseChannel, SetDSPBuffsize, RXA/TXA NC/MP).  Thetis issues
+    // these operations sequentially from one control path; NereusSDR has
+    // independent RX/TX lanes, so callers on those lanes must share this
+    // gate. Normal fexchange/audio/IQ processing is intentionally outside.
+    void runLifecycleSerialized(const std::function<void()>& work);
+
     // --- External Diversity management ---------------------------------
     //
     // WDSP owns exactly two external-diversity slots in a process-wide
@@ -897,11 +904,11 @@ private:
     mutable std::shared_mutex m_rxChannelsMutex;
 
     // R-R3-39: the receive lane and how its barriers quiesce the worker.
-    // SQ4KOU 2026-10-06: OpenChannel/CloseChannel and destructive channel
-    // reconfiguration mutate WDSP's process-wide channel graph.  RX and TX
-    // keep their independent control lanes for normal control traffic, but
-    // lifecycle work from those lanes must never overlap.  This mirrors
-    // Thetis create_cmaster(), which creates the complete RX set before TX.
+    // SQ4KOU 2026-10-06: OpenChannel/CloseChannel and structural live
+    // reconfiguration (SetDSPBuffsize, RXA/TXA NC/MP) mutate/re-plan WDSP
+    // internals. RX and TX keep independent lanes for normal control traffic,
+    // but those structural operations must never overlap. This mirrors the
+    // single ordered control path used by Thetis.
     std::recursive_mutex m_wdspLifecycleMutex;
 
     DspControlThread* m_rxLane{nullptr};
