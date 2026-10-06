@@ -256,6 +256,13 @@ jobs:
             }
           }
 
+          # NereusCore links OpenSSL 3 dynamically on this MSVC build.
+          foreach ($dll in @('libcrypto-3-x64.dll','libssl-3-x64.dll')) {
+            $src = Join-Path 'C:\Program Files\OpenSSL\bin' $dll
+            if (-not (Test-Path $src)) { throw "OpenSSL runtime missing on runner: $src" }
+            Copy-Item $src "deploy\$dll" -Force
+          }
+
           # Qt Multimedia is plugin-based on Windows. A bare Qt6Multimedia.dll
           # without its backend is an incomplete package.
           if (-not (Test-Path 'deploy\multimedia')) {
