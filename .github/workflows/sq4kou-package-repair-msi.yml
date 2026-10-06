@@ -1,0 +1,148 @@
+name: SQ4KOU Repair MSI from verified binary
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [SQ4KOU-work]
+    paths:
+      - '.github/workflows/sq4kou-package-repair-msi.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  repair-msi:
+    runs-on: windows-2022
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Qt 6.8 runtime tools
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: 'qtmultimedia qtserialport qtwebsockets qtshadertools'
+          cache: true
+
+      - name: Fetch last binary-identical HOT MSI
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $artifactId = 11371038100
+          gh api "repos/${{ github.repository }}/actions/artifacts/$artifactId/zip" > old-hot.zip
+          Expand-Archive old-hot.zip old-hot -Force
+          $msi = Get-ChildItem old-hot -Filter '*.msi' -Recurse | Select-Object -First 1
+          if (-not $msi) { throw 'Source HOT MSI not found' }
+          Write-Host "Source MSI: $($msi.FullName)"
+          "SOURCE_MSI=$($msi.FullName)" | Out-File $env:GITHUB_ENV -Append
+
+      - name: Expand MSI payload
+        shell: pwsh
+        run: |
+          $admin = (Resolve-Path .).Path + '\admin'
+          New-Item -ItemType Directory -Force $admin | Out-Null
+          $p = Start-Process msiexec.exe -ArgumentList @('/a', "`"$env:SOURCE_MSI`"", '/qn', "TARGETDIR=`"$admin`"") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Administrative MSI extraction failed: $($p.ExitCode)" }
+          $exe = Get-ChildItem $admin -Filter NereusSDR.exe -Recurse | Select-Object -First 1
+          if (-not $exe) { throw 'NereusSDR.exe not found in administrative image' }
+          Copy-Item $exe.Directory.FullName deploy -Recurse -Force
+          if (-not (Test-Path deploy\NereusSDRLib.dll)) { throw 'NereusSDRLib.dll missing in source MSI' }
+          if (-not (Test-Path deploy\NereusCore.dll)) { throw 'NereusCore.dll missing in source MSI' }
+
+      - name: Complete Qt and compiler runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          foreach ($pe in @('deploy\NereusSDR.exe','deploy\NereusSDRLib.dll','deploy\NereusCore.dll')) {
+            & windeployqt $pe --release --no-translations --no-system-d3d-compiler --compiler-runtime
+            if ($LASTEXITCODE -ne 0) { throw "windeployqt failed for $pe" }
+          }
+
+          $required = @(
+            'Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','Qt6Network.dll','Qt6Svg.dll',
+            'Qt6SerialPort.dll','Qt6WebSockets.dll','Qt6Multimedia.dll',
+            'avcodec-61.dll','avformat-61.dll','avutil-59.dll','swresample-5.dll','swscale-8.dll'
+          )
+          foreach ($dll in $required) {
+            if (-not (Test-Path "deploy\$dll")) { throw "Missing required runtime after deployment: $dll" }
+          }
+          foreach ($plugin in @('deploy\multimedia\ffmpegmediaplugin.dll','deploy\multimedia\windowsmediaplugin.dll','deploy\platforms\qwindows.dll')) {
+            if (-not (Test-Path $plugin)) { throw "Missing required Qt plugin: $plugin" }
+          }
+
+      - name: Recursive PE dependency audit
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          function Get-Imports([string]$file) {
+            $out = & dumpbin /dependents $file 2>$null
+            foreach ($line in $out) {
+              if ($line -match '^\s+([^\s]+\.dll)\s*$') { $matches[1] }
+            }
+          }
+          $missing=@{}
+          $allPE=@(Get-ChildItem deploy -Recurse -File | Where-Object { $_.Extension -in '.exe','.dll' })
+          foreach($pe in $allPE) {
+            foreach($dep in @(Get-Imports $pe.FullName)) {
+              if($dep -like 'api-ms-win-*' -or $dep -like 'ext-ms-win-*') { continue }
+              if(@(Get-ChildItem deploy -Recurse -File -Filter $dep -ErrorAction SilentlyContinue).Count -gt 0) { continue }
+              if(Test-Path (Join-Path $env:WINDIR "System32\$dep")) { continue }
+              if(-not $missing.ContainsKey($dep)) { $missing[$dep]=@() }
+              $missing[$dep]+=$pe.Name
+            }
+          }
+          if($missing.Count -gt 0) {
+            foreach($n in ($missing.Keys|Sort-Object)) { Write-Host "MISSING $n <- $($missing[$n] -join ', ')" }
+            throw "PE dependency audit failed: $($missing.Count) unresolved DLL(s)"
+          }
+          Write-Host 'Runtime audit PASS'
+
+      - name: Build repaired MSI
+        shell: pwsh
+        run: |
+          $short='7bd92ab2'
+          $msi="NereusSDR-SQ4KOU-HOT-$short-RUNTIME-FIX-Windows-x64.msi"
+          @"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+            <Product Id="*" Name="NereusSDR SQ4KOU HOT" Language="1045"
+                     Version="0.5.2.99" Manufacturer="SQ4KOU"
+                     UpgradeCode="E63F5B10-94F6-4C0B-AE5A-96F72DE52A31">
+              <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64"/>
+              <MediaTemplate EmbedCab="yes"/>
+              <MajorUpgrade DowngradeErrorMessage="A newer SQ4KOU test build is installed."/>
+              <Directory Id="TARGETDIR" Name="SourceDir">
+                <Directory Id="ProgramFiles64Folder">
+                  <Directory Id="INSTALLFOLDER" Name="NereusSDR SQ4KOU TEST"/>
+                </Directory>
+              </Directory>
+              <Feature Id="MainFeature" Title="NereusSDR SQ4KOU HOT" Level="1">
+                <ComponentGroupRef Id="AppFiles"/>
+              </Feature>
+            </Product>
+          </Wix>
+          "@ | Set-Content -Encoding UTF8 Product.wxs
+          heat.exe dir deploy -nologo -gg -sfrag -srd -sreg -dr INSTALLFOLDER -cg AppFiles -var var.DeployDir -out Harvest.wxs
+          candle.exe -nologo -arch x64 -dDeployDir="$((Resolve-Path deploy).Path)" Product.wxs Harvest.wxs
+          light.exe -nologo -out $msi Product.wixobj Harvest.wixobj
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $msi)) { throw 'MSI build failed' }
+          Get-FileHash $msi -Algorithm SHA256
+          "OUT_MSI=$msi" | Out-File $env:GITHUB_ENV -Append
+
+      - name: Upload repaired MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: NereusSDR-SQ4KOU-RUNTIME-FIX-MSI
+          path: ${{ env.OUT_MSI }}
+          retention-days: 7
+          if-no-files-found: error
