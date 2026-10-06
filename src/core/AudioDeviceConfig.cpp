@@ -12,6 +12,9 @@
 #include "AudioDeviceConfig.h"
 #include "AppSettings.h"
 
+#include <algorithm>
+#include <QByteArray>
+
 namespace NereusSDR {
 
 // ---------------------------------------------------------------------------
@@ -25,10 +28,17 @@ namespace NereusSDR {
 // ---------------------------------------------------------------------------
 AudioDeviceConfig AudioDeviceConfig::loadFromSettings(const QString& prefix)
 {
+    AudioDeviceConfig cfg;
+
+    const QByteArray diagIgnore = qgetenv("NEREUS_DIAG_IGNORE_AUDIO_SETTINGS").trimmed().toLower();
+    if (diagIgnore == "1" || diagIgnore == "true" || diagIgnore == "on" || diagIgnore == "yes") {
+        // Crash-isolation seam: bypass every persisted field for this endpoint
+        // without deleting or rewriting the profile.
+        return cfg;
+    }
+
     auto& s = AppSettings::instance();
     const QString base = prefix + QLatin1Char('/');
-
-    AudioDeviceConfig cfg;
 
     cfg.driverApi = s.value(base + QStringLiteral("DriverApi"),
                             QString()).toString();
@@ -68,6 +78,12 @@ AudioDeviceConfig AudioDeviceConfig::loadFromSettings(const QString& prefix)
     // It remains -1 (PortAudio default) on load; the DeviceCard / AudioEngine
     // may resolve it from driverApi at open time in a future sub-phase.
     cfg.hostApiIndex = -1;
+
+#if defined(Q_OS_WIN)
+    // SQ4KOU Windows stability audit. Preserve any safer/larger user value,
+    // but do not allow the 128/256-frame settings implicated in crackle.
+    cfg.bufferSamples = std::max(cfg.bufferSamples, 512);
+#endif
 
     return cfg;
 }

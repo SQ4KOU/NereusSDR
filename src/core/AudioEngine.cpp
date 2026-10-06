@@ -278,6 +278,38 @@ int AudioEngine::paTerminateCallsForTest()
 AudioEngine::AudioEngine(QObject* parent)
     : QObject(parent)
 {
+    m_audioDiagTimer.setInterval(2000);
+    connect(&m_audioDiagTimer, &QTimer::timeout, this, [this]() {
+        std::lock_guard<std::mutex> lock(m_speakersBusMutex);
+        auto* pa = dynamic_cast<PortAudioBus*>(m_speakersBus.get());
+        if (!pa || !pa->isOpen()) {
+            return;
+        }
+
+        const quint32 ringOverruns = pa->ringOverrunEvents();
+        const quint64 ringOverrunSamples = pa->ringOverrunSamples();
+        const quint32 ringUnderruns = pa->ringUnderrunEvents();
+        const quint32 paUnderflows = pa->paOutputUnderflowEvents();
+        const quint32 paOverflows = pa->paOutputOverflowEvents();
+
+        if (ringOverruns != m_diagLastRingOverruns
+            || ringOverrunSamples != m_diagLastRingOverrunSamples
+            || ringUnderruns != m_diagLastRingUnderruns
+            || paUnderflows != m_diagLastPaUnderflows
+            || paOverflows != m_diagLastPaOverflows) {
+            qCWarning(lcAudio) << "SQ4KOU audio diag:"
+                               << "ringOverruns=" << ringOverruns
+                               << "droppedSamples=" << ringOverrunSamples
+                               << "ringUnderruns=" << ringUnderruns
+                               << "paUnderflows=" << paUnderflows
+                               << "paOverflows=" << paOverflows;
+            m_diagLastRingOverruns = ringOverruns;
+            m_diagLastRingOverrunSamples = ringOverrunSamples;
+            m_diagLastRingUnderruns = ringUnderruns;
+            m_diagLastPaUnderflows = paUnderflows;
+            m_diagLastPaOverflows = paOverflows;
+        }
+    });
     // R-R3-45 fix wave: the mix scratch rxBlockReady uses, sized here and
     // grown only by ensureMixScratchFrames(), never on the DSP thread.
     m_mixScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
@@ -691,6 +723,12 @@ void AudioEngine::start()
     }
 
     m_running = true;
+    m_diagLastRingOverruns = 0;
+    m_diagLastRingOverrunSamples = 0;
+    m_diagLastRingUnderruns = 0;
+    m_diagLastPaUnderflows = 0;
+    m_diagLastPaOverflows = 0;
+    m_audioDiagTimer.start();
 
     qCInfo(lcAudio) << "AudioEngine started ("
                     << (m_speakersBus && m_speakersBus->isOpen()
@@ -701,6 +739,7 @@ void AudioEngine::start()
 
 void AudioEngine::stop()
 {
+    m_audioDiagTimer.stop();
     // Close every owned bus unconditionally — setVaxConfig / setHeadphonesConfig
     // etc. may populate bus slots even when start() was never called (test
     // paths, SetupDialog preview on a freshly constructed engine). If we only
@@ -1140,7 +1179,10 @@ void AudioEngine::ensureSpeakersOpen()
         qCInfo(lcAudio) << "Speakers bus opened @"
                         << m_speakersFormat.sampleRate << "Hz /"
                         << m_speakersFormat.channels << "ch"
-                        << "[" << m_speakersBus->backendName() << "]";
+                        << "[" << m_speakersBus->backendName() << "]"
+                        << "bufferFrames=" << cfg.bufferSamples
+                        << "device=" << (cfg.deviceName.isEmpty() ? QStringLiteral("<default>") : cfg.deviceName)
+                        << "driverApi=" << (cfg.driverApi.isEmpty() ? QStringLiteral("<default>") : cfg.driverApi);
         emit speakersConfigChanged(cfg);
     }
 }

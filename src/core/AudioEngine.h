@@ -209,6 +209,7 @@ namespace NereusSDR { class PipeWireThreadLoop; }
 #endif
 
 #include <QObject>
+#include <QTimer>
 #include <QString>
 
 #include <array>
@@ -1222,6 +1223,12 @@ private:
     std::mutex m_speakersBusMutex;
 
     std::unique_ptr<IAudioBus> m_speakersBus;
+    QTimer m_audioDiagTimer;
+    quint32 m_diagLastRingOverruns{0};
+    quint64 m_diagLastRingOverrunSamples{0};
+    quint32 m_diagLastRingUnderruns{0};
+    quint32 m_diagLastPaUnderflows{0};
+    quint32 m_diagLastPaOverflows{0};
     bool m_remotePlayback{false}; // protected by m_speakersBusMutex
     AudioFormat m_remotePlaybackFormat; // protected by m_speakersBusMutex
     // R-R3-45: the headphones output. Replaced only on the owner thread

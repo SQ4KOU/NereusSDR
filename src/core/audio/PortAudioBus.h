@@ -159,6 +159,12 @@ public:
     quint32 ringUnderrunEvents() const {
         return m_underrunEvents.load(std::memory_order_relaxed);
     }
+    quint32 paOutputUnderflowEvents() const {
+        return m_paOutputUnderflowEvents.load(std::memory_order_relaxed);
+    }
+    quint32 paOutputOverflowEvents() const {
+        return m_paOutputOverflowEvents.load(std::memory_order_relaxed);
+    }
     /// Capture frames discarded because a callback block exceeded the
     /// preallocated downmix scratch.  Expected to stay 0; non-zero
     /// means the host API is handing us blocks larger than the
@@ -170,6 +176,8 @@ public:
         m_dropEvents.store(0, std::memory_order_relaxed);
         m_dropSamples.store(0, std::memory_order_relaxed);
         m_underrunEvents.store(0, std::memory_order_relaxed);
+        m_paOutputUnderflowEvents.store(0, std::memory_order_relaxed);
+        m_paOutputOverflowEvents.store(0, std::memory_order_relaxed);
     }
 
     // ---- Capture-path helpers (pure; unit-tested directly) ----

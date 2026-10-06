@@ -17467,6 +17467,18 @@ bool MainWindow::localDisconnectAvailable() const
 void MainWindow::tryAutoReconnect()
 {
     if (m_shuttingDown || !m_radioModel->ownsLocalDsp()) { return; }
+
+    const QByteArray diagAuto = qgetenv("NEREUS_DIAG_AUTORECONNECT").trimmed().toLower();
+    const bool allowAutoReconnect =
+        diagAuto == "1" || diagAuto == "true" || diagAuto == "on" || diagAuto == "yes";
+    if (!allowAutoReconnect) {
+        qCWarning(lcConnection)
+            << "SQ4KOU diagnostic: startup auto-reconnect disabled; connect manually."
+            << "Set NEREUS_DIAG_AUTORECONNECT=1 to restore the upstream path.";
+        showConnectionPanel();
+        return;
+    }
+
     AppSettings& s = AppSettings::instance();
 
     // --- Step 1: Collect all autoConnect-flagged saved radios ---
