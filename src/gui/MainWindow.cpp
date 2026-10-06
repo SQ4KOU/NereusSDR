@@ -17468,16 +17468,16 @@ void MainWindow::tryAutoReconnect()
 {
     if (m_shuttingDown || !m_radioModel->ownsLocalDsp()) { return; }
 
-    const QByteArray diagAuto = qgetenv("NEREUS_DIAG_AUTORECONNECT").trimmed().toLower();
-    const bool allowAutoReconnect =
-        diagAuto == "1" || diagAuto == "true" || diagAuto == "on" || diagAuto == "yes";
-    if (!allowAutoReconnect) {
-        qCWarning(lcConnection)
-            << "SQ4KOU diagnostic: startup auto-reconnect disabled; connect manually."
-            << "Set NEREUS_DIAG_AUTORECONNECT=1 to restore the upstream path.";
-        showConnectionPanel();
-        return;
-    }
+#if defined(Q_OS_WIN)
+    // SQ4KOU B16: hard-disable startup auto-reconnect on Windows for this
+    // diagnostic build. No environment variable can bypass this gate.
+    // The first-run/manual-connect path was stable; the second launch that
+    // restored state entered this path immediately before the access violation.
+    qCWarning(lcConnection)
+        << "SQ4KOU B16: startup auto-reconnect HARD DISABLED; connect manually.";
+    showConnectionPanel();
+    return;
+#endif
 
     AppSettings& s = AppSettings::instance();
 
