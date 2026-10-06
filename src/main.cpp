@@ -295,6 +295,9 @@ int main(int argc, char* argv[])
     NereusSDR::CoreInit::initialize(activeProfile);
 
     qDebug() << "Starting NereusSDR" << app.applicationVersion();
+#if defined(Q_OS_WIN)
+    qWarning() << "SQ4KOU B16 ACTIVE: manual startup, WASAPI shared/default/512 speaker path";
+#endif
     if (!activeProfile.isEmpty()) {
         const QString logDir = NereusSDR::AppSettings::resolveConfigDir(activeProfile);
         qDebug() << "Profile:" << activeProfile
