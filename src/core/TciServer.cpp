@@ -141,7 +141,6 @@
 #include "TciSensorManager.h"
 #include "LogCategories.h"
 #include "models/RadioModel.h"
-#include "RadioConnection.h"       // SQ4KOU wire-bound hardware snapshot
 #include "core/meters/SliceMeterPump.h"
 #include "models/SliceModel.h"  // Phase 3J-1 closeout: SliceModel signal wireup for local broadcast.
 #include "models/NotchModel.h"  // TNF section 6.4: master notch enable broadcast.
@@ -198,63 +197,6 @@ void  destroy_resampleFV(void* ptr);
 #include <QDateTime>
 
 namespace NereusSDR {
-
-namespace {
-
-bool sq4kouTciRuntimeEnabled()
-{
-    // SQ4KOU hardware extension is opt-in during crash isolation.
-    // Standard TCI remains untouched. Enable explicitly with
-    // NEREUS_SQ4KOU_TCI=1 after the base application is proven stable.
-    const QByteArray gate = qgetenv("NEREUS_SQ4KOU_TCI").trimmed().toLower();
-    return gate == "1" || gate == "true" || gate == "on" || gate == "yes";
-}
-
-QString sq4kouBandToken(Band band)
-{
-    switch (band) {
-    case Band::Band160m: return QStringLiteral("b160m");
-    case Band::Band80m:  return QStringLiteral("b80m");
-    case Band::Band60m:  return QStringLiteral("b60m");
-    case Band::Band40m:  return QStringLiteral("b40m");
-    case Band::Band30m:  return QStringLiteral("b30m");
-    case Band::Band20m:  return QStringLiteral("b20m");
-    case Band::Band17m:  return QStringLiteral("b17m");
-    case Band::Band15m:  return QStringLiteral("b15m");
-    case Band::Band12m:  return QStringLiteral("b12m");
-    case Band::Band10m:  return QStringLiteral("b10m");
-    case Band::Band6m:   return QStringLiteral("b6m");
-    case Band::Band2m:   return QStringLiteral("b2m");
-    case Band::Band120m: return QStringLiteral("b120m");
-    case Band::Band90m:  return QStringLiteral("b90m");
-    case Band::Band61m:  return QStringLiteral("b61m");
-    case Band::Band49m:  return QStringLiteral("b49m");
-    case Band::Band41m:  return QStringLiteral("b41m");
-    case Band::Band31m:  return QStringLiteral("b31m");
-    case Band::Band25m:  return QStringLiteral("b25m");
-    case Band::Band22m:  return QStringLiteral("b22m");
-    case Band::Band19m:  return QStringLiteral("b19m");
-    case Band::Band16m:  return QStringLiteral("b16m");
-    case Band::Band14m:  return QStringLiteral("b14m");
-    case Band::Band13m:  return QStringLiteral("b13m");
-    case Band::Band11m:  return QStringLiteral("b11m");
-    case Band::WWV:      return QStringLiteral("wwv");
-    case Band::XVTR:     return QStringLiteral("xvtr");
-    case Band::GEN:
-    case Band::Count:
-    default:             return QStringLiteral("gen");
-    }
-}
-
-int sq4kouCmd05TattFromDrive(int drive)
-{
-    if (drive <= 0) { return 63; }
-    if (drive >= 255) { return 0; }
-    const double raw = -40.0 * std::log10(static_cast<double>(drive) / 255.0);
-    return qBound(0, static_cast<int>(raw), 63);
-}
-
-} // namespace
 
 // ── Constructor / destructor ─────────────────────────────────────────────────
 //
@@ -626,15 +568,6 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         }
     });
 
-    // SQ4KOU TCI publisher is strictly read-only and observes CodecContext.
-    m_sq4kouHardwareTimer = new QTimer(this);
-    m_sq4kouHardwareTimer->setInterval(200);
-    connect(m_sq4kouHardwareTimer, &QTimer::timeout, this, [this]() {
-        if (!m_clients.isEmpty()) {
-            sendSq4kouState({}, false);
-        }
-    });
-
     // Phase 3J-1 review P2.3: wire the DSP-thread audio tap and the IQ tap at
     // construction time via the shared helper.  The helper is also called from
     // start() so that a stop() → start() cycle reconnects the taps that stop()
@@ -654,135 +587,6 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     // to hookSliceBroadcasts above.  See hookGlobalBroadcasts implementation
     // for the per-handler Thetis cite chain.
     hookGlobalBroadcasts();
-}
-
-void TciServer::sendSq4kouState(const std::shared_ptr<TciClientSession>& only,
-                                bool force)
-{
-    if (!sq4kouTciRuntimeEnabled() || !m_model) { return; }
-
-    const auto pushFrame = [this, &only](const QString& frame) {
-        if (only) {
-            only->sendQueue.push(TciSendQueue::Priority::Control, frame);
-            return;
-        }
-        for (auto it = m_clients.begin(); it != m_clients.end(); ++it) {
-            it.value()->sendQueue.push(TciSendQueue::Priority::Control, frame);
-        }
-    };
-
-    // Stage 1: selected/preconfigured antennas.
-    const int rxSliceId = m_desktopHostMode ? desktopSliceForReceiver(0) : 0;
-    const SliceModel* rxSlice = m_model->sliceById(rxSliceId);
-    int txSliceId = rxSliceId;
-    if (const TxSliceArbiter* arb = m_model->txSliceArbiter()) {
-        if (arb->txBoundSliceId() >= 0) {
-            txSliceId = arb->txBoundSliceId();
-        }
-    }
-    const SliceModel* txSlice = m_model->sliceById(txSliceId);
-
-    if (rxSlice) {
-        const Band band = rxSlice->band();
-        const int ant = m_model->alexController().rxAnt(band);
-        const QString frame =
-            QStringLiteral("sq4kou_rx_antenna_selected_ex:%1,%2;")
-                .arg(ant).arg(sq4kouBandToken(band));
-        const bool changed = frame != m_sq4kouLastRxAntennaFrame;
-        if (only) {
-            if (force) { pushFrame(frame); }
-        } else if (force || changed) {
-            m_sq4kouLastRxAntennaFrame = frame;
-            pushFrame(frame);
-        }
-    }
-
-    if (txSlice) {
-        const Band band = txSlice->band();
-        const int ant = m_model->alexController().txAnt(band);
-        const QString frame =
-            QStringLiteral("sq4kou_tx_antenna_selected_ex:%1,%2;")
-                .arg(ant).arg(sq4kouBandToken(band));
-        const bool changed = frame != m_sq4kouLastTxAntennaFrame;
-        if (only) {
-            if (force) { pushFrame(frame); }
-        } else if (force || changed) {
-            m_sq4kouLastTxAntennaFrame = frame;
-            pushFrame(frame);
-        }
-    }
-
-    // Stage 2: effective hardware state at the codec/radio boundary.
-    Sq4kouHardwareState hw;
-    RadioConnection* connection = m_model->connection();
-    // Match the old ChannelMaster validity contract: do not publish a
-    // full-valid hardware image merely because a connection object exists.
-    // The radio must have completed its handshake first.
-    if (m_model->connectionState() == ConnectionState::Connected
-        && connection && connection->readSq4kouHardwareState(hw)) {
-        const int cmd05Tatt = sq4kouCmd05TattFromDrive(hw.drive);
-        const int lna6 = (hw.alexHpfBits & 0x40) != 0 ? 1 : 0;
-        const QString payload =
-            QStringLiteral("%1,%2,%3,%4,%5,%6,%7,%8,%9,%10,%11,%12,%13")
-                .arg(hw.valid)
-                .arg(hw.rxOnlyAnt)
-                .arg(hw.trxAnt)
-                .arg(hw.txAnt)
-                .arg(hw.rxOut)
-                .arg(hw.tx)
-                .arg(hw.ocBits)
-                .arg(hw.txStepAtt)
-                .arg(hw.adc1Att)
-                .arg(hw.drive)
-                .arg(cmd05Tatt)
-                .arg(hw.paEnabled)
-                .arg(lna6);
-        const bool changed = payload != m_sq4kouLastHwPayload;
-        const quint32 nextSequence =
-            changed ? (m_sq4kouHardwareSeq + 1u) : m_sq4kouHardwareSeq;
-        const quint32 frameSequence = nextSequence == 0 ? 1u : nextSequence;
-
-        if (only) {
-            if (force) {
-                pushFrame(QStringLiteral("sq4kou_radio_hw_ex:1,%1,%2;")
-                              .arg(frameSequence).arg(payload));
-            }
-        } else if (force || changed) {
-            if (changed) {
-                ++m_sq4kouHardwareSeq;
-                if (m_sq4kouHardwareSeq == 0) { m_sq4kouHardwareSeq = 1; }
-                m_sq4kouLastHwPayload = payload;
-            } else if (m_sq4kouHardwareSeq == 0) {
-                m_sq4kouHardwareSeq = 1;
-            }
-            pushFrame(QStringLiteral("sq4kou_radio_hw_ex:1,%1,%2;")
-                          .arg(m_sq4kouHardwareSeq).arg(payload));
-        }
-    }
-
-    // Stage 3: CMD07 heartbeat. Nereus has no GPS/PPS/NCO source yet, so
-    // telemetry is explicitly offline/unknown; heartbeat sequence is live.
-    const bool heartbeatDue =
-        force || !m_sq4kouCmd07Clock.isValid()
-        || m_sq4kouCmd07Clock.elapsed() >= 900;
-    if (heartbeatDue) {
-        quint32 sequence = m_sq4kouCmd07HeartbeatSeq;
-        if (only) {
-            if (sequence == 0) { sequence = 1; }
-        } else {
-            ++m_sq4kouCmd07HeartbeatSeq;
-            if (m_sq4kouCmd07HeartbeatSeq == 0) { m_sq4kouCmd07HeartbeatSeq = 1; }
-            sequence = m_sq4kouCmd07HeartbeatSeq;
-            if (m_sq4kouCmd07Clock.isValid()) {
-                m_sq4kouCmd07Clock.restart();
-            } else {
-                m_sq4kouCmd07Clock.start();
-            }
-        }
-        pushFrame(QStringLiteral(
-            "sq4kou_cmd07_ex:1,%1,0,-1,0,0,0,0,0,0,0,0,0,0,0,0;")
-            .arg(sequence));
-    }
 }
 
 // ── hookAudioAndIqTaps() ─────────────────────────────────────────────────────
@@ -2083,11 +1887,6 @@ bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
     // Phase 14: start the outbound drain timer (stops again in stop()).
     m_drainTimer->start();
 
-    // SQ4KOU extension runs only while the TCI listener is active.
-    if (sq4kouTciRuntimeEnabled()) {
-        m_sq4kouHardwareTimer->start();
-    }
-
     // Phase 19: start sensor broadcast timers.
     // From Thetis: RxSensorsTimerCallback / TxSensorsTimerCallback are started
     // by setRxSensorsEnabled / setTxSensorsEnabled per-listener
@@ -2176,7 +1975,6 @@ void TciServer::stop()
     m_wdspInitConn = {};
 
     m_pingTimer->stop();
-    m_sq4kouHardwareTimer->stop();
     m_drainTimer->stop();        // Phase 14: stop drain before disconnecting clients
     m_rxSensorTimer->stop();     // Phase 19: stop sensor broadcast timers
     m_txSensorTimer->stop();
@@ -2467,10 +2265,6 @@ void TciServer::onNewConnection()
                 }
                 session->sendQueue.push(TciSendQueue::Priority::Control, line);
             }
-
-            // Existing ESP32 hardware extension: complete state on connect.
-            // sendSq4kouState() itself also checks the runtime A/B gate.
-            sendSq4kouState(session, true);
         }
     }
 }

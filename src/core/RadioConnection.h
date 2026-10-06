@@ -78,26 +78,6 @@ struct AntennaRouting {
     bool tx        {false}; // current MOX state             (3M-1)
 };
 
-// SQ4KOU TCI hardware extension.
-//
-// Read-only snapshot of values that reached the final radio/codec boundary.
-// P1/P2 build it from the same CodecContext used to compose hardware packets,
-// equivalent to the earlier GetSQ4KOUHardwareState() shadow in ChannelMaster.
-struct Sq4kouHardwareState {
-    int valid{0};          // v1 validity bitmap; 0x7f = all fields live
-    int rxOnlyAnt{0};      // 0 none, 1 RX1/EXT2, 2 RX2/EXT1, 3 XVTR
-    int trxAnt{0};         // effective Alex0/shared antenna, 1..3 (0 none)
-    int txAnt{0};          // selected Alex1 TX antenna, 1..3 (0 none)
-    int rxOut{0};          // effective RX bypass/out relay
-    int tx{0};             // actual MOX bit at wire boundary
-    int ocBits{0};         // effective OC mask
-    int txStepAtt{0};      // TX step attenuator
-    int adc1Att{0};        // first physical ADC RX step attenuator
-    int drive{0};          // effective 0..255 drive byte
-    int paEnabled{0};      // 1 when Disable HF PA is not asserted
-    int alexHpfBits{0};    // effective Alex0 HPF bits; 0x40 carries 6 m LNA
-};
-
 // Per-ADC RX band-pass decision — Phase 3F.
 //
 // Composed by AlexController::recomputeBpf over the set of slice bands on
@@ -337,42 +317,6 @@ public slots:
     virtual void setTxDrive(int level) = 0;
     virtual void setMox(bool enabled) = 0;
     virtual void setAntennaRouting(AntennaRouting routing) = 0;
-
-    // SQ4KOU TCI hardware snapshot.
-    //
-    // RadioConnection instances live on the dedicated Connection worker
-    // thread. TCI lives on the GUI/main thread, therefore TCI must never call
-    // buildCodecContext() or read protocol-owned mutable state directly.
-    // Concrete P1/P2 code publishes a complete wire-bound snapshot from its
-    // own thread; this accessor reads only atomics and is cross-thread safe.
-    bool readSq4kouHardwareState(Sq4kouHardwareState& out) const noexcept
-    {
-        for (int attempt = 0; attempt < 8; ++attempt) {
-            const quint32 before = m_sq4kouSnapshotSeq.load(std::memory_order_acquire);
-            if (before & 1u) { continue; }
-
-            Sq4kouHardwareState candidate;
-            candidate.valid       = m_sq4kouValid.load(std::memory_order_relaxed);
-            candidate.rxOnlyAnt   = m_sq4kouRxOnlyAnt.load(std::memory_order_relaxed);
-            candidate.trxAnt      = m_sq4kouTrxAnt.load(std::memory_order_relaxed);
-            candidate.txAnt       = m_sq4kouTxAnt.load(std::memory_order_relaxed);
-            candidate.rxOut       = m_sq4kouRxOut.load(std::memory_order_relaxed);
-            candidate.tx          = m_sq4kouTx.load(std::memory_order_relaxed);
-            candidate.ocBits      = m_sq4kouOcBits.load(std::memory_order_relaxed);
-            candidate.txStepAtt   = m_sq4kouTxStepAtt.load(std::memory_order_relaxed);
-            candidate.adc1Att     = m_sq4kouAdc1Att.load(std::memory_order_relaxed);
-            candidate.drive       = m_sq4kouDrive.load(std::memory_order_relaxed);
-            candidate.paEnabled   = m_sq4kouPaEnabled.load(std::memory_order_relaxed);
-            candidate.alexHpfBits = m_sq4kouAlexHpfBits.load(std::memory_order_relaxed);
-
-            const quint32 after = m_sq4kouSnapshotSeq.load(std::memory_order_acquire);
-            if (before == after && !(after & 1u)) {
-                out = candidate;
-                return candidate.valid != 0;
-            }
-        }
-        return false;
-    }
 
     // Apply the per-ADC RX band-pass decision to the Alex HPF wire bits.
     //
@@ -1194,35 +1138,6 @@ private:
     std::atomic<float> m_lastUserAdc0Volts{-1.0f};
 
 protected:
-    // Publish one coherent SQ4KOU hardware image from the Connection worker
-    // thread. A simple sequence lock keeps TCI's cross-thread read coherent
-    // without blocking the radio sender.
-    void publishSq4kouHardwareState(const Sq4kouHardwareState& state) const noexcept
-    {
-        // Diagnostic A/B switch. With NEREUS_SQ4KOU_TCI=0 the SQ4KOU
-        // extension is completely inert at the hardware mirror boundary.
-        // Default is enabled so normal test builds keep the intended feature.
-        const QByteArray gate = qgetenv("NEREUS_SQ4KOU_TCI").trimmed().toLower();
-        if (!(gate == "1" || gate == "true" || gate == "on" || gate == "yes")) {
-            return;
-        }
-
-        m_sq4kouSnapshotSeq.fetch_add(1u, std::memory_order_acq_rel); // odd = writer active
-        m_sq4kouValid.store(state.valid, std::memory_order_relaxed);
-        m_sq4kouRxOnlyAnt.store(state.rxOnlyAnt, std::memory_order_relaxed);
-        m_sq4kouTrxAnt.store(state.trxAnt, std::memory_order_relaxed);
-        m_sq4kouTxAnt.store(state.txAnt, std::memory_order_relaxed);
-        m_sq4kouRxOut.store(state.rxOut, std::memory_order_relaxed);
-        m_sq4kouTx.store(state.tx, std::memory_order_relaxed);
-        m_sq4kouOcBits.store(state.ocBits, std::memory_order_relaxed);
-        m_sq4kouTxStepAtt.store(state.txStepAtt, std::memory_order_relaxed);
-        m_sq4kouAdc1Att.store(state.adc1Att, std::memory_order_relaxed);
-        m_sq4kouDrive.store(state.drive, std::memory_order_relaxed);
-        m_sq4kouPaEnabled.store(state.paEnabled, std::memory_order_relaxed);
-        m_sq4kouAlexHpfBits.store(state.alexHpfBits, std::memory_order_relaxed);
-        m_sq4kouSnapshotSeq.fetch_add(1u, std::memory_order_release); // even = stable
-    }
-
     // Radio codec (2026-09-30): the consumer side of pushRadioAudio, on one
     // thread (the protocol's sender). Fills `stereo` with `frames` L/R
     // pairs and returns true, or returns false with nothing taken while the
@@ -1333,24 +1248,6 @@ protected:
     int m_lastUserDigIn{-1};
 
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};
-
-    // Cross-thread SQ4KOU TCI mirror. Written only through
-    // publishSq4kouHardwareState() by the Connection worker thread; read from
-    // TCI/main thread through readSq4kouHardwareState().
-    mutable std::atomic<quint32> m_sq4kouSnapshotSeq{0};
-    mutable std::atomic<int> m_sq4kouValid{0};
-    mutable std::atomic<int> m_sq4kouRxOnlyAnt{0};
-    mutable std::atomic<int> m_sq4kouTrxAnt{0};
-    mutable std::atomic<int> m_sq4kouTxAnt{0};
-    mutable std::atomic<int> m_sq4kouRxOut{0};
-    mutable std::atomic<int> m_sq4kouTx{0};
-    mutable std::atomic<int> m_sq4kouOcBits{0};
-    mutable std::atomic<int> m_sq4kouTxStepAtt{0};
-    mutable std::atomic<int> m_sq4kouAdc1Att{0};
-    mutable std::atomic<int> m_sq4kouDrive{0};
-    mutable std::atomic<int> m_sq4kouPaEnabled{0};
-    mutable std::atomic<int> m_sq4kouAlexHpfBits{0};
-
     RadioInfo m_radioInfo;
     HardwareProfile m_hardwareProfile;
 

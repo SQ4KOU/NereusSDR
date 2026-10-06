@@ -1126,22 +1126,20 @@ void ConnectionPanel::onConnectClicked()
     }
     m_connectBtn->setEnabled(false);
 
-    // Persist the connection target, but do NOT silently enable
-    // auto-connect.  The checkbox is authoritative: a manual Connect action
-    // must not change the next-launch behavior behind the operator's back.
+    // Phase 3I Task 17 — persist as auto-reconnect target.
+    // Compute the same macKey saveRadio uses (MAC if present, else "manual-ip-port").
+    // saveRadio updates the autoConnect flag to true for this entry, then
+    // setLastConnected records which entry to reconnect to on next launch.
     const QString macKey = info.macAddress.isEmpty()
         ? QStringLiteral("manual-%1-%2").arg(info.address.toString()).arg(info.port)
         : info.macAddress;
     AppSettings& s = AppSettings::instance();
+    // Preserve existing pinToMac flag if the radio is already saved; default false.
     bool pinToMac = false;
-    bool autoConnect = m_autoConnectCheck ? m_autoConnectCheck->isChecked() : false;
     if (auto existing = s.savedRadio(macKey)) {
         pinToMac = existing->pinToMac;
-        if (!m_autoConnectCheck) {
-            autoConnect = existing->autoConnect;
-        }
     }
-    s.saveRadio(info, pinToMac, autoConnect);
+    s.saveRadio(info, pinToMac, /*autoConnect=*/true);
     s.setLastConnected(macKey);
     s.save();
 

@@ -583,36 +583,15 @@ RxChannel* WdspEngine::createRxChannel(int channelId,
         }
         m_rxLane->postBarrier([this, ptr, channelId, inputBufferSize, dspBufferSize,
                                inputSampleRate, dspSampleRate, outputSampleRate]() {
-            // R-R3-39 lifecycle invariant: the RX worker must be parked
-            // BEFORE any WDSP channel structure is created or mutated.
-            //
-            // The previous ordering parked the worker only after
-            // OpenChannel() + create_anbEXT/create_nobEXT + NNR/notch
-            // readback. Once channel 0 had been admitted, EP6 could therefore
-            // drive fexchange2(channel 0) while this barrier was opening
-            // channels 1..3. That violates the receive-lane design and races
-            // WDSP's channel/global structures. Hold the worker parked for
-            // the entire create transaction and admit the new channel only
-            // immediately before release.
-            const std::function<void()> release = quiesceRxWorker();
-            qCInfo(lcDsp) << "RX create barrier: worker parked before OpenChannel"
-                          << channelId;
-
             openRxChannelWdsp(channelId, inputBufferSize, dspBufferSize,
                               inputSampleRate, dspSampleRate, outputSampleRate);
-            qCInfo(lcDsp) << "RX create barrier: OpenChannel complete"
-                          << channelId;
-
             // NbFamily's anb/nob objects, as the constructor makes them
-            // without a lane. createWdspObjectsOnLane also performs notch
-            // and NNR readback, all while the worker remains parked.
+            // without a lane.
             ptr->createWdspObjectsOnLane();
-            qCInfo(lcDsp) << "RX create barrier: auxiliary DSP objects complete"
-                          << channelId;
-
+            // Admit the channel to processIq with the worker quiesced, so no
+            // block starts half way through the switch.
+            const std::function<void()> release = quiesceRxWorker();
             ptr->setWdspReady(true);
-            qCInfo(lcDsp) << "RX create barrier: channel admitted"
-                          << channelId;
             if (release) {
                 release();
             }

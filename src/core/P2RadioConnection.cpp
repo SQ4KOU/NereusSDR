@@ -4397,24 +4397,6 @@ CodecContext P2RadioConnection::buildCodecContext() const
     ctx.adcSupplyVoltage = m_hardwareProfile.adcSupplyVoltage;
     ctx.lrAudioSwap      = m_hardwareProfile.lrAudioSwap;
 
-    // SQ4KOU TCI: publish only from the Connection worker thread, after the
-    // complete P2 wire image has been resolved. The TCI thread reads the
-    // atomic mirror through RadioConnection::readSq4kouHardwareState().
-    Sq4kouHardwareState sq4kou;
-    sq4kou.valid       = 0x7f;
-    sq4kou.rxOnlyAnt   = ctx.rxOnlyAnt;
-    sq4kou.trxAnt      = ctx.p2AlexRxAnt;
-    sq4kou.txAnt       = ctx.p2AlexTxAnt;
-    sq4kou.rxOut       = ctx.rxOut ? 1 : 0;
-    sq4kou.tx          = ctx.mox ? 1 : 0;
-    sq4kou.ocBits      = static_cast<int>(ctx.ocByte);
-    sq4kou.txStepAtt   = ctx.txStepAttn[0];
-    sq4kou.adc1Att     = ctx.rxStepAttn[0];
-    sq4kou.drive       = ctx.p2DriveLevel;
-    sq4kou.paEnabled   = m_paDisabled ? 0 : 1;
-    sq4kou.alexHpfBits = static_cast<int>(ctx.alexHpfBits);
-    publishSq4kouHardwareState(sq4kou);
-
     return ctx;
 }
 

@@ -309,8 +309,6 @@ public:
 
     // Protocol identifier — 2 for OpenHPSDR P2.  See RadioConnection::protocolVersion.
     int protocolVersion() const override { return 2; }
-    // SQ4KOU TCI reads the final hardware-bound state; this is deliberately
-    // not a Qt slot because it is a synchronous read-only snapshot API.
 
     // primaryRxDdcForBoard — which DDC carries RX1 I/Q on the wire for this board.
     //
