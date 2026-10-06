@@ -1518,11 +1518,7 @@ void AppSettings::migrateVaxSchemaV1ToV2()
     s.setValue(QStringLiteral("audio/Speakers/SampleRate"),    QStringLiteral("48000"));
     s.setValue(QStringLiteral("audio/Speakers/BitDepth"),      QStringLiteral("24"));
     s.setValue(QStringLiteral("audio/Speakers/Channels"),      QStringLiteral("2"));
-#if defined(Q_OS_WIN)
-    s.setValue(QStringLiteral("audio/Speakers/BufferSamples"), QStringLiteral("512"));
-#else
     s.setValue(QStringLiteral("audio/Speakers/BufferSamples"), QStringLiteral("256"));
-#endif
 
     // Trigger first-run dialog on next launch.
     s.setValue(QStringLiteral("audio/FirstRunComplete"), QStringLiteral("False"));

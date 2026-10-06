@@ -2627,15 +2627,6 @@ void P1RadioConnection::setAntennaRouting(AntennaRouting r)
     // RX-only input mux: clamp to 0..3 per netInterface.c:479-481 [v2.10.3.13 @501e3f5]
     m_rxOnlyAnt = (r.rxOnlyAnt < 0) ? 0 : (r.rxOnlyAnt > 3 ? 3 : r.rxOnlyAnt);
     m_rxOut     = r.rxOut;
-
-    m_sq4kouLastAntennaRouting = r;
-    m_sq4kouLastAntennaRouting.trxAnt =
-        (r.trxAnt >= 1 && r.trxAnt <= 3) ? r.trxAnt : 0;
-    m_sq4kouLastAntennaRouting.txAnt =
-        (r.txAnt >= 1 && r.txAnt <= 3) ? r.txAnt : 0;
-    m_sq4kouLastAntennaRouting.rxOnlyAnt = m_rxOnlyAnt;
-    m_sq4kouLastAntennaRouting.rxOut = m_rxOut;
-
     // P1 has no high-priority packet; the next EP2 frame picks up all
     // antenna fields via buildCodecContext() → P1Codec::bank0.
 }
@@ -4330,25 +4321,6 @@ CodecContext P1RadioConnection::buildCodecContext() const
     // Per clsHardwareSpecific.cs:85-191 — forwarded to WDSP, not a P1 wire byte.
     ctx.adcSupplyVoltage = m_hardwareProfile.adcSupplyVoltage;
     ctx.lrAudioSwap      = m_hardwareProfile.lrAudioSwap;
-
-    // SQ4KOU TCI: publish from the Connection worker thread after the final
-    // wire-bound CodecContext has been composed. TCI only reads the atomic
-    // mirror and never reaches back into this connection object's live state.
-    Sq4kouHardwareState sq4kou;
-    sq4kou.valid       = 0x7f;
-    sq4kou.rxOnlyAnt   = ctx.rxOnlyAnt;
-    sq4kou.trxAnt      = m_sq4kouLastAntennaRouting.trxAnt;
-    sq4kou.txAnt       = m_sq4kouLastAntennaRouting.txAnt;
-    sq4kou.rxOut       = ctx.rxOut ? 1 : 0;
-    sq4kou.tx          = ctx.mox ? 1 : 0;
-    sq4kou.ocBits      = static_cast<int>(ctx.ocByte);
-    sq4kou.txStepAtt   = ctx.txStepAttn[0];
-    sq4kou.adc1Att     = ctx.rxStepAttn[0];
-    sq4kou.drive       = ctx.txDrive;
-    sq4kou.paEnabled   = m_paDisabled ? 0 : 1;
-    sq4kou.alexHpfBits = static_cast<int>(ctx.alexHpfBits);
-    publishSq4kouHardwareState(sq4kou);
-
     return ctx;
 }
 

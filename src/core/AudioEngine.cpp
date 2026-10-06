@@ -278,38 +278,6 @@ int AudioEngine::paTerminateCallsForTest()
 AudioEngine::AudioEngine(QObject* parent)
     : QObject(parent)
 {
-    m_audioDiagTimer.setInterval(2000);
-    connect(&m_audioDiagTimer, &QTimer::timeout, this, [this]() {
-        std::lock_guard<std::mutex> lock(m_speakersBusMutex);
-        auto* pa = dynamic_cast<PortAudioBus*>(m_speakersBus.get());
-        if (!pa || !pa->isOpen()) {
-            return;
-        }
-
-        const quint32 ringOverruns = pa->ringOverrunEvents();
-        const quint64 ringOverrunSamples = pa->ringOverrunSamples();
-        const quint32 ringUnderruns = pa->ringUnderrunEvents();
-        const quint32 paUnderflows = pa->paOutputUnderflowEvents();
-        const quint32 paOverflows = pa->paOutputOverflowEvents();
-
-        if (ringOverruns != m_diagLastRingOverruns
-            || ringOverrunSamples != m_diagLastRingOverrunSamples
-            || ringUnderruns != m_diagLastRingUnderruns
-            || paUnderflows != m_diagLastPaUnderflows
-            || paOverflows != m_diagLastPaOverflows) {
-            qCWarning(lcAudio) << "SQ4KOU audio diag:"
-                               << "ringOverruns=" << ringOverruns
-                               << "droppedSamples=" << ringOverrunSamples
-                               << "ringUnderruns=" << ringUnderruns
-                               << "paUnderflows=" << paUnderflows
-                               << "paOverflows=" << paOverflows;
-            m_diagLastRingOverruns = ringOverruns;
-            m_diagLastRingOverrunSamples = ringOverrunSamples;
-            m_diagLastRingUnderruns = ringUnderruns;
-            m_diagLastPaUnderflows = paUnderflows;
-            m_diagLastPaOverflows = paOverflows;
-        }
-    });
     // R-R3-45 fix wave: the mix scratch rxBlockReady uses, sized here and
     // grown only by ensureMixScratchFrames(), never on the DSP thread.
     m_mixScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
@@ -723,12 +691,6 @@ void AudioEngine::start()
     }
 
     m_running = true;
-    m_diagLastRingOverruns = 0;
-    m_diagLastRingOverrunSamples = 0;
-    m_diagLastRingUnderruns = 0;
-    m_diagLastPaUnderflows = 0;
-    m_diagLastPaOverflows = 0;
-    m_audioDiagTimer.start();
 
     qCInfo(lcAudio) << "AudioEngine started ("
                     << (m_speakersBus && m_speakersBus->isOpen()
@@ -739,7 +701,6 @@ void AudioEngine::start()
 
 void AudioEngine::stop()
 {
-    m_audioDiagTimer.stop();
     // Close every owned bus unconditionally — setVaxConfig / setHeadphonesConfig
     // etc. may populate bus slots even when start() was never called (test
     // paths, SetupDialog preview on a freshly constructed engine). If we only
@@ -868,40 +829,9 @@ std::unique_ptr<IAudioBus> AudioEngine::makeBus(const AudioDeviceConfig& cfg,
 #endif
     auto bus = std::make_unique<PortAudioBus>();
     PortAudioConfig pcfg;
-    pcfg.direction = capture ? AudioDirection::Input
-                             : AudioDirection::Output;
-
-    // AudioDeviceConfig persists the host API by name, while PortAudio needs
-    // the process-local numeric index.  loadFromSettings() intentionally
-    // leaves hostApiIndex at -1, so resolve the saved DriverApi here.
-    int resolvedHostApi = cfg.hostApiIndex;
-    if (resolvedHostApi < 0 && !cfg.driverApi.isEmpty()) {
-        const auto apis = PortAudioBus::hostApis();
-        for (const auto& api : apis) {
-            if (api.name.compare(cfg.driverApi, Qt::CaseInsensitive) == 0) {
-                resolvedHostApi = api.index;
-                break;
-            }
-        }
-    }
-
-#if defined(Q_OS_WIN)
-    // A fresh Windows profile previously fell through to PortAudio's global
-    // default and opened MME.  Bench logs from the SQ4KOU machine show that
-    // exact path together with severe crackling.  Prefer WASAPI for speakers;
-    // an explicitly saved DriverApi/hostApiIndex still wins.
-    if (!capture && resolvedHostApi < 0 && cfg.driverApi.isEmpty()) {
-        const auto apis = PortAudioBus::hostApis();
-        for (const auto& api : apis) {
-            if (api.name.contains(QStringLiteral("WASAPI"), Qt::CaseInsensitive)) {
-                resolvedHostApi = api.index;
-                break;
-            }
-        }
-    }
-#endif
-
-    pcfg.hostApiIndex  = resolvedHostApi;
+    pcfg.direction     = capture ? AudioDirection::Input
+                                 : AudioDirection::Output;
+    pcfg.hostApiIndex  = cfg.hostApiIndex;
     pcfg.deviceName    = cfg.deviceName;
     pcfg.bufferSamples = cfg.bufferSamples;
     pcfg.exclusiveMode = cfg.exclusiveMode;
@@ -1197,18 +1127,8 @@ void AudioEngine::ensureSpeakersOpen()
     // loadFromSettings returns a default-constructed AudioDeviceConfig
     // (empty deviceName) → makeBus treats it as "platform default" —
     // same behavior as the pre-Sub-Phase-12 code.
-    AudioDeviceConfig cfg =
+    const AudioDeviceConfig cfg =
         AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/Speakers"));
-
-#if defined(Q_OS_WIN)
-    // Stability-first Windows default.  128 frames was introduced primarily
-    // as a latency optimization; on a fresh SQ4KOU Windows profile it opens
-    // the MME path and crackles badly.  Do not override an operator-saved
-    // buffer size.
-    if (!AppSettings::instance().contains(QStringLiteral("audio/Speakers/BufferSamples"))) {
-        cfg.bufferSamples = 512;
-    }
-#endif
 
     {
         std::lock_guard<std::mutex> lk(m_speakersBusMutex);
@@ -1220,10 +1140,7 @@ void AudioEngine::ensureSpeakersOpen()
         qCInfo(lcAudio) << "Speakers bus opened @"
                         << m_speakersFormat.sampleRate << "Hz /"
                         << m_speakersFormat.channels << "ch"
-                        << "[" << m_speakersBus->backendName() << "]"
-                        << "bufferFrames=" << cfg.bufferSamples
-                        << "device=" << (cfg.deviceName.isEmpty() ? QStringLiteral("<default>") : cfg.deviceName)
-                        << "driverApi=" << (cfg.driverApi.isEmpty() ? QStringLiteral("<default>") : cfg.driverApi);
+                        << "[" << m_speakersBus->backendName() << "]";
         emit speakersConfigChanged(cfg);
     }
 }
