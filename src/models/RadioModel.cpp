@@ -17996,6 +17996,15 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         openRxChannelPool(boardCapabilities().maxSlices, wdspInSize,
                           wdspInputRate);
 
+        // SQ4KOU 2026-10-06: finish the receive side as one startup phase.
+        // openPsFeedbackChannel() was queued on the same receive lane before
+        // initializedChanged(true), and openRxChannelPool() queued RX0..N
+        // behind it.  Drain here so no network transport can be constructed,
+        // much less started, while WDSP is still creating RX/PS channels.
+        qCInfo(lcDsp) << "WDSP startup transaction: waiting for PS/RX lifecycle";
+        m_wdspEngine->drainReceiveLane();
+        qCInfo(lcDsp) << "WDSP startup transaction: PS/RX lifecycle complete";
+
         // Master output volume (MasterOutputWidget) is the only writer to
         // AudioEngine::setVolume; the per-slice afGain seeded above lives
         // in WDSP, not in the post-DSP scalar.  Don't overwrite the master
@@ -19091,6 +19100,16 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             seedInitialAudioVolume();
         };  // end of txSetup lambda
         txSetup();
+
+        // SQ4KOU 2026-10-06: Thetis creates all RX channels before TX and
+        // finishes the transmitter before any transport feeds DSP.  The TX
+        // lane remains independent during normal operation; only this startup
+        // boundary waits for its lifecycle barrier and all init setters.
+        if (m_txChannel) {
+            qCInfo(lcDsp) << "WDSP startup transaction: waiting for TX lifecycle";
+            m_wdspEngine->drainTransmitLane();
+            qCInfo(lcDsp) << "WDSP startup transaction: TX lifecycle complete; radio transport may start";
+        }
 
         if (!m_txChannel) {
             // Issue #153 sub-bug 1 — cold-start retry hook.

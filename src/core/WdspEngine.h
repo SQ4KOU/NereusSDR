@@ -897,6 +897,13 @@ private:
     mutable std::shared_mutex m_rxChannelsMutex;
 
     // R-R3-39: the receive lane and how its barriers quiesce the worker.
+    // SQ4KOU 2026-10-06: OpenChannel/CloseChannel and destructive channel
+    // reconfiguration mutate WDSP's process-wide channel graph.  RX and TX
+    // keep their independent control lanes for normal control traffic, but
+    // lifecycle work from those lanes must never overlap.  This mirrors
+    // Thetis create_cmaster(), which creates the complete RX set before TX.
+    std::recursive_mutex m_wdspLifecycleMutex;
+
     DspControlThread* m_rxLane{nullptr};
     std::mutex m_rxQuiesceMutex;
     RxWorkerQuiesce m_rxQuiesce;
