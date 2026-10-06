@@ -362,31 +362,16 @@ AudioEngine::AudioEngine(QObject* parent)
     // touch the real audio devices. The device layer counts as ready
     // anyway, so the device paths still reach makeBus, which hands out the
     // test's fake devices or nothing (see setDeviceBusFactoryForTest).
-    bool sq4kouBarPortAudio = false;
-#if defined(Q_OS_WIN)
-    // SQ4KOU startup-crash isolation, 2026-10-06.
-    // Keep the entire PortAudio runtime out of the Windows startup path unless
-    // the operator explicitly opts it back in. This is a diagnostic A/B:
-    // if the application becomes stable, the access violation is inside the
-    // PortAudio / Windows-audio startup boundary rather than persistence,
-    // TCI, radio discovery or auto-connect.
-    const QByteArray diagPa = qgetenv("NEREUS_DIAG_PORTAUDIO").trimmed().toLower();
-    const bool enablePortAudio =
-        diagPa == "1" || diagPa == "true" || diagPa == "on" || diagPa == "yes";
-    sq4kouBarPortAudio = !enablePortAudio;
-#endif
-
     if (PortAudioBus::portAudioBarredForTestRun()) {
         m_paInitialized = false;
         m_deviceLayerReady = true;
         qCInfo(lcAudio) << "PortAudio not initialized: test run";
-    } else if (sq4kouBarPortAudio) {
-        m_paInitialized = false;
-        m_deviceLayerReady = true;
-        qCWarning(lcAudio)
-            << "SQ4KOU diagnostic: PortAudio initialization disabled on Windows."
-            << "Set NEREUS_DIAG_PORTAUDIO=1 to re-enable it.";
     } else {
+#if defined(Q_OS_WIN)
+        qCWarning(lcAudio)
+            << "SQ4KOU B16: PortAudio enabled; speaker endpoint is forced to"
+            << "WASAPI shared/default/512 for this diagnostic build.";
+#endif
         g_paInitializeCalls.fetch_add(1, std::memory_order_relaxed);
         const PaError err = Pa_Initialize();
         if (err != paNoError) {
@@ -1226,13 +1211,17 @@ void AudioEngine::ensureSpeakersOpen()
         AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/Speakers"));
 
 #if defined(Q_OS_WIN)
-    // Stability-first Windows default.  128 frames was introduced primarily
-    // as a latency optimization; on a fresh SQ4KOU Windows profile it opens
-    // the MME path and crackles badly.  Do not override an operator-saved
-    // buffer size.
-    if (!AppSettings::instance().contains(QStringLiteral("audio/Speakers/BufferSamples"))) {
-        cfg.bufferSamples = 512;
-    }
+    // SQ4KOU B16: remove every persisted Windows speaker choice from this
+    // diagnostic. The previous failing run restored MME before radio startup.
+    // Use the Windows WASAPI host API, shared mode, the current Windows default
+    // output device, and a conservative 512-frame callback. VAX/headphones are
+    // untouched because this normalization is speaker-only.
+    cfg.driverApi = QStringLiteral("Windows WASAPI");
+    cfg.deviceName.clear();
+    cfg.bufferSamples = 512;
+    cfg.exclusiveMode = false;
+    qCWarning(lcAudio)
+        << "SQ4KOU B16: opening speakers as Windows WASAPI default, shared, 512 frames";
 #endif
 
     {
@@ -1488,16 +1477,26 @@ void AudioEngine::applySpeakersConfig(const AudioDeviceConfig& cfg)
         return;
     }
 
+    AudioDeviceConfig effective = cfg;
+#if defined(Q_OS_WIN)
+    // SQ4KOU B16: keep restored/UI speaker changes from re-selecting MME
+    // while this crash/audio diagnostic is active.
+    effective.driverApi = QStringLiteral("Windows WASAPI");
+    effective.deviceName.clear();
+    effective.bufferSamples = 512;
+    effective.exclusiveMode = false;
+#endif
+
     // Hold the mutex during tear-down + rebuild. rxBlockReady uses
     // try_lock and drops the block if it can't acquire (≤1 ms of silence
     // is inaudible vs. a use-after-free on the old bus pointer).
     std::unique_lock<std::mutex> lk(m_speakersBusMutex);
 
     m_speakersBus.reset();
-    m_speakersBus = makeBus(cfg, /*capture=*/false);
+    m_speakersBus = makeBus(effective, /*capture=*/false);
     configureSpeakersConverter();
 
-    AudioDeviceConfig negotiated = cfg;  // carry non-bus fields through
+    AudioDeviceConfig negotiated = effective;  // carry non-bus fields through
     if (m_speakersBus) {
         m_speakersFormat = m_speakersBus->negotiatedFormat();
         qCInfo(lcAudio) << "Speakers bus reconfigured @"
@@ -1505,7 +1504,7 @@ void AudioEngine::applySpeakersConfig(const AudioDeviceConfig& cfg)
                         << m_speakersFormat.channels << "ch";
     } else {
         qCWarning(lcAudio) << "setSpeakersConfig: bus open failed for device"
-                           << cfg.deviceName << "— audio silenced on speakers";
+                           << effective.deviceName << "— audio silenced on speakers";
     }
 
     lk.unlock();  // release before emitting so signal handlers can call
