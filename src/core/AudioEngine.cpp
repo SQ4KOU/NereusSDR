@@ -367,11 +367,6 @@ AudioEngine::AudioEngine(QObject* parent)
         m_deviceLayerReady = true;
         qCInfo(lcAudio) << "PortAudio not initialized: test run";
     } else {
-#if defined(Q_OS_WIN)
-        qCWarning(lcAudio)
-            << "SQ4KOU B16: PortAudio enabled; speaker endpoint is forced to"
-            << "WASAPI shared/default/512 for this diagnostic build.";
-#endif
         g_paInitializeCalls.fetch_add(1, std::memory_order_relaxed);
         const PaError err = Pa_Initialize();
         if (err != paNoError) {
@@ -871,11 +866,6 @@ std::unique_ptr<IAudioBus> AudioEngine::makeBus(const AudioDeviceConfig& cfg,
         return nullptr;
     }
 #endif
-    if (!m_paInitialized) {
-        qCWarning(lcAudio)
-            << "Audio device open skipped because PortAudio is not initialized";
-        return nullptr;
-    }
     auto bus = std::make_unique<PortAudioBus>();
     PortAudioConfig pcfg;
     pcfg.direction = capture ? AudioDirection::Input
@@ -1211,17 +1201,13 @@ void AudioEngine::ensureSpeakersOpen()
         AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/Speakers"));
 
 #if defined(Q_OS_WIN)
-    // SQ4KOU B16: remove every persisted Windows speaker choice from this
-    // diagnostic. The previous failing run restored MME before radio startup.
-    // Use the Windows WASAPI host API, shared mode, the current Windows default
-    // output device, and a conservative 512-frame callback. VAX/headphones are
-    // untouched because this normalization is speaker-only.
-    cfg.driverApi = QStringLiteral("Windows WASAPI");
-    cfg.deviceName.clear();
-    cfg.bufferSamples = 512;
-    cfg.exclusiveMode = false;
-    qCWarning(lcAudio)
-        << "SQ4KOU B16: opening speakers as Windows WASAPI default, shared, 512 frames";
+    // Stability-first Windows default.  128 frames was introduced primarily
+    // as a latency optimization; on a fresh SQ4KOU Windows profile it opens
+    // the MME path and crackles badly.  Do not override an operator-saved
+    // buffer size.
+    if (!AppSettings::instance().contains(QStringLiteral("audio/Speakers/BufferSamples"))) {
+        cfg.bufferSamples = 512;
+    }
 #endif
 
     {
@@ -1477,26 +1463,16 @@ void AudioEngine::applySpeakersConfig(const AudioDeviceConfig& cfg)
         return;
     }
 
-    AudioDeviceConfig effective = cfg;
-#if defined(Q_OS_WIN)
-    // SQ4KOU B16: keep restored/UI speaker changes from re-selecting MME
-    // while this crash/audio diagnostic is active.
-    effective.driverApi = QStringLiteral("Windows WASAPI");
-    effective.deviceName.clear();
-    effective.bufferSamples = 512;
-    effective.exclusiveMode = false;
-#endif
-
     // Hold the mutex during tear-down + rebuild. rxBlockReady uses
     // try_lock and drops the block if it can't acquire (≤1 ms of silence
     // is inaudible vs. a use-after-free on the old bus pointer).
     std::unique_lock<std::mutex> lk(m_speakersBusMutex);
 
     m_speakersBus.reset();
-    m_speakersBus = makeBus(effective, /*capture=*/false);
+    m_speakersBus = makeBus(cfg, /*capture=*/false);
     configureSpeakersConverter();
 
-    AudioDeviceConfig negotiated = effective;  // carry non-bus fields through
+    AudioDeviceConfig negotiated = cfg;  // carry non-bus fields through
     if (m_speakersBus) {
         m_speakersFormat = m_speakersBus->negotiatedFormat();
         qCInfo(lcAudio) << "Speakers bus reconfigured @"
@@ -1504,7 +1480,7 @@ void AudioEngine::applySpeakersConfig(const AudioDeviceConfig& cfg)
                         << m_speakersFormat.channels << "ch";
     } else {
         qCWarning(lcAudio) << "setSpeakersConfig: bus open failed for device"
-                           << effective.deviceName << "— audio silenced on speakers";
+                           << cfg.deviceName << "— audio silenced on speakers";
     }
 
     lk.unlock();  // release before emitting so signal handlers can call
