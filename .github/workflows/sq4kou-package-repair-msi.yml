@@ -80,6 +80,12 @@ jobs:
             if (-not (Test-Path $plugin)) { throw "Missing required Qt plugin: $plugin" }
           }
 
+          foreach ($dll in @('libcrypto-3-x64.dll','libssl-3-x64.dll')) {
+            $src = Get-ChildItem 'C:\Program Files\OpenSSL*' -Filter $dll -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $src) { throw "OpenSSL runtime missing on runner: $dll" }
+            Copy-Item $src.FullName "deploy\$dll" -Force
+          }
+
       - name: Recursive PE dependency audit
         shell: pwsh
         run: |
