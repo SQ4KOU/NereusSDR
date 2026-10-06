@@ -206,8 +206,7 @@ jobs:
             'deploy\NereusSDR.exe',
             'deploy\NereusSDRLib.dll',
             'deploy\NereusCore.dll',
-            'deploy\nereusd.exe',
-            'deploy\nereus-audio-capture.exe'
+            'deploy\nereusd.exe'
           )) {
             & windeployqt $pe --release --no-translations --no-system-d3d-compiler --compiler-runtime
             if ($LASTEXITCODE -ne 0) { throw "windeployqt failed for $pe" }
