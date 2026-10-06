@@ -1203,7 +1203,7 @@ protected:
         // extension is completely inert at the hardware mirror boundary.
         // Default is enabled so normal test builds keep the intended feature.
         const QByteArray gate = qgetenv("NEREUS_SQ4KOU_TCI").trimmed().toLower();
-        if (gate == "0" || gate == "false" || gate == "off" || gate == "no") {
+        if (!(gate == "1" || gate == "true" || gate == "on" || gate == "yes")) {
             return;
         }
 
