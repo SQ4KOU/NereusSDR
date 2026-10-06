@@ -286,6 +286,10 @@ jobs:
               if ($dep -like 'api-ms-win-*' -or $dep -like 'ext-ms-win-*' -or $systemDlls.Contains($dep)) { continue }
               $local = @(Get-ChildItem deploy -Recurse -File -Filter $dep -ErrorAction SilentlyContinue)
               if ($local.Count -eq 0) {
+                # Any genuine Windows inbox DLL is valid from System32.
+                # Non-system runtimes (Qt/FFmpeg/etc.) must be present in deploy.
+                $systemPath = Join-Path $env:WINDIR "System32\$dep"
+                if (Test-Path $systemPath) { continue }
                 if (-not $missing.ContainsKey($dep)) { $missing[$dep] = @() }
                 $missing[$dep] += $pe.FullName.Substring((Resolve-Path deploy).Path.Length + 1)
               }
