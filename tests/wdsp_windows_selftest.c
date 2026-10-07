@@ -61,6 +61,12 @@ static int g_input_period = 48;
 static const int g_output_period = 48;
 static const double g_input_amplitude = 0.05;
 
+/* dsp_outsize is 4096 in both cases below. dexchange() must copy the prior
+   rxa.outbuff into r2 bit-for-bit before xrxa() produces the next block. */
+static double g_previous_rxa_out[2 * 4096];
+static int g_previous_rxa_count = 0;
+static int g_previous_rxa_valid = 0;
+
 static const char* stage_name(int stage)
 {
     switch (stage) {
@@ -169,12 +175,39 @@ static void rx_trace_hook(int channel, int stage, int layout,
     if (ref_sq > 1.0e-30)
         period_error = sqrt(err_sq / ref_sq);
 
+    /* RXA_OUT from worker block N must be exactly the block dexchange writes
+       to r2 at the start of worker block N+1. Both callbacks execute on that
+       same WDSP worker, so this comparison adds no cross-thread test state. */
+    if (stage == TRACE_R2_WRITE && g_previous_rxa_valid) {
+        const double* iq = (const double*)data0;
+        if (layout != TRACE_DOUBLE_INTERLEAVED
+            || count != g_previous_rxa_count
+            || memcmp(iq, g_previous_rxa_out,
+                      (size_t)(2 * count) * sizeof(double)) != 0) {
+            fail_block(stage, seq, "rxa-to-r2-copy-mismatch",
+                       rms, peak, period_error);
+        }
+    }
+
     /* NaN/Inf is never a settling transient. Check it from the first sample
        of the first block; warm-up below applies only to amplitude/periodicity
        while the RXA filter and AGC settle. */
     if (nonfinite != 0) {
         fail_block(stage, seq, "nan-or-inf", rms, peak, period_error);
         return;
+    }
+
+    if (stage == TRACE_RXA_OUT && layout == TRACE_DOUBLE_INTERLEAVED) {
+        if (count > 4096) {
+            fail_block(stage, seq, "unexpected-rxa-block-size",
+                       rms, peak, period_error);
+            g_previous_rxa_valid = 0;
+        } else {
+            memcpy(g_previous_rxa_out, data0,
+                   (size_t)(2 * count) * sizeof(double));
+            g_previous_rxa_count = count;
+            g_previous_rxa_valid = 1;
+        }
     }
 
     if (seq <= warmup_blocks(stage))
@@ -236,6 +269,9 @@ static int validate_case(int input_rate)
     }
 
     memset(g_stage, 0, sizeof(g_stage));
+    g_previous_rxa_count = 0;
+    g_previous_rxa_valid = 0;
+    memset(g_previous_rxa_out, 0, sizeof(g_previous_rxa_out));
     g_input_period = input_rate / 1000;
 
     in_i = (float*)calloc((size_t)in_size, sizeof(float));
