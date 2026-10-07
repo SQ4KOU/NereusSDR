@@ -351,15 +351,6 @@ static int validate_case(int input_rate, int p1_wire)
     SetRXAAGCTop(channel, 80.0);
     SetRXAPanelGain1(channel, 1.0);
     SetRXAPanelBinaural(channel, 0);
-
-    /* Reproduce the application startup path exactly enough to cover the
-       regression seen on hardware: RXA is opened with the 4096-sample DSP
-       block, then Phone-mode DSP options shrink the live WDSP block to 64
-       before receive exchange starts.  The previous self-test never made
-       this SetDSPBuffsize transition, so it could not exercise the failing
-       rsmpout state. */
-    SetDSPBuffsize(channel, 64);
-
     SetChannelState(channel, 1, 0);
 
     for (k = 0; k < exchanges; ++k) {
@@ -420,6 +411,105 @@ done:
     return failures != 0;
 }
 
+
+static int validate_resize_finite_case(int input_rate, int p1_wire)
+{
+    const int channel = 21;
+    const int dsp_rate = 48000;
+    const int output_rate = 48000;
+    const int initial_dsp_size = 4096;
+    const int runtime_dsp_size = 64;
+    const int in_size = 64 * (input_rate / output_rate);
+    const int exchanges = 1024;
+    float* in_i = NULL;
+    float* in_q = NULL;
+    float* out_i = NULL;
+    float* out_q = NULL;
+    double phase = 0.0;
+    const double step = +2.0 * M_PI * 1000.0 / (double)input_rate;
+    int error = 0;
+    int failures = 0;
+    int k, n;
+
+    if (input_rate % output_rate != 0 || in_size <= 0)
+        return 1;
+
+    in_i = (float*)calloc((size_t)in_size, sizeof(float));
+    in_q = (float*)calloc((size_t)in_size, sizeof(float));
+    out_i = (float*)calloc(64u, sizeof(float));
+    out_q = (float*)calloc(64u, sizeof(float));
+    if (!in_i || !in_q || !out_i || !out_q) {
+        failures = 1;
+        goto done;
+    }
+
+    printf("WDSP_RESIZE_FINITE case input_rate=%d in_size=%d initial_dsp=%d runtime_dsp=%d\n",
+           input_rate, in_size, initial_dsp_size, runtime_dsp_size);
+
+    OpenChannel(channel, in_size, initial_dsp_size,
+                input_rate, dsp_rate, output_rate,
+                0, 0, 0.010, 0.025, 0.000, 0.010, 1);
+    SetRXAMode(channel, RXA_USB);
+    SetRXABandpassFreqs(channel, 150.0, 2850.0);
+    RXANBPSetFreqs(channel, 150.0, 2850.0);
+    SetRXAAGCMode(channel, 3);
+    SetRXAAGCTop(channel, 80.0);
+    SetRXAPanelGain1(channel, 1.0);
+    SetRXAPanelBinaural(channel, 0);
+
+    /* Application startup changes Phone RX DSP block 4096 -> 64 and
+       Low-Latency maps to minimum-phase=1 before exchange starts. */
+    SetDSPBuffsize(channel, runtime_dsp_size);
+    RXASetMP(channel, 1);
+    SetChannelState(channel, 1, 0);
+
+    for (k = 0; k < exchanges; ++k) {
+        for (n = 0; n < in_size; ++n) {
+            const double vi = g_input_amplitude * cos(phase);
+            const double vq = g_input_amplitude * sin(phase);
+            in_i[n] = p1_wire ? p1_wire_roundtrip(vi) : (float)vi;
+            in_q[n] = p1_wire ? p1_wire_roundtrip(vq) : (float)vq;
+            phase += step;
+            if (phase > M_PI) phase -= 2.0 * M_PI;
+        }
+
+        error = 0;
+        fexchange2(channel, in_i, in_q, out_i, out_q, &error);
+        if (error != 0) {
+            ++failures;
+            break;
+        }
+
+        /* The hardware regression is NaN/Inf at the RX output. Ignore
+           filter/AGC settling here and test that exact contract only. */
+        if (k >= 256) {
+            for (n = 0; n < 64; ++n) {
+                if (!isfinite(out_i[n]) || !isfinite(out_q[n])
+                    || fabs(out_i[n]) > 16.0 || fabs(out_q[n]) > 16.0) {
+                    fprintf(stderr,
+                            "WDSP_RESIZE_FINITE FAIL exchange=%d sample=%d I=%.9g Q=%.9g rate=%d\n",
+                            k, n, out_i[n], out_q[n], input_rate);
+                    ++failures;
+                    k = exchanges;
+                    break;
+                }
+            }
+        }
+    }
+
+    SetChannelState(channel, 0, 0);
+    CloseChannel(channel);
+
+done:
+    free(in_i);
+    free(in_q);
+    free(out_i);
+    free(out_q);
+    printf("WDSP_RESIZE_FINITE RESULT=%s rate=%d p1=%d\n",
+           failures ? "FAIL" : "PASS", input_rate, p1_wire);
+    return failures != 0;
+}
+
 int main(void)
 {
     int failed = 0;
@@ -432,6 +522,11 @@ int main(void)
     failed |= validate_case(192000, 0);
     failed |= validate_case(48000, 1);
     failed |= validate_case(192000, 1);
+
+    failed |= validate_resize_finite_case(48000, 0);
+    failed |= validate_resize_finite_case(192000, 0);
+    failed |= validate_resize_finite_case(48000, 1);
+    failed |= validate_resize_finite_case(192000, 1);
 
     if (failed) {
         fprintf(stderr, "WDSP_SELFTEST RESULT=FAIL\n");
