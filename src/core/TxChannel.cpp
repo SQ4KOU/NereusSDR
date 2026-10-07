@@ -1140,21 +1140,27 @@ void TxChannel::pumpDexp(const double* interleavedIn)
         ~LeaveBlock() { channel->leaveWorkerBlock(); }
     } leaveBlock{this};
 #ifdef HAVE_WDSP
-    // Same null-guard pair as setVoxRun / registerVoxCallback / all DEXP
-    // setters in this file.  Test builds never drove OpenChannel(type=1)
-    // so txa[].rsmpin.p is nullptr; calling xdexp on a missing DEXP module
-    // would dereference null.
-    if (txa[m_channelId].rsmpin.p == nullptr) {
-        return;
+    // Serialize this hot-path WDSP call against structural channel work
+    // (SetDSPBuffsize/TXASetNC/rate rebuilds).  The crash dump from the
+    // hardware run showed TxWorkerThread inside the FFTW/heap path while a
+    // structural re-plan was possible; the RX hot path already uses the same
+    // lifecycle gate for exactly this class of race.
+    const auto dexpWork = [this, interleavedIn]() {
+        // Same null-guard pair as setVoxRun / registerVoxCallback / all DEXP
+        // setters in this file.  Keep the guards inside the lifecycle gate so
+        // teardown/rebuild cannot invalidate them between check and use.
+        if (txa[m_channelId].rsmpin.p == nullptr || pdexp[m_channelId] == nullptr) {
+            return;
+        }
+        std::memcpy(m_dexpBuffer, interleavedIn,
+                    m_dexpBufferSizeDoubles * sizeof(double));
+        xdexp(m_channelId);
+    };
+    if (m_wdspEngine) {
+        m_wdspEngine->runLifecycleSerialized(dexpWork);
+    } else {
+        dexpWork();
     }
-    if (pdexp[m_channelId] == nullptr) {
-        return;
-    }
-    // Copy the worker-thread-owned mic block into the WDSP-visible DEXP
-    // buffer, then drive the per-block detector.  WDSP synchronises
-    // internally via dexp.cs_update; no additional locking needed here.
-    std::memcpy(m_dexpBuffer, interleavedIn, m_dexpBufferSizeDoubles * sizeof(double));
-    xdexp(m_channelId);
 #else
     // Non-HAVE_WDSP build: still copy into the buffer so the storage
     // exercise path matches between configs (the DEXP module isn't there
@@ -3831,7 +3837,20 @@ void TxChannel::driveOneTxBlockFromInterleaved(const double* interleavedIn)
     // lane's drain returns. Zero the block first so those last calls send
     // silence, never a repeat of the previous block.
     std::fill(m_out.begin(), m_out.end(), 0.0);
-    fexchange0(m_channelId, m_in.data(), m_out.data(), &error);
+
+    // Serialize the external TX worker's exchange against structural WDSP
+    // replans/destruction.  SetDSPBuffsize/TXASetNC rebuild FFTW-backed TXA
+    // internals; without this gate TxWorkerThread can be inside fexchange0
+    // while those objects are freed/replanned.  RX uses the same lifecycle
+    // serialization around fexchange2.
+    const auto exchange = [this, &error]() {
+        fexchange0(m_channelId, m_in.data(), m_out.data(), &error);
+    };
+    if (m_wdspEngine) {
+        m_wdspEngine->runLifecycleSerialized(exchange);
+    } else {
+        exchange();
+    }
     if (error != 0) {
         qCWarning(lcDsp) << "TxChannel" << m_channelId
                          << "fexchange0 error" << error;
