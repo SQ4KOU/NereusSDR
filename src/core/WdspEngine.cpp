@@ -120,6 +120,7 @@ warren@wpratt.com
 #include <QTimer>
 #include <QThread>
 
+#include <atomic>
 #include <mutex>
 
 #ifdef HAVE_WDSP
@@ -132,6 +133,89 @@ extern struct _dexp* pdexp[];
 #endif
 
 namespace NereusSDR {
+
+#ifdef HAVE_WDSP
+namespace {
+
+bool rxPathTraceEnabled()
+{
+    static const bool enabled = [] {
+        bool ok = false;
+        const int value = qEnvironmentVariableIntValue("NEREUS_RX_TRACE", &ok);
+        return ok && value != 0;
+    }();
+    return enabled;
+}
+
+const char* rxTraceStageName(int stage)
+{
+    switch (stage) {
+    case 1: return "fexchange2.in";
+    case 2: return "rxa.out.after_xrxa";
+    case 3: return "r2.write";
+    case 4: return "fexchange2.out";
+    default: return "unknown";
+    }
+}
+
+void wdspRxPathTraceHook(int channel, int stage, int layout,
+                         const void* data0, const void* data1, int count)
+{
+    if (channel < 0 || channel >= 32 || stage < 1 || stage > 4
+        || data0 == nullptr || count <= 0) {
+        return;
+    }
+
+    static std::atomic<quint64> sequence[32][5]{};
+    const quint64 seq =
+        sequence[channel][stage].fetch_add(1, std::memory_order_relaxed) + 1;
+
+    double sumSq = 0.0;
+    double peak = 0.0;
+    int nonFinite = 0;
+    const auto take = [&](double v) {
+        if (!std::isfinite(v)) {
+            ++nonFinite;
+            return;
+        }
+        const double a = std::fabs(v);
+        if (a > peak) {
+            peak = a;
+        }
+        sumSq += v * v;
+    };
+
+    if (layout == 1 && data1 != nullptr) {
+        const auto* i = static_cast<const float*>(data0);
+        const auto* q = static_cast<const float*>(data1);
+        for (int n = 0; n < count; ++n) {
+            take(i[n]);
+            take(q[n]);
+        }
+    } else if (layout == 2) {
+        const auto* iq = static_cast<const double*>(data0);
+        for (int n = 0; n < count * 2; ++n) {
+            take(iq[n]);
+        }
+    } else {
+        return;
+    }
+
+    const double rms = std::sqrt(sumSq / static_cast<double>(count * 2));
+    if (nonFinite != 0 || seq <= 4 || (seq % 128) == 0) {
+        qCInfo(lcDsp).nospace()
+            << "RXTRACE wdsp stage=" << rxTraceStageName(stage)
+            << " ch=" << channel
+            << " seq=" << seq
+            << " n=" << count
+            << " rms=" << rms
+            << " peak=" << peak
+            << " nonfinite=" << nonFinite;
+    }
+}
+
+} // namespace
+#endif
 
 // R-R3-39: WDSP plans its FFTs with double-precision FFTW, and FFTW's
 // planner is not thread-safe by default. The receive lane (every RX
@@ -152,6 +236,11 @@ WdspEngine::WdspEngine(QObject* parent)
     // without initialize()).
     makeFftwPlannersThreadSafe();
 #ifdef HAVE_WDSP
+    if (rxPathTraceEnabled()) {
+        WDSPSetRxTraceHook(&wdspRxPathTraceHook);
+        qCInfo(lcDsp)
+            << "RXTRACE enabled: fexchange2.in -> rxa.out -> r2 -> fexchange2.out";
+    }
     m_extDivCreate = &create_divEXT;
     m_extDivDestroy = &destroy_divEXT;
     m_extDivProcess = &xdivEXT;
