@@ -908,6 +908,7 @@ jobs:
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DNEREUS_GPU_SPECTRUM=ON \
+            -DNEREUS_WDSP_WINDOWS_SELFTEST=ON \
             -DOPENSSL_ROOT_DIR="$OPENSSL_ROOT_DIR"
 
       # ------------------------------------------------------------------
@@ -921,6 +922,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: cmake --build build -j$NUMBER_OF_PROCESSORS
+
+      # Linked WDSP/FFTW gate. This binary has no Qt, radio protocol,
+      # MasterMixer or PortAudio dependency; a failure here is therefore
+      # inside WDSP/FFTW/Windows synchronization or its pseudo-ring path.
+      - name: Windows linked WDSP self-test
+        if: runner.os == 'Windows'
+        shell: bash
+        run: ./build/wdsp_windows_selftest.exe
 
       # R-R3-21 follow-up from the 2026-09-24 checkpoint. The Linux build
       # above has NEREUS_BUILD_TESTS=ON. The macOS and Windows jobs already
