@@ -37,7 +37,16 @@ enum {
     TRACE_RXA_OUT = 2,
     TRACE_R2_WRITE = 3,
     TRACE_FEX_OUT = 4,
-    TRACE_STAGE_COUNT = 5
+    TRACE_AFTER_HB = 5,
+    TRACE_AFTER_NBP = 6,
+    TRACE_AFTER_DEMOD = 7,
+    TRACE_AFTER_NR0 = 8,
+    TRACE_AFTER_BP0 = 9,
+    TRACE_AFTER_AGC = 10,
+    TRACE_AFTER_BP1 = 11,
+    TRACE_AFTER_PANEL = 12,
+    TRACE_AFTER_RSMP_OUT = 13,
+    TRACE_STAGE_COUNT = 14
 };
 
 enum {
@@ -74,6 +83,15 @@ static const char* stage_name(int stage)
     case TRACE_RXA_OUT: return "rxa.out.after_xrxa";
     case TRACE_R2_WRITE: return "r2.write";
     case TRACE_FEX_OUT: return "fexchange2.out";
+    case TRACE_AFTER_HB: return "xrxa.after_input_resampler";
+    case TRACE_AFTER_NBP: return "xrxa.after_nbp";
+    case TRACE_AFTER_DEMOD: return "xrxa.after_demod";
+    case TRACE_AFTER_NR0: return "xrxa.after_nr_position0";
+    case TRACE_AFTER_BP0: return "xrxa.after_bandpass_pos0";
+    case TRACE_AFTER_AGC: return "xrxa.after_agc";
+    case TRACE_AFTER_BP1: return "xrxa.after_bandpass_pos1";
+    case TRACE_AFTER_PANEL: return "xrxa.after_panel";
+    case TRACE_AFTER_RSMP_OUT: return "xrxa.after_output_resampler";
     default: return "unknown";
     }
 }
@@ -85,6 +103,16 @@ static unsigned long long warmup_blocks(int stage)
     case TRACE_RXA_OUT: return 10;
     case TRACE_R2_WRITE: return 11; /* r2 is one worker block behind xrxa */
     case TRACE_FEX_OUT: return 768; /* 64 initial ring blocks + >10 RXA blocks */
+    case TRACE_AFTER_HB:
+    case TRACE_AFTER_NBP:
+    case TRACE_AFTER_DEMOD:
+    case TRACE_AFTER_NR0:
+    case TRACE_AFTER_BP0:
+    case TRACE_AFTER_AGC:
+    case TRACE_AFTER_BP1:
+    case TRACE_AFTER_PANEL:
+    case TRACE_AFTER_RSMP_OUT:
+        return 10;
     default: return 0;
     }
 }
