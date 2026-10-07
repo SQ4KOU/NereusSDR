@@ -2518,6 +2518,15 @@ if(NEREUS_WDSP_WINDOWS_SELFTEST)
     endif()
 
     add_executable(wdsp_windows_selftest tests/wdsp_windows_selftest.c)
+    # Top-level NereusSDR enables Qt code generators globally. This target is
+    # intentionally pure C: disabling them avoids an empty MOC C++ object
+    # changing the linker language and pulling MinGW C++ runtime DLLs into the
+    # supposedly isolated WDSP experiment.
+    set_target_properties(wdsp_windows_selftest PROPERTIES
+        AUTOMOC OFF
+        AUTOUIC OFF
+        AUTORCC OFF
+        LINKER_LANGUAGE C)
     target_link_libraries(wdsp_windows_selftest PRIVATE wdsp_static)
     target_include_directories(wdsp_windows_selftest PRIVATE ${FFTW3_INCLUDE_DIRS})
     target_compile_definitions(wdsp_windows_selftest PRIVATE WDSP_STATIC_BUILD)
