@@ -2,6 +2,10 @@ name: SQ4KOU Fast Windows MSI
 
 on:
   workflow_dispatch:
+  push:
+    branches: [diag/wdsp-rxa-stage-trace]
+    paths:
+      - '.github/workflows/sq4kou-fast-windows-msi.yml'
 
 concurrency:
   group: sq4kou-fast-windows-${{ github.ref }}
