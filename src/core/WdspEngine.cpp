@@ -1841,6 +1841,8 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
     // silently falls back to direct WDSP calls and can race structural FFTW
     // replans on the transmit lane.
     raw->setWdspEngine(this);
+    qCInfo(lcDsp) << "TX channel" << channelId
+                  << "bound to WDSP lifecycle serialization gate";
 
     // Phase 3M-3a-iii Task 20: hand the wrapper a non-owning pointer to the
     // per-channel DEXP buffer so TxChannel::pumpDexp has a valid destination
