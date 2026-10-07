@@ -166,6 +166,14 @@ static void rx_trace_hook(int channel, int stage, int layout,
     if (ref_sq > 1.0e-30)
         period_error = sqrt(err_sq / ref_sq);
 
+    /* NaN/Inf is never a settling transient. Check it from the first sample
+       of the first block; warm-up below applies only to amplitude/periodicity
+       while the RXA filter and AGC settle. */
+    if (nonfinite != 0) {
+        fail_block(stage, seq, "nan-or-inf", rms, peak, period_error);
+        return;
+    }
+
     if (seq <= warmup_blocks(stage))
         return;
 
@@ -181,11 +189,6 @@ static void rx_trace_hook(int channel, int stage, int layout,
     if (peak > s->max_peak) s->max_peak = peak;
     if (period_error > s->max_period_error)
         s->max_period_error = period_error;
-
-    if (nonfinite != 0) {
-        fail_block(stage, seq, "nan-or-inf", rms, peak, period_error);
-        return;
-    }
 
     if (stage == TRACE_FEX_IN) {
         if (peak < 0.049 || peak > 0.051)
