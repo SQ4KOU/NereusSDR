@@ -5482,8 +5482,15 @@ void TxChannel::setTxDspBufferSizeSamples(int size)
     // from main thread while TxWorkerThread is running.
     // R-R3-39: a barrier on the lane (it replans the channel's FFTs).
     runOrdered([this, size]() {
-        SetDSPBuffsize(m_channelId, size);
-        refreshDspSizeOnLane();
+        const auto work = [this, size]() {
+            SetDSPBuffsize(m_channelId, size);
+            refreshDspSizeOnLane();
+        };
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(work);
+        } else {
+            work();
+        }
     });
 #endif
 }
@@ -5504,15 +5511,29 @@ void TxChannel::setTxFilterSizeSamples(int nc)
 #ifdef HAVE_WDSP
         // From Thetis radio.cs:2606 [v2.10.3.13] DSPTX.BufferSize setter.
         runOrdered([this, nc]() {
-            SetDSPBuffsize(m_channelId, nc);
-            refreshDspSizeOnLane();
+            const auto work = [this, nc]() {
+                SetDSPBuffsize(m_channelId, nc);
+                refreshDspSizeOnLane();
+            };
+            if (m_wdspEngine) {
+                m_wdspEngine->runLifecycleSerialized(work);
+            } else {
+                work();
+            }
         });
 #endif
     }
     m_txFilterSize = nc;
 #ifdef HAVE_WDSP
     // From Thetis radio.cs:2628 [v2.10.3.13] DSPTX.FilterSize setter.
-    runOrdered([this, nc]() { TXASetNC(m_channelId, nc); });
+    runOrdered([this, nc]() {
+        const auto work = [this, nc]() { TXASetNC(m_channelId, nc); };
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(work);
+        } else {
+            work();
+        }
+    });
 #endif
 }
 
@@ -5563,7 +5584,14 @@ void TxChannel::setTxFilterTypeLinearPhase(bool linearPhase)
     // (2026-09-27): this used to send m_txFilterType itself, so "Low
     // Latency" ran linear phase (35.6 ms through TX DSP instead of 16.1).
     const int minimumPhase = linearPhase ? 0 : 1;
-    runOrdered([this, minimumPhase]() { TXASetMP(m_channelId, minimumPhase); });
+    runOrdered([this, minimumPhase]() {
+        const auto work = [this, minimumPhase]() { TXASetMP(m_channelId, minimumPhase); };
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(work);
+        } else {
+            work();
+        }
+    });
 #endif
 }
 

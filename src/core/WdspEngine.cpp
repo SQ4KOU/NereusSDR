@@ -120,6 +120,7 @@ warren@wpratt.com
 #include <QTimer>
 #include <QThread>
 
+#include <atomic>
 #include <mutex>
 
 #ifdef HAVE_WDSP
@@ -132,6 +133,89 @@ extern struct _dexp* pdexp[];
 #endif
 
 namespace NereusSDR {
+
+#ifdef HAVE_WDSP
+namespace {
+
+bool rxPathTraceEnabled()
+{
+    static const bool enabled = [] {
+        bool ok = false;
+        const int value = qEnvironmentVariableIntValue("NEREUS_RX_TRACE", &ok);
+        return ok && value != 0;
+    }();
+    return enabled;
+}
+
+const char* rxTraceStageName(int stage)
+{
+    switch (stage) {
+    case 1: return "fexchange2.in";
+    case 2: return "rxa.out.after_xrxa";
+    case 3: return "r2.write";
+    case 4: return "fexchange2.out";
+    default: return "unknown";
+    }
+}
+
+void wdspRxPathTraceHook(int channel, int stage, int layout,
+                         const void* data0, const void* data1, int count)
+{
+    if (channel < 0 || channel >= 32 || stage < 1 || stage > 4
+        || data0 == nullptr || count <= 0) {
+        return;
+    }
+
+    static std::atomic<quint64> sequence[32][5]{};
+    const quint64 seq =
+        sequence[channel][stage].fetch_add(1, std::memory_order_relaxed) + 1;
+
+    double sumSq = 0.0;
+    double peak = 0.0;
+    int nonFinite = 0;
+    const auto take = [&](double v) {
+        if (!std::isfinite(v)) {
+            ++nonFinite;
+            return;
+        }
+        const double a = std::fabs(v);
+        if (a > peak) {
+            peak = a;
+        }
+        sumSq += v * v;
+    };
+
+    if (layout == 1 && data1 != nullptr) {
+        const auto* i = static_cast<const float*>(data0);
+        const auto* q = static_cast<const float*>(data1);
+        for (int n = 0; n < count; ++n) {
+            take(i[n]);
+            take(q[n]);
+        }
+    } else if (layout == 2) {
+        const auto* iq = static_cast<const double*>(data0);
+        for (int n = 0; n < count * 2; ++n) {
+            take(iq[n]);
+        }
+    } else {
+        return;
+    }
+
+    const double rms = std::sqrt(sumSq / static_cast<double>(count * 2));
+    if (nonFinite != 0 || seq <= 4 || (seq % 128) == 0) {
+        qCInfo(lcDsp).nospace()
+            << "RXTRACE wdsp stage=" << rxTraceStageName(stage)
+            << " ch=" << channel
+            << " seq=" << seq
+            << " n=" << count
+            << " rms=" << rms
+            << " peak=" << peak
+            << " nonfinite=" << nonFinite;
+    }
+}
+
+} // namespace
+#endif
 
 // R-R3-39: WDSP plans its FFTs with double-precision FFTW, and FFTW's
 // planner is not thread-safe by default. The receive lane (every RX
@@ -152,6 +236,11 @@ WdspEngine::WdspEngine(QObject* parent)
     // without initialize()).
     makeFftwPlannersThreadSafe();
 #ifdef HAVE_WDSP
+    if (rxPathTraceEnabled()) {
+        WDSPSetRxTraceHook(&wdspRxPathTraceHook);
+        qCInfo(lcDsp)
+            << "RXTRACE enabled: fexchange2.in -> rxa.out -> r2 -> fexchange2.out";
+    }
     m_extDivCreate = &create_divEXT;
     m_extDivDestroy = &destroy_divEXT;
     m_extDivProcess = &xdivEXT;
@@ -583,6 +672,7 @@ RxChannel* WdspEngine::createRxChannel(int channelId,
         }
         m_rxLane->postBarrier([this, ptr, channelId, inputBufferSize, dspBufferSize,
                                inputSampleRate, dspSampleRate, outputSampleRate]() {
+            std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
             openRxChannelWdsp(channelId, inputBufferSize, dspBufferSize,
                               inputSampleRate, dspSampleRate, outputSampleRate);
             // NbFamily's anb/nob objects, as the constructor makes them
@@ -604,6 +694,7 @@ RxChannel* WdspEngine::createRxChannel(int channelId,
         return ptr;
     }
 
+    std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
 #ifdef HAVE_WDSP
     openRxChannelWdsp(channelId, inputBufferSize, dspBufferSize,
                       inputSampleRate, dspSampleRate, outputSampleRate);
@@ -709,6 +800,7 @@ void WdspEngine::destroyRxChannel(int channelId)
         // wrapper is deleted back on this thread once nothing can reach it.
         std::shared_ptr<RxChannel> channel(std::move(owned));
         m_rxLane->postBarrier([this, channel, channelId]() mutable {
+            std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
             const std::function<void()> release = quiesceRxWorker();
             channel->markRetired();
 #ifdef HAVE_WDSP
@@ -736,6 +828,7 @@ void WdspEngine::destroyRxChannel(int channelId)
         return;
     }
 
+    std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
 #ifdef HAVE_WDSP
     // Deactivate with drain
     SetChannelState(channelId, 0, 1);
@@ -1046,6 +1139,7 @@ qint64 WdspEngine::rebuildRxChannel(int channelId, const ChannelConfig& cfg)
             m_rxChannels.emplace(channelId, std::move(channel));
         }
         m_rxLane->postBarrier([this, retired, ptr, channelId, cfg]() mutable {
+            std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
             const std::function<void()> release = quiesceRxWorker();
             retired->markRetired();
 #ifdef HAVE_WDSP
@@ -1083,6 +1177,7 @@ qint64 WdspEngine::rebuildRxChannel(int channelId, const ChannelConfig& cfg)
         return elapsedMs;
     }
 
+    std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
 #ifdef HAVE_WDSP
     // Deactivate with drain before closing (mirrors destroyRxChannel).
     SetChannelState(channelId, 0, 1);
@@ -1186,6 +1281,7 @@ bool WdspEngine::setRxChannelRate(int channelId, int newRateHz)
 
 void WdspEngine::applyRateOnLane(RxChannel* ch, int rateHz, int bufferSize)
 {
+    std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
     // The wrapper's WDSP half first (pending stop, NB rate, notch-width
     // readout), as RxChannel::setSampleRate always ran ahead of the channel
     // calls below.
@@ -1345,6 +1441,15 @@ void WdspEngine::drainReceiveLane()
     m_rxLane->stop();
     m_rxLane->start();
     reapRetiredRxChannels();
+}
+
+void WdspEngine::runLifecycleSerialized(const std::function<void()>& work)
+{
+    if (!work) {
+        return;
+    }
+    std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
+    work();
 }
 
 // ---------------------------------------------------------------------------
@@ -1678,7 +1783,9 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
     // there as one barrier (below); the wrapper exists at once and keeps the
     // TX worker out until the barrier has opened the channel.
     const bool onLane = (m_txLane != nullptr && !m_txLane->isCurrentThread());
+    std::unique_lock<std::recursive_mutex> directLifecycle;
     if (!onLane) {
+        directLifecycle = std::unique_lock<std::recursive_mutex>(m_wdspLifecycleMutex);
         openTxChannelWdsp(channelId, inputBufferSize, dspBufferSize,
                           inputSampleRate, dspSampleRate, outputSampleRate, dexpBuf);
     }
@@ -1761,6 +1868,7 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
         // siphon, then the worker may run blocks through the channel.
         m_txLane->postBarrier([this, raw, channelId, inputBufferSize, dspBufferSize,
                                inputSampleRate, dspSampleRate, outputSampleRate, dexpBuf]() {
+            std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
             // Runs even for a wrapper retired meanwhile: the destroy or
             // rebuild barrier queued after this one closes what it opens.
             openTxChannelWdsp(channelId, inputBufferSize, dspBufferSize,
@@ -1805,6 +1913,7 @@ void WdspEngine::destroyTxChannel(int channelId)
             m_dexpBuffers.erase(bufIt);
         }
         m_txLane->postBarrier([this, channel, buffer, channelId]() mutable {
+            std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
             channel->quiesceWorkerOnLane();
             channel->markRetired();
             // R-R3-39: a TX cycle still running when the channel goes
@@ -1833,6 +1942,7 @@ void WdspEngine::destroyTxChannel(int channelId)
         return;
     }
 
+    std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
 #ifdef HAVE_WDSP
     // Deactivate with drain before closing.
     // dmode=1: drain-mode close (mirrors destroyRxChannel pattern).
@@ -1902,7 +2012,8 @@ void WdspEngine::openPsFeedbackChannel()
 
 #ifdef HAVE_WDSP
     // R-R3-39: on the receive lane when there is one, as a barrier.
-    auto open = [=]() {
+    auto open = [this]() {
+        std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
         // From Thetis cmaster.c:72-86 (create_rcvr OpenChannel call) [v2.10.3.13]
         OpenChannel(
             kPsFeedbackChannelId,
@@ -1950,7 +2061,8 @@ void WdspEngine::closePsFeedbackChannel()
 
 #ifdef HAVE_WDSP
     // R-R3-39: on the receive lane when there is one, as a barrier.
-    auto close = []() {
+    auto close = [this]() {
+        std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
         // Deactivate with drain before closing.  dmode=1: drain-mode close
         // (mirrors destroyRxChannel pattern at WdspEngine.cpp:381).
         SetChannelState(kPsFeedbackChannelId, 0, 1);
@@ -2086,6 +2198,7 @@ qint64 WdspEngine::rebuildTxChannel(int channelId, const ChannelConfig& cfg)
         m_txChannels.emplace(channelId, std::move(channel));
 
         m_txLane->postBarrier([this, old, ptr, channelId, reopen]() mutable {
+            std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
             old->quiesceWorkerOnLane();
             // R-R3-39: the old wrapper was retired at once, so a cycle-stop
             // destroy still queued for it is skipped; free its TCI
@@ -2119,6 +2232,7 @@ qint64 WdspEngine::rebuildTxChannel(int channelId, const ChannelConfig& cfg)
         return elapsedMs;
     }
 
+    std::lock_guard<std::recursive_mutex> lifecycle(m_wdspLifecycleMutex);
 #ifdef HAVE_WDSP
     // Deactivate with drain before closing (mirrors destroyTxChannel).
     // dmode=1: drain-mode close per Thetis console.cs:29607 [v2.10.3.13].

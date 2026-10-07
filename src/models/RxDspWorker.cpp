@@ -1241,6 +1241,12 @@ bool RxDspWorker::processSliceChunk(int sliceIdx, float* inI, float* inQ,
     rxCh->processIq(inI, inQ,
                     outI.data(), outQ.data(), inSize, outSize);
 
+    // SQ4KOU diagnostic build: point 1 is the WDSP output itself, before
+    // RADE replacement, MasterMixer, master volume or output backend.
+    if (sliceIdx == 0) {
+        m_audioEngine->observeRxWdspOutput(sliceIdx, outI.data(), outSize);
+    }
+
     // ── Phase 3R K-bench (source-first reframe): RADE RX fork
     //
     // freedv-gui (RADEReceiveStep.cpp:175-310 [@77e793a]) and

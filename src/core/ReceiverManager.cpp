@@ -86,10 +86,64 @@
 #include <QThread>
 #include <QPointer>
 
+#include <atomic>
+#include <cmath>
+
 #include "codec/IP1Codec.h"
 #include "codec/IP2Codec.h"
 
 namespace NereusSDR {
+
+namespace {
+
+bool rxPathTraceEnabled()
+{
+    static const bool enabled = [] {
+        bool ok = false;
+        const int value = qEnvironmentVariableIntValue("NEREUS_RX_TRACE", &ok);
+        return ok && value != 0;
+    }();
+    return enabled;
+}
+
+void traceP1RawIq(int hwReceiverIndex, const QVector<float>& samples)
+{
+    static std::atomic<quint64> sequence{0};
+    const quint64 seq = sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    const int count = samples.size() / 2;
+    int nonFinite = (samples.size() & 1) ? 1 : 0;
+    double sumSq = 0.0;
+    double peak = 0.0;
+
+    for (int n = 0; n < count * 2; ++n) {
+        const double v = samples[n];
+        if (!std::isfinite(v)) {
+            ++nonFinite;
+            continue;
+        }
+        const double a = std::fabs(v);
+        if (a > peak) {
+            peak = a;
+        }
+        sumSq += v * v;
+    }
+
+    const double rms = count > 0
+        ? std::sqrt(sumSq / static_cast<double>(count * 2))
+        : 0.0;
+    if (nonFinite != 0 || seq <= 4 || (seq % 128) == 0) {
+        qCInfo(lcReceiver).nospace()
+            << "RXTRACE p1.raw hw=" << hwReceiverIndex
+            << " seq=" << seq
+            << " n=" << count
+            << " rms=" << rms
+            << " peak=" << peak
+            << " nonfinite=" << nonFinite;
+    }
+}
+
+} // namespace
 
 const ReceiverConfig ReceiverManager::kInvalidConfig{};
 
@@ -392,6 +446,10 @@ void ReceiverManager::setAdcForReceiver(int receiverIndex, int adcIndex)
 
 void ReceiverManager::feedIqData(int hwReceiverIndex, const QVector<float>& samples)
 {
+    if (m_p1Codec != nullptr && rxPathTraceEnabled()) {
+        traceP1RawIq(hwReceiverIndex, samples);
+    }
+
     // Lever 2 (2026-05-24): this function now runs on the Connection thread
     // via Qt::DirectConnection from RadioConnection::iqDataReceived (see the
     // wire-up in RadioModel.cpp).  Main-thread writers of m_hwToLogical /

@@ -213,15 +213,19 @@ namespace NereusSDR { class PipeWireThreadLoop; }
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <vector>
 #include <functional>
 #include <memory>
 #include <mutex>
 
+class QTimer;
+
 namespace NereusSDR {
 
 class RadioModel;
 class SliceModel;
+class PortAudioBus;
 
 // Synchronous observer for the final receiver master mix.  `samples` is
 // borrowed interleaved stereo float32 and is valid only for the duration of
@@ -780,6 +784,11 @@ public:
     // A's demod output alone; see the note at the bottom of RxDspWorker's
     // drain loop.
     void rxBlockReady(int sliceId, const float* samples, int frames);
+
+    // SQ4KOU RX-audio diagnostic build: point 1, immediately after
+    // RxChannel::processIq and before RADE/mixer routing. Only slice 0 is
+    // recorded by the caller. Passive counters only; no logging here.
+    void observeRxWdspOutput(int sliceId, const float* samples, int frames) noexcept;
 
     /// TX-monitor block consumer. Called via Qt::DirectConnection from
     /// TxChannel::sip1OutputReady on the audio thread. When monitor is
@@ -1416,6 +1425,37 @@ private:
     // taps (slice control plan Task 6).
     void feedSliceTaps(int sliceId, const float* samples, int frames) noexcept;
     void skipSliceTaps(int sliceId, int frames) noexcept;
+
+    // SQ4KOU one-build RX audio tracer. Both stages are written only from
+    // the DSP thread. The owner-thread timer exchanges interval counters
+    // once per second and is the only place that logs.
+    struct AudioDiagStageCounters {
+        std::atomic<quint64> blocks{0};
+        std::atomic<quint64> frames{0};
+        std::atomic<quint64> samples{0};
+        std::atomic<quint64> nonFinite{0};
+        std::atomic<double>  squareSum{0.0};
+        std::atomic<float>   peak{0.0f};
+        std::atomic<float>   maxBoundaryStep{0.0f};
+        float lastL{0.0f};
+        float lastR{0.0f};
+        bool  haveLast{false};
+    };
+    void observeAudioDiagStage(AudioDiagStageCounters& stage,
+                               const float* samples, int frames) noexcept;
+    void logAudioDiagnostics();
+
+    AudioDiagStageCounters m_diagWdsp0;
+    AudioDiagStageCounters m_diagMasterMix;
+    QTimer* m_audioDiagTimer{nullptr};
+    std::chrono::steady_clock::time_point m_audioDiagLastLog{};
+    std::atomic<PortAudioBus*> m_speakersPortAudioDiag{nullptr};
+    PortAudioBus* m_audioDiagLastBus{nullptr};
+    quint32 m_audioDiagPrevRingOverrunEvents{0};
+    quint64 m_audioDiagPrevRingOverrunSamples{0};
+    quint32 m_audioDiagPrevRingUnderrunEvents{0};
+    quint32 m_audioDiagPrevPaUnderflows{0};
+    quint32 m_audioDiagPrevPaOverflows{0};
 
 #ifdef NEREUS_BUILD_TESTS
     std::function<void()> m_withdrawalPublishedHookForTest;

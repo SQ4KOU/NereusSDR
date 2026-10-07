@@ -260,6 +260,56 @@ PORT void WDSPSetTestHoldLoadPair (int channel, int hold);
 // from it without the load counters. Never call it in production code.
 PORT void WDSPSetTestBlockHook (void (*hook) (int channel, long long startNs, long long endNs));
 
+// RX path diagnostic hook. This is deliberately independent of the older
+// test-only exchange hook below: it can observe a live receive path without
+// changing scheduling or taking a WDSP lock. When no hook is installed each
+// trace point is one pointer load + null test.
+//
+// Layouts:
+//   FLOAT_SPLIT        data0=float I[count], data1=float Q[count]
+//   DOUBLE_INTERLEAVED data0=double {I,Q}[count], data1 is null
+//
+// Stages reflect the actual WDSP pipeline. R2_WRITE for worker block N contains
+// the rxa.outbuff produced by worker block N-1 because dexchange() writes the
+// previous output before xrxa() produces the next one.
+enum
+{
+	WDSP_RX_TRACE_FEXCHANGE_IN = 1,
+	WDSP_RX_TRACE_RXA_OUT = 2,
+	WDSP_RX_TRACE_R2_WRITE = 3,
+	WDSP_RX_TRACE_FEXCHANGE_OUT = 4
+};
+
+enum
+{
+	WDSP_RX_TRACE_FLOAT_SPLIT = 1,
+	WDSP_RX_TRACE_DOUBLE_INTERLEAVED = 2
+};
+
+typedef void (*WdspRxTraceHookFn) (
+	int channel, int stage, int layout,
+	const void* data0, const void* data1, int count);
+
+PORT void WDSPSetRxTraceHook (WdspRxTraceHookFn hook);
+
+extern WdspRxTraceHookFn volatile wdsp_rx_trace_hook;
+
+static __inline void WdspRxTrace (
+	int channel, int stage, int layout,
+	const void* data0, const void* data1, int count)
+{
+#ifdef _WIN32
+	const WdspRxTraceHookFn hook = wdsp_rx_trace_hook;
+#else
+	const WdspRxTraceHookFn hook =
+		__atomic_load_n (&wdsp_rx_trace_hook, __ATOMIC_ACQUIRE);
+#endif
+	if (hook != 0)
+	{
+		hook (channel, stage, layout, data0, data1, count);
+	}
+}
+
 // Test-only: install (or, with 0, remove) a function iobuffs.c's dexchange
 // calls on the channel worker right after it releases Sem_OutReady (the
 // tokens that let fexchange0's caller run on). A test that blocks in it holds
