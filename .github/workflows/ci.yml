@@ -918,10 +918,13 @@ jobs:
         if: runner.os != 'Windows'
         run: cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
-      - name: Build (Windows)
+      # Build and run the isolated WDSP gate before the full Windows app.
+      # This prevents an unrelated Qt/application compile failure from hiding
+      # the WDSP/FFTW result we need for receive-path fault isolation.
+      - name: Build Windows linked WDSP self-test
         if: runner.os == 'Windows'
         shell: bash
-        run: cmake --build build -j$NUMBER_OF_PROCESSORS
+        run: cmake --build build -j$NUMBER_OF_PROCESSORS --target wdsp_windows_selftest
 
       # Linked WDSP/FFTW gate. This binary has no Qt, radio protocol,
       # MasterMixer or PortAudio dependency; a failure here is therefore
@@ -930,6 +933,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: ./build/wdsp_windows_selftest.exe
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cmake --build build -j$NUMBER_OF_PROCESSORS
 
       # R-R3-21 follow-up from the 2026-09-24 checkpoint. The Linux build
       # above has NEREUS_BUILD_TESTS=ON. The macOS and Windows jobs already
