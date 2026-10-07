@@ -1836,6 +1836,11 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
                                       m_txLane, nullptr)
         : std::make_unique<TxChannel>(channelId, inputBufferSize, outputBufferSize, nullptr);
     TxChannel* raw = wrapper.get();
+    // The TX hot path (pumpDexp + fexchange0) uses the engine-wide WDSP
+    // lifecycle gate.  Without wiring this pointer the serialization code
+    // silently falls back to direct WDSP calls and can race structural FFTW
+    // replans on the transmit lane.
+    raw->setWdspEngine(this);
 
     // Phase 3M-3a-iii Task 20: hand the wrapper a non-owning pointer to the
     // per-channel DEXP buffer so TxChannel::pumpDexp has a valid destination
@@ -2208,6 +2213,7 @@ qint64 WdspEngine::rebuildTxChannel(int channelId, const ChannelConfig& cfg)
         auto channel = std::make_unique<TxChannel>(channelId, cfg.bufferSize,
                                                    outputBufferSize, m_txLane, this);
         TxChannel* ptr = channel.get();
+        ptr->setWdspEngine(this);
         m_txChannels.emplace(channelId, std::move(channel));
 
         m_txLane->postBarrier([this, old, ptr, channelId, reopen]() mutable {
@@ -2267,6 +2273,7 @@ qint64 WdspEngine::rebuildTxChannel(int channelId, const ChannelConfig& cfg)
     auto channel = std::make_unique<TxChannel>(channelId, cfg.bufferSize,
                                                outputBufferSize, this);
     TxChannel* ptr = channel.get();
+    ptr->setWdspEngine(this);
     m_txChannels.emplace(channelId, std::move(channel));
 
     // Reapply captured DSP state to the new channel.
