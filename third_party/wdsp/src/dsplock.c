@@ -177,6 +177,9 @@ static const int64_t kWorkerExitFastPollUs = 5000;
 // The caller check (see dsplock.h); 0 = none.
 WdspCallerCheckHook volatile wdsp_caller_check_hook = 0;
 
+// RX path diagnostic hook (WDSPSetRxTraceHook), 0 when none.
+WdspRxTraceHookFn volatile wdsp_rx_trace_hook = 0;
+
 // Test-only exchange hook (WDSPSetTestExchangeHook), 0 when none.
 WdspTestExchangeHookFn volatile wdsp_test_exchange_hook = 0;
 
@@ -775,6 +778,16 @@ long long TakeChannelDspIntervalMaxBlockUs (int channel)
 		return -1;
 	}
 	return load_exchange64 (&load_interval_max_us[channel], 0);
+}
+
+PORT
+void WDSPSetRxTraceHook (WdspRxTraceHookFn hook)
+{
+#ifdef _WIN32
+	InterlockedExchangePointer ((PVOID volatile*)&wdsp_rx_trace_hook, (PVOID)hook);
+#else
+	__atomic_store_n (&wdsp_rx_trace_hook, hook, __ATOMIC_RELEASE);
+#endif
 }
 
 PORT
