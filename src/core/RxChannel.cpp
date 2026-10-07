@@ -441,15 +441,23 @@ void RxChannel::setControlLane(DspControlThread* lane)
 void RxChannel::runKeyed(quint64 parameter, int sub, std::function<void()> job) const
 {
     if (m_lane == nullptr || m_lane->isCurrentThread()) {
-        job();
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(job);
+        } else {
+            job();
+        }
         return;
     }
     const quint64 key = parameter
         ^ (static_cast<quint64>(static_cast<quint32>(m_channelId) + 1u) * 0x9E3779B97F4A7C15ull)
         ^ (static_cast<quint64>(static_cast<quint32>(sub)) << 17);
-    m_lane->postKeyed(key, [alive = m_alive, job = std::move(job)]() {
+    m_lane->postKeyed(key, [this, alive = m_alive, job = std::move(job)]() {
         if (alive->load(std::memory_order_acquire)) {
-            job();
+            if (m_wdspEngine) {
+                m_wdspEngine->runLifecycleSerialized(job);
+            } else {
+                job();
+            }
         }
     });
 }
@@ -457,12 +465,20 @@ void RxChannel::runKeyed(quint64 parameter, int sub, std::function<void()> job) 
 void RxChannel::runOrdered(std::function<void()> job) const
 {
     if (m_lane == nullptr || m_lane->isCurrentThread()) {
-        job();
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(job);
+        } else {
+            job();
+        }
         return;
     }
-    m_lane->post([alive = m_alive, job = std::move(job)]() {
+    m_lane->post([this, alive = m_alive, job = std::move(job)]() {
         if (alive->load(std::memory_order_acquire)) {
-            job();
+            if (m_wdspEngine) {
+                m_wdspEngine->runLifecycleSerialized(job);
+            } else {
+                job();
+            }
         }
     });
 }
@@ -2950,8 +2966,19 @@ void RxChannel::processIq(float* inI, float* inQ,
     }
 
     // Main WDSP processing: demod, AGC, NR, ANF, filter, EQ, audio panel.
+    // Serialize the hot-path exchange against RX control/lifecycle mutations.
+    // WDSP 2.10 mutates channel internals in many setters; allowing the
+    // receive-control lane to execute those concurrently with fexchange2
+    // can expose partially rebuilt state and produce NaN/Inf audio.
     int error = 0;
-    fexchange2(m_channelId, inI, inQ, outI, outQ, &error);
+    const auto exchange = [this, inI, inQ, outI, outQ, &error]() {
+        fexchange2(m_channelId, inI, inQ, outI, outQ, &error);
+    };
+    if (m_wdspEngine) {
+        m_wdspEngine->runLifecycleSerialized(exchange);
+    } else {
+        exchange();
+    }
 
     if (error != 0) {
         qCWarning(lcDsp) << "fexchange2 error on channel"
