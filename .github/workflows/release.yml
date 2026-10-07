@@ -3,6 +3,9 @@ name: Release
 on:
   push:
     tags: ['v*']
+    branches: [diag/wdsp-rxa-stage-trace]
+    paths:
+      - '.github/workflows/release.yml'
   workflow_dispatch:
     inputs:
       tag:
