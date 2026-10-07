@@ -2531,13 +2531,17 @@ if(NEREUS_WDSP_WINDOWS_SELFTEST)
     target_include_directories(wdsp_windows_selftest PRIVATE ${FFTW3_INCLUDE_DIRS})
     target_compile_definitions(wdsp_windows_selftest PRIVATE WDSP_STATIC_BUILD)
 
-    # The fftw.org Windows package is a DLL. Put the exact linked DLL beside
-    # the self-test so the Windows loader does not find a different system copy.
+    # The fftw.org Windows package supplies both double- and single-precision
+    # runtimes. wdsp_static links libfftw3-3.dll directly, while retained NR
+    # dependencies also pull in libfftw3f-3.dll. Keep both beside the isolated
+    # self-test so loader failures cannot be mistaken for DSP failures.
     if(FFTW3_DLL)
         add_custom_command(TARGET wdsp_windows_selftest POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${FFTW3_DLL}" "$<TARGET_FILE_DIR:wdsp_windows_selftest>"
-            COMMENT "Copying linked FFTW DLL beside WDSP Windows self-test")
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${FFTW3_ROOT}/bin/libfftw3f-3.dll" "$<TARGET_FILE_DIR:wdsp_windows_selftest>"
+            COMMENT "Copying FFTW runtimes beside WDSP Windows self-test")
     endif()
 endif()
 
