@@ -1126,6 +1126,19 @@ void TxChannel::setDexpBuffer(double* dexpBuf, std::size_t sizeDoubles)
 // ---------------------------------------------------------------------------
 void TxChannel::pumpDexp(const double* interleavedIn)
 {
+    // Do not enter WDSP's DEXP/FFT path while the transmitter is idle and
+    // VOX listening is disabled.  TxWorkerThread drains radio-mic cadence
+    // continuously even on RX; before this guard every RX-only mic block
+    // still ran xdexp(), despite driveOneTxBlockFromInterleaved() correctly
+    // refusing fexchange0 when neither MOX nor VOX was active.  Hardware
+    // crash dumps show the idle RX-startup failure on TxWorkerThread inside
+    // the FFTW/heap path.  DEXP is needed only for an active TX block or
+    // while VOX is explicitly listening.
+    if (!m_running.load(std::memory_order_acquire)
+        && !m_voxListening.load(std::memory_order_acquire)) {
+        return;
+    }
+
     if (interleavedIn == nullptr || m_dexpBuffer == nullptr ||
         m_dexpBufferSizeDoubles == 0) {
         return;
