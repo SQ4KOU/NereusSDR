@@ -286,7 +286,7 @@ static int validate_case(int input_rate)
     float* out_i = NULL;
     float* out_q = NULL;
     double phase = 0.0;
-    const double step = -2.0 * M_PI * 1000.0 / (double)input_rate;
+    const double step = +2.0 * M_PI * 1000.0 / (double)input_rate;
     int error = 0;
     int failures = 0;
     int k, n;
@@ -312,7 +312,7 @@ static int validate_case(int input_rate)
         goto done;
     }
 
-    printf("WDSP_SELFTEST case input_rate=%d in_size=%d dsp_size=%d\n",
+    printf("WDSP_SELFTEST case input_rate=%d in_size=%d dsp_size=%d tone_hz=+1000 lsb_passband=-2850..-150\n",
            input_rate, in_size, dsp_size);
 
     WDSPSetRxTraceHook(rx_trace_hook);
