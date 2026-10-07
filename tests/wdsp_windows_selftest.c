@@ -6,6 +6,9 @@
  * Windows application and feeds a deterministic complex tone through a real
  * RXA channel. The WDSP RX trace tap checks every observed block at:
  *   fexchange2 input -> rxa.outbuff after xrxa -> r2 write -> fexchange2 out.
+ *
+ * Independently implemented from RXA.h interface; this file contains no
+ * ported Thetis implementation code.
  */
 
 #include <math.h>
