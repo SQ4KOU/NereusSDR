@@ -351,6 +351,15 @@ static int validate_case(int input_rate, int p1_wire)
     SetRXAAGCTop(channel, 80.0);
     SetRXAPanelGain1(channel, 1.0);
     SetRXAPanelBinaural(channel, 0);
+
+    /* Reproduce the application startup path exactly enough to cover the
+       regression seen on hardware: RXA is opened with the 4096-sample DSP
+       block, then Phone-mode DSP options shrink the live WDSP block to 64
+       before receive exchange starts.  The previous self-test never made
+       this SetDSPBuffsize transition, so it could not exercise the failing
+       rsmpout state. */
+    SetDSPBuffsize(channel, 64);
+
     SetChannelState(channel, 1, 0);
 
     for (k = 0; k < exchanges; ++k) {
