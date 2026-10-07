@@ -273,7 +273,31 @@ static void rx_trace_hook(int channel, int stage, int layout,
         fail_block(stage, seq, "periodic-pattern", rms, peak, period_error);
 }
 
-static int validate_case(int input_rate)
+static float p1_wire_roundtrip(double sample)
+{
+    /* Protocol 1 EP6 RX I/Q is signed 24-bit big-endian.  Mirror the exact
+       production scaleSample24 contract: quantize to [-2^23,2^23-1], emit
+       BE24, sign-extend, then divide by 2^23.  This deliberately inserts the
+       P1 wire quantization boundary ahead of fexchange2 without a radio. */
+    long v = lround(sample * 8388608.0);
+    unsigned char be[3];
+    int32_t decoded;
+    if (v > 8388607L) v = 8388607L;
+    if (v < -8388608L) v = -8388608L;
+    {
+        uint32_t u = (uint32_t)((int32_t)v) & 0x00ffffffu;
+        be[0] = (unsigned char)((u >> 16) & 0xffu);
+        be[1] = (unsigned char)((u >> 8) & 0xffu);
+        be[2] = (unsigned char)(u & 0xffu);
+    }
+    decoded = ((int32_t)be[0] << 24)
+            | ((int32_t)be[1] << 16)
+            | ((int32_t)be[2] << 8);
+    decoded >>= 8;
+    return (float)decoded / 8388608.0f;
+}
+
+static int validate_case(int input_rate, int p1_wire)
 {
     const int channel = 20;
     const int dsp_rate = 48000;
@@ -331,8 +355,12 @@ static int validate_case(int input_rate)
 
     for (k = 0; k < exchanges; ++k) {
         for (n = 0; n < in_size; ++n) {
-            in_i[n] = (float)(g_input_amplitude * cos(phase));
-            in_q[n] = (float)(g_input_amplitude * sin(phase));
+            {
+                const double vi = g_input_amplitude * cos(phase);
+                const double vq = g_input_amplitude * sin(phase);
+                in_i[n] = p1_wire ? p1_wire_roundtrip(vi) : (float)vi;
+                in_q[n] = p1_wire ? p1_wire_roundtrip(vq) : (float)vq;
+            }
             phase += step;
             if (phase < -M_PI)
                 phase += 2.0 * M_PI;
@@ -391,8 +419,10 @@ int main(void)
        Windows application, but no application code is linked here. */
     fftw_make_planner_thread_safe();
 
-    failed |= validate_case(48000);
-    failed |= validate_case(192000);
+    failed |= validate_case(48000, 0);
+    failed |= validate_case(192000, 0);
+    failed |= validate_case(48000, 1);
+    failed |= validate_case(192000, 1);
 
     if (failed) {
         fprintf(stderr, "WDSP_SELFTEST RESULT=FAIL\n");
