@@ -536,6 +536,16 @@ void TXASetMP(int channel, int mp);
 void fexchange2(int channel, float* Iin, float* Qin,
                 float* Iout, float* Qout, int* error);
 
+// Receive-path diagnostic tap exported by the vendored WDSP layer.
+// stage: 1=fexchange2 input, 2=rxa.outbuff after xrxa,
+//        3=r2 pseudo-ring write, 4=fexchange2 Iout/Qout.
+// layout: 1=split float I/Q, 2=interleaved double I/Q.
+// The hook must not call back into WDSP. With no hook installed, every tap
+// is only a pointer load plus null test.
+void WDSPSetRxTraceHook(void (*hook)(int channel, int stage, int layout,
+                                    const void* data0, const void* data1,
+                                    int count));
+
 // Phase 3M-1c TX pump v3 — fexchange0 (interleaved double I/Q).
 // Used by TxChannel since v3 to mirror Thetis cmaster.c:389 [v2.10.3.13]
 // callsite exactly.  The `in` buffer is 2 * in_size doubles (I0,Q0,I1,…),
