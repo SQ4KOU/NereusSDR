@@ -206,7 +206,7 @@ jobs:
           <?xml version="1.0" encoding="UTF-8"?>
           <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
             <Product Id="*" Name="NereusSDR SQ4KOU TEST" Language="1045"
-                     Version="0.5.2.2" Manufacturer="SQ4KOU"
+                     Version="0.5.99.1" Manufacturer="SQ4KOU"
                      UpgradeCode="E63F5B10-94F6-4C0B-AE5A-96F72DE52A31">
               <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"
                        Platform="x64" Description="NereusSDR SQ4KOU fast test build"/>
