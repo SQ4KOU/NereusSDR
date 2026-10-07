@@ -926,13 +926,35 @@ jobs:
         shell: bash
         run: cmake --build build -j$NUMBER_OF_PROCESSORS --target wdsp_windows_selftest
 
+      # Show the exact PE import set and make the compiler runtime used to
+      # link the target available to the Windows loader. The FFTW DLL itself is
+      # copied beside the executable by CMake. This step prevents a loader 127
+      # from being misclassified as a DSP self-test failure.
+      - name: Inspect Windows WDSP self-test imports
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          CC_PATH=$(grep '^CMAKE_C_COMPILER:FILEPATH=' build/CMakeCache.txt | cut -d= -f2-)
+          TOOLBIN=$(dirname "$CC_PATH")
+          echo "C compiler: $CC_PATH"
+          echo "Toolchain bin: $TOOLBIN"
+          "$TOOLBIN/objdump.exe" -p ./build/wdsp_windows_selftest.exe \
+            | grep -E 'DLL Name|ImageBase|Subsystem'
+          echo "Runtime DLLs present in toolchain:"
+          ls -1 "$TOOLBIN"/*.dll 2>/dev/null | sed -n '1,80p' || true
+          echo "DLLs beside self-test:"
+          ls -1 ./build/*.dll 2>/dev/null || true
+          echo "WDSP_TOOLBIN=$TOOLBIN" >> "$GITHUB_ENV"
+
       # Linked WDSP/FFTW gate. This binary has no Qt, radio protocol,
-      # MasterMixer or PortAudio dependency; a failure here is therefore
-      # inside WDSP/FFTW/Windows synchronization or its pseudo-ring path.
+      # MasterMixer or PortAudio dependency; a failure after main() starts is
+      # therefore inside WDSP/FFTW/Windows synchronization or its pseudo-ring.
       - name: Windows linked WDSP self-test
         if: runner.os == 'Windows'
         shell: bash
-        run: ./build/wdsp_windows_selftest.exe
+        run: |
+          export PATH="$WDSP_TOOLBIN:$PATH"
+          ./build/wdsp_windows_selftest.exe
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
