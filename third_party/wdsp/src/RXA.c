@@ -31,6 +31,14 @@ warren@wpratt.com
 // destroy, xrxa, setSamplerate, setBuffers and setSize), includes nnr, rnnr
 // and sbnr in the bpsnba check, and RXAbp1Check reads the stage run states
 // itself from the channel.
+//
+// NereusSDR modification (2026-10-07, SQ4KOU audio regression repair):
+// when DSP and output rates are equal, xrxa copies the canonical current
+// midbuff directly to the canonical current outbuff instead of routing the
+// no-op case through RESAMPLE's cached in/out pointers. The live RX trace
+// proved the signal finite through panel and corrupt only at the final output
+// boundary after a 4096->64 live DSP-buffer resize. Real rate conversion
+// remains on the upstream xresample path unchanged.
 
 #include "comm.h"
 
@@ -711,7 +719,19 @@ void xrxa (int channel)
 	xpanel (rxa[channel].panel.p);
 	WdspRxTrace(channel, WDSP_RX_TRACE_AFTER_PANEL, WDSP_RX_TRACE_DOUBLE_INTERLEAVED, rxa[channel].midbuff, 0, ch[channel].dsp_size);
 	xamsq (rxa[channel].amsq.p);
-	xresample (rxa[channel].rsmpout.p);
+	if (ch[channel].dsp_rate == ch[channel].out_rate)
+	{
+		// No rate conversion is required. Use RXA's canonical buffers here,
+		// rather than RESAMPLE's cached aliases, so a live DSP-buffer resize
+		// cannot leave the final copy dependent on stale resampler pointers.
+		// This is the exact no-resample operation xresample() intends to do.
+		memcpy (rxa[channel].outbuff, rxa[channel].midbuff,
+			ch[channel].dsp_outsize * sizeof (complex));
+	}
+	else
+	{
+		xresample (rxa[channel].rsmpout.p);
+	}
 	WdspRxTrace(channel, WDSP_RX_TRACE_AFTER_RSMP_OUT, WDSP_RX_TRACE_DOUBLE_INTERLEAVED, rxa[channel].outbuff, 0, ch[channel].dsp_outsize);
 }
 
