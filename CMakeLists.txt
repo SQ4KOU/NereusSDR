@@ -2503,6 +2503,35 @@ if(WDSP_FOUND)
     add_subdirectory(third_party/wdsp)
 endif()
 
+# Standalone Windows diagnostic gate: deliberately not part of
+# NEREUS_BUILD_TESTS, because that suite brings Qt/application fakes into the
+# experiment. This executable links only wdsp_static and its transitive
+# dependencies (not NereusCore, Qt, RadioConnection, MasterMixer or PortAudio).
+option(NEREUS_WDSP_WINDOWS_SELFTEST
+    "Build isolated linked WDSP receive self-test on Windows" OFF)
+if(NEREUS_WDSP_WINDOWS_SELFTEST)
+    if(NOT WIN32)
+        message(FATAL_ERROR "NEREUS_WDSP_WINDOWS_SELFTEST is Windows-only")
+    endif()
+    if(NOT TARGET wdsp_static)
+        message(FATAL_ERROR "NEREUS_WDSP_WINDOWS_SELFTEST requires wdsp_static")
+    endif()
+
+    add_executable(wdsp_windows_selftest tests/wdsp_windows_selftest.c)
+    target_link_libraries(wdsp_windows_selftest PRIVATE wdsp_static)
+    target_include_directories(wdsp_windows_selftest PRIVATE ${FFTW3_INCLUDE_DIRS})
+    target_compile_definitions(wdsp_windows_selftest PRIVATE WDSP_STATIC_BUILD)
+
+    # The fftw.org Windows package is a DLL. Put the exact linked DLL beside
+    # the self-test so the Windows loader does not find a different system copy.
+    if(FFTW3_DLL)
+        add_custom_command(TARGET wdsp_windows_selftest POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${FFTW3_DLL}" "$<TARGET_FILE_DIR:wdsp_windows_selftest>"
+            COMMENT "Copying linked FFTW DLL beside WDSP Windows self-test")
+    endif()
+endif()
+
 # --------------------------------------------------------------------------
 # RADE neural codec for FreeDV digital voice (Phase 3R)
 # License: BSD 2-Clause (radae_nopy at b2891023f3aecdf8b1793618000b1be6bcb2c4d1)
