@@ -154,6 +154,15 @@ const char* rxTraceStageName(int stage)
     case 2: return "rxa.out.after_xrxa";
     case 3: return "r2.write";
     case 4: return "fexchange2.out";
+    case 5: return "rxa.after_hb";
+    case 6: return "rxa.after_nbp";
+    case 7: return "rxa.after_demod";
+    case 8: return "rxa.after_nr0";
+    case 9: return "rxa.after_bp0";
+    case 10: return "rxa.after_agc";
+    case 11: return "rxa.after_bp1";
+    case 12: return "rxa.after_panel";
+    case 13: return "rxa.after_rsmp_out";
     default: return "unknown";
     }
 }
@@ -161,12 +170,12 @@ const char* rxTraceStageName(int stage)
 void wdspRxPathTraceHook(int channel, int stage, int layout,
                          const void* data0, const void* data1, int count)
 {
-    if (channel < 0 || channel >= 32 || stage < 1 || stage > 4
+    if (channel < 0 || channel >= 32 || stage < 1 || stage > 13
         || data0 == nullptr || count <= 0) {
         return;
     }
 
-    static std::atomic<quint64> sequence[32][5]{};
+    static std::atomic<quint64> sequence[32][14]{};
     const quint64 seq =
         sequence[channel][stage].fetch_add(1, std::memory_order_relaxed) + 1;
 
@@ -239,7 +248,7 @@ WdspEngine::WdspEngine(QObject* parent)
     if (rxPathTraceEnabled()) {
         WDSPSetRxTraceHook(&wdspRxPathTraceHook);
         qCInfo(lcDsp)
-            << "RXTRACE enabled: fexchange2.in -> rxa.out -> r2 -> fexchange2.out";
+            << "RXTRACE enabled: fexchange2.in -> RXA internal stages -> rxa.out -> r2 -> fexchange2.out";
     }
     m_extDivCreate = &create_divEXT;
     m_extDivDestroy = &destroy_divEXT;
