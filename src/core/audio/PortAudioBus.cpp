@@ -47,6 +47,28 @@ namespace NereusSDR {
 
 namespace {
 
+template <typename T>
+void diagAtomicMax(std::atomic<T>& dst, T value)
+{
+    T current = dst.load(std::memory_order_relaxed);
+    while (current < value
+           && !dst.compare_exchange_weak(current, value,
+                                         std::memory_order_relaxed,
+                                         std::memory_order_relaxed)) {
+    }
+}
+
+template <typename T>
+void diagAtomicMin(std::atomic<T>& dst, T value)
+{
+    T current = dst.load(std::memory_order_relaxed);
+    while (current > value
+           && !dst.compare_exchange_weak(current, value,
+                                         std::memory_order_relaxed,
+                                         std::memory_order_relaxed)) {
+    }
+}
+
 // Resolve a PortAudio device index from a PortAudioConfig, with a robust
 // fallback chain. Returns paNoDevice if no suitable device exists on the
 // system. Fixes issue #112: the 0.2.2 IAudioBus refactor hard-coded
@@ -559,6 +581,46 @@ qint64 PortAudioBus::push(const char* data, qint64 bytes) {
     const qint64 ringSize = static_cast<qint64>(m_ring.size());
     qint64 w = m_ringWrite.load(std::memory_order_relaxed);
     const float* in = reinterpret_cast<const float*>(data);
+    const int channels = std::max(1, m_negFormat.channels);
+    const int frames = floatCount / channels;
+
+    // Passive point-3 telemetry: exact samples entering PortAudioBus.
+    // Local reduction first, then one small set of atomics per push.
+    double squareSum = 0.0;
+    float diagPeak = 0.0f;
+    quint64 nonFinite = 0;
+    for (int i = 0; i < floatCount; ++i) {
+        const float v = in[i];
+        if (!std::isfinite(v)) {
+            ++nonFinite;
+            continue;
+        }
+        squareSum += static_cast<double>(v) * static_cast<double>(v);
+        diagPeak = std::max(diagPeak, std::abs(v));
+    }
+    float boundaryStep = 0.0f;
+    if (frames > 0 && channels <= 2) {
+        if (m_diagPushHaveLast) {
+            boundaryStep = std::abs(in[0] - m_diagPushLastL);
+            if (channels == 2) {
+                boundaryStep = std::max(
+                    boundaryStep, std::abs(in[1] - m_diagPushLastR));
+            }
+        }
+        const int lastBase = (frames - 1) * channels;
+        m_diagPushLastL = in[lastBase];
+        m_diagPushLastR = (channels == 2) ? in[lastBase + 1] : in[lastBase];
+        m_diagPushHaveLast = true;
+    }
+    m_diagPushBlocks.fetch_add(1, std::memory_order_relaxed);
+    m_diagPushFrames.fetch_add(static_cast<quint64>(std::max(0, frames)),
+                               std::memory_order_relaxed);
+    m_diagPushSamples.fetch_add(static_cast<quint64>(std::max(0, floatCount)),
+                                std::memory_order_relaxed);
+    m_diagPushNonFinite.fetch_add(nonFinite, std::memory_order_relaxed);
+    m_diagPushSquareSum.fetch_add(squareSum, std::memory_order_relaxed);
+    diagAtomicMax(m_diagPushPeak, diagPeak);
+    diagAtomicMax(m_diagPushMaxBoundaryStep, boundaryStep);
 
     // Drop-oldest accounting: if this push would put the writer more than
     // one ring's worth ahead of the reader, the oldest unread samples
@@ -572,6 +634,10 @@ qint64 PortAudioBus::push(const char* data, qint64 bytes) {
     const qint64 discardBefore = m_outputDiscardBefore.load(std::memory_order_acquire);
     const qint64 readPos = std::max(publishedRead, discardBefore);
     const qint64 afterWrite = w + floatCount;
+    const int queuedFramesAfterPush = static_cast<int>(
+        std::clamp(afterWrite - readPos, qint64{0}, ringSize) / channels);
+    diagAtomicMin(m_diagPushMinQueuedFrames, queuedFramesAfterPush);
+    diagAtomicMax(m_diagPushMaxQueuedFrames, queuedFramesAfterPush);
     if (afterWrite - readPos > ringSize) {
         m_dropEvents.fetch_add(1, std::memory_order_relaxed);
         m_dropSamples.fetch_add(
@@ -623,6 +689,55 @@ void PortAudioBus::flush() {
         return;
     }
     m_ringRead.store(w, std::memory_order_release);
+}
+
+PortAudioBus::OutputDiagSnapshot PortAudioBus::takeOutputDiagSnapshot()
+{
+    OutputDiagSnapshot out;
+    out.pushBlocks = m_diagPushBlocks.exchange(0, std::memory_order_relaxed);
+    out.pushFrames = m_diagPushFrames.exchange(0, std::memory_order_relaxed);
+    out.pushSamples = m_diagPushSamples.exchange(0, std::memory_order_relaxed);
+    out.pushNonFinite = m_diagPushNonFinite.exchange(0, std::memory_order_relaxed);
+    out.pushSquareSum = m_diagPushSquareSum.exchange(0.0, std::memory_order_relaxed);
+    out.pushPeak = m_diagPushPeak.exchange(0.0f, std::memory_order_relaxed);
+    out.pushMaxBoundaryStep =
+        m_diagPushMaxBoundaryStep.exchange(0.0f, std::memory_order_relaxed);
+    const int pushMin =
+        m_diagPushMinQueuedFrames.exchange(kDiagMinUnset, std::memory_order_relaxed);
+    out.pushMinQueuedFrames = (pushMin == kDiagMinUnset) ? -1 : pushMin;
+    out.pushMaxQueuedFrames =
+        m_diagPushMaxQueuedFrames.exchange(0, std::memory_order_relaxed);
+
+    out.callbackCalls =
+        m_diagCallbackCalls.exchange(0, std::memory_order_relaxed);
+    out.callbackRequestedFrames =
+        m_diagCallbackRequestedFrames.exchange(0, std::memory_order_relaxed);
+    out.callbackSilentFrames =
+        m_diagCallbackSilentFrames.exchange(0, std::memory_order_relaxed);
+    const int cbMin =
+        m_diagCallbackMinQueuedFrames.exchange(kDiagMinUnset, std::memory_order_relaxed);
+    out.callbackMinQueuedFrames = (cbMin == kDiagMinUnset) ? -1 : cbMin;
+    out.callbackMaxQueuedFrames =
+        m_diagCallbackMaxQueuedFrames.exchange(0, std::memory_order_relaxed);
+    out.callbackQuantumFrames =
+        m_outputCallbackFrames.load(std::memory_order_relaxed);
+
+    out.sampleRate = m_negFormat.sampleRate;
+    out.channels = m_negFormat.channels;
+    out.ringCapacityFrames =
+        (m_negFormat.channels > 0)
+            ? static_cast<int>(m_ring.size() / static_cast<size_t>(m_negFormat.channels))
+            : 0;
+
+    // These remain cumulative; AudioEngine converts them to 1 Hz deltas.
+    out.ringOverrunEvents = m_dropEvents.load(std::memory_order_relaxed);
+    out.ringOverrunSamples = m_dropSamples.load(std::memory_order_relaxed);
+    out.ringUnderrunEvents = m_underrunEvents.load(std::memory_order_relaxed);
+    out.paOutputUnderflowEvents =
+        m_paOutputUnderflowEvents.load(std::memory_order_relaxed);
+    out.paOutputOverflowEvents =
+        m_paOutputOverflowEvents.load(std::memory_order_relaxed);
+    return out;
 }
 
 std::optional<IAudioBus::OutputPacing> PortAudioBus::outputPacing() const
@@ -765,6 +880,19 @@ int PortAudioBus::paCallback(const void* in, void* out,
         // a "dip" but long enough to mask the click that a hard jump or
         // silence-to-signal transition would otherwise produce.
         const int channels = self->m_negFormat.channels;
+        const int queuedFramesBeforeCallback =
+            channels > 0
+                ? static_cast<int>(
+                      std::clamp(w - r, qint64{0}, ringSize) / channels)
+                : 0;
+        self->m_diagCallbackCalls.fetch_add(1, std::memory_order_relaxed);
+        self->m_diagCallbackRequestedFrames.fetch_add(
+            static_cast<quint64>(frames), std::memory_order_relaxed);
+        diagAtomicMin(self->m_diagCallbackMinQueuedFrames,
+                      queuedFramesBeforeCallback);
+        diagAtomicMax(self->m_diagCallbackMaxQueuedFrames,
+                      queuedFramesBeforeCallback);
+
         float lastL = self->m_lastOutL;
         float lastR = self->m_lastOutR;
         int crossfadeRem = self->m_crossfadeFramesRem;
@@ -782,6 +910,7 @@ int PortAudioBus::paCallback(const void* in, void* out,
         }
 
         bool wasUnderrun = (r >= w);
+        quint64 diagSilentSamples = 0;
         // Track underrun leading edge so we count distinct events, not
         // every silent frame in a run.  Initial state (callback fired
         // with an empty ring) counts as one event.
@@ -806,6 +935,7 @@ int PortAudioBus::paCallback(const void* in, void* out,
                 wasUnderrun = false;
             } else {
                 target = 0.0f;  // underrun -> silence (with crossfade below)
+                ++diagSilentSamples;
                 if (!wasUnderrun && !sawSilenceStart) {
                     // Transitioned from "had data" to "empty" mid-callback.
                     self->m_underrunEvents.fetch_add(1, std::memory_order_relaxed);
@@ -843,6 +973,13 @@ int PortAudioBus::paCallback(const void* in, void* out,
             resumeAfterDiscard = true;
         }
         self->m_ringRead.store(r, std::memory_order_release);
+        if (diagSilentSamples > 0 && channels > 0) {
+            const quint64 silentFrames =
+                (diagSilentSamples + static_cast<quint64>(channels) - 1)
+                / static_cast<quint64>(channels);
+            self->m_diagCallbackSilentFrames.fetch_add(
+                silentFrames, std::memory_order_relaxed);
+        }
         self->m_lastOutL = lastL;
         self->m_lastOutR = lastR;
         self->m_crossfadeFramesRem = crossfadeRem;

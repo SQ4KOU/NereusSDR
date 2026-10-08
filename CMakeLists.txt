@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(NereusSDR VERSION 0.5.2 LANGUAGES C CXX)
+project(NereusSDR VERSION 2026.10.0 LANGUAGES C CXX)
 
 if(APPLE)
     enable_language(OBJCXX)
@@ -2501,6 +2501,48 @@ if(WDSP_FOUND)
     add_subdirectory(third_party/rnnoise)
     add_subdirectory(third_party/libspecbleach)
     add_subdirectory(third_party/wdsp)
+endif()
+
+# Standalone Windows diagnostic gate: deliberately not part of
+# NEREUS_BUILD_TESTS, because that suite brings Qt/application fakes into the
+# experiment. This executable links only wdsp_static and its transitive
+# dependencies (not NereusCore, Qt, RadioConnection, MasterMixer or PortAudio).
+option(NEREUS_WDSP_WINDOWS_SELFTEST
+    "Build isolated linked WDSP receive self-test on Windows" OFF)
+if(NEREUS_WDSP_WINDOWS_SELFTEST)
+    if(NOT WIN32)
+        message(FATAL_ERROR "NEREUS_WDSP_WINDOWS_SELFTEST is Windows-only")
+    endif()
+    if(NOT TARGET wdsp_static)
+        message(FATAL_ERROR "NEREUS_WDSP_WINDOWS_SELFTEST requires wdsp_static")
+    endif()
+
+    add_executable(wdsp_windows_selftest tests/wdsp_windows_selftest.c)
+    # Top-level NereusSDR enables Qt code generators globally. This target is
+    # intentionally pure C: disabling them avoids an empty MOC C++ object
+    # changing the linker language and pulling MinGW C++ runtime DLLs into the
+    # supposedly isolated WDSP experiment.
+    set_target_properties(wdsp_windows_selftest PROPERTIES
+        AUTOMOC OFF
+        AUTOUIC OFF
+        AUTORCC OFF
+        LINKER_LANGUAGE C)
+    target_link_libraries(wdsp_windows_selftest PRIVATE wdsp_static)
+    target_include_directories(wdsp_windows_selftest PRIVATE ${FFTW3_INCLUDE_DIRS})
+    target_compile_definitions(wdsp_windows_selftest PRIVATE WDSP_STATIC_BUILD)
+
+    # The fftw.org Windows package supplies both double- and single-precision
+    # runtimes. wdsp_static links libfftw3-3.dll directly, while retained NR
+    # dependencies also pull in libfftw3f-3.dll. Keep both beside the isolated
+    # self-test so loader failures cannot be mistaken for DSP failures.
+    if(FFTW3_DLL)
+        add_custom_command(TARGET wdsp_windows_selftest POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${FFTW3_DLL}" "$<TARGET_FILE_DIR:wdsp_windows_selftest>"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${FFTW3_ROOT}/bin/libfftw3f-3.dll" "$<TARGET_FILE_DIR:wdsp_windows_selftest>"
+            COMMENT "Copying FFTW runtimes beside WDSP Windows self-test")
+    endif()
 endif()
 
 # --------------------------------------------------------------------------

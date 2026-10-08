@@ -441,15 +441,23 @@ void RxChannel::setControlLane(DspControlThread* lane)
 void RxChannel::runKeyed(quint64 parameter, int sub, std::function<void()> job) const
 {
     if (m_lane == nullptr || m_lane->isCurrentThread()) {
-        job();
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(job);
+        } else {
+            job();
+        }
         return;
     }
     const quint64 key = parameter
         ^ (static_cast<quint64>(static_cast<quint32>(m_channelId) + 1u) * 0x9E3779B97F4A7C15ull)
         ^ (static_cast<quint64>(static_cast<quint32>(sub)) << 17);
-    m_lane->postKeyed(key, [alive = m_alive, job = std::move(job)]() {
+    m_lane->postKeyed(key, [this, alive = m_alive, job = std::move(job)]() {
         if (alive->load(std::memory_order_acquire)) {
-            job();
+            if (m_wdspEngine) {
+                m_wdspEngine->runLifecycleSerialized(job);
+            } else {
+                job();
+            }
         }
     });
 }
@@ -457,12 +465,20 @@ void RxChannel::runKeyed(quint64 parameter, int sub, std::function<void()> job) 
 void RxChannel::runOrdered(std::function<void()> job) const
 {
     if (m_lane == nullptr || m_lane->isCurrentThread()) {
-        job();
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(job);
+        } else {
+            job();
+        }
         return;
     }
-    m_lane->post([alive = m_alive, job = std::move(job)]() {
+    m_lane->post([this, alive = m_alive, job = std::move(job)]() {
         if (alive->load(std::memory_order_acquire)) {
-            job();
+            if (m_wdspEngine) {
+                m_wdspEngine->runLifecycleSerialized(job);
+            } else {
+                job();
+            }
         }
     });
 }
@@ -2950,8 +2966,19 @@ void RxChannel::processIq(float* inI, float* inQ,
     }
 
     // Main WDSP processing: demod, AGC, NR, ANF, filter, EQ, audio panel.
+    // Serialize the hot-path exchange against RX control/lifecycle mutations.
+    // WDSP 2.10 mutates channel internals in many setters; allowing the
+    // receive-control lane to execute those concurrently with fexchange2
+    // can expose partially rebuilt state and produce NaN/Inf audio.
     int error = 0;
-    fexchange2(m_channelId, inI, inQ, outI, outQ, &error);
+    const auto exchange = [this, inI, inQ, outI, outQ, &error]() {
+        fexchange2(m_channelId, inI, inQ, outI, outQ, &error);
+    };
+    if (m_wdspEngine) {
+        m_wdspEngine->runLifecycleSerialized(exchange);
+    } else {
+        exchange();
+    }
 
     if (error != 0) {
         qCWarning(lcDsp) << "fexchange2 error on channel"
@@ -3459,7 +3486,16 @@ void RxChannel::setDspBufferSizeSamples(int size)
     // + rebuild with the new dsp_size.  Heavier than RXASetNC but still
     // safe to call from main thread while audio worker is alive.
     // R-R3-39: on the receive lane, in order with the filter size.
-    runOrdered([this, size]() { SetDSPBuffsize(m_channelId, size); });
+    // SetDSPBuffsize destroys/rebuilds channel internals; serialize it
+    // against the TX lane's equivalent structural work.
+    runOrdered([this, size]() {
+        const auto work = [this, size]() { SetDSPBuffsize(m_channelId, size); };
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(work);
+        } else {
+            work();
+        }
+    });
 #endif
 }
 
@@ -3480,25 +3516,33 @@ void RxChannel::setFilterSizeSamples(int nc)
     }
     m_filterSize = nc;
     // R-R3-39: the carries above change at once; the WDSP calls run on the
-    // receive lane, in this order.
+    // receive lane, in this order.  Keep the whole structural operation under
+    // the shared lifecycle gate so TX cannot re-plan another channel in parallel.
     runOrdered([this, nc, shrinkBuffer]() {
+        const auto work = [this, nc, shrinkBuffer]() {
 #ifdef HAVE_WDSP
-        if (shrinkBuffer) {
-            // From Thetis radio.cs:521 [v2.10.3.13] DSPRX.BufferSize setter.
-            SetDSPBuffsize(m_channelId, nc);
-        }
-        // From Thetis radio.cs:540 [v2.10.3.13] DSPRX.FilterSize setter.
-        RXASetNC(m_channelId, nc);
+            if (shrinkBuffer) {
+                // From Thetis radio.cs:521 [v2.10.3.13] DSPRX.BufferSize setter.
+                SetDSPBuffsize(m_channelId, nc);
+            }
+            // From Thetis radio.cs:540 [v2.10.3.13] DSPRX.FilterSize setter.
+            RXASetNC(m_channelId, nc);
 #else
-        Q_UNUSED(nc);
-        Q_UNUSED(shrinkBuffer);
+            Q_UNUSED(nc);
+            Q_UNUSED(shrinkBuffer);
 #endif
-        // RXASetNC reaches nbp0 through RXANBPSetNC (third_party/wdsp/src/RXA.c:1043),
-        // and min_notch_width divides by nc (nbp.c:82-96), so the narrowest
-        // realisable notch just moved. Thetis re-reads it at exactly this point
-        // in its own DSP-options apply path (console.cs:39052-39053 ->
-        // UpdateMinimumNotchWidthRX, :48787-48818 [v2.10.3.15]).
-        refreshMinNotchWidthOnLane();
+            // RXASetNC reaches nbp0 through RXANBPSetNC (third_party/wdsp/src/RXA.c:1043),
+            // and min_notch_width divides by nc (nbp.c:82-96), so the narrowest
+            // realisable notch just moved. Thetis re-reads it at exactly this point
+            // in its own DSP-options apply path (console.cs:39052-39053 ->
+            // UpdateMinimumNotchWidthRX, :48787-48818 [v2.10.3.15]).
+            refreshMinNotchWidthOnLane();
+        };
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(work);
+        } else {
+            work();
+        }
     });
 }
 
@@ -3519,7 +3563,14 @@ void RxChannel::setFilterTypeLinearPhase(bool linearPhase)
     // is its inverse (R-IOS-13, 2026-09-27: it used to be sent as is).
     // R-R3-39: on the receive lane, in order with the sizes.
     const int minimumPhase = linearPhase ? 0 : 1;
-    runOrdered([this, minimumPhase]() { RXASetMP(m_channelId, minimumPhase); });
+    runOrdered([this, minimumPhase]() {
+        const auto work = [this, minimumPhase]() { RXASetMP(m_channelId, minimumPhase); };
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(work);
+        } else {
+            work();
+        }
+    });
 #endif
 }
 

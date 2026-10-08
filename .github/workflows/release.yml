@@ -3,6 +3,9 @@ name: Release
 on:
   push:
     tags: ['v*']
+    branches: [diag/wdsp-rxa-stage-trace]
+    paths:
+      - '.github/workflows/release.yml'
   workflow_dispatch:
     inputs:
       tag:
@@ -1417,6 +1420,28 @@ jobs:
           # DeepFilterNet3 ONNX tarball
           New-Item -ItemType Directory -Force -Path deploy\models\dfnet3 | Out-Null
           Copy-Item third_party\deepfilter\models\DeepFilterNet3_onnx.tar.gz deploy\models\dfnet3\
+
+          # NereusSDR.exe is only a thin launcher. The Qt module imports live in
+          # NereusSDRLib.dll/NereusCore.dll, which are copied after the first
+          # windeployqt pass. Scan those DLLs now so Multimedia, SerialPort and
+          # every other indirect Qt dependency are included in the package.
+          windeployqt deploy\NereusSDRLib.dll --release --no-translations --no-system-d3d-compiler
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed for NereusSDRLib.dll" }
+          windeployqt deploy\NereusCore.dll --release --no-translations --no-system-d3d-compiler
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed for NereusCore.dll" }
+
+          $requiredQt = @("Qt6Core.dll","Qt6Gui.dll","Qt6Widgets.dll","Qt6Network.dll","Qt6Multimedia.dll","Qt6SerialPort.dll")
+          foreach ($dll in $requiredQt) {
+            if (-not (Test-Path (Join-Path deploy $dll))) { throw "Required Qt runtime missing after deployment: $dll" }
+          }
+
+          # Loader smoke test: reject a package that cannot even start from its
+          # staged directory. A running process after the grace period proves
+          # Windows resolved the load-time DLL graph.
+          $proc = Start-Process -FilePath (Resolve-Path "deploy\NereusSDR.exe") -WorkingDirectory (Resolve-Path deploy) -PassThru
+          Start-Sleep -Seconds 5
+          if ($proc.HasExited) { throw "Staged NereusSDR exited during loader smoke test (exit $($proc.ExitCode))" }
+          Stop-Process -Id $proc.Id -Force
 
       - name: Create portable ZIP
         shell: pwsh

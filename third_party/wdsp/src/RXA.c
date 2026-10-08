@@ -31,6 +31,14 @@ warren@wpratt.com
 // destroy, xrxa, setSamplerate, setBuffers and setSize), includes nnr, rnnr
 // and sbnr in the bpsnba check, and RXAbp1Check reads the stage run states
 // itself from the channel.
+//
+// NereusSDR modification (2026-10-07, SQ4KOU audio regression repair):
+// when DSP and output rates are equal, xrxa copies the canonical current
+// midbuff directly to the canonical current outbuff instead of routing the
+// no-op case through RESAMPLE's cached in/out pointers. The live RX trace
+// proved the signal finite through panel and corrupt only at the final output
+// boundary after a 4096->64 live DSP-buffer resize. Real rate conversion
+// remains on the upstream xresample path unchanged.
 
 #include "comm.h"
 
@@ -661,10 +669,12 @@ void xrxa (int channel)
 {
 	xshift (rxa[channel].shift.p);
 	xHBResampler(rxa[channel].rsmpin.p);
+	WdspRxTrace(channel, WDSP_RX_TRACE_AFTER_HB, WDSP_RX_TRACE_DOUBLE_INTERLEAVED, rxa[channel].midbuff, 0, ch[channel].dsp_size);
 	xgen (rxa[channel].gen0.p);
 	xmeter (rxa[channel].adcmeter.p);
 	xbpsnbain (rxa[channel].bpsnba.p, 0);
 	xnbp (rxa[channel].nbp0.p, 0);
+	WdspRxTrace(channel, WDSP_RX_TRACE_AFTER_NBP, WDSP_RX_TRACE_DOUBLE_INTERLEAVED, rxa[channel].midbuff, 0, ch[channel].dsp_size);
 	xmeter (rxa[channel].smeter.p);
 	xsender (rxa[channel].sender.p);
 	xamsqcap (rxa[channel].amsq.p);
@@ -673,6 +683,7 @@ void xrxa (int channel)
 	xwbfm(rxa[channel].wbfm.p);
 	xfmd (rxa[channel].fmd.p);
 	xfmsq (rxa[channel].fmsq.p);
+	WdspRxTrace(channel, WDSP_RX_TRACE_AFTER_DEMOD, WDSP_RX_TRACE_DOUBLE_INTERLEAVED, rxa[channel].midbuff, 0, ch[channel].dsp_size);
 	xbpsnbain (rxa[channel].bpsnba.p, 1);
 	xbpsnbaout (rxa[channel].bpsnba.p, 1);
 	xsnba (rxa[channel].snba.p);
@@ -683,8 +694,11 @@ void xrxa (int channel)
 	xnnr (rxa[channel].nnr.p, 0);
 	xrnnr (rxa[channel].rnnr.p, 0);
 	xsbnr (rxa[channel].sbnr.p, 0);
+	WdspRxTrace(channel, WDSP_RX_TRACE_AFTER_NR0, WDSP_RX_TRACE_DOUBLE_INTERLEAVED, rxa[channel].midbuff, 0, ch[channel].dsp_size);
 	xbandpass (rxa[channel].bp1.p, 0);
+	WdspRxTrace(channel, WDSP_RX_TRACE_AFTER_BP0, WDSP_RX_TRACE_DOUBLE_INTERLEAVED, rxa[channel].midbuff, 0, ch[channel].dsp_size);
 	xwcpagc (rxa[channel].agc.p);
+	WdspRxTrace(channel, WDSP_RX_TRACE_AFTER_AGC, WDSP_RX_TRACE_DOUBLE_INTERLEAVED, rxa[channel].midbuff, 0, ch[channel].dsp_size);
 	xanf (rxa[channel].anf.p, 1);
 	xanr (rxa[channel].anr.p, 1);
 	xemnr (rxa[channel].emnr.p, 1);
@@ -692,6 +706,7 @@ void xrxa (int channel)
 	xrnnr (rxa[channel].rnnr.p, 1);
 	xsbnr (rxa[channel].sbnr.p, 1);
 	xbandpass (rxa[channel].bp1.p, 1);
+	WdspRxTrace(channel, WDSP_RX_TRACE_AFTER_BP1, WDSP_RX_TRACE_DOUBLE_INTERLEAVED, rxa[channel].midbuff, 0, ch[channel].dsp_size);
 	xmeter (rxa[channel].agcmeter.p);
 	xsiphon (rxa[channel].sip1.p, 0);
 	xcbl (rxa[channel].cbl.p);
@@ -702,8 +717,22 @@ void xrxa (int channel)
 	xmpeak (rxa[channel].mpeak.p);
 	xssql (rxa[channel].ssql.p);
 	xpanel (rxa[channel].panel.p);
+	WdspRxTrace(channel, WDSP_RX_TRACE_AFTER_PANEL, WDSP_RX_TRACE_DOUBLE_INTERLEAVED, rxa[channel].midbuff, 0, ch[channel].dsp_size);
 	xamsq (rxa[channel].amsq.p);
-	xresample (rxa[channel].rsmpout.p);
+	if (ch[channel].dsp_rate == ch[channel].out_rate)
+	{
+		// No rate conversion is required. Use RXA's canonical buffers here,
+		// rather than RESAMPLE's cached aliases, so a live DSP-buffer resize
+		// cannot leave the final copy dependent on stale resampler pointers.
+		// This is the exact no-resample operation xresample() intends to do.
+		memcpy (rxa[channel].outbuff, rxa[channel].midbuff,
+			ch[channel].dsp_outsize * sizeof (complex));
+	}
+	else
+	{
+		xresample (rxa[channel].rsmpout.p);
+	}
+	WdspRxTrace(channel, WDSP_RX_TRACE_AFTER_RSMP_OUT, WDSP_RX_TRACE_DOUBLE_INTERLEAVED, rxa[channel].outbuff, 0, ch[channel].dsp_outsize);
 }
 
 void setInputSamplerate_rxa (int channel)

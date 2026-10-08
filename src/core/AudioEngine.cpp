@@ -232,12 +232,14 @@
 #include <QCoreApplication>
 #include <QScopeGuard>
 #include <QStandardPaths>
+#include <QTimer>
 
 #include <portaudio.h>
 
 #include <algorithm>
 #include <bit>
 #include <array>
+#include <cmath>
 #include <vector>
 
 namespace NereusSDR {
@@ -260,6 +262,17 @@ AudioFormat toAudioFormat(const AudioDeviceConfig& cfg)
 // AudioEngine, read by the test seam below.
 std::atomic<int> g_paInitializeCalls{0};
 std::atomic<int> g_paTerminateCalls{0};
+
+template <typename T>
+void audioDiagAtomicMax(std::atomic<T>& dst, T value)
+{
+    T current = dst.load(std::memory_order_relaxed);
+    while (current < value
+           && !dst.compare_exchange_weak(current, value,
+                                         std::memory_order_relaxed,
+                                         std::memory_order_relaxed)) {
+    }
+}
 
 } // namespace
 
@@ -293,6 +306,20 @@ AudioEngine::AudioEngine(QObject* parent)
             static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
     }
     m_mixScratchFrames.store(kMixScratchMinFrames, std::memory_order_seq_cst);
+
+    // SQ4KOU diagnostic build: all logging is owner-thread paced. No log,
+    // allocation or timer callback ever executes on the DSP/PortAudio
+    // real-time paths.
+    if (QCoreApplication::instance() != nullptr
+        && !PortAudioBus::portAudioBarredForTestRun()) {
+        m_audioDiagTimer = new QTimer(this);
+        m_audioDiagTimer->setInterval(1000);
+        m_audioDiagTimer->setTimerType(Qt::CoarseTimer);
+        connect(m_audioDiagTimer, &QTimer::timeout,
+                this, &AudioEngine::logAudioDiagnostics);
+        m_audioDiagLastLog = std::chrono::steady_clock::now();
+        m_audioDiagTimer->start();
+    }
 #if defined(Q_OS_LINUX)
     // Cache the Linux audio backend detection result up front so Task 14's
     // dispatch (PipeWireBus vs. LinuxPipeBus pactl path) has a stable
@@ -718,6 +745,7 @@ void AudioEngine::stop()
     {
         std::lock_guard<std::mutex> lock(m_speakersBusMutex);
         m_remotePlayback = false;
+        m_speakersPortAudioDiag.store(nullptr, std::memory_order_release);
         m_speakersBus.reset();
     }
     {
@@ -1133,6 +1161,9 @@ void AudioEngine::ensureSpeakersOpen()
     {
         std::lock_guard<std::mutex> lk(m_speakersBusMutex);
         m_speakersBus = makeBus(cfg, /*capture=*/false);
+        m_speakersPortAudioDiag.store(
+            dynamic_cast<PortAudioBus*>(m_speakersBus.get()),
+            std::memory_order_release);
         configureSpeakersConverter();
     }
     if (m_speakersBus) {
@@ -1385,8 +1416,12 @@ void AudioEngine::applySpeakersConfig(const AudioDeviceConfig& cfg)
     // is inaudible vs. a use-after-free on the old bus pointer).
     std::unique_lock<std::mutex> lk(m_speakersBusMutex);
 
+    m_speakersPortAudioDiag.store(nullptr, std::memory_order_release);
     m_speakersBus.reset();
     m_speakersBus = makeBus(cfg, /*capture=*/false);
+    m_speakersPortAudioDiag.store(
+        dynamic_cast<PortAudioBus*>(m_speakersBus.get()),
+        std::memory_order_release);
     configureSpeakersConverter();
 
     AudioDeviceConfig negotiated = cfg;  // carry non-bus fields through
@@ -1721,7 +1756,11 @@ void AudioEngine::setVaxBusForTest(int channel, std::unique_ptr<IAudioBus> bus)
 void AudioEngine::setSpeakersBusForTest(std::unique_ptr<IAudioBus> bus)
 {
     std::lock_guard<std::mutex> lk(m_speakersBusMutex);
+    m_speakersPortAudioDiag.store(nullptr, std::memory_order_release);
     m_speakersBus = std::move(bus);
+    m_speakersPortAudioDiag.store(
+        dynamic_cast<PortAudioBus*>(m_speakersBus.get()),
+        std::memory_order_release);
     configureSpeakersConverter();
 }
 
@@ -2198,6 +2237,60 @@ void AudioEngine::skipSliceTaps(int sliceId, int frames) noexcept
     }
 }
 
+void AudioEngine::observeAudioDiagStage(AudioDiagStageCounters& stage,
+                                        const float* samples,
+                                        int frames) noexcept
+{
+    if (samples == nullptr || frames <= 0) {
+        return;
+    }
+
+    const int sampleCount = frames * 2;
+    double squareSum = 0.0;
+    float peak = 0.0f;
+    quint64 nonFinite = 0;
+    for (int i = 0; i < sampleCount; ++i) {
+        const float v = samples[i];
+        if (!std::isfinite(v)) {
+            ++nonFinite;
+            continue;
+        }
+        squareSum += static_cast<double>(v) * static_cast<double>(v);
+        peak = std::max(peak, std::abs(v));
+    }
+
+    float boundaryStep = 0.0f;
+    if (stage.haveLast) {
+        if (std::isfinite(samples[0]) && std::isfinite(stage.lastL)) {
+            boundaryStep = std::abs(samples[0] - stage.lastL);
+        }
+        if (std::isfinite(samples[1]) && std::isfinite(stage.lastR)) {
+            boundaryStep =
+                std::max(boundaryStep, std::abs(samples[1] - stage.lastR));
+        }
+    }
+    stage.lastL = samples[sampleCount - 2];
+    stage.lastR = samples[sampleCount - 1];
+    stage.haveLast = true;
+
+    stage.blocks.fetch_add(1, std::memory_order_relaxed);
+    stage.frames.fetch_add(static_cast<quint64>(frames), std::memory_order_relaxed);
+    stage.samples.fetch_add(static_cast<quint64>(sampleCount), std::memory_order_relaxed);
+    stage.nonFinite.fetch_add(nonFinite, std::memory_order_relaxed);
+    stage.squareSum.fetch_add(squareSum, std::memory_order_relaxed);
+    audioDiagAtomicMax(stage.peak, peak);
+    audioDiagAtomicMax(stage.maxBoundaryStep, boundaryStep);
+}
+
+void AudioEngine::observeRxWdspOutput(int sliceId,
+                                      const float* samples,
+                                      int frames) noexcept
+{
+    if (sliceId == 0) {
+        observeAudioDiagStage(m_diagWdsp0, samples, frames);
+    }
+}
+
 void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
 {
     // R-R3-45 fix wave: seq_cst on both sides of this gate (a Dekker
@@ -2559,6 +2652,10 @@ void AudioEngine::drainMixes(int frames, bool monitorOnly)
         return;
     }
     const int stereoFloats = mixed * 2;
+
+    // Passive point-2 telemetry: MasterMixer output before master volume,
+    // output-device conversion and PortAudioBus.
+    observeAudioDiagStage(m_diagMasterMix, mix.data(), mixed);
 
     // R3 receive-only master tap.  This is the output of MasterMixer, after
     // per-slice gain/mute/pan and the readiness barrier, and deliberately
@@ -3377,6 +3474,148 @@ void AudioEngine::resetAudioSettings(bool operatorLocalOnly)
 // Production wiring of QAudioSink::stateChanged → setFlowState lands with
 // the segment integration in sub-PR-4 / D.2.
 // ---------------------------------------------------------------------------
+
+void AudioEngine::logAudioDiagnostics()
+{
+    const auto now = std::chrono::steady_clock::now();
+    double dt = 1.0;
+    if (m_audioDiagLastLog.time_since_epoch().count() != 0) {
+        dt = std::chrono::duration<double>(now - m_audioDiagLastLog).count();
+        if (!(dt > 0.0)) {
+            dt = 1.0;
+        }
+    }
+    m_audioDiagLastLog = now;
+
+    struct StageSnapshot {
+        quint64 blocks{0};
+        quint64 frames{0};
+        quint64 samples{0};
+        quint64 nonFinite{0};
+        double squareSum{0.0};
+        float peak{0.0f};
+        float maxStep{0.0f};
+    };
+    const auto takeStage = [](AudioDiagStageCounters& stage) {
+        StageSnapshot s;
+        s.blocks = stage.blocks.exchange(0, std::memory_order_relaxed);
+        s.frames = stage.frames.exchange(0, std::memory_order_relaxed);
+        s.samples = stage.samples.exchange(0, std::memory_order_relaxed);
+        s.nonFinite = stage.nonFinite.exchange(0, std::memory_order_relaxed);
+        s.squareSum = stage.squareSum.exchange(0.0, std::memory_order_relaxed);
+        s.peak = stage.peak.exchange(0.0f, std::memory_order_relaxed);
+        s.maxStep =
+            stage.maxBoundaryStep.exchange(0.0f, std::memory_order_relaxed);
+        return s;
+    };
+    const auto rms = [](double squareSum, quint64 samples) {
+        return samples > 0
+            ? std::sqrt(squareSum / static_cast<double>(samples))
+            : 0.0;
+    };
+    const auto rate = [dt](quint64 n) {
+        return static_cast<double>(n) / dt;
+    };
+    const auto delta32 = [](quint32 current, quint32& previous) {
+        const quint32 d = current >= previous ? current - previous : current;
+        previous = current;
+        return d;
+    };
+    const auto delta64 = [](quint64 current, quint64& previous) {
+        const quint64 d = current >= previous ? current - previous : current;
+        previous = current;
+        return d;
+    };
+
+    const StageSnapshot wdsp = takeStage(m_diagWdsp0);
+    const StageSnapshot mix = takeStage(m_diagMasterMix);
+
+    PortAudioBus::OutputDiagSnapshot pa;
+    bool havePa = false;
+    PortAudioBus* const paBus =
+        m_speakersPortAudioDiag.load(std::memory_order_acquire);
+    if (paBus != nullptr) {
+        pa = paBus->takeOutputDiagSnapshot();
+        havePa = true;
+        if (m_audioDiagLastBus != paBus) {
+            m_audioDiagLastBus = paBus;
+            m_audioDiagPrevRingOverrunEvents = 0;
+            m_audioDiagPrevRingOverrunSamples = 0;
+            m_audioDiagPrevRingUnderrunEvents = 0;
+            m_audioDiagPrevPaUnderflows = 0;
+            m_audioDiagPrevPaOverflows = 0;
+        }
+    } else {
+        m_audioDiagLastBus = nullptr;
+    }
+
+    if (wdsp.blocks == 0 && mix.blocks == 0
+        && (!havePa || (pa.pushBlocks == 0 && pa.callbackCalls == 0))) {
+        return;
+    }
+
+    quint32 dropEvents = 0;
+    quint64 dropSamples = 0;
+    quint32 ringUnderruns = 0;
+    quint32 paUnderflows = 0;
+    quint32 paOverflows = 0;
+    if (havePa) {
+        dropEvents = delta32(pa.ringOverrunEvents,
+                             m_audioDiagPrevRingOverrunEvents);
+        dropSamples = delta64(pa.ringOverrunSamples,
+                              m_audioDiagPrevRingOverrunSamples);
+        ringUnderruns = delta32(pa.ringUnderrunEvents,
+                                m_audioDiagPrevRingUnderrunEvents);
+        paUnderflows = delta32(pa.paOutputUnderflowEvents,
+                               m_audioDiagPrevPaUnderflows);
+        paOverflows = delta32(pa.paOutputOverflowEvents,
+                              m_audioDiagPrevPaOverflows);
+    }
+
+    qCInfo(lcAudio).noquote()
+        << QStringLiteral(
+               "AUDIO-DIAG dt=%1 "
+               "WDSP0{blk/s=%2 frm/s=%3 rms=%4 peak=%5 step=%6 nf=%7} "
+               "MIX{blk/s=%8 frm/s=%9 rms=%10 peak=%11 step=%12 nf=%13} "
+               "PA-PUSH{blk/s=%14 frm/s=%15 rms=%16 peak=%17 step=%18 nf=%19 q=%20..%21} "
+               "PA-CB{call/s=%22 reqfrm/s=%23 silentfrm=%24 q=%25..%26 quantum=%27 cap=%28 "
+               "drop=%29/%30 ringUnder=%31 paUnder=%32 paOver=%33 fmt=%34/%35}")
+              .arg(dt, 0, 'f', 3)
+              .arg(rate(wdsp.blocks), 0, 'f', 1)
+              .arg(rate(wdsp.frames), 0, 'f', 0)
+              .arg(rms(wdsp.squareSum, wdsp.samples), 0, 'g', 6)
+              .arg(wdsp.peak, 0, 'g', 6)
+              .arg(wdsp.maxStep, 0, 'g', 6)
+              .arg(wdsp.nonFinite)
+              .arg(rate(mix.blocks), 0, 'f', 1)
+              .arg(rate(mix.frames), 0, 'f', 0)
+              .arg(rms(mix.squareSum, mix.samples), 0, 'g', 6)
+              .arg(mix.peak, 0, 'g', 6)
+              .arg(mix.maxStep, 0, 'g', 6)
+              .arg(mix.nonFinite)
+              .arg(havePa ? rate(pa.pushBlocks) : 0.0, 0, 'f', 1)
+              .arg(havePa ? rate(pa.pushFrames) : 0.0, 0, 'f', 0)
+              .arg(havePa ? rms(pa.pushSquareSum, pa.pushSamples) : 0.0, 0, 'g', 6)
+              .arg(havePa ? pa.pushPeak : 0.0f, 0, 'g', 6)
+              .arg(havePa ? pa.pushMaxBoundaryStep : 0.0f, 0, 'g', 6)
+              .arg(havePa ? pa.pushNonFinite : 0)
+              .arg(havePa ? pa.pushMinQueuedFrames : -1)
+              .arg(havePa ? pa.pushMaxQueuedFrames : -1)
+              .arg(havePa ? rate(pa.callbackCalls) : 0.0, 0, 'f', 1)
+              .arg(havePa ? rate(pa.callbackRequestedFrames) : 0.0, 0, 'f', 0)
+              .arg(havePa ? pa.callbackSilentFrames : 0)
+              .arg(havePa ? pa.callbackMinQueuedFrames : -1)
+              .arg(havePa ? pa.callbackMaxQueuedFrames : -1)
+              .arg(havePa ? pa.callbackQuantumFrames : 0)
+              .arg(havePa ? pa.ringCapacityFrames : 0)
+              .arg(dropEvents)
+              .arg(dropSamples)
+              .arg(ringUnderruns)
+              .arg(paUnderflows)
+              .arg(paOverflows)
+              .arg(havePa ? pa.sampleRate : 0)
+              .arg(havePa ? pa.channels : 0);
+}
 
 void AudioEngine::setFlowState(FlowState s)
 {

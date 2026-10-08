@@ -55,6 +55,9 @@ void wdspmain (void *pargs)
 			case 0:		// rxa
 				dexchange (channel, rxa[channel].outbuff, rxa[channel].inbuff);
 				xrxa (channel);
+				WdspRxTrace (channel, WDSP_RX_TRACE_RXA_OUT,
+					WDSP_RX_TRACE_DOUBLE_INTERLEAVED,
+					rxa[channel].outbuff, 0, ch[channel].dsp_outsize);
 				break;
 			case 1:		// txa
 				dexchange (channel, txa[channel].outbuff, txa[channel].inbuff);

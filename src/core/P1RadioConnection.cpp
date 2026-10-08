@@ -2627,8 +2627,35 @@ void P1RadioConnection::setAntennaRouting(AntennaRouting r)
     // RX-only input mux: clamp to 0..3 per netInterface.c:479-481 [v2.10.3.13 @501e3f5]
     m_rxOnlyAnt = (r.rxOnlyAnt < 0) ? 0 : (r.rxOnlyAnt > 3 ? 3 : r.rxOnlyAnt);
     m_rxOut     = r.rxOut;
+
+    m_sq4kouLastAntennaRouting = r;
+    m_sq4kouLastAntennaRouting.trxAnt =
+        (r.trxAnt >= 1 && r.trxAnt <= 3) ? r.trxAnt : 0;
+    m_sq4kouLastAntennaRouting.txAnt =
+        (r.txAnt >= 1 && r.txAnt <= 3) ? r.txAnt : 0;
+    m_sq4kouLastAntennaRouting.rxOnlyAnt = m_rxOnlyAnt;
+    m_sq4kouLastAntennaRouting.rxOut = m_rxOut;
+
     // P1 has no high-priority packet; the next EP2 frame picks up all
     // antenna fields via buildCodecContext() → P1Codec::bank0.
+}
+
+bool P1RadioConnection::readSq4kouHardwareState(Sq4kouHardwareState& out) const
+{
+    const CodecContext ctx = buildCodecContext();
+    out.valid       = 0x7f;
+    out.rxOnlyAnt   = ctx.rxOnlyAnt;
+    out.trxAnt      = m_sq4kouLastAntennaRouting.trxAnt;
+    out.txAnt       = m_sq4kouLastAntennaRouting.txAnt;
+    out.rxOut       = ctx.rxOut ? 1 : 0;
+    out.tx          = ctx.mox ? 1 : 0;
+    out.ocBits      = static_cast<int>(ctx.ocByte);
+    out.txStepAtt   = ctx.txStepAttn[0];
+    out.adc1Att     = ctx.rxStepAttn[0];
+    out.drive       = ctx.txDrive;
+    out.paEnabled   = m_paDisabled ? 0 : 1;
+    out.alexHpfBits = static_cast<int>(ctx.alexHpfBits);
+    return true;
 }
 
 // ---------------------------------------------------------------------------

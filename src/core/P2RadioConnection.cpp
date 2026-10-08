@@ -1640,6 +1640,24 @@ bool P2RadioConnection::withinMoxOffGrace() const
 //   NetworkIO.SetAntBits(rx_only_ant, trx_ant, tx_ant, rx_out, tx);
 // MOX coupling (the `tx` arg) deferred to Phase 3M-1.
 // ---------------------------------------------------------------------------
+bool P2RadioConnection::readSq4kouHardwareState(Sq4kouHardwareState& out) const
+{
+    const CodecContext ctx = buildCodecContext();
+    out.valid       = 0x7f;
+    out.rxOnlyAnt   = ctx.rxOnlyAnt;
+    out.trxAnt      = ctx.p2AlexRxAnt;
+    out.txAnt       = ctx.p2AlexTxAnt;
+    out.rxOut       = ctx.rxOut ? 1 : 0;
+    out.tx          = ctx.mox ? 1 : 0;
+    out.ocBits      = static_cast<int>(ctx.ocByte);
+    out.txStepAtt   = ctx.txStepAttn[0];
+    out.adc1Att     = ctx.rxStepAttn[0];
+    out.drive       = ctx.p2DriveLevel;
+    out.paEnabled   = m_paDisabled ? 0 : 1;
+    out.alexHpfBits = static_cast<int>(ctx.alexHpfBits);
+    return true;
+}
+
 void P2RadioConnection::setAntennaRouting(AntennaRouting r)
 {
     // trxAnt drives the Alex0 RX antenna; txAnt drives the Alex1 TX.

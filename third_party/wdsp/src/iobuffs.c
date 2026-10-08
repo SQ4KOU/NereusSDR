@@ -533,6 +533,8 @@ void fexchange2 (int channel, INREAL *Iin, INREAL *Qin, OUTREAL *Iout, OUTREAL *
 	int doit = 0;
 	IOB a;
 	*error = 0;
+	WdspRxTrace (channel, WDSP_RX_TRACE_FEXCHANGE_IN,
+		WDSP_RX_TRACE_FLOAT_SPLIT, Iin, Qin, ch[channel].in_size);
 	if (_InterlockedAnd (&ch[channel].exchange, 1))
 	{
 		EnterCriticalSection (&ch[channel].csEXCH);
@@ -585,6 +587,8 @@ void fexchange2 (int channel, INREAL *Iin, INREAL *Qin, OUTREAL *Iout, OUTREAL *
 			memset (Qout, 0, a->out_size * sizeof (OUTREAL));
 			*error += -2;
 		}
+		WdspRxTrace (channel, WDSP_RX_TRACE_FEXCHANGE_OUT,
+			WDSP_RX_TRACE_FLOAT_SPLIT, Iout, Qout, a->out_size);
 		if ((a->r2_outidx += a->out_size) == a->r2_active_buffsize)
 			a->r2_outidx = 0;
 		LeaveCriticalSection (&ch[channel].csEXCH);
@@ -601,6 +605,9 @@ void dexchange (int channel, double* in, double* out)
 	a->r2_havesamps += a->r2_insize;
 	LeaveCriticalSection (&a->r2_ControlSection);
 	memcpy (a->r2_baseptr + 2 * a->r2_inidx, in, a->r2_insize * sizeof (complex));
+	WdspRxTrace (channel, WDSP_RX_TRACE_R2_WRITE,
+		WDSP_RX_TRACE_DOUBLE_INTERLEAVED,
+		a->r2_baseptr + 2 * a->r2_inidx, 0, a->r2_insize);
 	if ((a->r2_inidx += a->r2_insize) == a->r2_active_buffsize)
 		a->r2_inidx = 0;
 	// NereusSDR modification (2026-10-01): the input chunk is copied out of r1

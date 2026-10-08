@@ -163,6 +163,9 @@ public:
 
     // Protocol identifier — 1 for OpenHPSDR P1.  See RadioConnection::protocolVersion.
     int protocolVersion() const override { return 1; }
+    // SQ4KOU TCI reads the final hardware-bound state; this is deliberately
+    // not a Qt slot because it is a synchronous read-only snapshot API.
+    bool readSq4kouHardwareState(Sq4kouHardwareState& out) const override;
 
     // Wire-format compose helpers — static, testable in isolation.
     // Each implementation cites its Thetis source line.
@@ -982,6 +985,9 @@ private:
     int     m_antennaIdx{0};
     int     m_rxOnlyAnt{0};   // RX-only input mux (0..3). Bank 0 C3 bits 5-6.
     bool    m_rxOut{false};   // _Rx_1_Out relay. Bank 0 C3 bit 7.
+    // P1 wire has shared ANT bits, but the SQ4KOU extension also publishes
+    // the independently selected TX antenna passed through SetAntBits logic.
+    AntennaRouting m_sq4kouLastAntennaRouting{};
     // Alex attenuator _20_dB_Atten / _10_dB_Atten. Bank 0 C3 bits 1 / 0.
     bool    m_alex20dB{false};
     bool    m_alex10dB{false};
