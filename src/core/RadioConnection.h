@@ -78,6 +78,26 @@ struct AntennaRouting {
     bool tx        {false}; // current MOX state             (3M-1)
 };
 
+// SQ4KOU TCI hardware extension.
+//
+// Read-only snapshot of values that reached the final radio/codec boundary.
+// P1/P2 build it from the same CodecContext used to compose hardware packets,
+// equivalent to the earlier GetSQ4KOUHardwareState() shadow in ChannelMaster.
+struct Sq4kouHardwareState {
+    int valid{0};          // v1 validity bitmap; 0x7f = all fields live
+    int rxOnlyAnt{0};      // 0 none, 1 RX1/EXT2, 2 RX2/EXT1, 3 XVTR
+    int trxAnt{0};         // effective Alex0/shared antenna, 1..3 (0 none)
+    int txAnt{0};          // selected Alex1 TX antenna, 1..3 (0 none)
+    int rxOut{0};          // effective RX bypass/out relay
+    int tx{0};             // actual MOX bit at wire boundary
+    int ocBits{0};         // effective OC mask
+    int txStepAtt{0};      // TX step attenuator
+    int adc1Att{0};        // first physical ADC RX step attenuator
+    int drive{0};          // effective 0..255 drive byte
+    int paEnabled{0};      // 1 when Disable HF PA is not asserted
+    int alexHpfBits{0};    // effective Alex0 HPF bits; 0x40 carries 6 m LNA
+};
+
 // Per-ADC RX band-pass decision — Phase 3F.
 //
 // Composed by AlexController::recomputeBpf over the set of slice bands on
@@ -317,6 +337,13 @@ public slots:
     virtual void setTxDrive(int level) = 0;
     virtual void setMox(bool enabled) = 0;
     virtual void setAntennaRouting(AntennaRouting routing) = 0;
+
+    // Read-only SQ4KOU TCI snapshot. Stub/test connections return false.
+    virtual bool readSq4kouHardwareState(Sq4kouHardwareState& out) const
+    {
+        (void)out;
+        return false;
+    }
 
     // Apply the per-ADC RX band-pass decision to the Alex HPF wire bits.
     //
