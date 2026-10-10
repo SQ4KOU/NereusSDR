@@ -156,7 +156,8 @@ static void refreshAfterTopLevelChange(NereusSDR::SpectrumWidget* sw,
                                        bool wantVisible)
 {
     if (!sw) { return; }
-#if defined(Q_OS_MAC) && defined(NEREUS_GPU_SPECTRUM)
+// D3D11 also needs a fresh native child surface after a top-level move.
+#if (defined(Q_OS_MAC) || defined(Q_OS_WIN)) && defined(NEREUS_GPU_SPECTRUM)
     sw->hide();
     sw->resetGpuResources();
     if (QWindow* windowHandle = sw->windowHandle()) {
