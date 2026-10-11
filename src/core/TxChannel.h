@@ -868,6 +868,8 @@ public:
     /// From Thetis wdsp/dexp.c:304 [v2.10.3.13]:
     ///   "DEXP code runs continuously so it can be used to trigger VOX also."
     void setVoxListening(bool on);
+    // Local processed-TX monitor while MOX remains off. Never opens the RF gate.
+    void setMonitorPreview(bool on);
 
     // ── Per-mode TXA configuration (3M-1b D.2) ──────────────────────────────
 
@@ -2931,6 +2933,7 @@ private:
     // The keying halves on the lane (or at once without one).
     void applyRunningOnLane(bool on, int cfirRun, quint64 sequence);
     void applyVoxListeningOnLane(bool on, int cfirRun);
+    void applyMonitorPreviewOnLane(bool on, int cfirRun);
     void setRfGate(bool open);
     // Closes the RF gate and waits for a worker already inside sendTxIq
     // (see m_txIqSendersInFlight) to leave it.
@@ -2967,6 +2970,7 @@ private:
     // caller's thread with no lane).
     bool m_laneRunning{false};
     bool m_laneVoxListening{false};
+    bool m_laneMonitorPreview{false};
     // The newest setRunningAsync; an older on-job leaves the gate alone.
     std::atomic<quint64> m_runSequence{0};
     // Task 33: worker calls between the RF gate's re-check and the end of
@@ -3122,6 +3126,7 @@ private:
     // gates on m_running for power-saving when neither MOX nor VOX
     // is in play; this flag re-enables pumping for VOX detection.
     std::atomic<bool> m_voxListening{false};
+    std::atomic<bool> m_monitorPreview{false};
 
     // ── Phase 3J-1 bench fix (2026-05-10): TCI audio source gate ───────────
     // When a TCI client holds the TX audio mutex (trx:N,true,tci;) the

@@ -1126,6 +1126,24 @@ void TxChannel::setDexpBuffer(double* dexpBuf, std::size_t sizeDoubles)
 // ---------------------------------------------------------------------------
 void TxChannel::pumpDexp(const double* interleavedIn)
 {
+    // In monitor preview, never execute the VOX-keying detector while unkeyed.
+    // Suppress only the detector, not the processed audio path (fexchange0).
+    if (m_monitorPreview.load(std::memory_order_acquire)
+        && !m_running.load(std::memory_order_acquire)) {
+        return;
+    }
+    // Do not enter WDSP's DEXP/FFT path while the transmitter is idle and
+    // VOX listening is disabled.  TxWorkerThread drains radio-mic cadence
+    // continuously even on RX; before this guard every RX-only mic block
+    // still ran xdexp(), despite driveOneTxBlockFromInterleaved() correctly
+    // refusing fexchange0 when neither MOX nor VOX was active.  Hardware
+    // crash dumps show the idle RX-startup failure on TxWorkerThread inside
+    // the FFTW/heap path.  DEXP is needed only for an active TX block or
+    // while VOX is explicitly listening.
+    if (!m_running.load(std::memory_order_acquire)
+        && !m_voxListening.load(std::memory_order_acquire)) {
+        return;
+    }
     if (interleavedIn == nullptr || m_dexpBuffer == nullptr ||
         m_dexpBufferSizeDoubles == 0) {
         return;
@@ -1140,21 +1158,27 @@ void TxChannel::pumpDexp(const double* interleavedIn)
         ~LeaveBlock() { channel->leaveWorkerBlock(); }
     } leaveBlock{this};
 #ifdef HAVE_WDSP
-    // Same null-guard pair as setVoxRun / registerVoxCallback / all DEXP
-    // setters in this file.  Test builds never drove OpenChannel(type=1)
-    // so txa[].rsmpin.p is nullptr; calling xdexp on a missing DEXP module
-    // would dereference null.
-    if (txa[m_channelId].rsmpin.p == nullptr) {
-        return;
+    // Serialize this hot-path WDSP call against structural channel work
+    // (SetDSPBuffsize/TXASetNC/rate rebuilds).  The crash dump from the
+    // hardware run showed TxWorkerThread inside the FFTW/heap path while a
+    // structural re-plan was possible; the RX hot path already uses the same
+    // lifecycle gate for exactly this class of race.
+    const auto dexpWork = [this, interleavedIn]() {
+        // Same null-guard pair as setVoxRun / registerVoxCallback / all DEXP
+        // setters in this file.  Keep the guards inside the lifecycle gate so
+        // teardown/rebuild cannot invalidate them between check and use.
+        if (txa[m_channelId].rsmpin.p == nullptr || pdexp[m_channelId] == nullptr) {
+            return;
+        }
+        std::memcpy(m_dexpBuffer, interleavedIn,
+                    m_dexpBufferSizeDoubles * sizeof(double));
+        xdexp(m_channelId);
+    };
+    if (m_wdspEngine) {
+        m_wdspEngine->runLifecycleSerialized(dexpWork);
+    } else {
+        dexpWork();
     }
-    if (pdexp[m_channelId] == nullptr) {
-        return;
-    }
-    // Copy the worker-thread-owned mic block into the WDSP-visible DEXP
-    // buffer, then drive the per-block detector.  WDSP synchronises
-    // internally via dexp.cs_update; no additional locking needed here.
-    std::memcpy(m_dexpBuffer, interleavedIn, m_dexpBufferSizeDoubles * sizeof(double));
-    xdexp(m_channelId);
 #else
     // Non-HAVE_WDSP build: still copy into the buffer so the storage
     // exercise path matches between configs (the DEXP module isn't there
@@ -1587,7 +1611,7 @@ void TxChannel::applyRunningOnLane(bool on, int cfirRun, quint64 sequence)
             // pipeline up.
             // R-R3-39: VOX listening as the lane has applied it, so the
             // decision follows the calls' order.
-            if (!m_laneVoxListening) {
+            if (!m_laneVoxListening && !m_laneMonitorPreview) {
                 // Turn the TXA channel OFF: state=0, dmode=1 (drain in-flight samples).
                 // From Thetis console.cs:29607 [v2.10.3.13] — TX→RX transition:
                 //   WDSP.SetChannelState(WDSP.id(1, 0), 0, 1);   // turn off, drain
@@ -1698,7 +1722,7 @@ void TxChannel::applyVoxListeningOnLane(bool on, int cfirRun)
     if (on) {
         // Entering vox-listening: ensure WDSP TXA channel is on.
         // Idempotent if already on (setRunning(true) already called it).
-        if (!actualRunning) {
+        if (!actualRunning && !m_laneMonitorPreview) {
             SetTXACFIRRun(m_channelId, cfirRun);
             SetChannelState(m_channelId, 1, 0);
             // R-R3-41: VOX listening keeps the transmit worker busy too.
@@ -1708,7 +1732,7 @@ void TxChannel::applyVoxListeningOnLane(bool on, int cfirRun)
     } else {
         // Leaving vox-listening AND MOX is also off: drop the WDSP
         // TXA channel state (matches setRunning(false) path).
-        if (!actualRunning) {
+        if (!actualRunning && !m_laneMonitorPreview) {
             SetChannelState(m_channelId, 0, 1);
             ThreadPlacement::instance().setChannelActive(ThreadRole::TxWorker,
                                                          m_channelId, false);
@@ -1720,6 +1744,42 @@ void TxChannel::applyVoxListeningOnLane(bool on, int cfirRun)
 #else
     Q_UNUSED(cfirRun);
 #endif // HAVE_WDSP
+}
+
+// MON preview is an independent reason to run TXA. It never changes
+// m_running (the only gate to RadioConnection::sendTxIq).
+void TxChannel::setMonitorPreview(bool on)
+{
+    if (m_monitorPreview.exchange(on, std::memory_order_acq_rel) == on) {
+        return;
+    }
+    const int proto = m_connection ? m_connection->protocolVersion() : 1;
+    const int cfirRun = proto == 2 ? 1 : 0;
+    runOrdered([this, on, cfirRun]() { applyMonitorPreviewOnLane(on, cfirRun); });
+}
+
+void TxChannel::applyMonitorPreviewOnLane(bool on, int cfirRun)
+{
+    const bool alreadyActive = m_laneRunning || m_laneVoxListening;
+    m_laneMonitorPreview = on;
+#ifdef HAVE_WDSP
+    if (!txaOpenLive() || alreadyActive) {
+        return;
+    }
+    if (on) {
+        SetTXACFIRRun(m_channelId, cfirRun);
+        SetChannelState(m_channelId, 1, 0);
+        ThreadPlacement::instance().setChannelActive(ThreadRole::TxWorker,
+                                                     m_channelId, true);
+    } else {
+        SetChannelState(m_channelId, 0, 1);
+        ThreadPlacement::instance().setChannelActive(ThreadRole::TxWorker,
+                                                     m_channelId, false);
+        SetTXACFIRRun(m_channelId, 0);
+    }
+#else
+    Q_UNUSED(cfirRun);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -3728,7 +3788,8 @@ void TxChannel::driveOneTxBlock(const float* samples, int frames)
     // in driveOneTxBlockFromInterleaved on m_running ONLY.
     const bool actualRunning = m_running.load(std::memory_order_acquire);
     const bool voxListening  = m_voxListening.load(std::memory_order_acquire);
-    if ((!actualRunning && !voxListening) || !m_connection) {
+    const bool monitorPreview = m_monitorPreview.load(std::memory_order_acquire);
+    if ((!actualRunning && !voxListening && !monitorPreview) || !m_connection) {
         return;
     }
     const int inN = m_inputBufferSize;
@@ -3788,7 +3849,8 @@ void TxChannel::driveOneTxBlockFromInterleaved(const double* interleavedIn)
     // via the two-gate split here.
     const bool actualRunning = m_running.load(std::memory_order_acquire);
     const bool voxListening  = m_voxListening.load(std::memory_order_acquire);
-    const bool shouldPumpDsp = actualRunning || voxListening;
+    const bool previewListening = m_monitorPreview.load(std::memory_order_acquire);
+    const bool shouldPumpDsp = actualRunning || voxListening || previewListening;
     if (!shouldPumpDsp || !m_connection) {
         return;
     }
@@ -3831,7 +3893,19 @@ void TxChannel::driveOneTxBlockFromInterleaved(const double* interleavedIn)
     // lane's drain returns. Zero the block first so those last calls send
     // silence, never a repeat of the previous block.
     std::fill(m_out.begin(), m_out.end(), 0.0);
-    fexchange0(m_channelId, m_in.data(), m_out.data(), &error);
+    // Serialize the external TX worker's exchange against structural WDSP
+    // replans/destruction.  SetDSPBuffsize/TXASetNC rebuild FFTW-backed TXA
+    // internals; without this gate TxWorkerThread can be inside fexchange0
+    // while those objects are freed/replanned.  RX uses the same lifecycle
+    // serialization around fexchange2.
+    const auto exchange = [this, &error]() {
+        fexchange0(m_channelId, m_in.data(), m_out.data(), &error);
+    };
+    if (m_wdspEngine) {
+        m_wdspEngine->runLifecycleSerialized(exchange);
+    } else {
+        exchange();
+    }
     if (error != 0) {
         qCWarning(lcDsp) << "TxChannel" << m_channelId
                          << "fexchange0 error" << error;
@@ -3853,6 +3927,14 @@ void TxChannel::driveOneTxBlockFromInterleaved(const double* interleavedIn)
     // until the operator is actually transmitting.
     const bool shouldWriteRx = actualRunning;
     if (!shouldWriteRx) {
+        // Processed TXA audio to MON, without a call to sendTxIq().
+        if (previewListening) {
+            for (int i = 0; i < outN; ++i) {
+                m_outIFloatScratch[static_cast<size_t>(i)] =
+                    static_cast<float>(m_out[static_cast<size_t>(2 * i)]);
+            }
+            emit sip1OutputReady(m_outIFloatScratch.data(), outN);
+        }
         return;
     }
 
@@ -5482,8 +5564,15 @@ void TxChannel::setTxDspBufferSizeSamples(int size)
     // from main thread while TxWorkerThread is running.
     // R-R3-39: a barrier on the lane (it replans the channel's FFTs).
     runOrdered([this, size]() {
-        SetDSPBuffsize(m_channelId, size);
-        refreshDspSizeOnLane();
+        const auto work = [this, size]() {
+            SetDSPBuffsize(m_channelId, size);
+            refreshDspSizeOnLane();
+        };
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(work);
+        } else {
+            work();
+        }
     });
 #endif
 }
@@ -5504,15 +5593,29 @@ void TxChannel::setTxFilterSizeSamples(int nc)
 #ifdef HAVE_WDSP
         // From Thetis radio.cs:2606 [v2.10.3.13] DSPTX.BufferSize setter.
         runOrdered([this, nc]() {
-            SetDSPBuffsize(m_channelId, nc);
-            refreshDspSizeOnLane();
+            const auto work = [this, nc]() {
+                SetDSPBuffsize(m_channelId, nc);
+                refreshDspSizeOnLane();
+            };
+            if (m_wdspEngine) {
+                m_wdspEngine->runLifecycleSerialized(work);
+            } else {
+                work();
+            }
         });
 #endif
     }
     m_txFilterSize = nc;
 #ifdef HAVE_WDSP
     // From Thetis radio.cs:2628 [v2.10.3.13] DSPTX.FilterSize setter.
-    runOrdered([this, nc]() { TXASetNC(m_channelId, nc); });
+    runOrdered([this, nc]() {
+        const auto work = [this, nc]() { TXASetNC(m_channelId, nc); };
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(work);
+        } else {
+            work();
+        }
+    });
 #endif
 }
 
@@ -5563,7 +5666,14 @@ void TxChannel::setTxFilterTypeLinearPhase(bool linearPhase)
     // (2026-09-27): this used to send m_txFilterType itself, so "Low
     // Latency" ran linear phase (35.6 ms through TX DSP instead of 16.1).
     const int minimumPhase = linearPhase ? 0 : 1;
-    runOrdered([this, minimumPhase]() { TXASetMP(m_channelId, minimumPhase); });
+    runOrdered([this, minimumPhase]() {
+        const auto work = [this, minimumPhase]() { TXASetMP(m_channelId, minimumPhase); };
+        if (m_wdspEngine) {
+            m_wdspEngine->runLifecycleSerialized(work);
+        } else {
+            work();
+        }
+    });
 #endif
 }
 

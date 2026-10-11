@@ -186,6 +186,21 @@ void PureSignalSettings::setHardwarePeakOverride(double value)
 void PureSignalSettings::setRadioIdentity(const QString& mac)
 {
     m_radioIdentity = AppSettings::normalizedRadioMac(mac);
+    if (!m_radioIdentity.isEmpty()) return;
+
+    // AddCustomRadioDialog uses MANUAL:IP:PORT for a radio without a known
+    // hardware MAC. This is a stable per-radio key, not a malformed MAC.
+    // Accept this existing identifier only for PureSignal settings; leave
+    // AppSettings::normalizedRadioMac and unrelated hardware code untouched.
+    const QString manualId = mac.trimmed().toUpper();
+    if (manualId.startsWith(QStringLiteral("MANUAL:"))
+        && manualId.size() > 7 && manualId.size() <= 128
+        && !manualId.contains(QLatin1Char('/'))
+        && !manualId.contains(QLatin1Char('\\'))
+        && !manualId.contains(QLatin1Char('\n'))
+        && !manualId.contains(QLatin1Char('\r'))) {
+        m_radioIdentity = manualId;
+    }
 }
 
 QString PureSignalSettings::settingsPrefix() const

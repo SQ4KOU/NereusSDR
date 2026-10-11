@@ -1,7 +1,12 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 // Modification history (NereusSDR):
+//   2026-10-05 — J.J. Boyd (KG4VCF). Independent per-pan Clarity ownership.
+//                 AI-assisted via OpenAI Codex.
 //   2026-10-04: Hold accepted Core waterfall levels in the remote codec window.
 //               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-04: Opt-in waterfall diagnostic binding, row and applied extras
+//               provenance only; no routing changes. J.J. Boyd (KG4VCF),
+//               AI-assisted via OpenAI Codex.
 //   2026-10-04: Keep local PC microphone preview capture while unkeyed,
 //               independently of uplink admission; discard preview PCM.
 //               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
@@ -135,6 +140,10 @@
 //               pending replacement until the media connection is ready and
 //               the radio is on receive. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-10-06: Issue #351: the silence rules wait while the Core's radio
+//               is down and count from its return, so a radio dropout no
+//               longer moves media back to the tunnel or starts it over.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
@@ -151,7 +160,7 @@
 #include "core/session/media/DaemonMediaController.h"
 #include "core/session/media/DualPathAudio.h"
 #include "core/session/IceConfiguration.h"
-#include "core/ClarityController.h"
+#include "gui/PanClarityRegistry.h"
 #include "core/spectrum/SpectrumReducer.h"
 #include "core/ControlRanges.h"
 #include "core/FFTEngine.h"
@@ -831,6 +840,8 @@ struct RemoteMediaController::Private {
             qint64 sentAtMs = 0;
             bool timedOut = false;
         };
+        QPointer<PanClarityRegistry> clarityRegistry;
+        PanClarityRegistry::RecipientToken clarityToken;
         QString panId;
         int miniSliceId = -1; // -1 is the existing pan destination.
         bool isMini() const { return miniSliceId >= 0; }
@@ -895,12 +906,14 @@ struct RemoteMediaController::Private {
         QMetaObject::Connection ctunGesture;
         QMetaObject::Connection centreGesture;
         ~Binding() {
+            if (clarityRegistry) { clarityRegistry->setRemoteAvailable(panId, clarityToken, false); }
             QObject::disconnect(ctunGesture);
             QObject::disconnect(centreGesture);
         }
     };
     QPointer<StationClient> client;
     QPointer<RadioModel> model;
+    QPointer<PanClarityRegistry> clarityRegistry;
     QPointer<PanadapterStack> stack;
     QSet<int> miniWanted;
     // Parity Task 28: this media start declared txDisplayVersion.
@@ -1451,6 +1464,11 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         updateDirectUpgrade(viaTunnel);
         if (!self || !d->peer) { return; }
         if (d->coreTransmitting()) { return; }
+        // Issue #351: the Core sends no audio or display while its radio
+        // is down, so that silence says nothing about this path. Both
+        // silence rules wait for the radio's return, which restarts their
+        // clocks (connectionStateChanged below).
+        if (!d->model->isConnected()) { return; }
         if (slowPath && d->lastAudio.elapsed() > kMediaStallMs) {
             qCInfo(lcRemoteMedia) << "No audio from the Core for" << d->lastAudio.elapsed()
                                   << "ms on a relayed path; starting audio and display again";
@@ -1895,6 +1913,14 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             if (!retireSubscriptions(endpoints)) { return; }
             requestAudio();
         } else {
+            // Issue #351: the Core sent no audio or display while its radio
+            // was down, and the radio's first audio can come after this
+            // news does. The silence rules count from the radio's return,
+            // as they do from the return to receive.
+            const qint64 now = d->allocationClock();
+            if (d->lastAudio.isValid()) { d->lastAudio.restart(); }
+            if (d->lastMediaMs >= 0) { d->lastMediaMs = now; }
+            if (d->fallbackFinishedMs >= 0) { d->fallbackFinishedMs = now; }
             refreshSubscriptions();
             requestAudio();
         }
@@ -2918,8 +2944,16 @@ void RemoteMediaController::refreshAudioStatus()
     emit audioStatusChanged();
 }
 
+void RemoteMediaController::setClarityRegistry(PanClarityRegistry* registry)
+{
+    if (d->clarityRegistry == registry) { return; }
+    if (d->clarityRegistry) { d->clarityRegistry->invalidateRemoteSession(); }
+    d->clarityRegistry = registry;
+}
+
 void RemoteMediaController::stop()
 {
+    if (d->clarityRegistry) { d->clarityRegistry->invalidateRemoteSession(); }
     // iPhone app plan Task 29: a replacement under way and a peer still
     // draining go with the media session.
     d->replaceDeadline->stop();
@@ -3411,6 +3445,7 @@ void RemoteMediaController::promoteReplacement()
     disconnect(next, nullptr, this, nullptr);
     d->replacement = nullptr;
     d->peer = next;
+    if (d->clarityRegistry) { d->clarityRegistry->invalidateRemoteSession(); }
     // The direct media ladder: the connection in use is now the new one,
     // and its silence is counted from here.
     d->currentRouted = std::exchange(d->replacementRouted, false);
@@ -3426,6 +3461,22 @@ void RemoteMediaController::promoteReplacement()
     emit networkPathChanged();
     d->connectionId = d->replacementId;
     d->replacementId.clear();
+    // The existing migration contract carries accepted display contexts to
+    // the replacement peer. Replace their consumer authority after explicit
+    // session invalidation; wire peer/connection validation remains unchanged.
+    if (d->clarityRegistry) {
+        for (auto& [endpointId, binding] : d->bindings) {
+            if (!binding.accepted || binding.rejected || binding.retiring
+                || binding.suspending || binding.isMini() || binding.transmit
+                || !binding.widget || !binding.slice) { continue; }
+            binding.clarityRegistry = d->clarityRegistry;
+            binding.clarityToken = d->clarityRegistry->bindRemote(binding.panId,
+                binding.widget, binding.slice,
+                {binding.observedStream, binding.observedStreamEpoch,
+                 binding.capture.sourceCentreHz, binding.capture.sourceSampleRateHz},
+                d->epoch, endpointId, binding.context.codec.contextGeneration);
+        }
+    }
     connectPeer(next, d->epoch);
     for (const auto& [sliceId, stream] : d->iqStreams) {
         if (stream.wanted) { sendIqRequest(sliceId, true); }
@@ -4125,6 +4176,7 @@ bool RemoteMediaController::retireSubscriptions(const QList<quint32>& endpointId
             found->second.widget = nullptr;
             found->second.slice = nullptr;
             found->second.retiring = true;
+            if (found->second.clarityRegistry) { found->second.clarityRegistry->setRemoteAvailable(found->second.panId, found->second.clarityToken, false); }
             found->second.suspending = false;
             const QString panId = found->second.panId;
             if (widget) {
@@ -4374,6 +4426,7 @@ void RemoteMediaController::refreshSubscriptions()
         ++binding.revision;
         if (binding.revision == 0) { ++binding.revision; }
         binding.accepted = false;
+            if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); }
         binding.rejected = false;
         binding.refusalReason.clear();
         binding.decoder.reset();
@@ -4445,6 +4498,7 @@ void RemoteMediaController::refreshLegacyMiniSubscriptions()
         ++binding.revision;
         if (binding.revision == 0) { ++binding.revision; }
         binding.accepted = false;
+            if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); }
         binding.rejected = false;
         binding.decoder.reset();
         binding.presenter.reset();
@@ -4712,7 +4766,8 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             auto found = d->bindings.find(endpointId);
             if (found == d->bindings.end()) { continue; }
             Private::Binding& binding = found->second;
-            binding.suspending = true; // Preserve the widget/history across the release.
+            binding.suspending = true;
+            if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); } // Preserve the widget/history across the release.
             setPanStatus(binding.panId, phaseState(PanDisplayState::Phase::ChangingWindow));
             if (!self) { return; }
             if (binding.pending) { continue; }
@@ -4936,6 +4991,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             if (!self) { return; }
             if (found == d->bindings.end()) { continue; }
             found->second.suspending = true;
+            if (found->second.clarityRegistry) { found->second.clarityRegistry->setRemoteAvailable(found->second.panId, found->second.clarityToken, false); }
             found->second.refusalReason.clear();
             if (found->second.pending) { continue; }
             if (found->second.acceptedRevision == 0) {
@@ -5082,6 +5138,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         if (binding.isMini()) {
             emit miniDisplayUnavailable(binding.miniSliceId);
             binding.accepted = false;
+            if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); }
             binding.decoder.reset();
             binding.presenter.reset();
             binding.lastMiniTrace.clear();
@@ -5883,6 +5940,7 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
             binding.acceptedCharge = {};
             binding.acceptedRequest = {};
             binding.accepted = false;
+            if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); }
             binding.contextRevision = 0;
             binding.decoder.reset();
             binding.presenter.reset();
@@ -5938,6 +5996,7 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
                 binding.acceptedCharge = {};
                 binding.acceptedRequest = {};
                 binding.accepted = false;
+            if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); }
                 binding.contextRevision = 0;
                 binding.decoder.reset();
                 binding.presenter.reset();
@@ -5973,6 +6032,7 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
             binding.acceptedCharge = {};
             binding.acceptedRequest = {};
             binding.accepted = false;
+            if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); }
             binding.contextRevision = 0;
             binding.decoder.reset();
             binding.presenter.reset();
@@ -6158,7 +6218,10 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             || !number(payload, "floorDbm", -400, 100, floor)
             || !d->model || !d->model->isConnected() || !d->stack
             || !binding.slice
-            || d->stack->spectrum(d->stack->activePanId()) != binding.widget
+            || binding.isMini() || binding.transmit || binding.retiring || binding.suspending
+            || d->stack->spectrum(binding.panId) != binding.widget
+            || !d->stack->panadapter(binding.panId)
+            || d->stack->panadapter(binding.panId)->activeSliceIndex() != binding.slice->sliceIndex()
             || binding.observedStream != binding.slice->streamIndex()
             || binding.observedStreamEpoch != binding.slice->streamEpoch()
             || (budgetMode
@@ -6168,15 +6231,17 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
                 : d->request(binding.widget, binding.slice) != binding.observed)) {
             return;
         }
-        // Clarity remains the GUI's existing active-pan controller. Core
-        // supplies the full-source percentile, before any display detector
+        // Core supplies the full-source percentile, before any display detector
         // or codec can bias it; palette and operator overrides stay local.
-        if (ClarityController* clarity = d->model->clarityController()) {
+        if (d->clarityRegistry) {
             if (!binding.receivedNoiseFloor) {
                 binding.receivedNoiseFloor = true;
                 qCInfo(lcRemoteMedia) << "Core noise floor received for Clarity:" << floor << "dBm";
             }
-            clarity->feedNoiseFloor(static_cast<float>(floor));
+            const QString panId = binding.panId;
+            const QPointer<SpectrumWidget> widget(binding.widget);
+            const auto token = binding.clarityToken;
+            d->clarityRegistry->feedRemoteFloor(panId, widget, token, static_cast<float>(floor));
         }
         return;
     }
@@ -6202,6 +6267,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             const bool operatorChange = reason == QLatin1String(kRetireReasonSliceRemoved)
                 || reason == QLatin1String(kRetireReasonStreamBindingChanged);
             binding.accepted = false;
+            if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); }
             binding.rejected = true;
             binding.refusalReason = operatorChange ? QString()
                 : (reason.isEmpty() ? QStringLiteral("Core refused the display allocation.")
@@ -6343,6 +6409,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         binding.accepted = true;
         binding.rejected = false;
         binding.transmit = true;
+        if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); }
         binding.transmitGeneration = context.codec.contextGeneration;
         binding.transmitContext = *decoded;
         // Merge with R-R3-21: a transmit context that beats the window's
@@ -6403,6 +6470,14 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         || it->second.context.codec.contextGeneration
             != context.codec.contextGeneration) { return; }
     auto& installed = it->second;
+    if (d->clarityRegistry && installed.widget && installed.slice) {
+        installed.clarityRegistry = d->clarityRegistry;
+        installed.clarityToken = d->clarityRegistry->bindRemote(installed.panId,
+            installed.widget, installed.slice,
+            {installed.observedStream, installed.observedStreamEpoch, sourceCentre, rate},
+            d->epoch, endpointId, context.codec.contextGeneration);
+    }
+
     // The source crop may be bin-aligned. Remember the displayed accepted
     // window so the polling observer does not feed an ACK back as a new zoom.
     if (installed.slice) {
@@ -6567,6 +6642,10 @@ void RemoteMediaController::receiveDisplayExtras(const QByteArray& packet)
     if (d->transmittingPans.contains(binding.panId)) { return; }
     binding.widget->setCoreWaterfallLevels(decoded.frame.waterfallLevelsDbm->first,
                                            decoded.frame.waterfallLevelsDbm->second);
+    if (qEnvironmentVariableIntValue("NEREUS_TRACE_WF_STATE") == 1) {
+        binding.widget->m_wfExtrasDiagnostics = SpectrumWidget::WaterfallExtrasDiagnostics{
+            decoded.frame.endpointId, decoded.frame.contextGeneration, decoded.frame.encoderSequence};
+    }
 }
 
 RemoteDisplayTelemetry RemoteMediaController::displayTelemetry() const
@@ -6723,9 +6802,28 @@ void RemoteMediaController::presentDueDisplay()
                 continue;
             }
             const QPointer<SpectrumWidget> widget = it->second.widget;
+            const bool traceWaterfall = qEnvironmentVariableIntValue("NEREUS_TRACE_WF_STATE") == 1;
+            if (traceWaterfall) {
+                widget->m_wfDiagnosticStack = d->stack;
+                widget->m_wfDiagnosticPanId = it->second.panId;
+                widget->m_wfDiagnosticSliceId = it->second.slice ? it->second.slice->sliceIndex() : -1;
+                widget->m_wfDiagnosticStreamEpoch = it->second.observedStreamEpoch;
+            }
+            // Diagnostic metadata follows the existing queue insertion only.
+            // Synthesized blends/repeats do not carry source encoder sequences.
+            const auto recordQueuedProvenance = [&]() {
+                if (!traceWaterfall || !widget || widget->m_remoteRowQueue.isEmpty()) { return; }
+                auto& row = widget->m_remoteRowQueue.last().diagnostics;
+                row.presentationKind = static_cast<int>(item.kind);
+                row.encoderSequence = item.kind == RemoteDisplayPresenter::Kind::Frame
+                    ? std::optional<quint32>(item.frame.encoderSequence) : std::nullopt;
+                row.sliceId = widget->m_wfDiagnosticSliceId;
+                row.bindingStreamEpoch = widget->m_wfDiagnosticStreamEpoch;
+            };
             if (item.kind != RemoteDisplayPresenter::Kind::Frame) {
                 if (widget->enqueueRemoteWaterfallRow(item.frame.waterfallDbm, item.frame.wideDbm,
                                                       item.capture)) {
+                    recordQueuedProvenance();
                     if (item.kind == RemoteDisplayPresenter::Kind::Blended) {
                         ++d->displayCounters.rowsBlended;
                     } else {
@@ -6746,9 +6844,11 @@ void RemoteMediaController::presentDueDisplay()
                                                        item.centreHz, item.spanHz);
                 }
                 if (item.frame.waterfallAdvance && widget) {
-                    widget->enqueueRemoteWaterfallRow(item.frame.waterfallDbm,
-                                                      item.frame.wideDbm,
-                                                      item.capture);
+                    if (widget->enqueueRemoteWaterfallRow(item.frame.waterfallDbm,
+                                                          item.frame.wideDbm,
+                                                          item.capture)) {
+                        recordQueuedProvenance();
+                    }
                 }
                 continue;
             }

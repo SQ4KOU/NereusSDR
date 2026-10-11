@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(NereusSDR VERSION 0.5.2 LANGUAGES C CXX)
+project(NereusSDR VERSION 2026.10.0 LANGUAGES C CXX)
 
 if(APPLE)
     enable_language(OBJCXX)
@@ -1109,6 +1109,7 @@ set(CORE_SOURCES
     src/core/audio/CaptureHelperLocator.cpp
     src/core/StationBinaryLocator.cpp
     src/core/audio/CompositeTxMicRouter.cpp
+    src/core/audio/CmAsioBus.cpp
     src/core/audio/PortAudioBus.cpp
     src/core/audio/QAudioSinkAdapter.cpp
     src/core/audio/RealtimeAudioPriority.cpp
@@ -1602,6 +1603,7 @@ set(GUI_SOURCES
     src/gui/RemoteMediaController.cpp
     # Remote-window parity Task 29 (A11, R-R3-49): one MOX display
     # controller for both windows, and its local and remote sources.
+    src/gui/PanClarityRegistry.cpp
     src/gui/MoxDisplayController.cpp
     src/gui/TxDisplaySource.cpp
     # iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): the
@@ -1906,6 +1908,7 @@ set(GUI_SOURCES
     src/gui/setup/hardware/BandwidthMonitorTab.cpp
     src/gui/setup/AudioAdvancedPage.cpp
     src/gui/setup/AudioBackendStrip.cpp
+    src/gui/setup/AudioCmAsioPage.cpp
     src/gui/setup/AudioDevicesPage.cpp
     src/gui/setup/AudioTxInputPage.cpp
     src/gui/setup/CaptureStatusText.cpp

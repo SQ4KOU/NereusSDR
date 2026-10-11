@@ -75,7 +75,17 @@ string(REPLACE "${_rnnoise_anchor}" "${_rnnoise_anchor} model->file = NULL;"
        _rnnoise_text "${_rnnoise_text}")
 # Write through configure_file(COPYONLY) so a reconfigure that produces the
 # same text leaves the timestamp alone and does not rebuild rnnoise.
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/rnnoise_patched/denoise.c.in" "${_rnnoise_text}")
+# SQ4KOU_RNNOISE_WRITE_STABLE_V1
+function(_sq4kou_SQ4KOU_RNNOISE_WRITE_STABLE_V1_write_if_different path content)
+    if(EXISTS "${path}")
+        file(READ "${path}" _sq4kou_old_text)
+        if("${_sq4kou_old_text}" STREQUAL "${content}")
+            return()
+        endif()
+    endif()
+    file(WRITE "${path}" "${content}")
+endfunction()
+_sq4kou_SQ4KOU_RNNOISE_WRITE_STABLE_V1_write_if_different("${CMAKE_CURRENT_BINARY_DIR}/rnnoise_patched/denoise.c.in" "${_rnnoise_text}")
 configure_file("${CMAKE_CURRENT_BINARY_DIR}/rnnoise_patched/denoise.c.in"
                "${CMAKE_CURRENT_BINARY_DIR}/rnnoise_patched/denoise.c" COPYONLY)
 list(REMOVE_ITEM RNNOISE_SOURCES "${_rnnoise_denoise}")
@@ -123,7 +133,7 @@ target_compile_definitions(rnnoise_static PRIVATE
 
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rnnoise_config")
 
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/rnnoise_config/config.h"
+_sq4kou_SQ4KOU_RNNOISE_WRITE_STABLE_V1_write_if_different("${CMAKE_CURRENT_BINARY_DIR}/rnnoise_config/config.h"
 "/* NereusSDR-generated config.h shim for rnnoise FetchContent build.
  * Minimal: only the macros rnnoise needs to compile without autotools.
  * Generated at configure time — do not edit by hand.
@@ -146,7 +156,7 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/rnnoise_config/config.h"
 # prefix), so the rnnoise_config dir must appear before src/ in the search
 # path — the target_include_directories(PRIVATE rnnoise_config) below
 # guarantees that ordering.
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/rnnoise_config/rnnoise_data.h"
+_sq4kou_SQ4KOU_RNNOISE_WRITE_STABLE_V1_write_if_different("${CMAKE_CURRENT_BINARY_DIR}/rnnoise_config/rnnoise_data.h"
 "/* NereusSDR-generated rnnoise_data.h shim for rnnoise FetchContent build.
  * Constants ported from:
  *   Thetis/Project Files/lib/NR_Algorithms_x64/src/rnnoise/src/rnnoise_data.h

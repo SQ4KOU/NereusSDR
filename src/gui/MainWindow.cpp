@@ -11,6 +11,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-05 — J.J. Boyd (KG4VCF). Independent per-pan Clarity ownership.
+//                 AI-assisted via OpenAI Codex.
 //   2026-10-04 — Selected RX source identity and RX-only presentation reset by
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-03 — Describe saved control scope in user words by J.J. Boyd
@@ -879,6 +881,7 @@ warren@wpratt.com
 #include "gui/widgets/GradientPickerWidget.h"
 #include "core/NbFamily.h"
 #include "core/ClarityController.h"
+#include "gui/PanClarityRegistry.h"
 #include "core/StepAttenuatorController.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
@@ -1103,6 +1106,36 @@ namespace NereusSDR {
 
 namespace {
 constexpr char kInitialOwnedPanViewProperty[] = "initialOwnedPanView";
+constexpr char kInitialOwnedPanCtunProperty[] = "initialOwnedPanPreservesCtun";
+
+void followRemoteSliceFrequency(SpectrumWidget* spectrum, double frequencyHz)
+{
+    if (!spectrum) { return; }
+    const double halfSpan = spectrum->bandwidth() / 2.0;
+    const bool offScreen = frequencyHz < spectrum->centerFrequency() - halfSpan
+        || frequencyHz > spectrum->centerFrequency() + halfSpan;
+    // Core alone moves the DDC and applies the demodulator shift.
+    // Following a mirrored VFO must not echo an explicit pan gesture.
+    if (!spectrum->ctunEnabled() || offScreen) {
+        spectrum->setDisplayWindowPreservingHistory(frequencyHz, spectrum->bandwidth());
+    }
+    spectrum->setVfoFrequency(frequencyHz);
+}
+
+void armInitialOwnedPanView(SpectrumWidget* sw, bool preservesVisibleCtun = false)
+{
+    if (!sw) { return; }
+    // The first authoritative owned slice may arrive on the primary pane too.
+    // Retire this once-only placement on a user gesture; compare the geometry
+    // again when ownership arrives so accepted Core crops are preserved.
+    sw->setProperty(kInitialOwnedPanViewProperty,
+                          QPointF(sw->centerFrequency(), sw->bandwidth()));
+    sw->setProperty(kInitialOwnedPanCtunProperty, preservesVisibleCtun);
+    QObject::connect(sw, &SpectrumWidget::centerChanged, sw,
+                     [sw](double) {
+        sw->setProperty(kInitialOwnedPanViewProperty, QVariant());
+    });
+}
 
 void initializeOwnedPanView(SpectrumWidget* spectrum, double frequencyHz)
 {
@@ -1113,7 +1146,14 @@ void initializeOwnedPanView(SpectrumWidget* spectrum, double frequencyHz)
     const QPointF bornAt = initialView.toPointF();
     if (qFuzzyCompare(spectrum->centerFrequency(), bornAt.x())
         && qFuzzyCompare(spectrum->bandwidth(), bornAt.y())) {
-        spectrum->setDisplayWindowPreservingHistory(frequencyHz, spectrum->bandwidth());
+        // The primary pane already follows the remote CTUN rule: retain an
+        // on-window centre. Secondary panes keep their existing first-owned
+        // placement, so this does not change that separate policy.
+        if (spectrum->property(kInitialOwnedPanCtunProperty).toBool()) {
+            followRemoteSliceFrequency(spectrum, frequencyHz);
+        } else {
+            spectrum->setDisplayWindowPreservingHistory(frequencyHz, spectrum->bandwidth());
+        }
         spectrum->updateVfoPositions();
     }
 }
@@ -1532,9 +1572,12 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
     // and post an 8-second status-bar explanation.
     connect(m_radioModel, &RadioModel::autoConnectFailed,
             this, [this](const QString& mac, NereusSDR::ConnectFailure reason) {
-        showConnectionPanel();
-        if (m_connectionPanel) {
-            m_connectionPanel->highlightMac(mac);
+        // Do not open the global Connections picker on an automatic
+        // connection failure. Keep the existing status-bar warning below;
+        // the operator can choose another radio from Setup.
+        if (!m_connectionPickerManaged) {
+            showConnectionPanel();
+            if (m_connectionPanel) { m_connectionPanel->highlightMac(mac); }
         }
         const auto saved = AppSettings::instance().savedRadio(mac);
         const QString name = (saved.has_value() && !saved->info.name.isEmpty())
@@ -1731,7 +1774,13 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
         // Same flush as closeEvent — covers the signal-shutdown path
         // (SIGTERM, force-quit, debugger detach) where closeEvent
         // doesn't run. Idempotent when closeEvent already flushed.
+        const bool alreadyShuttingDown = m_shuttingDown;
         m_shuttingDown = true;
+        // Save before radio teardown, and don't repeat a normal close's save.
+        if (!alreadyShuttingDown && m_containerManager) {
+            m_containerManager->saveState();
+        }
+        if (m_clarityRegistry) { m_clarityRegistry->retireAll(); }
         if (m_desktopStationController) { m_desktopStationController->stop(); }
         // 2026-05-22 bench-finding: graceful radio disconnect MUST happen
         // before the process tears down so the SendStop frame (run=0
@@ -1745,9 +1794,7 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
             m_radioModel->disconnectFromRadio();
             m_radioModel->flushPendingSettingsSave();
         }
-        if (m_containerManager) {
-            m_containerManager->saveState();
-        }
+        // Container geometry was flushed before radio teardown above.
         // Issue #206 — also flush window geometry on signal-based
         // shutdown (SIGTERM / force-quit). Idempotent with the
         // closeEvent path above.
@@ -1771,6 +1818,7 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
 MainWindow::~MainWindow()
 {
     m_shuttingDown = true;
+    if (m_clarityRegistry) { m_clarityRegistry->retireAll(); }
     // Retire native hosts while their windows and original construction owners
     // still exist. QObject's later child teardown is too late to reparent a
     // parked native applet safely back into this window.
@@ -2438,6 +2486,9 @@ void MainWindow::setDesktopStationController(DesktopStationController* controlle
 
 void MainWindow::refreshDesktopFlags()
 {
+    // Pan retirement may already have destroyed the flag widgets.
+    // Teardown releases station ownership without refreshing retired UI.
+    if (m_shuttingDown) { return; }
     if (!m_radioModel || m_radioModel->role() != RadioModel::Role::Local) { return; }
     const bool hosting = desktopHosting();
     StationServer* server = hosting ? m_desktopStationController->server() : nullptr;
@@ -2464,6 +2515,9 @@ void MainWindow::refreshDesktopFlags()
 
 void MainWindow::refreshDesktopStationState()
 {
+    // Ownership release stays in the setter; these receivers refresh UI
+    // that pan retirement may already have destroyed during shutdown.
+    if (m_shuttingDown) { return; }
     if (!m_radioModel || m_radioModel->role() != RadioModel::Role::Local) { return; }
     const quint64 bindingGeneration = m_desktopBindingGeneration;
     const bool hosting = desktopHosting();
@@ -3133,7 +3187,8 @@ void MainWindow::refreshSliceChooser()
         // Complete the same once-only placement when ownership becomes known.
         if (sliceAccessClient() && windowControlsSlice(it.key())
             && !markerOnlyPlacement(it.key())) {
-            if (SliceModel* slice = m_radioModel->sliceById(it.key())) {
+            if (SliceModel* slice = m_radioModel->sliceById(it.key());
+                slice && !slice->panKey().isEmpty()) {
                 initializeOwnedPanView(qobject_cast<SpectrumWidget*>(flag->parentWidget()),
                                        slice->frequency());
             }
@@ -3842,7 +3897,9 @@ void MainWindow::ensureRemoteSession()
         }
         connect(m_coreStopBanner, &CoreStopBanner::chooseAnotherCoreRequested, this, [this] {
             if (m_shuttingDown || m_retiringSession) { return; }
-            if (m_connectionPickerManaged) { emit connectionsRequested(); }
+            if (m_connectionPickerManaged) {
+                openSetupAtPage(QStringLiteral("Remote Access"));
+            }
         });
         connect(m_coreStopBanner, &CoreStopBanner::checkForUpdatesRequested,
                 this, &MainWindow::checkForUpdates);
@@ -3858,7 +3915,8 @@ void MainWindow::ensureRemoteSession()
                 this, [this] {
             if (m_shuttingDown || m_retiringSession) { return; }
             if (m_connectionPickerManaged) {
-                emit connectionsRequested();
+                // No automatic Connections window on operator disconnect.
+                // It remains available from Setup > Remote Access.
                 return;
             }
             showRemoteConnectionPanel();
@@ -3885,6 +3943,7 @@ void MainWindow::ensureRemoteSession()
                 this, &MainWindow::applyRemoteRoleGating);
         m_remoteMedia = new RemoteMediaController(m_stationClient, m_radioModel,
                                                m_panStack, m_stationClient);
+        m_remoteMedia->setClarityRegistry(m_clarityRegistry);
         connect(m_remoteMedia, &RemoteMediaController::miniDisplayFrame, this,
                 &MainWindow::presentMiniFrame);
         connect(m_remoteMedia, &RemoteMediaController::miniDisplayUnavailable, this,
@@ -3902,6 +3961,11 @@ void MainWindow::ensureRemoteSession()
         }
         m_moxDisplay->setSource(m_remoteTxDisplaySource.get());
         m_moxDisplay->followStation(m_stationClient);
+        if (m_clarityRegistry) {
+            m_clarityRegistry->setKeyed(m_moxDisplay->isKeyed());
+            connect(m_moxDisplay, &MoxDisplayController::keyedChanged,
+                    m_clarityRegistry, &PanClarityRegistry::setKeyed, Qt::UniqueConnection);
+        }
         // Parity Task 31 (A11): DUP. The Core keeps the transmitting pan's
         // receive frames for a subscription that says `duplex` (version 3);
         // the menu item and the DUP button follow the Core's version.
@@ -4225,7 +4289,9 @@ void MainWindow::connectionRequestedByOperator()
 {
     if (m_shuttingDown) { return; }
     if (m_connectionPickerManaged) {
-        emit connectionsRequested();
+        // Radio menu and status-bar gestures navigate to Setup instead of
+        // opening Connections outside its designated entry point.
+        openSetupAtPage(QStringLiteral("Remote Access"));
         return;
     }
     if (!m_station.isRemote()) {
@@ -4600,7 +4666,7 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     // The pending geometry belongs to this widget instance, not its pan ID;
     // reused views and additional cohosted flags therefore stay where they are.
     if (sliceAccessClient() && windowControlsSlice(sliceIndex)
-        && !markerOnlyPlacement(sliceIndex)) {
+        && !slice->panKey().isEmpty() && !markerOnlyPlacement(sliceIndex)) {
         initializeOwnedPanView(sw, slice->frequency());
     }
 
@@ -4623,7 +4689,7 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         // A listened slice a layout change placed here: its flag and its own
         // edge marker, never this pan's VFO.
         sw->setEdgeMarkedSlice(sliceIndex, true);
-    } else {
+    } else if (m_radioModel->ownsLocalDsp() || !slice->panKey().isEmpty()) {
         sw->setVfoFrequency(slice->frequency());
     }
     newFlag->setMode(slice->dspMode());
@@ -4838,9 +4904,43 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     // panKeyChanged added one more frequency, mode and filter handler, and a
     // deleted flag's handlers stayed live. The hooks below are the host-side
     // half; the binding repaints the flag before calling them.
+    const auto queueKeylessPresentation = [this, slice, newFlag](double hz) {
+        const QPointer<SliceModel> pendingSlice(slice);
+        // applyUpdates completes synchronously; the flag's context drops
+        // this work if migration/removal retires it before the next turn.
+        // A complete record may legitimately have no key, so keep the
+        // existing hosting fallback once hydration has finished.
+        QMetaObject::invokeMethod(newFlag, [this, pendingSlice, hz]() {
+            if (!pendingSlice || !m_radioModel
+                || m_radioModel->sliceById(pendingSlice->sliceIndex()) != pendingSlice
+                || !pendingSlice->panKey().isEmpty()
+                || !qFuzzyCompare(pendingSlice->frequency(), hz)) { return; }
+            SpectrumWidget* host = spectrumForSlice(pendingSlice);
+            if (!host) { return; }
+            if (markerOnlyPlacement(pendingSlice->sliceIndex())) {
+                host->setEdgeMarkedSlice(pendingSlice->sliceIndex(), true);
+                host->refreshSliceFlags();
+            } else {
+                followRemoteSliceFrequency(host, hz);
+            }
+        }, Qt::QueuedConnection);
+    };
+    // A completed record can retain both the default frequency and empty
+    // key, emitting neither changed signal. Its initial flag still needs
+    // the same guarded fallback after synchronous record hydration.
+    if (!m_radioModel->ownsLocalDsp() && slice->panKey().isEmpty()) {
+        queueKeylessPresentation(slice->frequency());
+    }
     SliceFlagHostHooks hostHooks;
-    hostHooks.frequencyChanged = [this, slice](double hz) {
+    hostHooks.frequencyChanged = [this, slice, queueKeylessPresentation](double hz) {
         if (m_handlingBandJump) { return; }
+        // A remote object record publishes the slice before its pan key.
+        // Its frequency is already on the flag, but must not move the pane
+        // it temporarily borrows while that authoritative key is still absent.
+        if (!m_radioModel->ownsLocalDsp() && slice->panKey().isEmpty()) {
+            queueKeylessPresentation(hz);
+            return;
+        }
         // Keep the hosting pan's VFO marker on this slice as it tunes.
         // Resolved per-call rather than captured, because a slice can migrate
         // to another pan and the flag follows it there.
@@ -4874,12 +4974,7 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         const double halfBw = host->bandwidth() / 2.0;
         const bool offScreen = (hz < center - halfBw) || (hz > center + halfBw);
         if (!m_radioModel->ownsLocalDsp()) {
-            // Core alone moves the DDC and applies the demodulator shift.
-            // Following a mirrored VFO must not echo an explicit pan gesture.
-            if (!host->ctunEnabled() || offScreen) {
-                host->setDisplayWindowPreservingHistory(hz, host->bandwidth());
-            }
-            host->setVfoFrequency(hz);
+            followRemoteSliceFrequency(host, hz);
             return;
         }
         if (!host->ctunEnabled() || offScreen) {
@@ -5302,14 +5397,6 @@ FFTEngine* MainWindow::ensureStreamWired(int streamIndex)
             [nf](int, const QVector<float>& binsDbm) {
         static constexpr float kFrameIntervalMs = 33.0f;
         nf->feed(binsDbm, kFrameIntervalMs);
-    });
-
-    // Parity Task 18: Clarity reads the stream of the pan it tunes.
-    connect(engine, &FFTEngine::fftReady, this,
-            [this, streamIndex](int, const QVector<float>& binsDbm) {
-        if (m_clarityController && streamIndex == clarityStreamIndex()) {
-            m_clarityController->feedBins(binsDbm);
-        }
     });
 
     return engine;
@@ -5822,15 +5909,10 @@ void MainWindow::wireSpectrumForPan(SpectrumWidget* sw, const QString& panId)
     configureSpectrumForPanForTest(sw, panId);
 
     if (!m_radioModel->ownsLocalDsp()) {
-        // Only wired for a newly created secondary pan. This transient Qt
-        // property is retired by its first owned flag or by a user gesture;
-        // it is never persisted and dies with the pane. Geometry comparison
-        // at flag creation also preserves a view moved without centerChanged.
-        sw->setProperty(kInitialOwnedPanViewProperty,
-                        QPointF(sw->centerFrequency(), sw->bandwidth()));
-        connect(sw, &SpectrumWidget::centerChanged, sw, [sw](double) {
-            sw->setProperty(kInitialOwnedPanViewProperty, QVariant());
-        });
+        // This transient Qt property is retired by its first owned flag or
+        // by a user gesture; it is never persisted and dies with the pane.
+        // Geometry comparison also preserves a view moved without centerChanged.
+        armInitialOwnedPanView(sw);
     }
 
     // Parity ruling C13: in a remote window the Performance Overlay shows
@@ -6074,7 +6156,12 @@ void MainWindow::ensureOverlayPanels()
     for (auto* applet : m_panStack->allApplets()) {
         if (!applet) { continue; }
         const QString panId = applet->panId();
-        if (m_overlayPanels.contains(panId)) { continue; }
+        if (m_overlayPanels.contains(panId)) {
+            PanadapterModel* saved = panId == QStringLiteral("pan-0") && !m_radioModel->panadapters().isEmpty()
+                ? m_radioModel->panadapters().first() : nullptr;
+            if (m_clarityRegistry) { m_clarityRegistry->registerPan(panId, m_panStack->spectrum(panId), m_overlayPanels.value(panId), saved); }
+            continue;
+        }
 
         SpectrumWidget* sw = m_panStack->spectrum(panId);
         if (!sw) { continue; }
@@ -6133,6 +6220,9 @@ void MainWindow::ensureOverlayPanels()
         panel->move(4, 4);
         panel->show();
         m_overlayPanels.insert(panId, panel);
+        PanadapterModel* saved = panId == QStringLiteral("pan-0") && !m_radioModel->panadapters().isEmpty()
+            ? m_radioModel->panadapters().first() : nullptr;
+        if (m_clarityRegistry) { m_clarityRegistry->registerPan(panId, sw, panel, saved); }
         // Parity Task 18: this strip's Display flyout and Clarity Re-tune act
         // on this pan.
         wirePanDisplayFlyout(panel, sw, panId);
@@ -6144,6 +6234,7 @@ void MainWindow::ensureOverlayPanels()
         connect(applet, &PanadapterApplet::activeSliceChanged, panel,
                 [this, panel](const QString&, int) {
             panel->bindToPanSlice();
+            reconcileClarityBindings();
             refreshOverlayAttAccess();   // TX rulings (item 3)
         });
 
@@ -6205,7 +6296,7 @@ void MainWindow::ensureOverlayPanels()
     }
     // Parity Task 18 (C8): a pan created after connect says so when empty.
     refreshNoSliceHints();
-    refreshClarityBadges();
+    reconcileClarityBindings();
 }
 
 // Parity Task 18: one pan's Display flyout and Clarity Re-tune, on that pan.
@@ -6252,32 +6343,29 @@ void MainWindow::wirePanDisplayFlyout(SpectrumOverlayPanel* panel, SpectrumWidge
         dialog->selectPage(page);
         dialog->show();
     });
-    // Clarity tunes the active pan; Re-tune on this pan's strip makes this
-    // pan the one it tunes, then estimates afresh.
+    // Re-tune retains this strip's active-pan selection behavior; its
+    // controller is owned and retuned by the registry.
     connect(panel, &SpectrumOverlayPanel::clarityRetuneRequested, this,
-            [this, panId]() {
-        if (m_panStack) { m_panStack->setActivePan(panId); }
-        if (m_clarityController) { m_clarityController->retuneNow(); }
-    });
+            [this, panId]() { if (m_panStack) { m_panStack->setActivePan(panId); } });
+
 }
 
-void MainWindow::refreshClarityBadges()
+void MainWindow::reconcileClarityBindings()
 {
-    for (auto it = m_overlayPanels.constBegin(); it != m_overlayPanels.constEnd(); ++it) {
-        SpectrumOverlayPanel* panel = it.value();
-        if (!panel) { continue; }
-        const bool tuned = it.key() == m_clarityPanId;
-        panel->setClarityStatus(tuned && m_clarityBadgeActive,
-                                tuned && m_clarityBadgePaused);
+    if (!m_clarityRegistry || !m_panStack || !m_radioModel) { return; }
+    for (PanadapterApplet* applet : m_panStack->allApplets()) {
+        if (!applet) { continue; }
+        const QString id = applet->panId();
+        if (!m_radioModel->ownsLocalDsp()) { continue; }
+        SliceModel* slice = sliceForPan(id);
+        const int stream = slice ? slice->streamIndex() : -1;
+        FFTEngine* engine = stream >= 0 && m_fftEnginePool ? ensureStreamWired(stream) : nullptr;
+        const auto window = m_streamWindows.value(stream);
+        m_clarityRegistry->bindLocal(id, slice, engine,
+            {stream, slice ? slice->streamEpoch() : 0, window.centreHz,
+             static_cast<double>(window.sampleRateHz)});
     }
-}
-
-int MainWindow::clarityStreamIndex() const
-{
-    if (!m_panStack) { return -1; }
-    SliceModel* slice = sliceForPan(m_clarityPanId.isEmpty() ? m_panStack->activePanId()
-                                                              : m_clarityPanId);
-    return slice ? slice->streamIndex() : -1;
+    m_radioModel->setClarityController(m_clarityRegistry->controllerForPan(m_panStack->activePanId()));
 }
 
 // The slice this pan hosts: its own active slice if it has one, else the first
@@ -6493,6 +6581,7 @@ void MainWindow::rebuildFftRouting()
     // frequency / mode triggers and each pan's activeSliceChanged are wired
     // separately, since those move the overlay without moving the topology.
     refreshPanStatusOverlays();
+    reconcileClarityBindings();
 
     auto* router = m_radioModel->fftRouter();
     if (!router) { return; }
@@ -6840,6 +6929,7 @@ bool MainWindow::restoreMainWindowGeometry()
 
 void MainWindow::buildUI()
 {
+    m_clarityRegistry = new PanClarityRegistry(m_radioModel, this);
     // Title: name, version, then whatever else the operator needs to tell
     // this window apart from another one.
     //
@@ -6908,6 +6998,9 @@ void MainWindow::buildUI()
     if (initialSpectrum) {
         configureSpectrumForPanForTest(initialSpectrum,
                                        QStringLiteral("pan-0"));
+        if (!m_radioModel->ownsLocalDsp()) {
+            armInitialOwnedPanView(initialSpectrum, true);
+        }
     }
 
     // Task 13 wires per-pan rebinding when the active pan changes; for
@@ -6941,6 +7034,7 @@ void MainWindow::buildUI()
     connect(m_panStack, &PanadapterStack::activePanChanged, this,
             [this](const QString& panId) {
         if (!m_radioModel || !m_panStack) { return; }
+        if (m_clarityRegistry) { m_radioModel->setClarityController(m_clarityRegistry->controllerForPan(panId)); }
         if (SpectrumWidget* sw = m_panStack->spectrum(panId)) {
             setSpectrumHooks(sw);
         }
@@ -6973,7 +7067,10 @@ void MainWindow::buildUI()
     // router entry for a pan that no longer exists is still wrong state,
     // so close it now that m_topology exists to keep in sync.
     connect(m_panStack, &PanadapterStack::panRetired, this,
-            [this](const QString& panId) { m_topology.unsubscribe(panId); });
+            [this](const QString& panId) {
+        if (m_clarityRegistry) { m_clarityRegistry->retirePan(panId); }
+        m_topology.unsubscribe(panId);
+    });
 
     // A stream's physical ADC can move without its stream index or its folded
     // chain index moving with it, so nothing that watches slice properties
@@ -7086,6 +7183,22 @@ void MainWindow::buildUI()
         // (Codex review round 3, PR #293.)
         m_panStack->applyLayout(restoredLayout, panIdsForLayout(restoredLayout));
         m_panStack->restoreSplitterState();
+
+        // Restore floating pans after the main window has been mapped.
+        // floatPanadapter() already restores each pan's saved geometry.
+        const QStringList floatingIds =
+            s.value(QStringLiteral("FloatingPanIds")).toString()
+                .split(QLatin1Char(','), Qt::SkipEmptyParts);
+        if (!floatingIds.isEmpty()) {
+            QTimer::singleShot(0, this, [this, floatingIds]() {
+                if (!m_panStack) { return; }
+                for (const QString& id : floatingIds) {
+                    if (m_panStack->panadapter(id)) {
+                        m_panStack->floatPanadapter(id);
+                    }
+                }
+            });
+        }
 
         // ...and finish the job once there IS a radio. Skipping the slice
         // add-loop above is right, but nothing used to pick it up afterwards,
@@ -7623,6 +7736,16 @@ void MainWindow::buildUI()
     // the applet panel is always populated regardless of restore path.
     populateDefaultMeter();
     m_containerManager->restoreSplitterState();
+    // Restore Overlay positions again once Qt has laid out the visible pane.
+    // The early restore above runs before the splitter has its final size.
+    QTimer::singleShot(0, this, [this] {
+        if (isVisible() && m_containerManager && m_containerManager->workspaceStore()) {
+            m_containerManager->reconcileWorkspace(m_containerManager->workspaceStore()->snapshot());
+            // Only subsequent user-time resizes may run AxisLock; never the
+            // initial Qt/QSplitter resize while saved positions are loading.
+            setProperty("containerAnchorsReady", true);
+        }
+    });
 
     // Phase 3P-I-a T17 — initial push. `containerAdded` fires during
     // restoreState() but the content (and any AntennaButtonItems) are
@@ -7654,7 +7777,11 @@ void MainWindow::buildUI()
     }
 
     // Default splitter sizes on first run: ~80% spectrum, ~20% panel
-    if (!AppSettings::instance().contains(QStringLiteral("MainSplitterSizes"))) {
+    if (m_mainSplitter->count() == 2
+        && !AppSettings::instance().contains(QStringLiteral("MainSplitterSizes"))
+        && (!m_containerManager || !m_containerManager->workspaceStore()
+            || m_containerManager->workspaceStore()->snapshot().extensions
+                   .value(QStringLiteral("splitterSizes")).toArray().isEmpty())) {
         m_mainSplitter->setSizes({1024, 256});
     }
 
@@ -7909,6 +8036,24 @@ void MainWindow::buildUI()
                 }
                 m_vfoWidgetsBySlice.remove(idx);
                 if (dest) { createSliceFlag(slice, dest); }
+            }
+            // Complete presentation on the authoritative host, even when
+            // Slice A's flag was already parented there and needed no rebuild.
+            // The pane's once-only placement preserves operator/listener views
+            // and accepted Core crops, exactly as a newly owned flag does.
+            if (dest && !m_radioModel->ownsLocalDsp()
+                && !markerOnlyPlacement(idx)) {
+                if (sliceAccessClient() && windowControlsSlice(idx)) {
+                    initializeOwnedPanView(dest, slice->frequency());
+                }
+                // Use the mirrored-frequency path: non-CTUN must update
+                // the view before the VFO, avoiding auto-scroll centreChanged
+                // writing a display margin back into the authoritative slice.
+                if (dest->ctunEnabled()) {
+                    dest->setVfoFrequency(slice->frequency());
+                } else {
+                    followRemoteSliceFrequency(dest, slice->frequency());
+                }
             }
             // Phase 3F Sub-Epic I Task 9: the slice now feeds a different
             // pan, so the FFT topology has to follow. Unconditional: the
@@ -8178,6 +8323,7 @@ void MainWindow::buildUI()
                 }
             }
         }
+        reconcileClarityBindings();
     });
 
     // Phase 3F Sub-Epic I Task 9: any change to which slices sit on which
@@ -8386,30 +8532,17 @@ void MainWindow::buildUI()
         }, Qt::QueuedConnection);
     }
 
-    // --- Phase 3G-9c: Clarity adaptive display tuning ---
-    m_clarityController = new ClarityController(this);
-    m_radioModel->setClarityController(m_clarityController);
-
-    // Restore enabled state from AppSettings + sync the clarityActive
-    // flag on SpectrumWidget so legacy AGC knows to stand down.
-    {
-        auto& s = AppSettings::instance();
-        // Ship default 2026-04-30: Clarity ON for fresh installs. Auto-tuning
-        // the noise floor is the better first-launch experience than asking
-        // the user to find and toggle the setting themselves.
-        bool clarityOn = s.value(QStringLiteral("ClarityEnabled"), QStringLiteral("True"))
-                            .toString() == QStringLiteral("True");
-        m_clarityController->setEnabled(clarityOn);
-        activeSpectrumWidget()->setClarityActive(clarityOn);
+    // Each full pan owns the existing adaptive policy and full-source inputs.
+    reconcileClarityBindings();
+    if (m_moxDisplay) {
+        m_clarityRegistry->setKeyed(m_moxDisplay->isKeyed());
+        connect(m_moxDisplay, &MoxDisplayController::keyedChanged,
+                m_clarityRegistry, &PanClarityRegistry::setKeyed);
     }
-
-    // Feed FFT bins to Clarity (auto-queued: spectrum thread → main).
-    // ClarityController holds one adaptive-display state, so it tracks one
-    // stream rather than whichever stream last produced a frame. Parity
-    // Task 18: that stream is the one feeding the pan Clarity tunes (the
-    // active pan), connected per stream in ensureStreamWired(); it was stream
-    // 0 whichever pan Clarity was tuning. A remote window's feed is the
-    // Core's noise floor for that same pan (RemoteMediaController).
+    connect(m_radioModel, &RadioModel::connectionStateChanged, this, [this]() {
+        if (!m_radioModel->isConnected()) { m_clarityRegistry->invalidateAllSources(); }
+        else { reconcileClarityBindings(); }
+    });
 
     // ── NoiseFloorTracker for Auto AGC-T ────────────────────────────────
     auto* nfTracker = new NoiseFloorTracker;
@@ -8478,10 +8611,6 @@ void MainWindow::buildUI()
         });
     }
 
-    // TX pause: MOX signal → ClarityController
-    connect(&m_radioModel->transmitModel(), &TransmitModel::moxChanged,
-            m_clarityController, &ClarityController::setTransmitting);
-
     // Plan 4 D9 (Cluster E): TX filter audio range → spectrum overlay.
     // TransmitModel::filterChanged carries (low, high) audio Hz; SpectrumWidget
     // converts to IQ-space at draw time using m_txMode (set below via slice).
@@ -8494,124 +8623,10 @@ void MainWindow::buildUI()
         activeSpectrumWidget()->setTxFilterRange(txModel.filterLow(), txModel.filterHigh());
     }
 
-    // Clarity → SpectrumWidget threshold update + clarityActive flag.
-    // Issue #230 fix: write the render-active mirror, not the
-    // persistent user fields — Clarity is runtime state per Thetis's
-    // AGC pattern (display.cs:6584 [v2.10.3.13] uses
-    // _RX1waterfallPreviousMinValue, a runtime field separate from
-    // waterfall_low_threshold).  The previous setWfLow/HighThreshold
-    // calls were silently overwriting the user's saved thresholds via
-    // scheduleSettingsSave() on every Clarity tick.
-    connect(m_clarityController, &ClarityController::waterfallThresholdsChanged,
-            this, [this](float low, float high) {
-        // PR #212 follow-up bench fix (KG4VCF, 2026-05-10): suppress
-        // Clarity threshold updates while MOX is active.  Clarity tracks
-        // RX noise floor and would otherwise re-enable itself with
-        // RX-tuned thresholds during TX, defeating the
-        // setClarityActive(false) call in the MOX-rise lambda.
-        //
-        // Kept through the 3M-5 revive merge, re-applied on top of the
-        // issue-#230 shape: the threshold write now goes to the runtime
-        // mirror via setClarityWaterfallThresholds rather than to the
-        // persisted setWfLow/HighThreshold pair. The MOX gate is still
-        // needed and is independent of that change -- #230 stopped Clarity
-        // clobbering SAVED thresholds, this stops it running at all during
-        // transmit.
-        MoxController* mox = m_radioModel ? m_radioModel->moxController()
-                                          : nullptr;
-        if (mox && mox->isMox()) {
-            return;
-        }
-        // Parity Task 29: a remote window's Core keyed (no local MOX).
-        if (m_moxDisplay && m_moxDisplay->isKeyed()) {
-            return;
-        }
-        if (SpectrumWidget* sw = activeSpectrumWidget()) {
-            sw->setClarityActive(true);
-            sw->setClarityWaterfallThresholds(low, high);
-        }
-    });
-
-    // Clarity → SpectrumWidget NF-aware grid (Task 2.9).
-    // NereusSDR-original — no Thetis equivalent.
-    // noiseFloorChanged fires after EWMA smoothing but before the deadband
-    // gate so the grid tracks the floor at every cadence tick.
-    // The window owns both output routes; retiring the initial pane must
-    // neither disconnect them nor leave its grid receiving another pane's floor.
-    connect(m_clarityController, &ClarityController::noiseFloorChanged,
-            this, [this](float nf) {
-        if (SpectrumWidget* sw = activeSpectrumWidget()) {
-            sw->onNoiseFloorChanged(nf);
-        }
-    });
-
-    // Task 2.10: per-band NF priming — settle detector.
-    // NereusSDR-original — no Thetis equivalent.
-    //
-    // On each noiseFloorChanged tick, keep a 2-second sliding window of NF
-    // samples. When variance drops below 1 dB for a sustained window of ≥30
-    // samples (≈ 15 s / cadence-0.5s = 30 ticks), save the current floor to
-    // the panadapter's per-band NF slot so the next band-switch can snap
-    // instantly instead of cold-starting from zero.
     {
-        struct NFHistoryEntry { qint64 t; float value; };
-        struct SettleState {
-            QList<NFHistoryEntry> history;
-        };
-        auto settle = QSharedPointer<SettleState>::create();
-
         PanadapterModel* pan0 = m_radioModel->panadapters().isEmpty()
-                                ? nullptr
-                                : m_radioModel->panadapters().first();
+            ? nullptr : m_radioModel->panadapters().first();
         if (pan0) {
-            connect(m_clarityController, &ClarityController::noiseFloorChanged,
-                    this, [pan0, settle](float nf) {
-                const qint64 now = QDateTime::currentMSecsSinceEpoch();
-                settle->history.append({now, nf});
-
-                // Trim to 2-second window.
-                const qint64 cutoff = now - 2000;
-                while (!settle->history.isEmpty() && settle->history.first().t < cutoff) {
-                    settle->history.removeFirst();
-                }
-
-                // Compute variance when we have ≥30 samples (~30 cadence ticks).
-                if (settle->history.size() >= 30) {
-                    float sum = 0.0f;
-                    for (const auto& e : std::as_const(settle->history)) { sum += e.value; }
-                    const float mean = sum / static_cast<float>(settle->history.size());
-                    float sqSum = 0.0f;
-                    for (const auto& e : std::as_const(settle->history)) {
-                        const float d = e.value - mean;
-                        sqSum += d * d;
-                    }
-                    const float variance = sqSum / static_cast<float>(settle->history.size());
-
-                    if (variance < 1.0f) {
-                        // NereusSDR-original — no Thetis equivalent.
-                        // NF settled within 1 dB variance over 2s; save for this band.
-                        pan0->setBandNFEstimate(pan0->band(), nf);
-                    }
-                }
-            });
-
-            // Task 2.10: band-change → prime ClarityController EWMA with stored NF.
-            // NereusSDR-original — no Thetis equivalent.
-            //
-            // PanadapterModel::bandChanged fires when the pan center crosses a band
-            // boundary. snapToFloor() seeds the EWMA (m_smoothedFloor) and emits
-            // waterfallThresholdsChanged immediately so the waterfall snaps to the
-            // remembered state rather than cold-starting from an uninitialized floor.
-            // NaN is ignored by snapToFloor (band with no stored data is a no-op).
-            connect(pan0, &PanadapterModel::bandChanged,
-                    this, [this, pan0](NereusSDR::Band newBand) {
-                // NereusSDR-original — no Thetis equivalent.
-                // Prime estimator with last-seen NF for this band to eliminate
-                // cold-start visual jump after band change.
-                const float storedNF = pan0->bandNFEstimate(newBand);
-                m_clarityController->snapToFloor(storedNF);
-            });
-
             // NF fast-attack triggers — From Thetis display.cs:879-905
             // [v2.10.3.13]:
             //   if (rx == 1) FastAttackNoiseFloorRX1 = true;  // band change
@@ -8895,52 +8910,6 @@ void MainWindow::buildUI()
         });
     }
 
-    // When Clarity pauses or is disabled, let legacy AGC resume.
-    connect(m_clarityController, &ClarityController::pausedChanged,
-            activeSpectrumWidget(), [this](bool paused) {
-        if (paused) {
-            activeSpectrumWidget()->setClarityActive(false);
-        }
-    });
-
-    // Clarity ↔ each pan's strip. Parity Task 18: every strip shows the
-    // badge for the pan Clarity tunes (the active pan) and nothing on the
-    // others, and each strip's Display flyout and Re-tune act on its own pan
-    // (wirePanDisplayFlyout, from ensureOverlayPanels). Before, only pan-0's
-    // strip was wired, and its display controls reached whichever pan was
-    // active.
-    connect(m_clarityController, &ClarityController::waterfallThresholdsChanged,
-            this, [this](float, float) {
-        m_clarityBadgeActive = true;
-        m_clarityBadgePaused = false;
-        refreshClarityBadges();
-    });
-    connect(m_clarityController, &ClarityController::pausedChanged,
-            this, [this](bool paused) {
-        m_clarityBadgeActive = m_clarityController->isEnabled();
-        m_clarityBadgePaused = paused;
-        refreshClarityBadges();
-    });
-    // Clarity follows the active pan: the pan it leaves goes back to its own
-    // waterfall levels, and the pan it arrives at is estimated afresh
-    // rather than given the last pan's floor.
-    m_clarityPanId = m_panStack ? m_panStack->activePanId() : QString();
-    connect(m_panStack, &PanadapterStack::activePanChanged, this,
-            [this](const QString& panId) {
-        if (panId == m_clarityPanId) { return; }
-        if (SpectrumWidget* left = m_panStack->spectrum(m_clarityPanId)) {
-            left->setClarityActive(false);
-        }
-        m_clarityPanId = panId;
-        if (m_clarityController->isEnabled()) {
-            if (SpectrumWidget* arrived = m_panStack->spectrum(panId)) {
-                arrived->setClarityActive(!m_clarityController->isPaused());
-            }
-            m_clarityController->retuneNow();
-        }
-        refreshClarityBadges();
-    });
-
     // Wire: zoom changes -> auto-replan FFT size to maintain constant
     // bins-per-pixel across zoom levels.  NereusSDR-original (Thetis
     // does not auto-replan on zoom; the user manually picks FFT size).
@@ -8972,6 +8941,11 @@ void MainWindow::buildUI()
     constexpr int kAutoZoomMaxFftSize = 65536;
     connect(activeSpectrumWidget(), &SpectrumWidget::bandwidthChangeRequested,
             this, [this, kAutoZoomMaxFftSize](double bwHz) {
+        // Manual FFT mode: only Setup > Spectrum Defaults > Size may set FFT.
+        if (!AppSettings::instance().value(
+                QStringLiteral("DisplayFftExternalInfluence"), true).toBool()) {
+            return;
+        }
         FFTEngine* engine = primaryFftEngine();
         if (!engine || !activeSpectrumWidget()) { return; }
         const double sampleRate = activeSpectrumWidget()->sampleRate();
@@ -13862,8 +13836,11 @@ void MainWindow::wireSetupDialog(SetupDialog* dialog)
     if (SMeterWidget* sm = sMeter()) {
         connect(sm, &SMeterWidget::settingsChanged, dialog, &SetupDialog::reloadMeterStyles);
     }
-    connect(dialog, &SetupDialog::connectionsRequested,
-            this, &MainWindow::connectionRequestedByOperator);
+    connect(dialog, &SetupDialog::connectionsRequested, this, [this] {
+        // Setup is the explicit, direct entry point for Connections.
+        if (m_connectionPickerManaged) { emit connectionsRequested(); }
+        else { connectionRequestedByOperator(); }
+    });
     connect(dialog, &SetupDialog::coreConnectionDetailsRequested,
             this, &MainWindow::showRemoteConnectionPanel);
     connect(dialog, &SetupDialog::coreDiagnosticsRequested,
@@ -14078,8 +14055,16 @@ void MainWindow::wireSliceToSpectrum()
         const double ceiling  = host->maxZoomOutBandwidthHz();
         const double initialBw = (loadedBw >= 10000.0 && loadedBw <= ceiling)
                                  ? loadedBw : 768000.0;
-        host->setFrequencyRange(freq, initialBw);
-        host->setVfoFrequency(freq);
+        // The provisional remote Slice A has no authoritative hosting key.
+        // Preserve this pane's view until its record completes, just as the
+        // per-flag frequency binding does; local startup keeps its seed.
+        const bool provisionalRemote = !m_radioModel->ownsLocalDsp()
+            && slice->panKey().isEmpty();
+        host->setFrequencyRange(provisionalRemote ? host->centerFrequency() : freq,
+                                initialBw);
+        if (!provisionalRemote) {
+            host->setVfoFrequency(freq);
+        }
         host->setFilterOffset(slice->filterLow(), slice->filterHigh());
         host->setStepSize(slice->stepHz());
     }
@@ -14766,10 +14751,12 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 {
     QMainWindow::resizeEvent(event);
 
-    // Update axis-lock positions for overlay-docked containers
-    if (m_mainSplitter && m_containerManager) {
+    // Ignore initialization resizes. Qt has not yet restored the splitter
+    // and all container geometries, so anchoring now would shift saved views.
+    if (property("containerAnchorsReady").toBool()
+        && m_mainSplitter && m_containerManager) {
         // Use the spectrum pane (first splitter child) as reference
-        QWidget* spectrumPane = m_mainSplitter->widget(0);
+        QWidget* spectrumPane = m_panStack ? m_panStack->parentWidget() : nullptr;
         if (spectrumPane) {
             m_hDelta = spectrumPane->width();
             m_vDelta = spectrumPane->height();
@@ -14845,7 +14832,8 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
             if (!m_mainSplitter || m_mainSplitter->count() < 2) {
                 return QMainWindow::eventFilter(watched, event);
             }
-            QWidget* rightPane = m_mainSplitter->widget(1);
+            QWidget* rightPane = m_containerManager ? m_containerManager->panelContainer() : nullptr;
+            if (!rightPane) { return QMainWindow::eventFilter(watched, event); }
             if (rightPane->isVisible()) {
                 // Hide: save current sizes, then collapse right to 0
                 m_splitterSizesBeforeHide = m_mainSplitter->sizes();
@@ -14857,7 +14845,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
                 rightPane->show();
                 if (!m_splitterSizesBeforeHide.isEmpty()) {
                     m_mainSplitter->setSizes(m_splitterSizesBeforeHide);
-                } else {
+                } else if (m_mainSplitter->count() == 2) {
                     m_mainSplitter->setSizes({1024, 256});
                 }
                 label->setStyleSheet(QStringLiteral(
@@ -14931,7 +14919,7 @@ void MainWindow::showConnectionPanel()
 {
     if (m_shuttingDown) { return; }
     if (m_connectionPickerManaged) {
-        emit connectionsRequested();
+        openSetupAtPage(QStringLiteral("Remote Access"));
         return;
     }
     // ── Remote-daemon R2 Task 20 ─────────────────────────────────────────
@@ -17390,10 +17378,9 @@ void MainWindow::onConnectionStateChanged()
         // operatorDisconnected); a Disconnected state it reaches through
         // link loss or an offline radio at the Core opens nothing.
         if (!m_autoReconnectInProgress && !m_shuttingDown
-            && m_radioModel->ownsLocalDsp()) {
-            // Only open if we were previously connected (transition from Connected,
-            // not the initial Disconnected state at startup). We detect this by
-            // checking if the model has ever reported a radio name — set on connect.
+            && m_radioModel->ownsLocalDsp() && !m_connectionPickerManaged) {
+            // Only unmanaged local windows use the automatic connection panel.
+            // A managed session keeps the saved selection; Setup opens it manually.
             if (!m_radioModel->name().isEmpty()) {
                 showConnectionPanel();
             }
@@ -17485,7 +17472,10 @@ void MainWindow::tryAutoReconnect()
         // around the panel. Skipped when an auto-connect attempt is in
         // flight (the auto-reconnect path handles its own panel open via
         // the failure handler in Task 10).
-        showConnectionPanel();
+        // The managed Connections picker is opened once by
+        // GuiConnectionController::start() only when no Core/radio is selected.
+        // Do not route this automatic cold-start event into Setup.
+        if (!m_connectionPickerManaged) { showConnectionPanel(); }
         return;
     }
 
@@ -17584,9 +17574,10 @@ void MainWindow::tryAutoReconnect()
                 .value_or(SavedRadio{})
                 .info.name;
             const QString displayName = name.isEmpty() ? chosenMac : name;
-            showConnectionPanel();
-            if (m_connectionPanel) {
-                m_connectionPanel->highlightMac(chosenMac);
+            // Connection failure is reported below, not as a forced Settings window.
+            if (!m_connectionPickerManaged) {
+                showConnectionPanel();
+                if (m_connectionPanel) { m_connectionPanel->highlightMac(chosenMac); }
             }
             showToast(
                 QStringLiteral("Auto-connect target %1 isn't reachable from this network. "
@@ -17766,6 +17757,20 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // ConnectionPanel on Disconnect" slot below doesn't re-trigger
     // discovery via ConnectionPanel's ctor while teardown runs.
     m_shuttingDown = true;
+    // Capture live container positions before any shutdown relayout.
+    if (m_containerManager) { m_containerManager->saveState(); }
+    // Preserve Float/Dock selection during teardown even when Qt docks
+    // or destroys the floating native windows after the main window closes.
+    setProperty("_nereusClosingWithFloats", true);
+
+    // Record what the operator actually left on screen, before disconnect
+    // or a shutdown signal has any chance to re-layout/dock the pans.
+    if (m_panStack) {
+        m_panStack->saveSplitterState();
+        m_panStack->saveFloatingGeometry();
+    }
+    saveMainWindowGeometry();
+    if (m_clarityRegistry) { m_clarityRegistry->retireAll(); }
     if (m_desktopStationController) { m_desktopStationController->stop(); }
     m_autoReconnectInProgress = false;
     if (m_stationClient) {
@@ -17822,29 +17827,9 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // Tear down connection (sends stop command, closes sockets, joins thread)
     m_radioModel->disconnectFromRadio();
 
-    // Save container layout
-    if (m_containerManager) {
-        m_containerManager->saveState();
-    }
+    // Container layout was saved before shutdown teardown above.
 
-    // Phase 3F Sub-Epic D Task 15: persist pan layout id + per-splitter
-    // sizes. PanadapterStack::saveSplitterState writes PanLayoutId +
-    // PanLayoutSplitter_* keys to AppSettings; the matching restore runs
-    // during MainWindow init.
-    if (m_panStack) {
-        m_panStack->saveSplitterState();
-        // Any pan still popped out, while there is still a flush coming.
-        // ~PanadapterStack saves too, but it runs after the
-        // AppSettings::save() below and setValue only writes an in-memory map
-        // whose owner has a defaulted destructor, so the teardown save alone
-        // never reached the disk. Codex, PR #318.
-        m_panStack->saveFloatingGeometry();
-    }
-
-    // Issue #206 — persist window geometry + maximized/fullscreen
-    // state. Captured BEFORE close so the saved blob reflects the
-    // user-visible state, not Qt's mid-teardown geometry.
-    saveMainWindowGeometry();
+    // Window geometry was captured before teardown.
 
     AppSettings::instance().save();
     event->accept();

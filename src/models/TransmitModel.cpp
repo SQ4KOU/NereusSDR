@@ -867,7 +867,6 @@ bool TransmitModel::setTunePowerForTxBand(int watts)
 {
     if (!m_tuneTxBandKnown) { return false; }
     setTunePowerForBand(m_tuneTxBand, watts);
-    setTuneDrivePowerSource(DrivePowerSource::TuneSlider);
     return true;
 }
 

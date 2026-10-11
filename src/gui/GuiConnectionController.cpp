@@ -174,7 +174,9 @@ GuiConnectionController::GuiConnectionController(QObject* parent)
             [this](const QString& reason) {
         if (m_shuttingDown) { return; }
         m_selector->setNotice(reason);
-        showConnections();
+        // An operation failure must not summon the picker over a selected
+        // radio. An already open picker still receives the error message.
+        if (m_selector->isVisible()) { refresh(); }
     }, Qt::QueuedConnection);
     connect(m_selector.get(), &ConnectionSelector::connectRequested,
             this, &GuiConnectionController::queueConnect);
@@ -220,6 +222,23 @@ void GuiConnectionController::start(const StationStartupRequest& request)
     if (!error.isEmpty()) {
         m_selector->setNotice(error);
         showConnections();
+    } else if (m_storeLoaded && selected && !request.stationSpecified
+               && !selected->connection.isRemote()
+               && m_store.selectedId() == QStringLiteral("local")) {
+        // Show Connections on startup only when the local Core has no
+        // selected radio. A disconnected or temporarily unavailable saved
+        // radio is still a selection and must not reopen this dialog.
+        const AppSettings& settings = AppSettings::instance();
+        const QString stationChoice = settings.value(
+            QStringLiteral("StationRadioChoice")).toString().trimmed();
+        const QString lastMac = settings.lastConnected().trimmed();
+        const bool hasSavedRadio = !lastMac.isEmpty()
+            && settings.savedRadio(lastMac).has_value();
+        if (stationChoice.isEmpty() && !hasSavedRadio) {
+            QTimer::singleShot(0, this, [this] {
+                if (!m_shuttingDown) { showConnections(); }
+            });
+        }
     }
 }
 

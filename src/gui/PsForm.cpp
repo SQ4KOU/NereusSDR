@@ -859,7 +859,9 @@ void PsForm::syncAcceptedSettings()
     m_spinCalDelay->setValue(m_settings->loopDelaySeconds());
     m_spinAmpDelay->setValue(static_cast<int>(m_settings->requestedTxDelayNs()));
     m_chkHardwarePeakOverride->setChecked(m_settings->hardwarePeakOverrideEnabled());
-    m_txtPSpeak->setText(QString::number(m_settings->hardwarePeakOverride(), 'f', 4));
+    const double shownPeak = (!m_settings->hardwarePeakOverrideEnabled() && m_pureSignal)
+        ? m_pureSignal->hwPeak() : m_settings->hardwarePeakOverride();
+    m_txtPSpeak->setText(QString::number(shownPeak, 'f', 4));
     m_txtPSpeak->setEnabled(true);
     m_updatingFromModel = false;
 }

@@ -242,7 +242,50 @@ function(nereus_add_remote_media_dependency)
     set(NEREUS_ORIGINAL_JUICE_SOURCE_DIR "${nereus_libjuice_SOURCE_DIR}" PARENT_SCOPE)
     set(NEREUS_ORIGINAL_DC_SOURCE_DIR "${nereus_libdatachannel_SOURCE_DIR}" PARENT_SCOPE)
 
-    # Work on a build-owned copy. FetchContent source overrides may point at
+    # SQ4KOU_VENDOR_STABLE_SOURCE_GATE_V1
+    # The nested add_subdirectory below also needs this path on no-op reconfigure.
+    set(_dc_build_source "${CMAKE_BINARY_DIR}/_deps/nereus-built-libdatachannel")
+    # Detect real content changes, not timestamps from CMake regeneration.
+    # Hash only the original pinned vendor trees and the exact patch inputs.
+    set(_sq4kou_vendor_files
+        "${nereus_libdatachannel_SOURCE_DIR}/CMakeLists.txt"
+        "${nereus_libdatachannel_SOURCE_DIR}/LICENSE"
+        "${_NEREUS_REMOTE_MEDIA_CMAKE_DIR}/NereusRemoteMedia.cmake")
+    foreach(_sq4kou_dir IN ITEMS cmake include src)
+        file(GLOB_RECURSE _sq4kou_found LIST_DIRECTORIES FALSE CONFIGURE_DEPENDS
+            "${nereus_libdatachannel_SOURCE_DIR}/${_sq4kou_dir}/*")
+        list(APPEND _sq4kou_vendor_files ${_sq4kou_found})
+    endforeach()
+    foreach(_sq4kou_dep IN ITEMS plog usrsctp libjuice json libsrtp)
+        file(GLOB_RECURSE _sq4kou_found LIST_DIRECTORIES FALSE CONFIGURE_DEPENDS
+            "${nereus_${_sq4kou_dep}_SOURCE_DIR}/*")
+        list(APPEND _sq4kou_vendor_files ${_sq4kou_found})
+    endforeach()
+    file(GLOB _sq4kou_patch_files LIST_DIRECTORIES FALSE
+        "${_NEREUS_REMOTE_MEDIA_CMAKE_DIR}/patches/libdatachannel-*"
+        "${_NEREUS_REMOTE_MEDIA_CMAKE_DIR}/patches/libjuice-*")
+    list(APPEND _sq4kou_vendor_files ${_sq4kou_patch_files})
+    list(REMOVE_DUPLICATES _sq4kou_vendor_files)
+    list(SORT _sq4kou_vendor_files)
+    set(_sq4kou_signature_input "")
+    foreach(_sq4kou_input IN LISTS _sq4kou_vendor_files)
+        if(NOT EXISTS "${_sq4kou_input}")
+            message(FATAL_ERROR "Missing pinned vendor input: ${_sq4kou_input}")
+        endif()
+        file(SHA256 "${_sq4kou_input}" _sq4kou_file_sha)
+        string(APPEND _sq4kou_signature_input "${_sq4kou_input}=${_sq4kou_file_sha}\n")
+    endforeach()
+    string(SHA256 _sq4kou_current_signature "${_sq4kou_signature_input}")
+    set(_sq4kou_signature_file "${CMAKE_BINARY_DIR}/_deps/sq4kou-libdatachannel-input.sha256")
+    set(_sq4kou_previous_signature "")
+    if(EXISTS "${_sq4kou_signature_file}")
+        file(READ "${_sq4kou_signature_file}" _sq4kou_previous_signature)
+        string(STRIP "${_sq4kou_previous_signature}" _sq4kou_previous_signature)
+    endif()
+    if(NOT "${_sq4kou_current_signature}" STREQUAL "${_sq4kou_previous_signature}"
+       OR NOT EXISTS "${CMAKE_BINARY_DIR}/_deps/nereus-built-libdatachannel/deps/libjuice/src/juice.c")
+        # Source/patch content changed, or first run: copy and patch as before.
+        # If unchanged, skip both copy and re-application; preserve object mtimes.    # Work on a build-owned copy. FetchContent source overrides may point at
     # shared offline caches, so never patch or populate their source trees.
     set(_dc_build_source "${CMAKE_BINARY_DIR}/_deps/nereus-built-libdatachannel")
     file(MAKE_DIRECTORY "${_dc_build_source}")
@@ -277,6 +320,8 @@ function(nereus_add_remote_media_dependency)
     _nereus_apply_vendor_patch("${_dc_build_source}"
         "libdatachannel-0005-defer-dtls-startup.patch")
 
+        file(WRITE "${_sq4kou_signature_file}" "${_sq4kou_current_signature}\n")
+    endif()
     # These are function-scope normal variables. They configure only the
     # nested project and leave the parent cache, BUILD_SHARED_LIBS, and later
     # dependencies unchanged.

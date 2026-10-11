@@ -26,7 +26,7 @@ warren@wpratt.com
 
 #include "comm.h"
 
-DEXP pdexp[4];
+DEXP pdexp[MAX_CHANNELS];
 
 DELRING calc_delring (int rsize, int size, int delay, double* in, double* out)
 {

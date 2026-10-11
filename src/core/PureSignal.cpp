@@ -93,8 +93,14 @@ PureSignal::PureSignal(WdspEngine* engine,
 
     m_autoAttTimer.setInterval(kAutoAttIntervalMs);
     m_autoAttTimer.setTimerType(Qt::CoarseTimer);
-    connect(&m_autoAttTimer, &QTimer::timeout, this,
-            &PureSignal::autoAttentionTick);
+    // SQ4KOU_P1_PS_SDRVST3_PARITY_V1 — SDR-VST3 PSLoop timer1code -> timer2code.
+    // RedPitaya P1 runs AutoATT immediately after GetPSInfo, not on a second timer.
+    connect(&m_autoAttTimer, &QTimer::timeout, this, [this]() {
+        const bool redPitayaP1 = m_stepAtt
+            && m_stepAtt->hardwareModel() == HPSDRModel::REDPITAYA
+            && std::abs(m_caps.psDefaultPeak - 0.4072) < 0.00001;
+        if (!redPitayaP1) autoAttentionTick();
+    });
 
     // From Thetis PSForm.cs:1064-1071 [v2.10.3.13] — `static puresignal()`
     // zero-fills the 16-int info arrays.  std::array zero-init in the
@@ -377,7 +383,9 @@ void PureSignal::startAutomaticCalibration()
     }
     m_autoON = true;
     m_OFF = false;
-    m_aaLastSeenAttemptCount = m_calAttempts.load();
+    m_aaLastSeenAttemptCount = ((m_stepAtt && m_stepAtt->hardwareModel() == HPSDRModel::REDPITAYA
+             && std::abs(m_caps.psDefaultPeak - 0.4072) < 0.00001)
+            ? m_calCount.load() : m_calAttempts.load());
     if (m_tx && !m_aaCancelPending) {
         m_tx->setPSControl(/*reset=*/0, /*mancal=*/0,
                            /*automode=*/1, /*turnon=*/0);
@@ -402,7 +410,9 @@ void PureSignal::cancelAutoAttenuation()
         return;
     }
     m_aaState = AutoAttenuateState::Monitor;
-    m_aaLastSeenAttemptCount = m_calAttempts.load();
+    m_aaLastSeenAttemptCount = ((m_stepAtt && m_stepAtt->hardwareModel() == HPSDRModel::REDPITAYA
+             && std::abs(m_caps.psDefaultPeak - 0.4072) < 0.00001)
+            ? m_calCount.load() : m_calAttempts.load());
     m_saveAutoOn = 0;
     m_saveSingleCalOn = 0;
     m_deltaDb = 0;
@@ -1148,7 +1158,9 @@ void PureSignal::onMoxChanged(bool mox)
     // which is auto-synced every timer1 tick — see setAutoCalEnabled
     // header for the full story).
     if (mox && isAutoCalEnabled()) {
-        m_aaLastSeenAttemptCount = m_calAttempts.load();
+        m_aaLastSeenAttemptCount = ((m_stepAtt && m_stepAtt->hardwareModel() == HPSDRModel::REDPITAYA
+             && std::abs(m_caps.psDefaultPeak - 0.4072) < 0.00001)
+            ? m_calCount.load() : m_calAttempts.load());
     }
 }
 
@@ -1199,6 +1211,11 @@ void PureSignal::pollTimerTick()
         return;
     }
     processNewInfo(newInfo, controlSerial);
+    // SDR-VST3 timer1code() -> timer2code(): one coherent GetPSInfo snapshot.
+    if (m_stepAtt && m_stepAtt->hardwareModel() == HPSDRModel::REDPITAYA
+        && std::abs(m_caps.psDefaultPeak - 0.4072) < 0.00001) {
+        autoAttentionTick();
+    }
     updateStatusSnapshot(++m_statusSequence,
                          QDateTime::currentMSecsSinceEpoch());
 }
@@ -1527,7 +1544,9 @@ void PureSignal::processNewInfo(const int newInfo[16], std::uint64_t controlSeri
                    && controlSerial >= m_aaResetControlSerial
                    && engineStateRaw == static_cast<int>(EngineState::LRESET)) {
             m_aaCancelPending = false;
-            m_aaLastSeenAttemptCount = m_calAttempts.load();
+            m_aaLastSeenAttemptCount = ((m_stepAtt && m_stepAtt->hardwareModel() == HPSDRModel::REDPITAYA
+             && std::abs(m_caps.psDefaultPeak - 0.4072) < 0.00001)
+            ? m_calCount.load() : m_calAttempts.load());
             // The operator may have changed Auto/Single during the drain.
             // Resume the current intent only after the old collection retires.
             m_tx->setPSControl(0, m_singleCalON ? 1 : 0,
@@ -1898,7 +1917,9 @@ void PureSignal::autoAttentionTick()
         // evidence: ATT toggled 0↔31 every ~0.3-1 s at calCount=180
         // with fbLevel stuck at 20 — exactly the over-correction
         // pattern this guard prevents.
-        const int curAttemptCount = m_calAttempts.load();
+        const int curAttemptCount = ((m_stepAtt && m_stepAtt->hardwareModel() == HPSDRModel::REDPITAYA
+             && std::abs(m_caps.psDefaultPeak - 0.4072) < 0.00001)
+            ? m_calCount.load() : m_calAttempts.load());
         if (curAttemptCount == m_aaLastSeenAttemptCount) {
             return;
         }
@@ -1913,6 +1934,16 @@ void PureSignal::autoAttentionTick()
 
         const int currentAttOnTx = m_stepAtt->attOnTxValue();
         const int fbLevel = m_feedbackLevel.load();
+        // SQ4KOU_P1_PS_FEEDBACK_STABILIZER_V1
+        // Only REDPITAYA Protocol 1 (Thetis P1 HW peak 0.4072).
+        // Thetis 1:1: feedback gate is the completed info[5] calibration.
+        const bool rpP1 = m_stepAtt->hardwareModel() == HPSDRModel::REDPITAYA
+            && std::abs(m_caps.psDefaultPeak - 0.4072) < 0.00001;
+        // Nothing above the 31 dB hardware limit can be applied.
+        // Do not reset a valid WDSP calibration for a no-op 31->62 request.
+        if (fbLevel > 256 && currentAttOnTx >= 31) {
+            return;
+        }
         // From Thetis PSForm.cs:1109-1112 NeedToRecalibrate [v2.10.3.13]:
         //   return (FeedbackLevel > 181 || (FeedbackLevel <= 128 && nCurrentATTonTX > 0));
         //
@@ -1930,8 +1961,11 @@ void PureSignal::autoAttentionTick()
         // `currentAttOnTx > minAttenuation()` is the byte-for-byte port of
         // both Thetis branches without an explicit board check.
         const int minAtt = m_stepAtt->minAttenuation();
-        const bool needRecal = (fbLevel > 181)
-            || (fbLevel <= 128 && currentAttOnTx > minAtt);
+        // SDR-VST3: NeedToRecalibrate, target=152 (PSForm.cs:1185,1243-1248).
+        const bool needRecal = rpP1
+            ? (fbLevel > static_cast<int>(152.0 * 1.5)
+               || (fbLevel < static_cast<int>(152.0 * 0.7) && currentAttOnTx > minAtt))
+            : ((fbLevel > 181) || (fbLevel <= 128 && currentAttOnTx > minAtt));
         if (!needRecal) {
             return;
         }
@@ -2021,7 +2055,7 @@ void PureSignal::autoAttentionTick()
             // mask the -inf path and prevent the HL2 -10 clamp from ever
             // firing on real fbLevel=0 readings (a documented HL2 mode
             // when calcc is mid-dropout).
-            ddB = 20.0 * std::log10(static_cast<double>(fbLevel) / 152.293);
+            ddB = 20.0 * std::log10(static_cast<double>(fbLevel) / (rpP1 ? 152.0 : 152.293));
             if (!isHl2) {
                 if (std::isnan(ddB)) {
                     ddB = 31.1;
@@ -2073,7 +2107,9 @@ void PureSignal::autoAttentionTick()
             || m_info[15] != static_cast<int>(EngineState::LRESET)) {
             break;
         }
-        m_aaLastSeenAttemptCount = m_calAttempts.load();
+        m_aaLastSeenAttemptCount = ((m_stepAtt && m_stepAtt->hardwareModel() == HPSDRModel::REDPITAYA
+             && std::abs(m_caps.psDefaultPeak - 0.4072) < 0.00001)
+            ? m_calCount.load() : m_calAttempts.load());
         // From Thetis PSForm.cs:763-778 [v2.10.3.13]:
         //   _autoAttenuateState = eAAState.RestoreOperation;
         //   int newAtten;
@@ -2142,7 +2178,9 @@ void PureSignal::autoAttentionTick()
         //   _autoAttenuateState = eAAState.Monitor;
         //   puresignal.SetPSControl(_txachannel, 0, _save_singlecalON, _save_autoON, 0);
         m_aaState = AutoAttenuateState::Monitor;
-        m_aaLastSeenAttemptCount = m_calAttempts.load();
+        m_aaLastSeenAttemptCount = ((m_stepAtt && m_stepAtt->hardwareModel() == HPSDRModel::REDPITAYA
+             && std::abs(m_caps.psDefaultPeak - 0.4072) < 0.00001)
+            ? m_calCount.load() : m_calAttempts.load());
         if (m_tx) {
             m_tx->setPSControl(/*reset=*/0,
                                /*mancal=*/m_saveSingleCalOn,

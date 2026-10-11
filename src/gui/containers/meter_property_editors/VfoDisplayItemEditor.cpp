@@ -78,15 +78,15 @@ void VfoDisplayItemEditor::buildTypeSpecific()
     addHeader(QStringLiteral("Colors"));
 
     auto makeColorBtn = [this](const QString& label, QPushButton*& out,
-                               auto setter) {
+                               auto setter, auto getter) {
         out = new QPushButton(this);
         out->setFixedSize(40, 18);
         QPushButton* btn = out;
-        connect(btn, &QPushButton::clicked, this, [this, btn, setter]() {
+        connect(btn, &QPushButton::clicked, this, [this, btn, setter, getter]() {
             VfoDisplayItem* v = qobject_cast<VfoDisplayItem*>(m_item);
             if (!v) { return; }
             const QColor chosen = QColorDialog::getColor(
-                Qt::gray, this, QString(), QColorDialog::ShowAlphaChannel);
+                (v->*getter)(), this, QString(), QColorDialog::ShowAlphaChannel);
             if (chosen.isValid()) {
                 (v->*setter)(chosen);
                 applyBtnColor(btn, chosen);
@@ -96,12 +96,12 @@ void VfoDisplayItemEditor::buildTypeSpecific()
         addRow(label, out);
     };
 
-    makeColorBtn(QStringLiteral("Frequency"),  m_btnFreqColour,   &VfoDisplayItem::setFrequencyColour);
-    makeColorBtn(QStringLiteral("Mode"),       m_btnModeColour,   &VfoDisplayItem::setModeColour);
-    makeColorBtn(QStringLiteral("Filter"),     m_btnFilterColour, &VfoDisplayItem::setFilterColour);
-    makeColorBtn(QStringLiteral("Band"),       m_btnBandColour,   &VfoDisplayItem::setBandColour);
-    makeColorBtn(QStringLiteral("RX label"),   m_btnRxColour,     &VfoDisplayItem::setRxColour);
-    makeColorBtn(QStringLiteral("TX label"),   m_btnTxColour,     &VfoDisplayItem::setTxColour);
+    makeColorBtn(QStringLiteral("Frequency"),  m_btnFreqColour,   &VfoDisplayItem::setFrequencyColour, &VfoDisplayItem::frequencyColour);
+    makeColorBtn(QStringLiteral("Mode"),       m_btnModeColour,   &VfoDisplayItem::setModeColour, &VfoDisplayItem::modeColour);
+    makeColorBtn(QStringLiteral("Filter"),     m_btnFilterColour, &VfoDisplayItem::setFilterColour, &VfoDisplayItem::filterColour);
+    makeColorBtn(QStringLiteral("Band"),       m_btnBandColour,   &VfoDisplayItem::setBandColour, &VfoDisplayItem::bandColour);
+    makeColorBtn(QStringLiteral("RX label"),   m_btnRxColour,     &VfoDisplayItem::setRxColour, &VfoDisplayItem::rxColour);
+    makeColorBtn(QStringLiteral("TX label"),   m_btnTxColour,     &VfoDisplayItem::setTxColour, &VfoDisplayItem::txColour);
 }
 
 } // namespace NereusSDR

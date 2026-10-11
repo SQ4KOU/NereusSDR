@@ -12,6 +12,10 @@
 
 struct DFState;
 
+constexpr static const float MEAN_NORM_INIT[2] = { -60., -90., };
+
+constexpr static const float UNIT_NORM_INIT[2] = { 0.001, 0.0001, };
+
 extern "C" {
 
 /// Create a DeepFilterNet Model

@@ -194,7 +194,10 @@ void ContainerManager::setWorkspaceAdapter(ContainerWorkspaceStore* store, Conta
     if (m_splitter) {
         m_splitter->installEventFilter(this);
         connect(m_splitter, &QSplitter::splitterMoved, this, [this] {
-            if (!m_reconciling) { m_geometryCommit.start(); }
+            // Ignore geometry produced while the initial splitter is laid out.
+            if (!m_reconciling && m_dockParent && m_dockParent->window()->isVisible()) {
+                m_geometryCommit.start();
+            }
         });
     }
 }
@@ -258,19 +261,24 @@ bool ContainerManager::eventFilter(QObject* watched, QEvent* event)
             return false;
         }
     }
+    // Qt emits Move/Resize for layout, reparenting and content projection too.
+    // Those events are not operator edits and must not overwrite saved positions.
+    // Actual drags/resizes run through ContainerWidget's interaction signals.
     if (m_store && !m_reconciling && m_storageError.isEmpty()
+        && !GuiApplication::applicationQuitInProgress()
+        && m_dockParent && m_dockParent->window()->isVisible()
         && (event->type() == QEvent::Move || event->type() == QEvent::Resize)) {
-        if (qobject_cast<ContainerWidget*>(watched) || qobject_cast<FloatingContainer*>(watched)) {
-            ContainerWidget* changed = qobject_cast<ContainerWidget*>(watched);
-            if (!changed) {
-                changed = container(qobject_cast<FloatingContainer*>(watched)->id());
+        ContainerWidget* changed = qobject_cast<ContainerWidget*>(watched);
+        if (!changed) {
+            if (auto* form = qobject_cast<FloatingContainer*>(watched)) {
+                changed = container(form->id());
             }
-            if (changed) {
-                m_pendingGeometry.insert(changed->id());
-                if (changed->isOverlayDocked() && m_dockParent) {
-                    changed->storeLocation();
-                    changed->setDelta(QPoint(m_dockParent->width(), m_dockParent->height()));
-                }
+        }
+        if (changed && !changed->isPanelDocked() && changed->geometryInteractionActive()) {
+            m_pendingGeometry.insert(changed->id());
+            if (changed->isOverlayDocked()) {
+                changed->storeLocation();
+                changed->setDelta(QPoint(m_dockParent->width(), m_dockParent->height()));
             }
             m_geometryCommit.start();
         }
@@ -386,8 +394,11 @@ void ContainerManager::reconcileWorkspace(const WorkspaceDocument& document)
             const QByteArray geometry=QByteArray::fromHex(d.config.value("legacyAppletFloatGeometry").toString().toLatin1());
             if (!geometry.isEmpty()) { form->QWidget::restoreGeometry(geometry); }
         }
-        if (!preserveGeometry) {
-            if (d.geometry.isValid()) { (d.dockMode == DockMode::Floating ? static_cast<QWidget*>(form) : c)->setGeometry(d.geometry); }
+        if (!preserveGeometry && d.geometry.isValid()) {
+            // A Panel is sized by QSplitter; replaying its old QWidget rect
+            // conflicts with the split sizes that the workspace also stores.
+            if (d.dockMode == DockMode::Floating) { form->setGeometry(d.geometry); }
+            else if (d.dockMode == DockMode::OverlayDocked) { c->setGeometry(d.geometry); }
         }
         if (!host) {
             host = new ContainerContentHost(*m_registry, c);
@@ -444,9 +455,16 @@ void ContainerManager::reconcileWorkspace(const WorkspaceDocument& document)
         if (d.dockMode == DockMode::Floating) {
             form->ensureVisiblePosition(m_dockParent);
         } else if (d.dockMode == DockMode::OverlayDocked && m_dockParent) {
-            c->setGeometry(FloatingContainer::clampedGeometry(
-                c->geometry(), m_dockParent->rect(),
-                c->minimumSizeHint().expandedTo(QSize(260, 24))));
+            // At construction time the spectrum pane has no final extent.
+            // Clamping to that transient rectangle loses saved geometry.
+            // Do not clamp locked placements against transient pane bounds.
+            // A locked user position is authoritative, even across startup.
+            if (!d.locked && m_dockParent->window()->isVisible()
+                && m_dockParent->width() > 0 && m_dockParent->height() > 0) {
+                c->setGeometry(FloatingContainer::clampedGeometry(
+                    c->geometry(), m_dockParent->rect(),
+                    c->minimumSizeHint().expandedTo(QSize(260, 24))));
+            }
             c->storeLocation();
             c->setDelta(QPoint(m_dockParent->width(), m_dockParent->height()));
         }
@@ -458,6 +476,58 @@ void ContainerManager::reconcileWorkspace(const WorkspaceDocument& document)
         }
         if (fresh) { emit containerAdded(d.id); }
         m_documentGeometry[d.id] = d.geometry;
+    }
+    // PANEL-SIDE-SQ4KOU: The splitter layout is user-selectable per panel.
+    // Keep the spectrum pane as the center divider; do not reparent Overlay/Floating.
+    if (m_splitter && m_dockParent) {
+        QList<QWidget*> ordered;
+        for (const auto& d : document.containers) {
+            if (d.dockMode == DockMode::PanelDocked
+                && d.config.value("panelSide").toString() == QStringLiteral("left")) {
+                if (auto* c = container(d.id)) { ordered.append(c); }
+            }
+        }
+        ordered.append(m_dockParent);
+        for (const auto& d : document.containers) {
+            if (d.dockMode == DockMode::PanelDocked
+                && d.config.value("panelSide").toString() != QStringLiteral("left")) {
+                if (auto* c = container(d.id)) { ordered.append(c); }
+            }
+        }
+        bool needsOrder = ordered.size() == m_splitter->count();
+        if (needsOrder) {
+            needsOrder = false;
+            for (int index = 0; index < ordered.size(); ++index) {
+                if (m_splitter->widget(index) != ordered.at(index)) {
+                    needsOrder = true;
+                    break;
+                }
+            }
+        }
+        if (needsOrder) {
+            // Save widths by widget identity, not splitter index. Reordering
+            // must never give the left panel the old spectrum width.
+            const QList<int> before = m_splitter->sizes();
+            QHash<QWidget*, int> widths;
+            for (int index = 0; index < m_splitter->count(); ++index) {
+                QWidget* widget = m_splitter->widget(index);
+                int width = before.value(index, 0);
+                if (width <= 0) {
+                    width = widget == m_dockParent ? 1024 : qMax(260, widget->width());
+                }
+                widths.insert(widget, width);
+            }
+            for (int index = 0; index < ordered.size(); ++index) {
+                if (m_splitter->widget(index) != ordered.at(index)) {
+                    m_splitter->insertWidget(index, ordered.at(index));
+                }
+            }
+            QList<int> sizes;
+            for (QWidget* widget : ordered) { sizes.append(widths.value(widget, 260)); }
+            m_splitter->setSizes(sizes);
+            // Persist newly ordered splitter widths after the transaction ends.
+            m_geometryCommit.start();
+        }
     }
     if (m_splitter) {
         for (auto *handle : m_splitter->findChildren<QSplitterHandle *>()) {
@@ -857,7 +927,9 @@ void ContainerManager::updateDockedPositions(int hDelta, int vDelta)
     // From Thetis MeterManager.cs:5812-5865 — overlay-docked only
     for (auto it = m_containers.constBegin(); it != m_containers.constEnd(); ++it) {
         ContainerWidget* c = it.value();
-        if (!c->isOverlayDocked()) {
+        // Lock also freezes the placement: viewport resizing must not
+        // move a container the operator has locked in place.
+        if (!c->isOverlayDocked() || c->isLocked()) {
             continue;
         }
 
@@ -1023,22 +1095,30 @@ void ContainerManager::saveState()
         // Publication projects the final captured geometry; rejection restores
         // committed placement rather than preserving the rejected live draft.
         m_geometryCommit.stop();
-        m_pendingGeometry.clear();
+        const QSet<QString> editedGeometry = m_pendingGeometry;
         WorkspaceDocument document = m_store->snapshot();
         for (auto& d : document.containers) {
             auto* c = container(d.id); if (!c) { continue; }
-            // Geometry commits retain the committed content verbatim; live readings
-            // and stack projection are presentation state, not document edits.
+            // Layout-generated sizes must not replace other containers' saved
+            // positions. Only a completed user interaction owns geometry.
             d.name = c->notes(); d.dockMode = c->dockMode(); d.locked = c->isLocked(); d.autoHeight = c->autoHeight(); d.anchor = c->axisLock();
-            d.geometry = c->isFloating() && m_floatingForms.value(d.id) ? m_floatingForms[d.id]->geometry() : c->geometry();
+            if (editedGeometry.contains(d.id) && d.dockMode != DockMode::PanelDocked) {
+                d.geometry = c->isFloating() && m_floatingForms.value(d.id)
+                    ? m_floatingForms[d.id]->geometry() : c->geometry();
+            }
             if (c->rxSource() != d.config.value("rxSource").toInt(1)) { d.config["rxSource"] = c->rxSource(); }
             d.config["enabled"] = c->isContainerEnabled();
             d.config["showOnRx"] = c->showOnRx(); d.config["showOnTx"] = c->showOnTx();
             d.config["border"] = c->hasBorder(); d.config["pinOnTop"] = c->isPinOnTop();
         }
         if (m_splitter) { QJsonArray sizes; for (int size : m_splitter->sizes()) { sizes.append(size); } document.extensions["splitterSizes"] = sizes; }
-        if (document == m_store->snapshot()) { return; }
-        if (commitWorkspace(document, document.revision).status != CommitStatus::Saved) { reconcileWorkspace(m_store->snapshot()); }
+        if (document == m_store->snapshot()) { m_pendingGeometry.subtract(editedGeometry); return; }
+        if (commitWorkspace(document, document.revision).status == CommitStatus::Saved) {
+            m_pendingGeometry.subtract(editedGeometry);
+        } else {
+            // Keep pending edits for a retry instead of silently discarding them.
+            reconcileWorkspace(m_store->snapshot());
+        }
         return;
     }
     // From Thetis MeterManager.cs:6391-6447

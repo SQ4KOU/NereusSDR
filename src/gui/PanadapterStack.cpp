@@ -156,7 +156,7 @@ static void refreshAfterTopLevelChange(NereusSDR::SpectrumWidget* sw,
                                        bool wantVisible)
 {
     if (!sw) { return; }
-#if defined(Q_OS_MAC) && defined(NEREUS_GPU_SPECTRUM)
+#if (defined(Q_OS_MAC) || defined(Q_OS_WIN)) && defined(NEREUS_GPU_SPECTRUM)
     sw->hide();
     sw->resetGpuResources();
     if (QWindow* windowHandle = sw->windowHandle()) {
@@ -507,9 +507,53 @@ void PanadapterStack::floatPanadapter(const QString& panId)
     connect(applet, &PanadapterApplet::dockRequested,
             this, &PanadapterStack::dockPanadapter, Qt::UniqueConnection);
 
+    // Float geometry persistence: map first, restore after map.
+    // Capture the stored bytes BEFORE showing the new native window.
+    // Never replace the stored geometry with Qt's provisional frame size.
+    const QString geometryKey = QStringLiteral("FloatingPan_%1_Geometry").arg(panId);
+    const QByteArray savedGeometry = QByteArray::fromBase64(
+        AppSettings::instance().value(geometryKey, QString()).toString().toLatin1());
+
     floater->restoreWindowGeometry();
     floater->show();
     floater->raise();
+
+    // Only persist which pans are floated here. Their last saved geometry
+    // stays unchanged until the window has been mapped and moved/resized.
+    auto& settings = AppSettings::instance();
+    settings.setValue(QStringLiteral("FloatingPanIds"),
+                      m_floating.keys().join(QLatin1Char(',')));
+    QString floatStateError;
+    if (!settings.save(&floatStateError)) {
+        qWarning() << "Float state save failed:" << floatStateError;
+    }
+
+    // Windows can correct a Qt::Window's first native frame on show().
+    // Apply the original snapshot again after that frame is mapped.
+    if (!savedGeometry.isEmpty()) {
+        QTimer::singleShot(0, floater, [floater, savedGeometry]() {
+            if (!floater->restoreGeometry(savedGeometry)) {
+                qWarning() << "Float geometry restore failed for" << floater->panId();
+            }
+        });
+    }
+
+    // Coalesce user move/resize events, persisting the final rectangle.
+    auto* geometrySaveTimer = new QTimer(floater);
+    geometrySaveTimer->setSingleShot(true);
+    geometrySaveTimer->setInterval(400);
+    connect(floater, &PanFloatingWindow::geometryChanged, geometrySaveTimer,
+            [geometrySaveTimer](const QString&, const QByteArray&) {
+                geometrySaveTimer->start();
+            });
+    connect(geometrySaveTimer, &QTimer::timeout, floater, [floater]() {
+        floater->saveWindowGeometry();
+        QString error;
+        if (!AppSettings::instance().save(&error)) {
+            qWarning() << "Float geometry save failed for" << floater->panId()
+                       << ":" << error;
+        }
+    });
 
     // Deferred a tick so the new window is mapped and Metal is bound to the
     // new NSView before the first render. Showing before the reset can drive
@@ -558,6 +602,11 @@ void PanadapterStack::dockPanadapter(const QString& panId)
     floater->takeApplet(this);
     retireFloatingWindow(floater, applet);
 
+    // The last floated window may have been docked. Clear its saved state
+    // immediately so a later restart does not reopen it.
+    saveFloatingGeometry();
+    AppSettings::instance().save();
+
     // This pan is already out of m_floating (taken at the top), so
     // applyLayout's own dockAllFloatingPans finds nothing and schedules
     // nothing for it -- the refresh has to be named here. Exactly one pass,
@@ -605,10 +654,20 @@ void PanadapterStack::rebuildSplitters(const QString&, const QStringList&) {}
 
 void PanadapterStack::saveFloatingGeometry()
 {
+    QStringList floatingIds;
     for (auto it = m_floating.cbegin(); it != m_floating.cend(); ++it) {
         if (PanFloatingWindow* floater = it.value()) {
+            floatingIds << it.key();
             floater->saveWindowGeometry();
         }
+    }
+    // A shutdown may have already retired the Qt::Window instances. Do not
+    // replace the last user-selected Float IDs with an empty teardown list.
+    // Explicit Dock outside shutdown still clears the persisted IDs normally.
+    if (!floatingIds.isEmpty() ||
+        !window()->property("_nereusClosingWithFloats").toBool()) {
+        AppSettings::instance().setValue(QStringLiteral("FloatingPanIds"),
+                                         floatingIds.join(QLatin1Char(',')));
     }
 }
 

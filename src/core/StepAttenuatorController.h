@@ -587,6 +587,8 @@ public:
     // loadSettings: the preamp modes stored before the SA modes existed
     // are moved to the new numbering only once the board is known.
     void setBoardIdentity(HPSDRHW board, HPSDRModel model, bool alexPresent);
+    // SQ4KOU_P1_PS_FEEDBACK_STABILIZER_V1: identify the actual radio model.
+    HPSDRModel hardwareModel() const noexcept { return m_hpsdrModel; }
     // R-R3-46: also drops the band memory, which is the unloaded radio's.
     void markSettingsUnloaded()
     {

@@ -703,7 +703,15 @@ void xrxa (int channel)
 	xssql (rxa[channel].ssql.p);
 	xpanel (rxa[channel].panel.p);
 	xamsq (rxa[channel].amsq.p);
-	xresample (rxa[channel].rsmpout.p);
+	if (ch[channel].dsp_rate == ch[channel].out_rate)
+	{
+		memcpy (rxa[channel].outbuff, rxa[channel].midbuff,
+			ch[channel].dsp_outsize * sizeof (complex));
+	}
+	else
+	{
+		xresample (rxa[channel].rsmpout.p);
+	}
 }
 
 void setInputSamplerate_rxa (int channel)

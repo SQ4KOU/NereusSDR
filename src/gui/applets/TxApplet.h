@@ -552,6 +552,7 @@ private:
     void buildUI();
     void refreshMicSourceBadge();
     void wireControls();  // called after buildUI() — attaches signals/slots
+    void syncXpaFromOc();  // external PA state follows saved RX/TX OC6
     void syncPsaFromFacade();
     // Fix wave GUI-I7: put back PS-A's tooltip under the facade's reason.
     void removePsaFacadeReason();
@@ -690,6 +691,7 @@ private:
     QPushButton* m_twoToneBtn = nullptr;
     // 9. PS-A (Phase 3M-4 Task 13)
     QPushButton* m_psaBtn     = nullptr;
+    QPushButton* m_xpaBtn     = nullptr;  // ESP32 QRP/QRO, matrix OC6
     // Shared session facade owned by RadioModel. setPureSignal() changes its
     // local coordinator only for the established standalone test seam.
     QPointer<NereusSDR::PureSignalSessionFacade> m_psFacade;
@@ -711,7 +713,7 @@ private:
     //   m_memBtn      — channel-memory phase
     //   m_tuneModeCombo — ATU phase (no plan yet)
     //   m_dupBtn      — full-duplex audio routing phase
-    //   m_xpaBtn      — external-PA hardware-specific phase
+
 
     // Current band — used to resolve per-band tune power.
     // Updated by setCurrentBand() when PanadapterModel::bandChanged fires.

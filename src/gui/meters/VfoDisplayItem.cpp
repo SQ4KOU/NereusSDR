@@ -198,9 +198,18 @@ bool VfoDisplayItem::handleMousePress(QMouseEvent* event, int widgetW, int widge
 
 QString VfoDisplayItem::serialize() const
 {
-    return QStringLiteral("VFO|%1|%2|%3|%4|%5|%6|%7")
+    const QString base = QStringLiteral("VFO|%1|%2|%3|%4|%5|%6|%7")
         .arg(m_x).arg(m_y).arg(m_w).arg(m_h)
         .arg(m_bindingId).arg(m_zOrder).arg(static_cast<int>(m_displayMode));
+    // Persist the six colors selected in the VFO property editor.
+    // Preserve the complete legacy 0..7 field layout for older profiles.
+    return base
+        + QLatin1Char('|') + m_freqColour.name(QColor::HexArgb)
+        + QLatin1Char('|') + m_modeColour.name(QColor::HexArgb)
+        + QLatin1Char('|') + m_filterColour.name(QColor::HexArgb)
+        + QLatin1Char('|') + m_bandColour.name(QColor::HexArgb)
+        + QLatin1Char('|') + m_rxColour.name(QColor::HexArgb)
+        + QLatin1Char('|') + m_txColour.name(QColor::HexArgb);
 }
 
 bool VfoDisplayItem::deserialize(const QString& data)
@@ -211,6 +220,25 @@ bool VfoDisplayItem::deserialize(const QString& data)
     m_w = parts[3].toFloat(); m_h = parts[4].toFloat();
     m_bindingId = parts[5].toInt(); m_zOrder = parts[6].toInt();
     if (parts.size() > 7) { m_displayMode = static_cast<DisplayMode>(parts[7].toInt()); }
+    // Legacy records contain 7 or 8 fields and keep their original defaults.
+    // A partial new-format record is invalid, not silently reset to defaults.
+    if (parts.size() > 8 && parts.size() < 14) { return false; }
+    if (parts.size() >= 14) {
+        const QColor freq(parts[8]);
+        const QColor mode(parts[9]);
+        const QColor filter(parts[10]);
+        const QColor band(parts[11]);
+        const QColor rx(parts[12]);
+        const QColor tx(parts[13]);
+        if (!freq.isValid() || !mode.isValid() || !filter.isValid()
+            || !band.isValid() || !rx.isValid() || !tx.isValid()) { return false; }
+        m_freqColour = freq;
+        m_modeColour = mode;
+        m_filterColour = filter;
+        m_bandColour = band;
+        m_rxColour = rx;
+        m_txColour = tx;
+    }
     return true;
 }
 

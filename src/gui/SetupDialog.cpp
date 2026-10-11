@@ -213,6 +213,9 @@
 // Audio
 #include "setup/AudioBackendStrip.h"
 #include "setup/AudioDevicesPage.h"
+#if defined(Q_OS_WIN)
+#include "setup/AudioCmAsioPage.h"
+#endif
 #include "setup/AudioTxInputPage.h"
 #include "setup/AudioVaxPage.h"
 #include "setup/AudioTciPage.h"
@@ -1599,6 +1602,11 @@ void SetupDialog::buildTree()
     // Mic), so it works in every window, connected or not.
     registerPage(audio, "Devices", SetupScope::ThisComputer,
                  [this] { return wrapWithAudioBackendStrip(new AudioDevicesPage(m_model)); });
+    // SQ4KOU_CMASIO_STAGE1: this computer only; RX output, not TX input.
+#if defined(Q_OS_WIN)
+    registerPage(audio, "cmASIO", SetupScope::ThisComputer,
+                 [this] { return new AudioCmAsioPage(m_model); });
+#endif
     // R-R3-36: the PC microphone device, backend, buffer and Test Mic are
     // this computer's; the mic source, mic gain and radio microphone
     // hardware controls follow the transmit permission inside the page

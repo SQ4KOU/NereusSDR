@@ -7,6 +7,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-05 — J.J. Boyd (KG4VCF). Independent per-pan Clarity ownership.
+//                 AI-assisted via OpenAI Codex.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -209,8 +211,13 @@ void SpectrumDefaultsPage::pushFps(int fps)
 void SpectrumDefaultsPage::setStationSettingsAvailable(bool available, const QString& reason)
 {
     gateStationControls({m_fftSizeSlider, m_windowCombo, m_hzPerBinTargetSpin,
+                         findChild<QCheckBox*>(QStringLiteral("fftExternalInfluenceCheck")),
                          m_fpSlider, m_fpSpin},
                         available, reason);
+    if (m_hzPerBinTargetSpin &&
+        !AppSettings::instance().value(QStringLiteral("DisplayFftExternalInfluence"), true).toBool()) {
+        m_hzPerBinTargetSpin->setEnabled(false);
+    }
     // Parity Task 17: the Core's stored values arrive with its settings.
     if (available && remoteWindow()) {
         loadStationSpectrumSettings();
@@ -305,7 +312,12 @@ void SpectrumDefaultsPage::loadFromRenderer()
     // (4096) per Thetis setup.cs:16142 [v2.10.3.13]
     //   FFTSize = 4096 * Math.Pow(2, Math.Floor(slider.Value))
     // Inverse: slider = log2(FFTSize / 4096), clamped to [0, 6].
-    const int fs = fe->fftSize();
+    const bool allowExternalFft = AppSettings::instance().value(
+        QStringLiteral("DisplayFftExternalInfluence"), true).toBool();
+    const int fs = allowExternalFft ? fe->fftSize() :
+        AppSettings::instance().value(QLatin1String(ControlRanges::kDisplayFftSizeKey),
+                                      QString::number(ControlRanges::kDisplayFftSizeDefault))
+            .toString().toInt();
     const int sliderVal = qBound(0, ControlRanges::displayFftSizePosition(fs),
                                  ControlRanges::kDisplayFftSizePositionMax);
     m_fftSizeSlider->setValue(sliderVal);
@@ -497,22 +509,17 @@ void SpectrumDefaultsPage::buildUI()
         "noise floor as band conditions and tuning change. Uses a 30th-"
         "percentile estimator with 3-second EWMA smoothing and a ±2 dB "
         "deadband. When off, thresholds are fixed at their last values."));
-    if (auto* cc = model() ? model()->clarityController() : nullptr) {
-        clarityToggle->setChecked(cc->isEnabled());
-        connect(clarityToggle, &QCheckBox::toggled, this, [this](bool on) {
-            if (auto* cc2 = model() ? model()->clarityController() : nullptr) {
-                cc2->setEnabled(on);
-                AppSettings::instance().setValue(
-                    QStringLiteral("ClarityEnabled"),
-                    on ? QStringLiteral("True") : QStringLiteral("False"));
-            }
-            // Sync the clarityActive flag so legacy AGC knows whether
-            // to stand down. Off = AGC free to run, On = AGC yields
-            // once Clarity emits its first threshold update.
-            if (auto* sw2 = model() ? model()->spectrumWidget() : nullptr) {
-                if (!on) { sw2->setClarityActive(false); }
-            }
+    if (model()) {
+        clarityToggle->setChecked(model()->clarityEnabled());
+        connect(clarityToggle, &QCheckBox::toggled, model(), &RadioModel::setClarityEnabled);
+        connect(model(), &RadioModel::clarityEnabledChanged, clarityToggle,
+                [clarityToggle](bool enabled) {
+            const QSignalBlocker blocker(clarityToggle);
+            clarityToggle->setChecked(enabled);
         });
+        // Sync the clarityActive flag so legacy AGC knows whether
+        // to stand down. Off = AGC free to run, On = AGC yields
+        // once Clarity emits its first threshold update.
     }
     contentLayout()->addWidget(clarityToggle);
 
@@ -690,6 +697,49 @@ void SpectrumDefaultsPage::buildUI()
     });
     fftGrid->addWidget(hzPerBinPrefix,        4, 0);
     fftGrid->addWidget(m_hzPerBinTargetSpin,  4, 1, 1, 3);  // span cols 1-3
+
+    // Default ON preserves the existing automatic FFT-size behaviour.
+    // OFF makes the Size slider authoritative regardless of zoom / Hz/bin.
+    auto* fftExternalCheck = new QCheckBox(QStringLiteral("Wp\u0142yw zewn\u0119trzny"), fftGroup);
+    fftExternalCheck->setObjectName(QStringLiteral("fftExternalInfluenceCheck"));
+    fftExternalCheck->setProperty("nereusSetupId", "display.spectrumDefaults.externalFftInfluence");
+    fftExternalCheck->setToolTip(QStringLiteral(
+        "W\u0142\u0105czone: zoom i Hz/bin Target mog\u0105 automatycznie zmienia\u0107 FFT Size. "
+        "Wy\u0142\u0105czone: rozmiar FFT okre\u015bla wy\u0142\u0105cznie suwak Size."));
+    fftExternalCheck->setChecked(AppSettings::instance().value(
+        QStringLiteral("DisplayFftExternalInfluence"), true).toBool());
+    m_hzPerBinTargetSpin->setEnabled(fftExternalCheck->isChecked());
+    fftGrid->addWidget(fftExternalCheck, 5, 1, 1, 3);
+    connect(fftExternalCheck, &QCheckBox::toggled, this, [this](bool allow) {
+        AppSettings::instance().setValue(QStringLiteral("DisplayFftExternalInfluence"), allow);
+        if (m_hzPerBinTargetSpin) { m_hzPerBinTargetSpin->setEnabled(allow); }
+        if (!allow) {
+            // Do not inherit an auto-zoomed FFT size. Read the saved manual
+            // slider value, restore the FFT and update the visible slider.
+            const int savedSize = AppSettings::instance().value(
+                QLatin1String(ControlRanges::kDisplayFftSizeKey),
+                QString::number(ControlRanges::kDisplayFftSizeDefault)).toString().toInt();
+            const int position = ControlRanges::displayFftSizePosition(savedSize);
+            const int manualSize = ControlRanges::displayFftSizeAt(position);
+            if (m_fftSizeSlider) {
+                const QSignalBlocker blocker(m_fftSizeSlider);
+                m_fftSizeSlider->setValue(position);
+            }
+            if (auto* engine = model() ? model()->fftEngine() : nullptr) {
+                engine->setFftSizeBaseline(manualSize);
+                engine->setFftSize(manualSize);
+                if (m_binWidthLabel) {
+                    const double width = engine->sampleRate() / manualSize;
+                    m_binWidthLabel->setText(QString::number(
+                        width, 'f', ControlRanges::kDisplayBinWidthDecimals));
+                }
+            }
+            if (m_fftSizeReadout) { m_fftSizeReadout->setText(QString::number(manualSize)); }
+        } else if (auto* sw = model() ? model()->spectrumWidget() : nullptr) {
+            // Reuse the existing auto-zoom signal for an immediate replan.
+            sw->requestAutoZoomReplan();
+        }
+    });
 
     // Slider valueChanged handler.  Mirrors Thetis tbDisplayFFTSize_Scroll
     // at setup.cs:16142-16166 [v2.10.3.13] -- the nine-action sequence

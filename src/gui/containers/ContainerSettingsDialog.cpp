@@ -1105,6 +1105,21 @@ void ContainerSettingsDialog::buildContainerPropertiesSection(QVBoxLayout* paren
         });
         m_placementCombo=new QComboBox(bar); m_placementCombo->setObjectName("containerPlacement"); m_placementCombo->addItem(tr("Panel"),int(DockMode::PanelDocked));m_placementCombo->addItem(tr("Overlay"),int(DockMode::OverlayDocked));m_placementCombo->addItem(tr("Floating"),int(DockMode::Floating));
         modes->addWidget(new QLabel(tr("Header:"),bar));modes->addWidget(m_headerCombo);modes->addWidget(m_layoutCombo);modes->addWidget(m_placementCombo);
+        // PANEL-SIDE-SQ4KOU: independent Left/Right choice for each Panel.
+        auto* panelSide = new QComboBox(bar);
+        panelSide->setObjectName(QStringLiteral("containerPanelSide"));
+        panelSide->addItem(tr("Left"), QStringLiteral("left"));
+        panelSide->addItem(tr("Right"), QStringLiteral("right"));
+        modes->addWidget(new QLabel(tr("Panel side:"),bar));
+        modes->addWidget(panelSide);
+        applyComboStyle(panelSide);
+        connect(panelSide, qOverload<int>(&QComboBox::currentIndexChanged),
+                this, [this] { updatePreview(); });
+        connect(m_placementCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+                this, [this, panelSide] {
+                    panelSide->setEnabled(m_placementCombo->currentData().toInt()
+                                          == int(DockMode::PanelDocked));
+                });
         m_anchorCombo=new QComboBox(bar);m_anchorCombo->setObjectName("containerAnchor");
         const QStringList anchors{tr("Left"),tr("Top left"),tr("Top"),tr("Top right"),tr("Right"),tr("Bottom right"),tr("Bottom"),tr("Bottom left")};
         for(int i=0;i<anchors.size();++i) {m_anchorCombo->addItem(anchors[i],i);}modes->addWidget(m_anchorCombo);modes->addStretch();
@@ -2120,6 +2135,14 @@ void ContainerSettingsDialog::loadCurrentDraft()
         if(m_layoutCombo) {m_layoutCombo->setCurrentIndex(m_layoutCombo->findData(int(c.layout)));}
         if(m_anchorCombo) {m_anchorCombo->setCurrentIndex(m_anchorCombo->findData(int(c.anchor)));}
         if(m_placementCombo) {m_placementCombo->setCurrentIndex(m_placementCombo->findData(int(c.dockMode)));}
+        if (auto* side = findChild<QComboBox*>(QStringLiteral("containerPanelSide"))) {
+            // Migration: an Overlay at X=0 belongs to the left column.
+            // Existing Panels retain their old default, Right.
+            const QString defaultSide = c.dockMode == DockMode::OverlayDocked
+                && c.geometry.x() <= 0 ? QStringLiteral("left") : QStringLiteral("right");
+            const QString chosen = c.config.value("panelSide").toString(defaultSide);
+            side->setCurrentIndex(side->findData(chosen));
+        }
         if(m_preview) { m_preview->setDocument(c); }
         break;
     }
@@ -2182,6 +2205,12 @@ void ContainerSettingsDialog::saveCurrentDraft()
             }
             if(m_anchorCombo) {d.anchor=static_cast<AxisLock>(m_anchorCombo->currentData().toInt());}
             if(m_placementCombo) {d.dockMode=static_cast<DockMode>(m_placementCombo->currentData().toInt());}
+            if (auto* side = findChild<QComboBox*>(QStringLiteral("containerPanelSide"))) {
+                const QString value = side->currentData().toString();
+                if (value == QStringLiteral("left") || value == QStringLiteral("right")) {
+                    d.config["panelSide"] = value;
+                }
+            }
             break;
         }
         m_editSession->setDraft(document);

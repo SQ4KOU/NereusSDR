@@ -129,8 +129,18 @@ if(TARGET specbleach_static)
     # sbnr.c (ported byte-for-byte from Thetis v2.10.3.13 @ 501e3f51)
     # uses the old name. We generate a thin compat header rather than
     # editing the byte-for-byte port.
+# SQ4KOU_WDSP_WRITE_STABLE_V1
+function(_sq4kou_SQ4KOU_WDSP_WRITE_STABLE_V1_write_if_different path content)
+    if(EXISTS "${path}")
+        file(READ "${path}" _sq4kou_old_text)
+        if("${_sq4kou_old_text}" STREQUAL "${content}")
+            return()
+        endif()
+    endif()
+    file(WRITE "${path}" "${content}")
+endfunction()
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/specbleach_compat")
-    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/specbleach_compat/specbleach_compat.h"
+    _sq4kou_SQ4KOU_WDSP_WRITE_STABLE_V1_write_if_different("${CMAKE_CURRENT_BINARY_DIR}/specbleach_compat/specbleach_compat.h"
 "/* NereusSDR specbleach API compatibility shim.
  * libspecbleach commit 41d3f58 renamed SpectralBleachParameters to
  * SpectralBleachAdaptiveParameters. sbnr.c was ported byte-for-byte from

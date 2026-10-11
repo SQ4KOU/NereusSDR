@@ -17,6 +17,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-05 — J.J. Boyd (KG4VCF). Independent per-pan Clarity ownership.
+//                 AI-assisted via OpenAI Codex.
 //   2026-10-04 - Two-tone sideband follows the transmit-bound slice at
 //                 connect and handoff. J.J. Boyd (KG4VCF), AI-assisted
 //                 via OpenAI Codex. NereusSDR-original binding fix.
@@ -997,6 +999,10 @@
 //                console.cs:8215-8216, 8544 [v2.10.3.15]) to the
 //                connection, which had no writer for it. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-06 - FreeDV Reporter / PSK Reporter identity: every setIdentity
+//                call sends SpotSourceHost::reporterVersion(); a remote
+//                identity edit had sent "NereusSDR/<version>". J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1249,6 +1255,7 @@ mw0lge@grange-lane.co.uk
 //============================================================================================//
 
 #include "RadioModel.h"
+#include "core/ClarityController.h"
 #include "core/session/RemoteDevicesState.h"
 #include "core/AmModulationAnalyzer.h"
 #include "core/session/ModMonitorRecord.h"
@@ -1406,6 +1413,7 @@ mw0lge@grange-lane.co.uk
 #include <functional>
 #include <limits>
 #include <mutex>
+#include <atomic>  // P1 diagnostic counters; no processing-path changes
 #include <tuple>
 #include <vector>
 
@@ -1445,6 +1453,11 @@ namespace NereusSDR {
 // (bridge_volt, refvoltage, adc_cal_offset, volt_div, amp_voff, amp_sens)
 // preserved exactly per CLAUDE.md "Constants and Magic Numbers" rule.
 namespace {
+
+// P1 192k/384k diagnostic: raw I/Q packets presented to spectrum/FFT tap.
+// Relaxed atomics only: producer is the connection thread, reader is UI timer.
+std::atomic<quint64> gP1DiagFftTapPackets{0};
+std::atomic<quint64> gP1DiagFftTapSamples{0};
 
 // scaleFwdPowerWatts: lifted from this anonymous namespace into the
 // public PaTelemetryScaling API in Phase 1 Agent 1B of issue #167.
@@ -1594,6 +1607,12 @@ RadioModel::RadioModel(Role role, QObject* parent)
     , m_wdspEngine(new WdspEngine(this))
 {
     m_role = role;
+    // Ship default 2026-04-30: Clarity ON for fresh installs. Auto-tuning
+    // the noise floor is the better first-launch experience than asking
+    // the user to find and toggle the setting themselves.
+    m_clarityEnabled = AppSettings::instance().value(
+        QStringLiteral("ClarityEnabled"), QStringLiteral("True")).toString()
+        == QStringLiteral("True");
     // The lane is a Qt thread fed through Qt's event queue, which needs an
     // application object: a model made without one (an app-less unit test)
     // runs its WDSP calls at once, as before.
@@ -3912,7 +3931,7 @@ RadioModel::RadioModel(Role role, QObject* parent)
                 QString()).toString(),
         s.value(QStringLiteral("FreeDvReporter/Message"),
                 QString()).toString(),
-        QStringLiteral("NereusSDR ") + QStringLiteral(NEREUSSDR_VERSION));
+        SpotSourceHost::reporterVersion());
     {
         const QString serverUrl = s.value(
             QStringLiteral("FreeDvReporter/ServerUrl"),
@@ -3947,7 +3966,7 @@ RadioModel::RadioModel(Role role, QObject* parent)
                 QString()).toString(),
         s.value(QStringLiteral("PskReporter/GridSquare"),
                 QString()).toString(),
-        QStringLiteral("NereusSDR ") + QStringLiteral(NEREUSSDR_VERSION));
+        SpotSourceHost::reporterVersion());
 
     // Per-source adapter slots. Auto-connection (sender + receiver both on
     // the main thread) gives DirectConnection, so the spot lands in
@@ -4288,6 +4307,20 @@ RadioModel::RadioModel(Role role, QObject* parent)
                 m_transmitModel.fmTxOffsetForBandMhz(m_txBand));
         }
         drivePowerScroll();
+    });
+    // SQ4KOU TUNE_SOURCE_FIX: update actual drive while TUNE is keyed.
+    connect(&m_transmitModel, &TransmitModel::tunePowerForTxBandChanged,
+            this, [this](int) {
+        if (ownsLocalDsp() && m_transmitModel.isTune() &&
+            m_transmitModel.tuneDrivePowerSource() == DrivePowerSource::TuneSlider) {
+            drivePowerScroll();
+        }
+    });
+    connect(&m_transmitModel, &TransmitModel::tuneDrivePowerSourceChanged,
+            this, [this](DrivePowerSource) {
+        if (ownsLocalDsp() && m_transmitModel.isTune()) {
+            drivePowerScroll();
+        }
     });
     // PA on-air gate re-review, Important C: the PA row the Core holds on
     // the air reaches its windows (paTransmitBandVersion 1).
@@ -5942,8 +5975,7 @@ void RadioModel::applyRemoteFreedvSetting(const QString& key, AppSettings& setti
         settings.save();
         // The same existing clients the local Startup and Spot Hub pages
         // update must see a remote settings edit without a restart.
-        const QString version = QStringLiteral("NereusSDR/")
-            + QStringLiteral(NEREUSSDR_VERSION);
+        const QString version = SpotSourceHost::reporterVersion();
         if (m_freeDvReporter) {
             m_freeDvReporter->setIdentity(call, grid, message, version);
         }
@@ -7048,6 +7080,11 @@ void RadioModel::wireMicAndMonitorToTransmit()
     // — but it closes the audit gap and stays robust if the
     // safety-default policy ever changes.
     m_audioEngine->setTxMonitorEnabled(m_transmitModel.monEnabled());
+    // The MON button also enables local TXA processing without opening MOX.
+    // Both sinks listen to the same model state; neither requests RF keying.
+    connect(&m_transmitModel, &TransmitModel::monEnabledChanged,
+            m_txChannel, &TxChannel::setMonitorPreview);
+    m_txChannel->setMonitorPreview(m_transmitModel.monEnabled());
 
     // L.1 connection 5: TX monitor volume from TransmitModel.
     // setTxMonitorVolume is atomic (E.3 design); auto connection.
@@ -10906,7 +10943,11 @@ void RadioModel::activateSliceChannel(SliceModel* slice)
 
     // Sub-Epic I invariant: WDSP RX channel id == slice index.
     const QPointer<RxChannel> ch(m_wdspEngine->rxChannel(slice->sliceIndex()));
-    if (!ch || ch->isActive()) {
+    if (!ch) {
+        return;
+    }
+    ch->setWdspEngine(m_wdspEngine);
+    if (ch->isActive()) {
         // Already live. Leave it alone: connectToRadio's WDSP-init lambda
         // gives Slice A's channel the full state push (NR, SNB, APF, squelch,
         // audio panel, the lot) and then activates it, and re-running the
@@ -10927,6 +10968,11 @@ void RadioModel::activateSliceChannel(SliceModel* slice)
     const auto current = [&] {
         return self && target && ch && self->sliceById(targetId) == target.data();
     };
+    // Apply mode-specific BufferSize/FilterSize/FilterType while the channel
+    // is still stopped.  This also fixes slices > 0, whose wrappers previously
+    // never received a WdspEngine pointer and therefore ignored onModeChanged().
+    ch->onModeChanged(slice->dspMode());
+    if (!current()) { return; }
     ch->setMode(slice->dspMode());
     if (!current()) { return; }
     ch->setFilterFreqs(slice->filterLow(), slice->filterHigh());
@@ -13977,6 +14023,73 @@ void RadioModel::sampleReceiverDspLoad()
         }
     }
     m_dspLoadSampler.update(readings);
+
+    // P1 diagnostic, once per ~1 s on the existing UI sampling timer.
+    // No new timers, threads, queues or calls into DSP execution lane.
+    static qint64 diagLastMs = 0;
+    static quint64 diagPreviousBlocks = 0;
+    static quint64 diagPreviousLate = 0;
+    static quint64 diagPreviousBusyNs = 0;
+    const qint64 diagNowMs = QDateTime::currentMSecsSinceEpoch();
+    if (m_connection && qobject_cast<P1RadioConnection*>(m_connection)
+        && isConnected()
+        && (diagLastMs == 0 || diagNowMs - diagLastMs >= 1000)) {
+        const qint64 windowMs = diagLastMs > 0 ? (diagNowMs - diagLastMs) : 0;
+        diagLastMs = diagNowMs;
+        const quint64 packets = gP1DiagFftTapPackets.exchange(0, std::memory_order_relaxed);
+        const quint64 samples = gP1DiagFftTapSamples.exchange(0, std::memory_order_relaxed);
+        const quint64 seqErrors = m_bwMonitor.ep6SequenceErrorCount();
+        const double rxMbps = static_cast<double>(m_bwMonitor.ep6IngressBytesPerSec()) * 8.0 / 1000000.0;
+        bool haveDsp = false;
+        for (SliceModel* slice : m_slices) {
+            if (!slice || slice->sliceIndex() != 0 || !m_wdspEngine) { continue; }
+            RxChannel* channel = m_wdspEngine->rxChannel(0);
+            if (!channel) { continue; }
+            RxChannel::DspLoadCounters dsp{};
+            if (!channel->dspLoad(dsp)) { continue; }
+            const auto input = m_dspWorker
+                ? m_dspWorker->inputDelayStatsForSlice(0, slice->streamIndex())
+                : RxDspWorker::InputDelayStats{};
+            const quint64 blocks = static_cast<quint64>(dsp.blocks);
+            const quint64 late = static_cast<quint64>(dsp.lateBlocks);
+            const quint64 busy = static_cast<quint64>(dsp.busyNs);
+            const quint64 blocksDelta = blocks >= diagPreviousBlocks ? blocks - diagPreviousBlocks : 0;
+            const quint64 lateDelta = late >= diagPreviousLate ? late - diagPreviousLate : 0;
+            const quint64 busyDelta = busy >= diagPreviousBusyNs ? busy - diagPreviousBusyNs : 0;
+            diagPreviousBlocks = blocks;
+            diagPreviousLate = late;
+            diagPreviousBusyNs = busy;
+            const double busyPercent = windowMs > 0
+                ? 100.0 * static_cast<double>(busyDelta) / (static_cast<double>(windowMs) * 1000000.0)
+                : 0.0;
+            qCInfo(lcConnection).nospace()
+                << "P1_384_DIAG RX rate=" << m_connectionSampleRateHz
+                << " fftTapPackets=" << packets
+                << " fftTapSamples=" << samples
+                << " fftSamplesPerSec=" << (windowMs > 0 ? samples * 1000 / static_cast<quint64>(windowMs) : 0)
+                << " ep6Mbps=" << rxMbps
+                << " ep6SeqErrorsTotal=" << seqErrors
+                << " dspInputDelayMs=" << input.inputDelayMs
+                << " dspDroppedMsTotal=" << input.droppedInputMs
+                << " dspBlocksDelta=" << blocksDelta
+                << " dspLateDelta=" << lateDelta
+                << " dspBusyPercent=" << busyPercent
+                << " dspMaxBlockUs=" << dsp.maxBlockUs
+                << " dspBlockPeriodUs=" << dsp.blockPeriodUs
+                << " dspCountersConsistent=" << dsp.consistent;
+            haveDsp = true;
+            break;
+        }
+        if (!haveDsp) {
+            qCInfo(lcConnection).nospace()
+                << "P1_384_DIAG RX rate=" << m_connectionSampleRateHz
+                << " fftTapPackets=" << packets
+                << " fftTapSamples=" << samples
+                << " ep6Mbps=" << rxMbps
+                << " ep6SeqErrorsTotal=" << seqErrors
+                << " dspCountersUnavailable=1";
+        }
+    }
 }
 
 // R-R3-40. Main thread, right after sampleReceiverDspLoad.
@@ -17831,6 +17944,11 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // preserves another receiver as the operator's active selection.
             SliceModel* const primarySlice = sliceById(0);
             if (primarySlice) {
+                // The saved DSP Options are part of channel construction, not a
+                // future mode-change side effect. Apply them while the channel is
+                // still stopped; drainReceiveLane() below completes them before
+                // AudioEngine or Protocol 1 can deliver a single sample.
+                rxCh->onModeChanged(primarySlice->dspMode());
                 rxCh->setMode(primarySlice->dspMode());
                 rxCh->setFilterFreqs(primarySlice->filterLow(),
                                      primarySlice->filterHigh());
@@ -17996,6 +18114,15 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         openRxChannelPool(boardCapabilities().maxSlices, wdspInSize,
                           wdspInputRate);
 
+        // SQ4KOU 2026-10-06: finish the receive side as one startup phase.
+        // openPsFeedbackChannel() was queued on the same receive lane before
+        // initializedChanged(true), and openRxChannelPool() queued RX0..N
+        // behind it.  Drain here so no network transport can be constructed,
+        // much less started, while WDSP is still creating RX/PS channels.
+        qCInfo(lcDsp) << "WDSP startup transaction: waiting for PS/RX lifecycle";
+        m_wdspEngine->drainReceiveLane();
+        qCInfo(lcDsp) << "WDSP startup transaction: PS/RX lifecycle complete";
+
         // Master output volume (MasterOutputWidget) is the only writer to
         // AudioEngine::setVolume; the per-slice afGain seeded above lives
         // in WDSP, not in the post-DSP scalar.  Don't overwrite the master
@@ -18156,8 +18283,14 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             }
 
             // Task 4.2: give TxChannel a handle to WdspEngine so onModeChanged()
-            // can call rebuild() when the active mode's DSP-Options settings change.
+            // can apply the active mode's DSP-Options settings.
             m_txChannel->setWdspEngine(m_wdspEngine);
+            if (const SliceModel* const txSlice = txBoundSlice()) {
+                // Seed DSPTX BufferSize/FilterSize/FilterType before the TX
+                // startup drain.  This prevents the first band/mode change
+                // from being the first time the saved Phone settings reach WDSP.
+                m_txChannel->onModeChanged(txSlice->dspMode());
+            }
             // R-R3-39: with the transmit lane, onModeChanged returns at once
             // and the lane reports how long its WDSP work took. Same gate as
             // the RX path's.
@@ -18319,7 +18452,11 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // [v2.10.3.13]: puresignal.SetPSFeedbackRate(txch, ps_rate);).
             // Inline tag preservation: //MI0BOT  [original inline comment
             // from mi0bot-Thetis cmaster.cs:566]
-            m_pureSignal->applyBoardCapabilities(boardCapabilities());
+            auto psCaps = boardCapabilities();
+            if (m_lastRadioInfo.protocol == ProtocolVersion::Protocol1) {
+                psCaps.psDefaultPeak = 0.4072; // Thetis P1 default; P2 uses board value.
+            }
+            m_pureSignal->applyBoardCapabilities(psCaps);
 
             // ── Task 17 chunk A — wire PSEnabled fan-out into ReceiverManager ──
             //
@@ -19092,6 +19229,16 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         };  // end of txSetup lambda
         txSetup();
 
+        // SQ4KOU 2026-10-06: Thetis creates all RX channels before TX and
+        // finishes the transmitter before any transport feeds DSP.  The TX
+        // lane remains independent during normal operation; only this startup
+        // boundary waits for its lifecycle barrier and all init setters.
+        if (m_txChannel) {
+            qCInfo(lcDsp) << "WDSP startup transaction: waiting for TX lifecycle";
+            m_wdspEngine->drainTransmitLane();
+            qCInfo(lcDsp) << "WDSP startup transaction: TX lifecycle complete; radio transport may start";
+        }
+
         if (!m_txChannel) {
             // Issue #153 sub-bug 1 — cold-start retry hook.
             //
@@ -19707,9 +19854,9 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
     // ReceiverManager's stamped copy of every hardware batch (feedIqData runs
     // for each RadioConnection::iqDataReceived through the DirectConnection
     // above), so the diversity input is bounded like any receiver's.
-    connect(m_receiverManager, &ReceiverManager::hardwareIqDataStamped,
-            m_dspWorker, &RxDspWorker::processStampedExternalDiversityIqBatch,
-            Qt::QueuedConnection);
+    // External Diversity I/Q is subscribed only while its route is active.
+    // reconcileExternalDiversityRoute() attaches the queued connection;
+    // stopExternalDiversityRoute() detaches it before stopping WDSP.
     m_dspThread->start();
     // R-R3-39: what the receive lane's barriers park.
     setRxWorkerTarget(m_dspWorker, m_dspThread);
@@ -25255,6 +25402,17 @@ void RadioModel::teardownConnection()
 }
 
 // Phase 3G-9b — 7 smooth-default recipe values. See docs/architecture/waterfall-tuning.md.
+ClarityController* RadioModel::clarityController() const { return m_clarityController.data(); }
+void RadioModel::setClarityController(ClarityController* controller) { m_clarityController = controller; }
+void RadioModel::setClarityEnabled(bool enabled)
+{
+    if (m_clarityEnabled == enabled) { return; }
+    m_clarityEnabled = enabled;
+    AppSettings::instance().setValue(QStringLiteral("ClarityEnabled"),
+        enabled ? QStringLiteral("True") : QStringLiteral("False"));
+    emit clarityEnabledChanged(enabled);
+}
+
 void RadioModel::applyClaritySmoothDefaults()
 {
     NereusSDR::ISpectrumSink* sw = spectrumSink();
@@ -25823,6 +25981,7 @@ void RadioModel::pumpAudioVolume(double audioVolume)
     if (m_txChannel) {
         m_txChannel->setTxFixedGain(iqGain);
     }
+    m_lastSq4kouTxDriveByte = wireDrive;
     auto* conn = m_connection;
     QMetaObject::invokeMethod(conn, [conn, wireDrive]() {
         conn->setTxDrive(wireDrive);
@@ -28766,9 +28925,13 @@ void RadioModel::startSampleRateChange(SampleRateRequest request)
         // inside RadioConnection::setSampleRate (P2).  Both paths are queued
         // to the connection thread; we wait below for inflight packets to drain.
         if (auto* p1 = qobject_cast<P1RadioConnection*>(connection)) {
-            QMetaObject::invokeMethod(p1, [p1, newRateHz]() {
+            // P1: complete the connection-thread restart before WDSP is re-rated.
+            const bool invoked = QMetaObject::invokeMethod(p1, [p1, newRateHz]() {
                 p1->restartStreamWithRate(newRateHz);
-            }, Qt::QueuedConnection);
+            }, Qt::BlockingQueuedConnection);
+            if (!invoked) {
+                qCCritical(lcConnection) << "P1 sample-rate restart dispatch failed";
+            }
         } else if (connection) {
             QMetaObject::invokeMethod(connection,
                                       [conn = connection, newRateHz]() {
@@ -32369,6 +32532,13 @@ void RadioModel::reconcileExternalDiversityRoute(
         m_externalDiversitySecondaryDdc = secondaryDdc;
         m_externalDiversityChunkSize = chunkSize;
         const quint64 generation = ++m_externalDiversityRouteGeneration;
+        // The raw EP6 fork is needed only for an active Diversity route.
+        // Avoid queueing every unused DDC batch to the DSP worker on normal RX.
+        if (m_receiverManager) {
+            connect(m_receiverManager, &ReceiverManager::hardwareIqDataStamped,
+                    m_dspWorker, &RxDspWorker::processStampedExternalDiversityIqBatch,
+                    Qt::ConnectionType(Qt::QueuedConnection | Qt::UniqueConnection));
+        }
         WdspEngine* const engine = m_wdspEngine;
         RxDspWorker* const worker = m_dspWorker;
         const int targetSliceId = target->sliceIndex();
@@ -32400,6 +32570,10 @@ void RadioModel::reconcileExternalDiversityRoute(
         m_rxLane->request<bool>([created]() { return created->load(); }, this,
                                 [this, generation](bool ok) {
             if (!ok && generation == m_externalDiversityRouteGeneration) {
+                if (m_receiverManager && m_dspWorker) {
+                    disconnect(m_receiverManager, &ReceiverManager::hardwareIqDataStamped,
+                               m_dspWorker, &RxDspWorker::processStampedExternalDiversityIqBatch);
+                }
                 m_externalDiversityRouteActive = false;
                 m_externalDiversityPrimaryDdc = -1;
                 m_externalDiversitySecondaryDdc = -1;
@@ -32415,6 +32589,12 @@ void RadioModel::reconcileExternalDiversityRoute(
     if (!m_wdspEngine->createExternalDiversity(
             kExternalDiversityId, 2, chunkSize)) {
         return;
+    }
+    // No receive lane (tests/legacy fallback): same on-demand raw-I/Q fork.
+    if (m_receiverManager) {
+        connect(m_receiverManager, &ReceiverManager::hardwareIqDataStamped,
+                m_dspWorker, &RxDspWorker::processStampedExternalDiversityIqBatch,
+                Qt::ConnectionType(Qt::QueuedConnection | Qt::UniqueConnection));
     }
     configureExternalDiversityRotation(target);
 
@@ -32443,6 +32623,12 @@ void RadioModel::reconcileExternalDiversityRoute(
 
 void RadioModel::stopExternalDiversityRoute()
 {
+    // Disconnect first: no Diversity means no queued DSP events for unused DDCs.
+    // Already-queued events remain ordered before the existing worker barrier.
+    if (m_receiverManager && m_dspWorker) {
+        disconnect(m_receiverManager, &ReceiverManager::hardwareIqDataStamped,
+                   m_dspWorker, &RxDspWorker::processStampedExternalDiversityIqBatch);
+    }
     if (m_rxLane) {
         // R-R3-39: the same order as one receive-lane barrier. The lane,
         // not the event loop, waits for the worker to clear the route
@@ -33161,6 +33347,10 @@ void RadioModel::forkIqToTaps(int receiverIndex, const QVector<float>& samples)
     // unaffected. Widening the untagged signal instead would mean giving
     // TCI a real per-receiver IQ surface, which is its own piece of work.
     if (receiverIndex == 0) {
+        // Diagnostic only: count blocks forwarded to the spectrum tap.
+        gP1DiagFftTapPackets.fetch_add(1, std::memory_order_relaxed);
+        gP1DiagFftTapSamples.fetch_add(static_cast<quint64>(samples.size() / 2),
+                                        std::memory_order_relaxed);
         emit rawIqData(samples);
     }
     emit rawIqDataForStream(receiverIndex, samples);

@@ -174,6 +174,12 @@
 //                8544; netInterface.c:1249-1252; networkproto1.c:471
 //                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-10-06 - Issue #351: a lost link recovers in place. Each reconnect
+//                attempt waits the full silence window from the attempt (the
+//                stale last-frame time tripped the watchdog again 25 ms after
+//                the start went out), attempts come 1 s apart (was 5 s), and
+//                inPlaceRecoveryMs tells the owner how long they run.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -526,11 +532,13 @@ mw0lge@grange-lane.co.uk
 #include <algorithm>
 #include <cmath>
 #include <atomic>
+#include <chrono>  // P1 EP6 receive/parse diagnostic timings
 #include <cstdlib>
 #include <cstring>    // memset
 #include <vector>
 #include <QtEndian>
 #include <QNetworkDatagram>
+#include <QScopeGuard>
 #include <QThread>
 #include <QVariant>
 #include <QCoreApplication>
@@ -882,7 +890,8 @@ void P1RadioConnection::init()
     connect(m_ep2PacerTimer, &QTimer::timeout, this, &P1RadioConnection::onEp2PacerTick);
 
     // Reconnect timer — single-shot; fires kReconnectIntervalMs after watchdog trips.
-    // Source: NereusSDR design doc §3.6 — 5-second reconnect interval, max 3 retries.
+    // Source: NereusSDR design doc §3.6 — max 3 retries; issue #351 moved the
+    // interval from 5 s to 1 s.
     m_reconnectTimer = new QTimer(this);
     m_reconnectTimer->setSingleShot(true);
     connect(m_reconnectTimer, &QTimer::timeout, this, &P1RadioConnection::onReconnectTimeout);
@@ -1665,6 +1674,9 @@ void P1RadioConnection::restartStreamWithRate(int newSampleRate)
         return;  // idempotent
     }
     setSampleRate(newSampleRate);  // updates rate + mic decimation factor
+    // Bank 0 carries SampleRate. It must be sent BEFORE Metis START;
+    // six priming frames cover only 12 of the 17 standard P1 banks.
+    m_forceBank0Next = true;
     sendMetisStop();
     sendPrimingBurst(3);
     sendMetisStart(false);
@@ -1715,6 +1727,9 @@ void P1RadioConnection::restartStreamWithCount(int newActiveRxCount)
         return;  // idempotent
     }
     m_activeRxCount = newActiveRxCount;
+    // Bank 0 also carries RX-count (EP6 slot layout). Without this,
+    // priming can miss bank 0 and the host can parse the wrong layout.
+    m_forceBank0Next = true;
     sendMetisStop();
     sendPrimingBurst(3);
     sendMetisStart(false);
@@ -2324,6 +2339,11 @@ void P1RadioConnection::setAttenuatorForAdc(int adc, int dB)
     } else if (m_caps && !m_caps->attenuator.present) {
         dB = 0;
     }
+    if (adc == 1 && m_hardwareProfile.model == HPSDRModel::REDPITAYA
+        && m_mox && m_savedRpPsAdc1AttValid) {
+        m_savedRpPsAdc1AttDb = dB;  // restore this RX setting at unkey
+        return; // preserve live PureSignal feedback ATT during TX
+    }
     m_stepAttn[adc] = dB;
 }
 
@@ -2438,6 +2458,20 @@ void P1RadioConnection::setTxStepAttenuation(int dB)
     // round-robin equivalent.
     m_forceBank4Next = true;
 
+    // SQ4KOU_P1_ADC1_TXATT_SYNC_FIX_V2
+    // Red Pitaya P1 feedback is ADC1, sent in C&C bank 12 C1.
+    // The previous patch only copied the value at the MOX edge.
+    // Update it here BEFORE the idempotent TX ATT guard.
+    if (m_hardwareProfile.model == HPSDRModel::REDPITAYA && m_mox) {
+        if (!m_savedRpPsAdc1AttValid) {
+            m_savedRpPsAdc1AttDb = m_stepAttn[1];
+            m_savedRpPsAdc1AttValid = true;
+        }
+        if (m_stepAttn[1] != dB) {
+            m_stepAttn[1] = dB;
+            qCInfo(lcConnection) << "P1 RP PS ADC1 BANK12_C1_DB=" << dB;
+        }
+    }
     if (m_txStepAttn == dB) {
         return;  // idempotent — flush flag already set above
     }
@@ -2505,6 +2539,19 @@ void P1RadioConnection::setMox(bool enabled)
     } else {
         // G-05 follow-up: nothing queued for this key goes out after it.
         discardTxIqOnUnkey();
+    }
+    // Red Pitaya P1: feedback ADC1 uses bank 12 C1 (not bank 4 C3).
+    // Save its RX value only for the keyed interval; restore at unkey.
+    if (m_hardwareProfile.model == HPSDRModel::REDPITAYA) {
+        if (enabled && !m_savedRpPsAdc1AttValid) {
+            m_savedRpPsAdc1AttDb = m_stepAttn[1];
+            m_savedRpPsAdc1AttValid = true;
+            m_stepAttn[1] = m_txStepAttn;
+            qCInfo(lcConnection) << "P1 RedPitaya PS ADC1 step ATT bank12=" << m_txStepAttn;
+        } else if (!enabled && m_savedRpPsAdc1AttValid) {
+            m_stepAttn[1] = m_savedRpPsAdc1AttDb;
+            m_savedRpPsAdc1AttValid = false;
+        }
     }
     m_mox = enabled;
 
@@ -4346,6 +4393,14 @@ void P1RadioConnection::onReadyRead()
 {
     if (!m_socket) { return; }
 
+    // P1 diagnostic: thread-local, receive-thread-only counters, no signal traffic.
+    // Reset each 1 s window; unchanged parsing and radio control below.
+    static thread_local qint64 diagFirstUs = 0;
+    static thread_local quint64 diagFrames = 0;
+    static thread_local quint64 diagSequenceGaps = 0;
+    static thread_local quint64 diagParseTotalUs = 0;
+    static thread_local quint64 diagParseMaxUs = 0;
+
     // Note: not `const` — we update this local snapshot below when the
     // Connecting -> Connected promotion fires on the first 1032-byte
     // datagram, so the "ep6 stream established" log line emits exactly
@@ -4366,6 +4421,24 @@ void P1RadioConnection::onReadyRead()
         }
         return;
     }
+
+    // Same socket-drain batching as P2: reduce queued DSP events without
+    // changing any EP6 data, stream order or PureSignal pairing.
+    const bool outerDrain = !m_inIqDrain;
+    if (outerDrain) {
+        m_inIqDrain = true;
+        m_frameReceivedPending = false;
+        emit iqBatchStarted();
+    }
+    const auto finishDrain = qScopeGuard([this, outerDrain] {
+        if (!outerDrain) { return; }
+        m_inIqDrain = false;
+        emit iqBatchFinished();
+        if (m_frameReceivedPending) {
+            m_frameReceivedPending = false;
+            emit frameReceived();
+        }
+    });
 
     while (m_socket->hasPendingDatagrams()) {
         QNetworkDatagram dg = m_socket->receiveDatagram();
@@ -4392,9 +4465,9 @@ void P1RadioConnection::onReadyRead()
                 m_connectWatchdog->stop();
             }
 
-            // Per-frame activity signal for TitleBar LED (throttled to 10 Hz
-            // by the receiver). Design §4.1.
-            emit frameReceived();
+            // Update activity once per socket drain (as in P2); the
+            // TitleBar receiver already throttles LED updates to 10 Hz.
+            m_frameReceivedPending = true;
 
             // Diagnostic: log the first EP6 frame of this session so
             // remote debugging can tell "connected but no data" apart
@@ -4412,6 +4485,9 @@ void P1RadioConnection::onReadyRead()
             // log message branches on m_reconnectAttempts so an initial
             // connect doesn't claim it was "Reconnected".
             if (cs == ConnectionState::Connecting) {
+                // Publish the first radio PTT state again after reconnect,
+                // even when it equals the state from the previous session.
+                m_radioPttKnown = false;
                 const bool wasReconnecting = (m_reconnectAttempts > 0);
                 m_reconnectAttempts = 0;
                 if (m_reconnectTimer) { m_reconnectTimer->stop(); }
@@ -4468,6 +4544,7 @@ void P1RadioConnection::onReadyRead()
                     const bool seqError = seqnum != (1 + m_ep6LastRecvSeq);
                     if (seqError) {
                         if (m_bwMonitor) { m_bwMonitor->recordEp6SequenceError(); }
+                        if (m_ep6SeqPrimed) { ++diagSequenceGaps; }
                     }
                     // R-R3-32 (parity Task 6): the same count, one per
                     // mismatch, feeds the link's packet loss. The first
@@ -4487,7 +4564,39 @@ void P1RadioConnection::onReadyRead()
                 }
             }
 
+            const auto parseStart = std::chrono::steady_clock::now();
             parseEp6Frame(data);
+            const auto parseEnd = std::chrono::steady_clock::now();
+            const quint64 parseUs = static_cast<quint64>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    parseEnd - parseStart).count());
+            diagParseTotalUs += parseUs;
+            diagParseMaxUs = std::max(diagParseMaxUs, parseUs);
+            ++diagFrames;
+            if (diagFirstUs == 0) { diagFirstUs = arrivalUs; }
+            const qint64 diagElapsedUs = arrivalUs - diagFirstUs;
+            if (diagElapsedUs >= 1000000) {
+                const int spr = 504 / (6 * std::max(1, m_activeRxCount) + 2);
+                const double expectedFps = m_sampleRate > 0
+                    ? static_cast<double>(m_sampleRate) / (2.0 * spr) : 0.0;
+                const double measuredFps = static_cast<double>(diagFrames) * 1000000.0
+                    / static_cast<double>(diagElapsedUs);
+                qCInfo(lcConnection).nospace()
+                    << "P1_384_DIAG EP6 rate=" << m_sampleRate
+                    << " ddcSlots=" << m_activeRxCount
+                    << " spr=" << spr
+                    << " frames=" << diagFrames
+                    << " fps=" << measuredFps
+                    << " expectedFps=" << expectedFps
+                    << " seqGaps=" << diagSequenceGaps
+                    << " parseMeanUs=" << (diagFrames ? diagParseTotalUs / diagFrames : 0)
+                    << " parseMaxUs=" << diagParseMaxUs;
+                diagFirstUs = arrivalUs;
+                diagFrames = 0;
+                diagSequenceGaps = 0;
+                diagParseTotalUs = 0;
+                diagParseMaxUs = 0;
+            }
         }
     }
 }
@@ -4705,6 +4814,12 @@ void P1RadioConnection::onReconnectTimeout()
     sendMetisStart(false);
     sendPrimingBurst(3);
 
+    // Issue #351: this attempt waits the full silence window from now, as
+    // setWatchdogEnabled does. Counted from the last frame before the loss,
+    // the window had long passed, so the watchdog's next tick (25 ms) called
+    // the link lost again unless the radio's answer had already arrived.
+    m_lastEp6At = QDateTime::currentDateTimeUtc();
+
     // Re-arm the watchdog so onReadyRead can complete the transition to Connected.
     if (!m_watchdogTimer->isActive()) {
         m_watchdogTimer->start();
@@ -4722,6 +4837,16 @@ void P1RadioConnection::onReconnectTimeout()
     // But we schedule a fallback in case no ep6 data arrives within the window
     // (i.e., watchdog trips again → re-arms reconnect timer).
     // No extra start() needed; see onWatchdogTick for the arming path.
+}
+
+int P1RadioConnection::inPlaceRecoveryMs() const noexcept
+{
+    // Issue #351: every attempt comes kReconnectIntervalMs after the loss or
+    // the last attempt's silence, and waits m_watchdogSilenceMs for its
+    // first frame; the last attempt's wait ends the budget, and one more
+    // interval covers its answer.
+    return kMaxReconnectAttempts * (m_reconnectIntervalMs + m_watchdogSilenceMs)
+        + m_reconnectIntervalMs;
 }
 
 // ---------------------------------------------------------------------------
@@ -5299,10 +5424,14 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
     // (matches Thetis nativeGetDotDashPTT() which reads a single prn->ptt_in
     // accumulated across all sub-frame writes).
     //
-    // Emitted unconditionally each frame: MoxController::onMicPttFromRadio
-    // is idempotent, so repeated false→false calls are harmless.
+    // Send the first observed PTT state and subsequent edges only. This
+    // avoids thousands of redundant queued GUI events per second at 384 kHz.
     const bool micPtt = ((c0_sub0 & 0x01) != 0) || ((c0_sub1 & 0x01) != 0);
-    emit micPttFromRadio(micPtt);
+    if (!m_radioPttKnown || micPtt != m_radioPttLast) {
+        m_radioPttKnown = true;
+        m_radioPttLast = micPtt;
+        emit micPttFromRadio(micPtt);
+    }
 
     // Phase 3P-H Task 4: PA telemetry — extract raw 16-bit ADC counts from
     // each subframe's C&C status bytes.  Per-board scaling lives in RadioModel

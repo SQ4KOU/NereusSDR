@@ -332,7 +332,8 @@
 #include "core/ControlRanges.h"
 #include "core/audio/CompositeTxMicRouter.h"
 #include "core/MicProfileManager.h"
-#include "core/MoxController.h"
+#include "core/MoxController.h"
+#include "core/OcMatrix.h"
 #include "core/PureSignal.h"
 #include "core/RadioStatus.h"
 #include "core/session/IStationLink.h"
@@ -376,6 +377,9 @@ QString monitorHeadphonesCaption() { return QStringLiteral("PHONES"); }
 // The tooltip a control had before the transmit-permission layer
 // (setTransmitPermitted) disabled it, given back when permission returns.
 constexpr auto kTransmitSavedTooltip = "TxAppletSavedTransmitTooltip";
+// ESP32 calls matrix pin 7 (zero-based index 6) OC6: the 0x40 bit.
+constexpr int kEsp32QroCompanionOcPin = 5;  // P6, 0x20
+constexpr int kEsp32QroOcPin = 6;           // P7, 0x40
 
 // Disable a control with `reason` as its tooltip, remembering what it had,
 // or put back what it had. Shared by the keying gate and the transmit
@@ -768,9 +772,9 @@ void TxApplet::buildUI()
         // R-R3-21: MON plays your own transmitted audio as it sounds on the
         // air, in the output chosen beside it (R-R3-45).
         m_monBtn->setToolTip(QStringLiteral(
-            "Monitor: hear your own transmitted audio as it sounds on the air, "
-            "on the output chosen next to MON (SPEAKERS or PHONES).\n"
-            "MON is off each time NereusSDR starts, for safety."));
+            "MON: hear the processed TX modulation even with MOX OFF; "
+            "the radio stays in receive. Local RX audio is muted during preview.\n"
+            "Choose SPEAKERS or PHONES beside MON. MON starts OFF."));
         monRow->addWidget(m_monBtn, 1);
 
         // R-R3-45: where MON plays, beside MON. An exclusive pair in the
@@ -1058,13 +1062,21 @@ void TxApplet::buildUI()
         vbox->addLayout(row);
     }
 
-    // ── SWR protection LED inset ─────────────────────────────────────────────
-    // xPA button removed (external-PA hardware-specific phase, no plan yet).
-    // SWR Prot LED now occupies its own full-width inset row.
+    // ── xPA / ESP32 QRP-QRO + SWR protection indicator ─────────────────────
+    // Existing OC matrix and RF/TCI path remain authoritative.
     // Inset: fixedHeight 22, bg #0a0a18, border #1e2e3e (AetherSDR TxApplet.cpp:224–253)
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
+
+        m_xpaBtn = new QPushButton(QStringLiteral("xPA"), this);
+        m_xpaBtn->setObjectName(QStringLiteral("TxAppletXpaBtn"));
+        m_xpaBtn->setCheckable(true);
+        m_xpaBtn->setFixedHeight(22);
+        m_xpaBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_xpaBtn->setStyleSheet(Style::buttonBaseStyle() + Style::greenCheckedStyle());
+        m_xpaBtn->setAccessibleName(QStringLiteral("External PA QRP/QRO"));
+        row->addWidget(m_xpaBtn, 1);
 
         // Inset container for SWR protection LED (styled like AetherSDR atuInset)
         auto* inset = new QWidget(this);
@@ -1090,7 +1102,7 @@ void TxApplet::buildUI()
         m_swrProtLed->setAccessibleName(QStringLiteral("SWR protection indicator"));
         insetLayout->addWidget(m_swrProtLed);
 
-        row->addWidget(inset, 1); // full width (xPA removed)
+        row->addWidget(inset, 1);
         vbox->addLayout(row);
     }
 
@@ -1244,7 +1256,6 @@ void TxApplet::wireControls()
         // a different band (this applet's active slice) from the one that
         // transmits.
         if (m_model && m_model->role() == RadioModel::Role::Local) {
-            tx.setTuneDrivePowerSource(DrivePowerSource::DriveSlider);
             return;
         }
         // R-R3-49 (group A fix wave, M3): a Core below
@@ -1294,17 +1305,7 @@ void TxApplet::wireControls()
         }
         if (tx.setTunePowerForTxBand(val)) { return; }
         tx.setTunePowerForBand(m_currentBand, val);
-        // When the user touches the tune slider, switch the tune drive
-        // source so TUNE actually reads from tunePowerForBand instead of
-        // the regular drive slider (the default per Thetis console.cs:46553
-        // [v2.10.3.13]).  Without this the tune slider is dead UI: its
-        // value persists per-band but the math kernel
-        // (TransmitModel::setPowerUsingTargetDbm txMode 1) only consults
-        // tunePowerForBand when m_tuneDrivePowerSource == TuneSlider.
-        // NereusSDR-spin: Thetis exposes _tuneDrivePowerSource via a
-        // separate Setup combo; NereusSDR follows last-touched-slider-wins
-        // UX so users don't need to know the enum exists.
-        tx.setTuneDrivePowerSource(DrivePowerSource::TuneSlider);
+        // Setup -> Transmit -> Power owns the TUNE drive-source selection.
     });
 
     connect(m_tunePwrSlider, &QSlider::sliderReleased, this, [this]() {
@@ -2012,8 +2013,59 @@ void TxApplet::wireControls()
         syncPsaFromFacade();
     }
 
+    // xPA alters only OC6, on the current TX band's RX and TX rows.
+    // setPin() already saves to the existing matrix and notifies RF/TCI.
+    connect(m_xpaBtn, &QPushButton::toggled, this, [this](bool enabled) {
+        if (!m_model || !m_transmitSettingsPermitted ||
+            m_model->isTransmitting() || m_model->isTune()) {
+            syncXpaFromOc();
+            return;
+        }
+        OcMatrix& matrix = m_model->ocMatrixMutable();
+        const Band band = txBand();
+        matrix.setPin(band, kEsp32QroCompanionOcPin, false, enabled);  // RX P6
+        matrix.setPin(band, kEsp32QroOcPin, false, enabled);  // RX: ATU preview
+        matrix.setPin(band, kEsp32QroCompanionOcPin, true, enabled);  // TX P6
+        matrix.setPin(band, kEsp32QroOcPin, true, enabled);   // TX: PA selection
+        syncXpaFromOc();
+    });
+    connect(&m_model->ocMatrixMutable(), &OcMatrix::changed,
+            this, &TxApplet::syncXpaFromOc);
+    connect(&tx, &TransmitModel::tuneChanged,
+            this, &TxApplet::syncXpaFromOc);
+    connect(m_model, &RadioModel::transmittingChanged,
+            this, &TxApplet::syncXpaFromOc);
+    if (mox) {
+        connect(mox, &MoxController::moxStateChanged,
+                this, &TxApplet::syncXpaFromOc);
+    }
+
     // ── Initial sync from model ──────────────────────────────────────────────
     syncFromModel();
+}
+
+void TxApplet::syncXpaFromOc()
+{
+    if (!m_xpaBtn || !m_model) { return; }
+    const Band band = txBand();
+    const OcMatrix& matrix = m_model->ocMatrix();
+    const bool rxQro = matrix.pinEnabled(band, kEsp32QroOcPin, false);
+    const bool txQro = matrix.pinEnabled(band, kEsp32QroOcPin, true);
+    const QSignalBlocker block(m_xpaBtn);
+    const bool rxCompanion = matrix.pinEnabled(band, kEsp32QroCompanionOcPin, false);
+    const bool txCompanion = matrix.pinEnabled(band, kEsp32QroCompanionOcPin, true);
+    m_xpaBtn->setChecked(rxQro && txQro && rxCompanion && txCompanion);
+    const bool txActive = m_model->isTransmitting() || m_model->isTune();
+    m_xpaBtn->setEnabled(m_transmitSettingsPermitted && !txActive);
+    if (txActive) {
+        m_xpaBtn->setToolTip(QStringLiteral("QRP/QRO change is blocked during TX/TUNE."));
+    } else if (!m_transmitSettingsPermitted) {
+        m_xpaBtn->setToolTip(IStationLink::transmitSettingsUnavailableReason());
+    } else if (rxQro != txQro) {
+        m_xpaBtn->setToolTip(QStringLiteral("RX and TX OC6 differ. Click to enable QRO on both."));
+    } else {
+        m_xpaBtn->setToolTip(QStringLiteral("OFF: QRP. ON: QRO. Uses RX/TX OC6 of TX band."));
+    }
 }
 
 void TxApplet::refreshMicSourceBadge()
@@ -2154,6 +2206,7 @@ void TxApplet::syncFromModel()
     }
 
     m_updatingFromModel = false;
+    syncXpaFromOc();
 }
 
 void TxApplet::setDesktopKeyHandlers(std::function<void(bool)> mox,
@@ -2434,6 +2487,7 @@ void TxApplet::setCurrentBand(Band band)
     // their own same-value early-returns — so the cost is negligible and
     // the win is correct first-paint behaviour after loadFromSettings.
     m_currentBand = band;
+    syncXpaFromOc();
 
     if (!m_model) { return; }
 
@@ -2553,6 +2607,7 @@ void TxApplet::followTransmitSlice()
     refreshTxFilterStatus();
     if (!slice) {
         m_txBandKnown = false;
+        syncXpaFromOc();
         return;
     }
     if (moved || !m_txBandKnown) {
@@ -2571,11 +2626,13 @@ void TxApplet::followTransmitSlice()
         m_txBand = band;
         m_txBandKnown = true;
         if (band != m_currentBand) { setCurrentBand(band); }
+        syncXpaFromOc();
     });
     onMoxModeChanged(slice->dspMode());
     if (moved) {
         setCurrentBand(bandFromFrequency(slice->frequency()));
     }
+    syncXpaFromOc();
 }
 
 void TxApplet::watchTransmitFlags()
@@ -3029,6 +3086,7 @@ void TxApplet::setTransmitSettingsPermitted(bool permitted, const QString& unava
                              static_cast<QWidget*>(m_txFilterHighSpin)}) {
         gateTransmitControl(control, permitted, reason);
     }
+    syncXpaFromOc();
 }
 
 // R-R3-49 (parity Task 2): the rest of this applet's transmit settings. The

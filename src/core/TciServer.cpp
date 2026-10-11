@@ -150,7 +150,10 @@
 #include "core/session/SliceAccessPolicy.h"
 #include "core/safety/TxRefusal.h"
 #include "MicProfileManager.h"     // R-R3-49 (parity Task 3): a remote window's TX profiles.
-#include "TxSliceArbiter.h"        // Codex review round 6: tx_frequency follows the TX-bound slice.
+#include "TxSliceArbiter.h"
+#include "StepAttenuatorFacade.h"
+#include "StepAttenuatorController.h" // read native applied TX ATT
+#include "RadioConnection.h" // P1-only guard
 #include "AudioEngine.h"           // Phase 3J-1 closeout (review P1 #1): volume change broadcast.
 #include "TciVolume.h"             // tciLinearToDbVolume / tciAudioGainToDb for volume frames.
 #include "WdspEngine.h"
@@ -197,6 +200,157 @@ void  destroy_resampleFV(void* ptr);
 #include <QDateTime>
 
 namespace NereusSDR {
+
+// SQ4KOU TCI ESP328 compatibility (source-only; no changes to WDSP).
+// Contract: ESP firmware tci_sq4kou.cpp, V2.306+; Thetis custom TCI.
+// ANT/OC and a Nereus-owned external TX ATT are valid. ADC1 ATT is valid
+// only during RX; PA, LNA6, PS S-ATT and CMD07 are not fabricated.
+namespace {
+int sq4kouTciBandIndex(Band band)
+{
+    const int raw = static_cast<int>(band);
+    const int start = static_cast<int>(Band::Band160m);
+    const int end = static_cast<int>(Band::Band6m);
+    return (raw >= start && raw <= end) ? raw - start + 1 : 0;
+}
+
+QString sq4kouTciBandToken(int idx)
+{
+    static constexpr const char* names[] = {
+        "bypass", "b160m", "b80m", "b60m", "b40m", "b30m",
+        "b20m", "b17m", "b15m", "b12m", "b10m", "b6m"
+    };
+    return QString::fromLatin1(names[(idx >= 0 && idx <= 11) ? idx : 0]);
+}
+
+quint32 sq4kouTciNextSequence()
+{
+    static quint32 seq = 0;  // TciServer and client callbacks run on the Qt GUI thread.
+    if (++seq == 0) { ++seq; }
+    return seq;
+}
+
+// SQ4KOU CMD05 external TX ATT - exact Thetis mapping, not a second
+// PA gain / RF power conversion.  The actual HPSDR drive byte is
+// captured where Nereus already writes it to the radio (RadioModel).
+// Thetis TCIServer.cs sq4kouCmd05TattFromDrive():
+//   trunc(-40*log10(DRIVE/255)), limited to 0..63 (0.5 dB units).
+// -1 is the only "not yet available" sentinel; zero DRIVE means 63.
+int sq4kouCmd05TattFromDrive(int drive)
+{
+    if (drive < 0) { return -1; }
+    if (drive == 0) { return 63; }
+    if (drive >= 255) { return 0; }
+    const double raw = -40.0 * std::log10(static_cast<double>(drive) / 255.0);
+    return qBound(0, static_cast<int>(raw), 63); // Truncate, do NOT round.
+}
+
+// seq=0 is used only for content comparison; wire sends nonzero sequence.
+QStringList sq4kouTciHardwareLines(RadioModel* model, quint32 seq)
+{
+    QStringList out;
+    // Remote windows must not report local antenna or OC as station authority.
+    if (!model || model->role() == RadioModel::Role::Remote) { return out; }
+
+    SliceModel* rx = model->activeSlice();
+    if (!rx) { rx = model->sliceById(0); }
+    SliceModel* tx = nullptr;
+    if (const auto* arb = model->txSliceArbiter()) {
+        tx = model->sliceById(arb->txBoundSliceId());
+    }
+    if (!tx) { tx = model->sliceById(0); }
+    if (!rx || !tx) { return out; }
+
+    const auto rxBand = bandFromFrequency(static_cast<double>(rx->frequency()));
+    const auto txBand = bandFromFrequency(static_cast<double>(tx->frequency()));
+    const int rxIndex = sq4kouTciBandIndex(rxBand);
+    const int txIndex = sq4kouTciBandIndex(txBand);
+    const auto& alex = model->alexController();
+    const int rxAnt = alex.useTxAntForRx() ? alex.txAnt(rxBand) : alex.rxAnt(rxBand);
+    const int txAnt = alex.txAnt(txBand);
+    if (rxAnt < 1 || rxAnt > 3 || txAnt < 1 || txAnt > 3) { return out; }
+
+    const bool mox = model->mox();
+    // ESP32 OC low nibble = RX/TX band; RX OC6 selects QRP/QRO.
+    const int rxOc6 = static_cast<int>(model->ocMatrix().maskFor(rxBand, false)) & 0x20;
+    const int compatibilityOc = (mox ? txIndex : rxIndex) | rxOc6;
+
+    auto& txModel = model->transmitModel();
+    // Standard TCI 'drive:' remains the UI 0..100 value.  Hardware
+    // sq4kou_radio_hw_ex uses the final 8-bit TX drive byte (0..255).
+    const int drive = qBound(0, txModel.power(), 100);
+    const int tuneDrive = qBound(0, txModel.tunePower(), 100);
+    const int wireDrive = model->sq4kouLastTxWireDriveByte();
+
+    // SQ4KOU: the ESP32 PCF8575 RX/PS attenuator is controlled by the
+    // ADC1_ATT field (valid bit 0x40) in sq4kou_radio_hw_ex.
+    // Thetis reports this field during RX AND during keyed P1 PureSignal.
+    // Preserve the RX1 facade/preamp calculation in RX; in TX the final
+    // StepAttenuatorController TX offset is the authoritative 0..31 dB
+    // feedback attenuation (including PS AutoAtt and force-31 override).
+    const auto* att = model->stepAttFacade();
+    const bool attDisplayValid = att && att->isBound();
+    const auto* stepAtt = model->stepAttController();
+    const bool redPitayaP1Tx = mox
+        && model->hardwareProfile().model == HPSDRModel::REDPITAYA
+        && model->connection() && model->connection()->protocolVersion() == 1;
+    bool rxAttValid = attDisplayValid && (!mox || (redPitayaP1Tx && stepAtt));
+    int effectiveAdc1Att = 0;
+    if (rxAttValid) {
+        if (redPitayaP1Tx) {
+            effectiveAdc1Att = qBound(0, stepAtt->txAttenuatorOffsetDb(), 31);
+        } else if (att->enabled()) {
+            // Never wrap a value >31 into the 5-bit PCF output.
+            effectiveAdc1Att = qBound(0, att->attenuationDb(), 31);
+        } else {
+            static constexpr int kPreampAdcAttDb[] = {
+                20, 0, 0, 0, 0, 20, 20, 10, 20, 30
+            }; // Off, On, -10, -20, -30, -40, -50, SA-10, SA-20, SA-30
+            const int mode = att->preampMode();
+            if (mode >= 0 && mode < 10) {
+                effectiveAdc1Att = kPreampAdcAttDb[mode];
+            } else {
+                rxAttValid = false;
+            }
+        }
+    }
+    // Validity: ANT | OC | TX_STEP_ATT/CMD05_TATT | DRIVE | RX_ADC1_ATT.
+    // Never claim a DRIVE or TX TATT value before native wire drive exists.
+    // 0x04 authorises cmd05Tatt in ESP32 V2.330; 0x20 is DRIVE validity.
+    const int externalTxAttRaw = sq4kouCmd05TattFromDrive(wireDrive);
+    const bool txAttValid = externalTxAttRaw >= 0;
+    const int validMask = 0x03 | (txAttValid ? (0x04 | 0x20) : 0)
+                          | (rxAttValid ? 0x40 : 0);
+
+    out << QStringLiteral("sq4kou_tci:4;")
+        << QStringLiteral("sq4kou_esp328:1;")
+        << QStringLiteral("sq4kou_rx_antenna_selected_ex:%1,%2;")
+               .arg(rxAnt).arg(sq4kouTciBandToken(rxIndex))
+        << QStringLiteral("sq4kou_tx_antenna_selected_ex:%1,%2;")
+               .arg(txAnt).arg(sq4kouTciBandToken(txIndex))
+        << QStringLiteral("sq4kou_radio_hw_ex:1,%1,%2,0,%3,%4,0,%5,%6,0,%7,%8,%9,0,0;")
+               .arg(seq).arg(validMask).arg(mox ? txAnt : rxAnt).arg(txAnt)
+               .arg(mox ? 1 : 0).arg(compatibilityOc)
+               .arg(rxAttValid ? effectiveAdc1Att : 0).arg(txAttValid ? wireDrive : 0).arg(txAttValid ? externalTxAttRaw : 0)
+        ;
+    if (txAttValid) {
+        out << QStringLiteral("sq4kou_tx_att_ex:0,%1;").arg(externalTxAttRaw);
+    }
+    out
+        << QStringLiteral("drive:0,%1;").arg(drive)
+        << QStringLiteral("tune_drive:0,%1;").arg(tuneDrive);
+
+    if (attDisplayValid) {
+        // Separate UI state from physical ADC attenuation (especially
+        // important when the step-ATT mode is disabled).
+        out << QStringLiteral("rx_step_att_enabled_ex:0,%1;")
+                   .arg(att->enabled() ? QStringLiteral("true") : QStringLiteral("false"))
+            << QStringLiteral("rx_step_att_ex:0,%1;")
+                   .arg(qBound(0, att->attenuationDb(), 31));
+    }
+    return out;
+}
+} // namespace — SQ4KOU TCI
 
 // ── Constructor / destructor ─────────────────────────────────────────────────
 //
@@ -314,7 +468,29 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     // 20ms latency budget.
     m_drainTimer = new QTimer(this);
     m_drainTimer->setInterval(5);   // 5ms drain tick; see rationale above
-    connect(m_drainTimer, &QTimer::timeout, this, [this]() {
+    connect(m_drainTimer, &QTimer::timeout, this, [this,
+            sq4kouPrevious = QStringList{}, sq4kouLastCheck = qint64(-2000),
+            sq4kouLastSend = qint64(-2000)]() mutable {
+        // SQ4KOU: check effective hardware at most every 200 ms; publish
+        // immediately on change and refresh the ESP32 snapshot every 1 s.
+        // Reuse the existing TCI drain timer (no second timer/thread).
+        if (m_model && m_protocol && !m_clients.isEmpty()) {
+            const qint64 now = m_gapClock.elapsed();
+            if (now - sq4kouLastCheck >= 200) {
+                sq4kouLastCheck = now;
+                const auto snapshot = sq4kouTciHardwareLines(m_model, 0);
+                if (!snapshot.isEmpty() &&
+                    (snapshot != sq4kouPrevious || now - sq4kouLastSend >= 1000)) {
+                    sq4kouPrevious = snapshot;
+                    sq4kouLastSend = now;
+                    for (const auto& frame : sq4kouTciHardwareLines(m_model, sq4kouTciNextSequence())) {
+                        m_protocol->enqueueLocalBroadcast(frame);
+                    }
+                }
+            }
+        } else {
+            sq4kouPrevious.clear();
+        }
         // Phase 15: collapse coalesced VFO updates into pending notifications
         // BEFORE per-client drain so the just-drained frames participate in
         // this tick. From Thetis TCIServer.cs:1722-1727 [v2.10.3.13].
@@ -435,12 +611,14 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 rx1Dbm = slice->signalAverageDbm();
             }
         } else if (m_model) {
-            if (auto* wdsp = m_model->wdspEngine()) {
-                if (auto* rx = wdsp->rxChannel(0)) {
-                    // R-R3-46 / R-R3-11: channel 0 is slice 0's; its
-                    // ADC's offset.
-                    rx1Dbm = rx->getMeter(RxMeterType::SignalAvg)
-                           + m_model->rxMeterOffsetDbForSlice(0);
+            // Use the Core's authoritative RX1 meter cache (SliceMeterPump).
+            // The same dBm value drives Nereus receiver meters. Raw WDSP
+            // channel-0 reads may be stale or not ready and should not
+            // override the actual slice reading exposed to the GUI.
+            if (const SliceModel* slice = m_model->sliceById(0)) {
+                const double dbm = slice->signalAverageDbm();
+                if (std::isfinite(dbm) && dbm > -400.0) {
+                    rx1Dbm = dbm;
                 }
             }
         }
@@ -2265,6 +2443,11 @@ void TciServer::onNewConnection()
                 }
                 session->sendQueue.push(TciSendQueue::Priority::Control, line);
             }
+            // SQ4KOU: append the station snapshot ONLY to this newly
+            // connected session. Standard Thetis init/ready remains intact.
+            for (const auto& frame : sq4kouTciHardwareLines(m_model, sq4kouTciNextSequence())) {
+                session->sendQueue.push(TciSendQueue::Priority::Control, frame);
+            }
         }
     }
 }
@@ -3826,6 +4009,78 @@ void TciServer::onTextMessageReceived(const QString& msg)
                            session->lastCommandAt);
     }
 
+    // SQ4KOU physical TX ATT is derived from the same final HPSDR DRIVE
+    // byte as Thetis. Keep the read-only query; never override hardware
+    // drive via a private setting or a TCI remote write.
+    {
+        QString line = msg.trimmed();
+        if (line.endsWith(QLatin1Char(';'))) { line.chop(1); }
+        const int colon = line.indexOf(QLatin1Char(':'));
+        if (colon > 0 &&
+            line.left(colon).compare(QLatin1String("sq4kou_tx_att_ex"), Qt::CaseInsensitive) == 0) {
+            if (line.mid(colon + 1).trimmed() != QLatin1String("0")) {
+                qCWarning(lcTci) << "SQ4KOU TX ATT is controlled by PA Gain / RF Power, not a raw TCI override";
+                return;
+            }
+            const auto frames = sq4kouTciHardwareLines(m_model, sq4kouTciNextSequence());
+            for (const auto& frame : frames) {
+                if (frame.startsWith(QLatin1String("sq4kou_tx_att_ex:")) ||
+                    frame.startsWith(QLatin1String("sq4kou_radio_hw_ex:"))) {
+                    session->sendQueue.push(TciSendQueue::Priority::Control, frame);
+                }
+            }
+            return;
+        }
+    }
+    // SQ4KOU RX ATT V2: Nextion -> ESP32 -> TCI -> existing Nereus controller.
+    // The native Thetis TCI parser has no rx_step_att*_ex handlers here.
+    // Handle ONLY the two verified commands, never pretend unknown PRE or
+    // external TX ATT commands were accepted. Never control remote windows.
+    {
+        QString sq4kouCmd = msg.trimmed();
+        if (sq4kouCmd.endsWith(QLatin1Char(';'))) { sq4kouCmd.chop(1); }
+        const int colon = sq4kouCmd.indexOf(QLatin1Char(':'));
+        const QString name = (colon > 0) ? sq4kouCmd.left(colon).toLower() : QString();
+        if (name == QLatin1String("rx_step_att_enabled_ex") ||
+            name == QLatin1String("rx_step_att_ex")) {
+            // No multiscript frames, no implicit parse-to-zero and no RX2
+            // masquerading as RX1. Ignore invalid requests without changing HW.
+            if (sq4kouCmd.indexOf(QLatin1Char(';')) >= 0 ||
+                !m_model || m_model->role() == RadioModel::Role::Remote ||
+                !m_model->stepAttFacade() || !m_model->stepAttFacade()->isBound()) {
+                qCWarning(lcTci) << "SQ4KOU ATT: command ignored (unavailable)" << name;
+                return;
+            }
+            const QStringList args = sq4kouCmd.mid(colon + 1).split(QLatin1Char(','));
+            if (args.isEmpty() || args.at(0).trimmed() != QLatin1String("0") || args.size() > 2) {
+                qCWarning(lcTci) << "SQ4KOU ATT: invalid receiver/argument count";
+                return;
+            }
+            auto* fac = m_model->stepAttFacade();
+            if (args.size() == 2) {
+                const QString v = args.at(1).trimmed().toLower();
+                if (name == QLatin1String("rx_step_att_enabled_ex")) {
+                    if (v != QLatin1String("true") && v != QLatin1String("false")) { return; }
+                    fac->setEnabled(v == QLatin1String("true"));
+                } else {
+                    bool ok = false;
+                    const int dB = v.toInt(&ok);
+                    if (!ok || dB < 0 || dB > 31) { return; }
+                    fac->setAttenuationDb(dB);
+                }
+            }
+            // Always respond with the actual resulting state; the facade can
+            // reject an edit due to a radio-safety/edit gate.
+            const QString reply = (name == QLatin1String("rx_step_att_enabled_ex"))
+                ? QStringLiteral("rx_step_att_enabled_ex:0,%1;")
+                      .arg(fac->enabled() ? QStringLiteral("true") : QStringLiteral("false"))
+                : QStringLiteral("rx_step_att_ex:0,%1;")
+                      .arg(qBound(0, fac->attenuationDb(), 31));
+            session->sendQueue.push(TciSendQueue::Priority::Control, reply);
+            return;
+        }
+    }
+
     // Phase 16 Task 16.3 (sub-commit b): intercept audio_start/audio_stop for
     // per-client subscription state and WDSP resampler lifecycle. This runs
     // BEFORE TciProtocol dispatch because TciProtocol is transport-blind and
@@ -4105,7 +4360,7 @@ void TciServer::onTextMessageReceived(const QString& msg)
                 return true;
             };
 
-            if (trimmed.startsWith(kRxSensEnable)) {
+            if (trimmed.startsWith(kRxSensEnable, Qt::CaseInsensitive)) {
                 // From Thetis TCIServer.cs:4449-4459 [v2.10.3.13] — handleRxSensorsEnable.
                 const QStringList parts = trimmed.mid(kRxSensEnable.size())
                                               .split(QLatin1Char(','));
@@ -4133,7 +4388,7 @@ void TciServer::onTextMessageReceived(const QString& msg)
                                   << "intervalMs" << intervalMs
                                   << "peer" << session->peer;
                 }
-            } else if (trimmed.startsWith(kTxSensEnable)) {
+            } else if (trimmed.startsWith(kTxSensEnable, Qt::CaseInsensitive)) {
                 // From Thetis TCIServer.cs:4460-4469 [v2.10.3.13] — handleTxSensorsEnable.
                 const QStringList parts = trimmed.mid(kTxSensEnable.size())
                                               .split(QLatin1Char(','));

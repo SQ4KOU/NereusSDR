@@ -215,6 +215,8 @@
 #include "WdspEngine.h"       // rxChannel(0) lookup
 #include "audio/CaptureAudioBus.h"
 #include "audio/PortAudioBus.h"
+#include "audio/CmAsioBus.h"
+#include <functional>
 #include "../models/RadioModel.h"
 #include "../models/SliceModel.h"
 
@@ -644,6 +646,48 @@ void AudioEngine::start()
                                .toString().toInt());
 
     ensureSpeakersOpen();
+    // SQ4KOU_CMASIO_TX_STAGE2: optional PC mic ASIO, independent of RX.
+    // Open only on this owner thread at audio startup, not on the RT worker.
+    // A single CmAsioSession is shared with the proven RX output.
+#if defined(Q_OS_WIN)
+#  if defined(NEREUS_BUILD_TESTS)
+    if (!QStandardPaths::isTestModeEnabled()) {
+#  endif
+    const QString cmAsioDisabled = qEnvironmentVariable("NEREUS_CMASIO_DISABLE").trimmed();
+    if (!m_txInputBus && cmAsioDisabled != QStringLiteral("1") &&
+        cmAsioDisabled.compare(QStringLiteral("true"), Qt::CaseInsensitive) != 0) {
+        const CmAsioSettings selection = CmAsioSettings::load();
+        qCInfo(lcAudio) << "SQ4KOU CMASIO TX startup: requested=" << selection.txEnabled
+                        << "driver=" << selection.driverName
+                        << "captureHelperDemand="
+                        << (m_captureSupervisor && m_captureSupervisor->hasDemand());
+        // SQ4KOU_CMASIO_TX_ROUTE_FIX: startup no longer depends on the
+        // old capture helper lease. Native TX bus takes source priority.
+        if (selection.txEnabled) {
+            auto native = std::make_unique<CmAsioBus>();
+            CmAsioConfig options;
+            options.direction = CmAsioDirection::Input;
+            options.settings = selection;
+            native->setConfig(options);
+            AudioFormat micFormat;
+            micFormat.sampleRate = 48000;
+            micFormat.channels = 2;
+            micFormat.sample = AudioFormat::Sample::Float32;
+            if (native->open(micFormat)) {
+                qCInfo(lcAudio) << "SQ4KOU cmASIO PC Microphone TX ready:" << native->backendName();
+                m_txInputBus = std::move(native);
+                qCInfo(lcAudio) << "SQ4KOU TX_MIC_ROUTE=CMASIO (native PC microphone)";
+            } else {
+                qCWarning(lcAudio) << "SQ4KOU cmASIO PC Microphone TX unavailable:"
+                                   << native->errorString()
+                                   << "— original capture helper remains available";
+            }
+        }
+    }
+#  if defined(NEREUS_BUILD_TESTS)
+    }
+#  endif
+#endif
     // R-R3-45: the headphones output opens at startup too, when Setup,
     // Audio, Devices has it enabled (audio/Headphones/Enabled). Before this
     // it opened only on a Devices card change and nothing ever fed it.
@@ -805,6 +849,45 @@ void AudioEngine::reinitForSampleRate(int newWireRateHz)
     qCDebug(lcAudio) << "AudioEngine: reinitForSampleRate" << newWireRateHz
                      << "Hz (note: WDSP output remains 64 samples @ 48 kHz; "
                         "bus does not need to be reopened)";
+}
+
+// SQ4KOU_CMASIO_STAGE1: optional Windows Speakers RX output.
+// The caller supplies the unchanged PortAudio/WASAPI fallback.
+// No AudioEngine.h changes: existing WDSP/TCI/TX sources need not recompile.
+static std::unique_ptr<IAudioBus> sq4kouOpenSpeakersBus(
+    const std::function<std::unique_ptr<IAudioBus>()>& fallback)
+{
+#if defined(Q_OS_WIN)
+#  if defined(NEREUS_BUILD_TESTS)
+    // Qt unit tests never touch real audio drivers.
+    if (QStandardPaths::isTestModeEnabled()) { return fallback(); }
+#  endif
+    const QString disabled = qEnvironmentVariable("NEREUS_CMASIO_DISABLE").trimmed();
+    if (disabled != QStringLiteral("1") &&
+        disabled.compare(QStringLiteral("true"), Qt::CaseInsensitive) != 0) {
+        const CmAsioSettings selection = CmAsioSettings::load();
+        if (selection.enabled) {
+            auto native = std::make_unique<CmAsioBus>();
+            CmAsioConfig options;
+            options.direction = CmAsioDirection::Output;
+            options.settings = selection;
+            native->setConfig(options);
+            AudioFormat format;
+            format.sampleRate = 48000;
+            format.channels = 2;
+            format.sample = AudioFormat::Sample::Float32;
+            if (native->open(format)) {
+                qCInfo(lcAudio) << "SQ4KOU cmASIO Speakers RX ready:"
+                                << native->backendName();
+                return native;
+            }
+            qCWarning(lcAudio) << "SQ4KOU cmASIO Speakers unavailable:"
+                                << native->errorString()
+                                << "— falling back to existing PortAudio/WASAPI";
+        }
+    }
+#endif
+    return fallback();
 }
 
 std::unique_ptr<IAudioBus> AudioEngine::makeBus(const AudioDeviceConfig& cfg,
@@ -1132,7 +1215,9 @@ void AudioEngine::ensureSpeakersOpen()
 
     {
         std::lock_guard<std::mutex> lk(m_speakersBusMutex);
-        m_speakersBus = makeBus(cfg, /*capture=*/false);
+        m_speakersBus = sq4kouOpenSpeakersBus([this, &cfg]() {
+        return makeBus(cfg, /*capture=*/false);
+    });
         configureSpeakersConverter();
     }
     if (m_speakersBus) {
@@ -1169,16 +1254,31 @@ AudioDeviceConfig AudioEngine::txInputConfig() const
 
 CaptureSupervisor::Status AudioEngine::captureStatus() const
 {
+    // SQ4KOU_CMASIO_TX_STAGE2: selected native PC mic is already ready.
+    if (m_txInputBus && m_txInputBus->isOpen()) {
+        CaptureSupervisor::Status status;
+        status.state = CaptureSupervisor::Status::State::Ready;
+        status.actualDevice = m_txInputBus->backendName();
+        return status;
+    }
     return m_captureSupervisor ? m_captureSupervisor->status() : CaptureSupervisor::Status{};
 }
 
 bool AudioEngine::isCaptureReaderOpen() const
 {
-    return m_captureSupervisor != nullptr && m_captureSupervisor->reader()->isOpen();
+    return (m_txInputBus && m_txInputBus->isOpen()) ||
+           (m_captureSupervisor != nullptr && m_captureSupervisor->reader()->isOpen());
 }
 
 CaptureSupervisor::Lease AudioEngine::acquireCaptureDemand(CaptureSupervisor::Demand demand)
 {
+    // A native ASIO PC mic is already owned by this engine. Do not start
+    // the separate OS capture helper for LocalSession or TestMic.
+    // RemoteWindow keeps its existing independent capture demand.
+    if (m_txInputBus && m_txInputBus->isOpen() &&
+        demand != CaptureSupervisor::Demand::RemoteWindow) {
+        return CaptureSupervisor::Lease();
+    }
     if (!m_captureSupervisor) {
         return CaptureSupervisor::Lease();
     }
@@ -1386,7 +1486,9 @@ void AudioEngine::applySpeakersConfig(const AudioDeviceConfig& cfg)
     std::unique_lock<std::mutex> lk(m_speakersBusMutex);
 
     m_speakersBus.reset();
-    m_speakersBus = makeBus(cfg, /*capture=*/false);
+    m_speakersBus = sq4kouOpenSpeakersBus([this, &cfg]() {
+        return makeBus(cfg, /*capture=*/false);
+    });
     configureSpeakersConverter();
 
     AudioDeviceConfig negotiated = cfg;  // carry non-bus fields through
@@ -2491,7 +2593,11 @@ void AudioEngine::drainMixes(int frames, bool monitorOnly)
         owner.listenSlot = k;
         ++ownerCount;
     }
-    const quint32 localListen = m_localListenMask.load(std::memory_order_acquire);
+    // MON preview replaces local RX program with processed TXA audio.
+    // Remote owner sums, radio speaker output, VAX and TCI stay unchanged.
+    const bool monPreview = m_txMonitorEnabled.load(std::memory_order_acquire)
+        && !m_moxActive.load(std::memory_order_acquire);
+    const quint32 localListen = monPreview ? 0u : m_localListenMask.load(std::memory_order_acquire);
     std::array<float, kMaxSliceAudioViews> localListenLevels{};
     if (localListen != 0) {
         for (int id = 0; id < kMaxSliceAudioViews; ++id) {
@@ -2509,7 +2615,7 @@ void AudioEngine::drainMixes(int frames, bool monitorOnly)
         m_radioOutputTap.tap.load(std::memory_order_acquire) != nullptr;
     const int mixed = m_masterMix.tryDrain(
         mix.data(), hpMix.data(), drainFrames,
-        m_localOutputSliceMask.load(std::memory_order_acquire), owners.data(), ownerCount,
+        monPreview ? 0u : m_localOutputSliceMask.load(std::memory_order_acquire), owners.data(), ownerCount,
         m_txMonitorLocal.load(std::memory_order_acquire), monitorOnly, localListen,
         localListenLevels.data(), radioTapped ? radioSum.data() : nullptr);
 

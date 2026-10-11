@@ -9,6 +9,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-05 — J.J. Boyd (KG4VCF). Independent per-pan Clarity ownership.
+//                 AI-assisted via OpenAI Codex.
 //   2026-10-03 - Diversity atomic reentry and slice-close/hydration lifetime
 //                 fences, J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-30 - Fix round 1 (minor 4): transmitLinkDownReason picks the
@@ -1396,6 +1398,7 @@ public:
     // Sub-components
     RadioConnection*  connection()       { return m_connection; }
     const RadioConnection* connection() const { return m_connection; }
+    int sq4kouLastTxWireDriveByte() const noexcept { return (m_connection && isConnected()) ? m_lastSq4kouTxDriveByte : -1; }
     RadioDiscovery*   discovery()        { return m_discovery; }
     ReceiverManager*  receiverManager()  { noteLocalDspHandOut("receiverManager"); return m_receiverManager; }
     AudioEngine*      audioEngine()      { noteLocalDspHandOut("audioEngine");     return m_audioEngine;     }
@@ -2814,6 +2817,7 @@ public:
         emit spectrumWidgetChanged(w);
     }
 signals:
+    void clarityEnabledChanged(bool enabled);
     // 3D Stacked-Trace Spectrum Plan Task 22: lets a surface that follows
     // the active panadapter (DisplayApplet) rebind when MainWindow
     // repoints this view hook, instead of only ever reading it once at
@@ -2854,8 +2858,10 @@ public:
     /// Task 28: the transmit display's feed, owned here; null without a TX
     /// analyzer.
     TxDisplayFeed* txDisplayFeed() const { return m_txDisplayFeed.get(); }
-    class ClarityController* clarityController() const { return m_clarityController; }
-    void setClarityController(class ClarityController* c) { m_clarityController = c; }
+    class ClarityController* clarityController() const;
+    void setClarityController(class ClarityController* c);
+    bool clarityEnabled() const { return m_clarityEnabled; }
+    void setClarityEnabled(bool enabled);
     class StepAttenuatorController* stepAttController() const { return m_stepAttController; }
     // Phase 4 Agent 4A of issue #167 — also propagates to TransmitModel
     // so the ATT-on-TX-on-power-change safety gate inside
@@ -7477,7 +7483,8 @@ private:
     class FftEnginePool*      m_fftEnginePool{nullptr};
     class TxAnalyzer*         m_txAnalyzer{nullptr};
     std::unique_ptr<TxDisplayFeed> m_txDisplayFeed;
-    class ClarityController*  m_clarityController{nullptr};
+    QPointer<class ClarityController> m_clarityController;
+    bool m_clarityEnabled{true};
     class StepAttenuatorController* m_stepAttController{nullptr};
     // Level Cal: Thetis rx2_preamp_offset[] (console.cs:2011-2019
     // [v2.10.3.15]), never saved; NaN reads the default.
@@ -7807,6 +7814,7 @@ private:
     //   `Audio.RadioVolume = Audio.RadioVolume` self-assign re-emission when
     //   SWRProtect changes mid-TX).  Updated only by pumpAudioVolume.
     double m_lastAudioVolume{0.0};
+    int m_lastSq4kouTxDriveByte{-1};
 
     // ── Issue #177 fix — Thetis-faithful TUN-off ordering ────────────────────
     //
