@@ -171,3 +171,50 @@ jobs:
           echo '::endgroup::'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-contributor-indexes:
+    if: github.head_ref == 'synthesis/upstream-20261017'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Regenerate existing Thetis indexes from pinned actual source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BRANCH='synthesis/upstream-20261017'
+          git fetch --no-tags origin "$BRANCH"
+          git checkout -B "$BRANCH" "origin/$BRANCH"
+          # One-shot and idempotent; later source fixes do not regenerate again.
+          if [ "$(git hash-object docs/attribution/thetis-contributor-index.md)" != 'b15fac4e6cea38d1d442655424ec45964209c06e' ]; then
+            echo 'INDEX_REFRESH_ALREADY_DONE'
+            exit 0
+          fi
+          git config user.name "SQ4KOU synthesis"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p ../Thetis ../mi0bot-Thetis
+          git -C ../Thetis init -q
+          git -C ../Thetis remote add origin https://github.com/ramdor/Thetis.git
+          git -C ../Thetis fetch --depth=1 -q origin 501e3f513f73f07742d7e1b85a0e9528bd14977d
+          git -C ../Thetis checkout -q FETCH_HEAD
+          git -C ../mi0bot-Thetis init -q
+          git -C ../mi0bot-Thetis remote add origin https://github.com/mi0bot/OpenHPSDR-Thetis.git
+          git -C ../mi0bot-Thetis fetch --depth=1 -q origin c26a8a4c7592605039be5f4b5973b33e04e91e54
+          git -C ../mi0bot-Thetis checkout -q FETCH_HEAD
+          export NEREUS_THETIS_DIR="$(pwd)/../Thetis"
+          export NEREUS_MI0BOT_DIR="$(pwd)/../mi0bot-Thetis"
+          python3 scripts/generate-contributor-indexes.py
+          python3 scripts/generate-contributor-indexes.py --check
+          git add docs/attribution/thetis-contributor-index.md docs/attribution/thetis-inline-mods-index.md
+          if git diff --cached --quiet; then
+            echo 'NO_INDEX_CHANGES'
+            exit 0
+          fi
+          git commit -m "Regenerate Thetis contributor indexes from CI-pinned upstream sources"
+          git push origin HEAD:refs/heads/"$BRANCH"
+          echo 'CONTRIBUTOR_INDEX_REFRESH: PASS'
