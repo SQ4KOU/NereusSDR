@@ -37,6 +37,7 @@ set(WDSP_SOURCES
     src/dexp.c
     src/div.c
     src/doublepole.c
+    src/dexp.c
     src/dsplock.c
     src/eer.c
     src/emnr.c
@@ -92,6 +93,7 @@ set(WDSP_SOURCES
     src/ssql.c
     src/syncbuffs.c
     src/txgain_stub.c
+    src/varsamp.c
     src/utilities.c
     src/varsamp.c
     src/version.c
