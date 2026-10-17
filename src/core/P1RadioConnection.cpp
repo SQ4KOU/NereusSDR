@@ -1741,6 +1741,9 @@ void P1RadioConnection::restartStreamWithRate(int newSampleRate)
     // Bank 0 carries SampleRate. It must be sent BEFORE Metis START;
     // six priming frames cover only 12 of the 17 standard P1 banks.
     m_forceBank0Next = true;
+    // Keep EP2 pacing stopped during the synchronous Metis restart.
+    const bool senderWasRunning = m_ep2Sender != nullptr;
+    stopEp2Sender();
     sendMetisStop();
     sendPrimingBurst(3);
     sendMetisStart(false);
@@ -1797,6 +1800,9 @@ void P1RadioConnection::restartStreamWithCount(int newActiveRxCount)
     // Bank 0 also carries RX-count (EP6 slot layout). Without this,
     // priming can miss bank 0 and the host can parse the wrong layout.
     m_forceBank0Next = true;
+    // Keep EP2 pacing stopped during the synchronous Metis restart.
+    const bool senderWasRunning = m_ep2Sender != nullptr;
+    stopEp2Sender();
     sendMetisStop();
     sendPrimingBurst(3);
     sendMetisStart(false);
@@ -4615,7 +4621,10 @@ void P1RadioConnection::onReadyRead()
         }
     });
 
-    while (m_socket->hasPendingDatagrams()) {
+    // Upstream bounded drain, retaining SQ4KOU's IQ-batch lifecycle.
+    int datagramsRead = 0;
+    while (datagramsRead < kMaxEp6DatagramsPerRead && m_socket->hasPendingDatagrams()) {
+        ++datagramsRead;
         QNetworkDatagram dg = m_socket->receiveDatagram();
         const QByteArray& data = dg.data();
 
@@ -4774,11 +4783,8 @@ void P1RadioConnection::onReadyRead()
             }
         }
     }
-    if (frameReceivedPending) {
-        emit frameReceived();
-    }
 }
-
+ 
 // ---------------------------------------------------------------------------
 // onWatchdogTick
 //
@@ -6107,10 +6113,14 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
     //
     // Send the first observed PTT state and subsequent edges only. This
     // avoids thousands of redundant queued GUI events per second at 384 kHz.
-    const bool micPtt = ((c0_sub0 & 0x01) != 0) || ((c0_sub1 & 0x01) != 0);
-    if (!m_radioPttKnown || micPtt != m_radioPttLast) {
-        m_radioPttKnown = true;
-        m_radioPttLast = micPtt;
+    // The later ordinary status subframe provides micPtt; I2C replies
+    // must not masquerade as PTT. Preserve edge publication and status ticks.
+    bool pttEmitted = false;
+    if (hasMicPtt && (!m_statusPttKnown || micPtt != m_statusPttLevel)) {
+        m_statusPttKnown = true;
+        m_statusPttLevel = micPtt;
+        m_statusPttRepeatDue = false;
+        pttEmitted = true;
         emit micPttFromRadio(micPtt);
     }
 
