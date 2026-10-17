@@ -111,6 +111,10 @@ LOCAL_AUDIO_PATTERN = re.compile(r"\blocalAudioDevices\s*\(")
 LOCAL_AUDIO_DEFINITION = "src/models/RadioModel.h"
 # Repo-relative path -> number of localAudioDevices() CALLS in it.
 LOCAL_AUDIO_ALLOWLIST = {
+    # SQ4KOU's existing Setup > Audio > Devices page reads only this
+    # computer's hardware for speaker, headphones and microphone controls;
+    # it does not access the Core's remote DSP.
+    "src/gui/setup/AudioDevicesPage.cpp": 1,
     # Setup > Audio > Outputs (R-SPK-21): this computer's speakers, PC
     # volume and mute, headphones, the Sound system line and Rescan
     # devices. Its Radio speaker controls go through RadioModel.
