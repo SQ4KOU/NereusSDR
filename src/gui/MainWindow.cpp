@@ -7461,47 +7461,6 @@ void MainWindow::wirePanDisplayFlyout(SpectrumOverlayPanel* panel, SpectrumWidge
         dialog->selectPage(page);
         dialog->show();
     });
-    // Re-tune retains this strip's active-pan selection behavior; its
-    // controller is owned and retuned by the registry.
-    hooks.retuneClarity = [this, panId]() {
-        if (m_panStack) { m_panStack->setActivePan(panId); }
-    };
-    // dB Max and dB Min are the band's, kept for every pan and window
-    // (design S9): they go to the store for the band this pan is on, and
-    // the pan's range follows the store (PanModels). An end that would
-    // cross the other is not taken. The pill is then shown the store, so
-    // a value that was not taken goes back.
-    hooks.setPerBandDbMax = [this, panId](int db) {
-        PanadapterModel* model = m_panModels ? m_panModels->model(panId) : nullptr;
-        if (model && stationSettingsAvailable()) {
-            const Band band = model->band();
-            if (db > model->perBandGrid(band).dbMin) { model->setPerBandDbMax(band, db); }
-        }
-        refreshDisplayPillBandGrid(panId);
-    };
-    hooks.setPerBandDbMin = [this, panId](int db) {
-        PanadapterModel* model = m_panModels ? m_panModels->model(panId) : nullptr;
-        if (model && stationSettingsAvailable()) {
-            const Band band = model->band();
-            if (db < model->perBandGrid(band).dbMax) { model->setPerBandDbMin(band, db); }
-        }
-        refreshDisplayPillBandGrid(panId);
-    };
-    // B8 Task 24: "Setup defaults" opens the Setup page for the pill's open
-    // tab, whose pages act on the active pan (setSpectrumHooks), so this
-    // pan becomes it.
-    hooks.openSetupPage = [this, panId, setupPanIndex = sw->panIndex()](const QString& page) {
-        if (m_panStack) { m_panStack->setActivePan(panId); }
-        auto* dialog = createSetupDialog();
-        if (dialog == nullptr) {
-            return;  // the gate refused and has already said why
-        }
-        dialog->setDisplayPanIndex(setupPanIndex);
-        dialog->selectPage(page);
-        dialog->show();
-    });
-    // Re-tune retains this strip's active-pan selection behavior; its
-    // controller is owned and retuned by the registry.
     connect(panel, &SpectrumOverlayPanel::clarityRetuneRequested, this,
             [this, panId]() { if (m_panStack) { m_panStack->setActivePan(panId); } });
 
