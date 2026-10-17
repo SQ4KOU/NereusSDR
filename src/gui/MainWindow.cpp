@@ -989,6 +989,7 @@ warren@wpratt.com
 #include "core/NbFamily.h"
 #include "core/ClarityController.h"
 #include "gui/PanClarityRegistry.h"
+#include "gui/PanModels.h"
 #include "core/StepAttenuatorController.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"

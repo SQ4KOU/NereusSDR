@@ -3729,6 +3729,7 @@ private:
     // ---- Phase 3G-8 commit 4: waterfall renderer state ----
 
     bool  m_wfAgcEnabled{true};
+    bool  m_clarityEnabled{true}; // Requested Clarity state.
     // The Core's waterfall AGC levels (setCoreWaterfallLevelsAvailable).
     bool  m_coreWfLevelsAvailable{false};
     std::optional<std::pair<float, float>> m_coreWfLevels;

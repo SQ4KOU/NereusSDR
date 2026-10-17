@@ -37,7 +37,6 @@ set(WDSP_SOURCES
     src/dexp.c
     src/div.c
     src/doublepole.c
-    src/dexp.c
     src/dsplock.c
     src/eer.c
     src/emnr.c
@@ -95,7 +94,6 @@ set(WDSP_SOURCES
     src/txgain_stub.c
     src/varsamp.c
     src/utilities.c
-    src/varsamp.c
     src/version.c
     src/wbfm.c
     src/wcpAGC.c
@@ -216,6 +214,7 @@ endif()
 # the pinned hash in source-manifest.csv, or one left out of it does not.
 set(WDSP_EDITED_SOURCES
     src/RXA.c
+    src/dexp.c
     src/TXA.c
     src/amd.c
     src/anf.c
@@ -246,6 +245,7 @@ set(WDSP_EDITED_SOURCES
     src/sbnr.c
     src/snb.c
     src/txgain_stub.c
+    src/varsamp.c
     src/wbfm.c
 )
 set(WDSP_PINNED_SOURCES ${WDSP_SOURCES})

@@ -255,6 +255,8 @@ class PanadapterModel;
 // guard against not-yet-wired state; Task 12 instantiates m_panStack and
 // migrates m_spectrumWidget references.
 class PanadapterStack;
+class PanModels;
+struct DisplayPillFftState;
 class ClarityController;
 class PanClarityRegistry;
 class ContainerManager;
@@ -1659,6 +1661,8 @@ private:
     // The accessor returns nullptr during early init before m_panStack
     // is constructed, so callers must null-guard.
     PanadapterStack*    m_panStack{nullptr};
+    PanModels* m_panModels{nullptr}; // Per-pan models owned by this window.
+    QHash<QString, int> m_panShownStream; // Per-pan selected RX stream.
 
     // Task B4: +PAN status-bar icon (AetherSDR MainWindow.cpp:4368-4396
     // [@c6481cb]). Dimmed + retooltipped by updateAddPanButtonState(),
