@@ -142,7 +142,10 @@ jobs:
 
           echo '::group::Publish merge candidate (never touch main)'
           git add -A
-          git commit -m "Synthesize upstream 2026-10-17 with SQ4KOU patches preserved" -m "Baseline 50ff60e0; verified identical to f108feba. Three-way merge; SQ4KOU conflict precedence. Candidate requires CI and hardware validation."
+          MERGED_TREE="$(git write-tree)"
+          CANDIDATE="$(printf 'Synthesize upstream a0b381e7 with SQ4KOU patches preserved\\n\\nTree produced by verified three-way merge at baseline 50ff60e0; original workflow files retained. Full CI and hardware validation still required.\\n' | git commit-tree "$MERGED_TREE" -p "$USER_TIP")"
+          git reset --hard "$CANDIDATE"
+          echo "SYNTHESIS_SQUASH_COMMIT: $CANDIDATE"
           git log -3 --format='%h %s'
           git diff --stat "$USER_TIP" HEAD | tail -60
           echo 'Checking working-tree cleanliness'
