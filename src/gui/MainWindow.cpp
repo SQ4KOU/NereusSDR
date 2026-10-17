@@ -7414,32 +7414,53 @@ void MainWindow::wirePanDisplayFlyout(SpectrumOverlayPanel* panel, SpectrumWidge
 {
     if (!panel || !sw) { return; }
 
-    // Display pill plan Task 18: what this pan's pill asks of the window.
-    // Its per-pan rows read and write this pan's widget themselves
-    // (wireDisplayPill makes the widget the pill's target); everything
-    // else is a request, answered here.
-    DisplayPillHooks hooks;
-    // The FFT tab is the station's: every stream, every pan (D25).
-    hooks.applyFftBaseline = [this](int size) {
+    // Typed requests from the current Display pill, connected to the existing handlers.
+    connect(panel, &SpectrumOverlayPanel::fftBaselineRequested, this, [this](int size) {
         if (stationSettingsAvailable()) { applyFftBaseline(size); }
-    };
-    hooks.applyFftSizingMode =
-        [this](ControlRanges::DisplayFftSizingMode mode, double hzPerBinIfNoneRemembered) {
-            applyDisplayFftSizingMode(mode, hzPerBinIfNoneRemembered);
-        };
-    hooks.applyFps = [this](int fps) { applyDisplayFps(fps); };
-    hooks.applyWindowType = [this](int windowType) { applyDisplayFftWindow(windowType); };
-    hooks.applyHzPerBinTarget = [this](double hz) { applyDisplayHzPerBinTarget(hz); };
-    hooks.applyDecimation = [this](int decimation) { applyDisplayDecimation(decimation); };
-    hooks.fftState = [this, panId]() { return displayPillFftState(panId); };
-    // The Clarity switch is the window's one (RadioModel, as Setup's box).
-    // PanClarityRegistry hears the change and tells every pill; nothing
-    // here calls setClarityState.
-    // The approved rebuild supersedes the historical global switch above:
-    // a pill edits its captured pan's requested choice, never the master.
-    hooks.setClarityEnabled = [pan = QPointer<SpectrumWidget>(sw)](bool on) {
+    });
+    connect(panel, &SpectrumOverlayPanel::fftSizingModeRequested, this,
+        [this](ControlRanges::DisplayFftSizingMode mode, double initialHzPerBin) {
+            applyDisplayFftSizingMode(mode, initialHzPerBin);
+        });
+    connect(panel, &SpectrumOverlayPanel::fftFpsRequested, this,
+            [this](int fps) { applyDisplayFps(fps); });
+    connect(panel, &SpectrumOverlayPanel::fftWindowRequested, this,
+            [this](int kind) { applyDisplayFftWindow(kind); });
+    connect(panel, &SpectrumOverlayPanel::hzPerBinTargetRequested, this,
+            [this](double hz) { applyDisplayHzPerBinTarget(hz); });
+    connect(panel, &SpectrumOverlayPanel::decimationRequested, this,
+            [this](int decimation) { applyDisplayDecimation(decimation); });
+    connect(panel, &SpectrumOverlayPanel::clarityEnabledRequested, this,
+            [pan = QPointer<SpectrumWidget>(sw)](bool on) {
         if (pan) { pan->setClarityEnabled(on); }
-    };
+    });
+    connect(panel, &SpectrumOverlayPanel::perBandDbMaxRequested, this,
+            [this, panId](int db) {
+        PanadapterModel* model = m_panModels ? m_panModels->model(panId) : nullptr;
+        if (model && stationSettingsAvailable()) {
+            const Band band = model->band();
+            if (db > model->perBandGrid(band).dbMin) { model->setPerBandDbMax(band, db); }
+        }
+        refreshDisplayPillBandGrid(panId);
+    });
+    connect(panel, &SpectrumOverlayPanel::perBandDbMinRequested, this,
+            [this, panId](int db) {
+        PanadapterModel* model = m_panModels ? m_panModels->model(panId) : nullptr;
+        if (model && stationSettingsAvailable()) {
+            const Band band = model->band();
+            if (db < model->perBandGrid(band).dbMax) { model->setPerBandDbMin(band, db); }
+        }
+        refreshDisplayPillBandGrid(panId);
+    });
+    connect(panel, &SpectrumOverlayPanel::openSetupRequested, this,
+            [this, panId, setupPanIndex = sw->panIndex()](const QString& page) {
+        if (m_panStack) { m_panStack->setActivePan(panId); }
+        auto* dialog = createSetupDialog();
+        if (dialog == nullptr) { return; }
+        dialog->setDisplayPanIndex(setupPanIndex);
+        dialog->selectPage(page);
+        dialog->show();
+    });
     // Re-tune retains this strip's active-pan selection behavior; its
     // controller is owned and retuned by the registry.
     hooks.retuneClarity = [this, panId]() {

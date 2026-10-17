@@ -169,6 +169,7 @@ public:
 
 signals:
     void keyedChanged(bool keyed);
+    void keyedOwnerCommitted(const QString& panId);
     /// displayDuplex() changed (the setting, or its availability).
     void displayDuplexChanged(bool on);
 
