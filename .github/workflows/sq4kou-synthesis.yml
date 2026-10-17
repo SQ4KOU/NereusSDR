@@ -74,8 +74,23 @@ jobs:
           paths = subprocess.check_output(['git','diff','--name-only','-z',base,user]).decode().split('\0')
           missing = []
           checked = 0
+          nums = subprocess.check_output(['git','diff','--numstat','-z',base,user]).split(b'\\0')
+          binary = set()
+          for rec in nums:
+              bits = rec.split(b'\\t', 2)
+              if len(bits) == 3 and bits[0] == bits[1] == b'-':
+                  binary.add(bits[2].decode('utf-8', errors='replace'))
           for p in filter(None, paths):
-              diff = subprocess.check_output(['git','diff','--no-ext-diff','--unified=0','-a',base,user,'--',p]).decode('utf-8', errors='replace')
+              if p in binary:
+                  try:
+                      current_sha = subprocess.check_output(['git','hash-object',p]).decode().strip()
+                      original_sha = subprocess.check_output(['git','rev-parse',user+':'+p]).decode().strip()
+                      if current_sha != original_sha:
+                          missing.append((p, 'binary blob differs', 1))
+                  except subprocess.CalledProcessError:
+                      missing.append((p, 'binary blob absent', 1))
+                  continue
+              diff = subprocess.check_output(['git','diff','--no-ext-diff','--unified=0',base,user,'--',p]).decode('utf-8', errors='replace')
               additions = collections.Counter(line[1:] for line in diff.splitlines()
                           if line.startswith('+') and not line.startswith('+++') and line[1:].strip())
               if not additions:
