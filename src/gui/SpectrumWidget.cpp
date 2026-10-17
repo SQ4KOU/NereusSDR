@@ -317,6 +317,7 @@
 #include "core/session/media/DssWideRow.h"
 #include "core/spectrum/SpectrumDetector.h"
 #include "ImdOverlay.h"
+#include "gui/PureSignalViewStyle.h"
 #include "gui/DssMeshGeometry.h"
 #include "gui/SpectrumTraceFramePlan.h"
 #include "gui/SpectrumTraceRibbon.h"
@@ -2684,7 +2685,7 @@ bool SpectrumWidget::enqueueRemoteWaterfallRow(const QVector<float>& pixelsDbm,
         applyVisualNotchDent(pixels);
     }
     m_remoteRowQueue.append({std::move(pixels), wideDbm, centreHz, spanHz,
-                             capture, {}, 0});
+                             capture, {}});
     while (m_remoteRowQueue.size() > kMaxRemoteRowQueue) {
         m_remoteRowQueue.removeFirst();
         ++m_remoteRowsDropped;
@@ -9393,114 +9394,6 @@ void SpectrumWidget::traceWaterfallState(const QVector<float>& calibratedPixelsD
             << " effectiveLow=" << effectiveLow << " effectiveHigh=" << effectiveHigh
             << " clarity=" << m_clarityActive << " agc=" << m_wfAgcEnabled
             << " nfAgc=" << m_wfNfAgcEnabled << " nfOffset=" << waterfallAGCOffsetDb()
-            << " black=" << m_wfBlackLevel << " gain=" << m_wfColorGain
-            << " mox=" << m_moxOverlay << " remote=" << m_remoteSpectrum
-            << " allBlack=" << (width > 0 && blackPixels == width);
-    }
-    const bool changed = state != m_wfDiagnosticLastState;
-    m_wfDiagnosticLastState = state;
-    // Preserve the first row after a state change, even inside the throttle
-    // window. Emit that exact tuple on the next allowed row, rather than
-    // substituting a later row; additional changes are counted, not flooded.
-    if (changed && !m_wfDiagnosticFirstChangedRow.isEmpty()) {
-        ++m_wfDiagnosticCollapsedChanges;
-    }
-    if ((changed && m_wfDiagnosticFirstChangedRow.isEmpty())
-        || (due && m_wfDiagnosticFirstChangedRow.isEmpty())) {
-        QVector<float> finitePixels;
-        finitePixels.reserve(calibratedPixelsDbm.size());
-        for (float value : calibratedPixelsDbm) {
-            if (std::isfinite(value)) { finitePixels.append(value); }
-        }
-        std::sort(finitePixels.begin(), finitePixels.end());
-        QString tuple;
-        {
-            QDebug out(&tuple);
-            out.nospace().noquote()
-                << "WF_STATE rowTimeMs=" << rowTimeMs << " stateChanged=" << changed << state
-                << " rowSeqKnown=" << m_pendingWfRowDiagnostics.encoderSequence.has_value()
-                << " rowSeq=" << (m_pendingWfRowDiagnostics.encoderSequence
-                    ? qint64(*m_pendingWfRowDiagnostics.encoderSequence) : -1)
-                // Blends/repeats have no contributing sequence range in the
-                // existing presenter. Kind records provenance; -1 seq is unknown.
-                << " presentationKind=" << m_pendingWfRowDiagnostics.presentationKind
-                << " extrasSeqKnown=" << m_wfExtrasDiagnostics.has_value()
-                << " extrasEndpoint=" << (m_wfExtrasDiagnostics ? qint64(m_wfExtrasDiagnostics->endpointId) : -1)
-                << " extrasContext=" << (m_wfExtrasDiagnostics ? qint64(m_wfExtrasDiagnostics->contextGeneration) : -1)
-                << " extrasSeq=" << (m_wfExtrasDiagnostics ? qint64(m_wfExtrasDiagnostics->encoderSequence) : -1)
-                << " calibratedP10=" << (finitePixels.isEmpty() ? qQNaN() : finitePixels[finitePixels.size() / 10])
-                << " calibratedMax=" << (finitePixels.isEmpty() ? qQNaN() : finitePixels.constLast())
-                << " finiteSamples=" << finitePixels.size() << " samples=" << calibratedPixelsDbm.size()
-                << " blackPixels=" << blackPixels << " rowWidth=" << width;
-        }
-        m_wfDiagnosticFirstChangedRow = tuple;
-    }
-    if (due && !m_wfDiagnosticFirstChangedRow.isEmpty()) {
-        qCInfo(lcSpectrum).noquote().nospace() << m_wfDiagnosticFirstChangedRow
-            << " collapsedStateChanges=" << m_wfDiagnosticCollapsedChanges;
-        m_wfDiagnosticFirstChangedRow.clear();
-        m_wfDiagnosticCollapsedChanges = 0;
-        m_wfDiagnosticLogClock.start();
-    }
-}
-
-// NereusSDR-original observability only. The recorded pixels have already
-// been calibrated, composed and colored by the existing row-writing path.
-void SpectrumWidget::traceWaterfallState(const QVector<float>& calibratedPixelsDbm,
-                                        const QRgb* scanline, int width,
-                                        qint64 rowTimeMs)
-{
-    static const bool enabled = qEnvironmentVariableIntValue("NEREUS_TRACE_WF_STATE") == 1;
-    if (!enabled) { return; }
-
-    constexpr qint64 kLogIntervalMs = 500;
-    const bool due = !m_wfDiagnosticLogClock.isValid()
-        || m_wfDiagnosticLogClock.elapsed() >= kLogIntervalMs;
-    const SpectrumEndpointContext& represented = m_pendingRemoteCapture.context();
-    const QString activePanId = m_wfDiagnosticStack
-        ? m_wfDiagnosticStack->activePanId() : QString();
-    // Observe dbmToRgb's effective pair without changing its palette inputs.
-    const float effectiveLow = m_moxOverlay ? static_cast<float>(m_txWfLowLevel)
-        : m_wfActiveLowThreshold + static_cast<float>(125 - m_wfBlackLevel) * 0.4f;
-    float effectiveHigh = m_moxOverlay ? static_cast<float>(m_txWfHighLevel)
-        : m_wfActiveHighThreshold - static_cast<float>(m_wfColorGain) * 0.3f;
-    if (effectiveHigh <= effectiveLow) { effectiveHigh = effectiveLow + 1.0f; }
-
-    int blackPixels = 0;
-    for (int x = 0; x < width; ++x) {
-        if (qRed(scanline[x]) == 0 && qGreen(scanline[x]) == 0
-            && qBlue(scanline[x]) == 0) { ++blackPixels; }
-    }
-    const auto numeric = [](double value) { return QString::number(value, 'g', 17); };
-    QString state;
-    {
-        QDebug out(&state);
-        out.nospace().noquote()
-            << " panId=" << m_wfDiagnosticPanId << " panIndex=" << m_panIndex
-            << " activePanId=" << activePanId << " activePanKnown=" << !m_wfDiagnosticStack.isNull()
-            << " sliceId=" << m_pendingWfRowDiagnostics.sliceId
-            << " rowContextKnown=" << (represented.codec.endpointId != 0)
-            << " streamIndex=" << represented.source.streamIndex
-            << " sourceTier=" << static_cast<int>(represented.source.tier)
-            << " bindingStreamEpoch=" << m_pendingWfRowDiagnostics.bindingStreamEpoch
-            << " sourceGeneration=" << represented.sourceGeneration
-            << " endpoint=" << represented.codec.endpointId
-            << " contextGeneration=" << represented.codec.contextGeneration
-            << " codecMin=" << represented.codec.minDbm << " codecMax=" << represented.codec.maxDbm
-            << " currentEndpoint=" << m_remoteCodec.endpointId
-            << " currentContextGeneration=" << m_remoteCodec.contextGeneration
-            << " capturedCentre=" << numeric(represented.exactCentreHz)
-            << " capturedSpan=" << numeric(represented.exactSpanHz)
-            << " viewCentre=" << numeric(m_centerHz) << " viewSpan=" << numeric(m_bandwidthHz)
-            << " coreAvailable=" << m_coreWfLevelsAvailable
-            << " coreInUse=" << coreWaterfallLevelsInUse()
-            << " cachePresent=" << m_coreWfLevels.has_value()
-            << " cacheLow=" << (m_coreWfLevels ? m_coreWfLevels->first : qQNaN())
-            << " cacheHigh=" << (m_coreWfLevels ? m_coreWfLevels->second : qQNaN())
-            << " activeLow=" << m_wfActiveLowThreshold << " activeHigh=" << m_wfActiveHighThreshold
-            << " effectiveLow=" << effectiveLow << " effectiveHigh=" << effectiveHigh
-            << " clarity=" << m_clarityActive << " agc=" << m_wfAgcEnabled
-            << " nfAgc=" << m_wfNfAgcEnabled << " nfOffset=" << m_wfNfAgcOffsetDb
             << " black=" << m_wfBlackLevel << " gain=" << m_wfColorGain
             << " mox=" << m_moxOverlay << " remote=" << m_remoteSpectrum
             << " allBlack=" << (width > 0 && blackPixels == width);
