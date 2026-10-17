@@ -67,6 +67,15 @@ jobs:
           fi
           echo '::endgroup::'
 
+          echo '::group::Restore the 8 SQ4KOU-only cmASIO/GUI source files verbatim'
+          git checkout "$USER_TIP" -- \
+            src/core/audio/CmAsioBus.cpp src/core/audio/CmAsioBus.h \
+            src/gui/setup/AudioBackendStrip.cpp src/gui/setup/AudioBackendStrip.h \
+            src/gui/setup/AudioCmAsioPage.cpp src/gui/setup/AudioCmAsioPage.h \
+            src/gui/setup/AudioDevicesPage.cpp src/gui/setup/AudioDevicesPage.h
+          echo 'SQ4KOU_UNIQUE_FILES_RESTORED: 8'
+          echo '::endgroup::'
+
           echo '::group::Check ALL original SQ4KOU code additions are retained'
           python3 - <<'PY'
           import collections, os, pathlib, subprocess, sys
