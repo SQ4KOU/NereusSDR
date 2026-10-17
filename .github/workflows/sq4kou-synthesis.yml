@@ -38,6 +38,10 @@ jobs:
           git checkout -B "$BRANCH" "origin/$BRANCH"
           USER_TIP="$(git rev-parse HEAD)"
           export BASE USER_TIP
+          if git merge-base --is-ancestor 54bad86628b0dbc98d119ba305efdb62ba0db0e2 "$USER_TIP"; then
+            echo "UPSTREAM_SYNTHESIS_ALREADY_APPLIED: 54bad866; preserving current candidate"
+            exit 0
+          fi
           git remote add upstream https://github.com/boydsoftprez/NereusSDR.git
           echo 'Fetching verified upstream main, full ancestry'
           git fetch --no-tags upstream main
