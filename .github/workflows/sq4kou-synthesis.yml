@@ -67,6 +67,16 @@ jobs:
           fi
           echo '::endgroup::'
 
+          echo '::group::Preserve existing CI workflows exactly (GitHub token cannot rewrite workflow files)'
+          git rm -qr -f -- .github/workflows
+          git checkout "$USER_TIP" -- .github/workflows
+          if ! git diff --quiet "$USER_TIP" -- .github/workflows; then
+            echo '::error::Existing GitHub workflows changed unexpectedly'
+            exit 1
+          fi
+          echo 'SQ4KOU_ORIGINAL_WORKFLOWS_UNCHANGED: PASS'
+          echo '::endgroup::'
+
           echo '::group::Restore the 8 SQ4KOU-only cmASIO/GUI source files verbatim'
           git checkout "$USER_TIP" -- \
             src/core/audio/CmAsioBus.cpp src/core/audio/CmAsioBus.h \
