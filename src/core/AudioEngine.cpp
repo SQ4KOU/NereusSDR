@@ -1861,66 +1861,6 @@ void AudioEngine::setAsioDemanded(bool demanded)
     }
 }
 
-AsioBackend* AudioEngine::asioBackend() const
-{
-    for (const std::shared_ptr<IAudioEngineBackend>& backend : m_backends) {
-        if (backend && backend->id() == AudioBackendId::Asio) {
-            return dynamic_cast<AsioBackend*>(backend.get());
-        }
-    }
-    return nullptr;
-}
-
-// Task 15 (R-AUD-19, R-AUD-22): the ASIO backend reaches the helper through
-// the capture supervisor.  Its calls may come from any thread, so each is
-// queued to this engine's thread and finds the supervisor there.
-void AudioEngine::linkAsioBackend()
-{
-    AsioBackend* const asio = asioBackend();
-    if (asio == nullptr) {
-        return;
-    }
-    AsioHelperLink link;
-    link.describe = [this](const QString& driver) {
-        QMetaObject::invokeMethod(this, [this, driver]() {
-            if (m_captureSupervisor) {
-                m_captureSupervisor->describeAsio(driver);
-            }
-        }, Qt::QueuedConnection);
-    };
-    link.open = [this](const CaptureProtocol::AsioOpen& open) {
-        QMetaObject::invokeMethod(this, [this, open]() {
-            if (m_captureSupervisor) {
-                m_captureSupervisor->openAsio(open);
-            }
-        }, Qt::QueuedConnection);
-    };
-    link.openControlPanel = [this]() {
-        QMetaObject::invokeMethod(this, [this]() {
-            if (m_captureSupervisor) {
-                m_captureSupervisor->openAsioControlPanel();
-            }
-        }, Qt::QueuedConnection);
-    };
-    link.setDemanded = [this](bool demanded) {
-        QMetaObject::invokeMethod(this, [this, demanded]() { setAsioDemanded(demanded); },
-                                  Qt::QueuedConnection);
-    };
-    asio->setHelperLink(std::move(link));
-}
-
-void AudioEngine::setAsioDemanded(bool demanded)
-{
-    m_asioDemanded = demanded;
-    if (!demanded) {
-        m_asioLease.release();
-        return;
-    }
-    if (m_captureSupervisor && !m_asioLease.isActive()) {
-        m_asioLease = m_captureSupervisor->acquire(CaptureSupervisor::Demand::AsioDevice);
-    }
-}
-
 CaptureSupervisor::Lease AudioEngine::acquireCaptureDemand(CaptureSupervisor::Demand demand)
 {
     // A native ASIO PC mic is already owned by this engine. Do not start
