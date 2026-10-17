@@ -1161,7 +1161,7 @@ void SpectrumDefaultsPage::buildUI()
         }
     });
 
-    // Slider valueChanged handler.  Mirrors Thetis tbDisplayFFTSize_Scroll
+    // Slider handlers.  Mirrors Thetis tbDisplayFFTSize_Scroll
     // at setup.cs:16142-16166 [v2.10.3.13] -- the nine-action sequence
     // (skip mutex/UpdateRXSpectrumDisplayVars/InitFFTFillTime per design
     // notes; everything else ported).

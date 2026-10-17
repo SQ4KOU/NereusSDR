@@ -1193,6 +1193,10 @@ void ContainerManager::reconcileWorkspace(const WorkspaceDocument& document)
             m_geometryCommit.start();
         }
     }
+    if (edgeMode()) {
+        layoutEdgeStrips(document);
+    }
+    placeFreeContainers();
     if (m_splitter) {
         for (auto *handle : m_splitter->findChildren<QSplitterHandle *>()) {
             handle->installEventFilter(this);
