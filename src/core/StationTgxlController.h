@@ -12,9 +12,13 @@
 // 2026-09-25: R-R3-49 (parity Task 8): showSavedEndpoint, a window's saved
 // address shown on the tuner object without dialling. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-10-11: StationAccessoryAdmission: a desktop window that shares its
+// accessories uses the device at the typed address, as it did before.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #pragma once
 
 #include "core/TgxlConnection.h"
+#include "core/StationAccessoryAdmission.h"
 #include "models/TunerModel.h"
 #include "core/StationNetwork.h"
 #include "core/StationDeviceSettings.h"
@@ -32,7 +36,9 @@ class StationTgxlController final : public QObject {
     Q_OBJECT
 public:
     StationTgxlController(TgxlConnection* connection, TunerModel* model,
-                          QObject* parent = nullptr);
+                          QObject* parent = nullptr,
+                          StationAccessoryAdmission admission
+                              = StationAccessoryAdmission::Identified);
     ~StationTgxlController() override;
     void resetScope(const QString& host, quint16 port, bool enabled);
     void start(const QString& host, quint16 port);
@@ -83,5 +89,6 @@ private:
     // (the drop, or the first failure to connect); kept across Retrying;
     // cleared on Connected and on a new scope, start or cancel.
     bool m_outageFaulted{false};
+    StationAccessoryAdmission m_admission{StationAccessoryAdmission::Identified};
 };
 } // namespace NereusSDR

@@ -553,6 +553,90 @@
 //   2026-10-01 - Diversity lane: diversityTargetSlice(), the slice diversity
 //                runs for, for the Diversity dialog. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-06 - CAT review X1: m_tuneStartObserving, so a TUNE start adopts
+//                a TUNE turning off and any other request lets the off finish.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-06 - CAT review X5: m_tuneStartingSerial and
+//                finishCutShortTuneStart, so a CAT TUNE start cut short by
+//                another request is finished as an off. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-10-07 - CAT setup from a connected desktop: stationCatModel() and
+//                stationCatController(), the Core's `stationCat` object and
+//                its publisher. J.J. Boyd (KG4VCF). AI tooling: Claude Code.
+//   2026-10-07 - catControl(): what the CAT pages, applet, log window and
+//                status bar use, local or the Core's; the CAT tester's
+//                reply by command (reportStationCatTestReply). J.J. Boyd
+//                (KG4VCF). AI tooling: Claude Code.
+//   2026-10-06 - Radio speaker: radioSpeakerVolume, radioSpeakerMuted,
+//                speakerAmplifierMode (saved per radio), the
+//                radioSpeakerAvailability and speakerAmplifierAvailable
+//                reports with their reasons, speakerAmplifierStatus, and
+//                the CW or Tune flag sent to the connection (R-SPK-05 to
+//                R-SPK-07, R-SPK-11, R-SPK-12, R-SPK-15). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-06 - Radio speaker in a remote window: the setters write
+//                through the mirror only while the Core offers the radio
+//                speaker (radioSpeakerVersion 1), the reports are the
+//                Core's, the reasons name an older Core, and
+//                radioSpeakerToolTip (R-SPK-06, R-SPK-13, R-SPK-14,
+//                R-SPK-16). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-10-08 - Rotor control plan Task 3c: the Core's rotor
+//                (StationRotorController) made beside the other station
+//                accessories, placing callsigns with the spots' cty.dat.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - Rotor control plan Task 4b: the rotor as the read-only
+//                `rotor` object (rotorModel()), following the Core's
+//                controller. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-10-08 - Rotor control plan Task 4c: enableStationRotor(), the
+//                rotor alone, for a desktop running its own radio.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - Rotor control plan Task 5: RadioModel is the GUI's
+//                RotorCommandSink (requestRotorTarget, requestStopRotor),
+//                routed to the local rotor or to the remote Core.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - Rotor control plan Task 6: the rest of the sink the
+//                Rotor applet uses (rotorControlAvailable,
+//                requestTurnRotorToCall, requestNudgeRotor,
+//                lastRotorCommandId). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-08 - Rotor control plan Task 7: requestConfigureRotor and
+//                requestRotorPresets for the Rotor Setup page, routed the
+//                same way. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-10-08 - Rotor control plan Task 8: every rotor command's refusal
+//                from a remote Core goes the accessory way ("rotor").
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - Core speaker (native audio plan Task 21; R-AUD-25,
+//                R-AUD-28, R-AUD-30, D23, D31): coreSpeakerVolume,
+//                coreSpeakerMuted, coreSpeakerDevice, coreSpeakerDevices,
+//                coreSpeakerState and coreSpeakerDetails, bound on the Core
+//                (setCoreSpeakerHost) to the engine's master level and mute
+//                and the speakers role, with the desktop rule; a remote
+//                window's follow the Core (coreSpeakerVersion 1). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - setPgxlOperateFromApplet: this computer's own Power Genius
+//                OPERATE and STANDBY, for an app that runs its own radio
+//                whether or not it shares the amplifier. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - A desktop window that runs its own radio shares its Tuner
+//                Genius, Power Genius and RF-Kit with the windows and
+//                phones signed in to it: enableStationAccessoryIdentity
+//                takes how the device is admitted, and the window's own
+//                Connect and Disconnect go through the controllers
+//                (connect*FromWindow, disconnect*FromWindow). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-12 - connectionFirmwareText: the radio's second firmware number
+//                where it reported one. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-12 - firmwareBetaVersion and firmwareText: the second number
+//                beside version(), which a Core sends and a remote window
+//                reads (firmwareBeta 1). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-10 - rebuildDspOptionsForMode judges each slice by its own
+//                mode. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
 // =================================================================
 
 //=================================================================
@@ -606,9 +690,11 @@
 
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
+#include "core/MoxController.h"
 #include "core/NereusCoreExport.h"
 #include "core/ConnectionState.h"
 #include "core/audio/CaptureSupervisor.h"
+#include "core/audio/IAudioStreamHost.h"
 #include "core/ReceiveLayoutStore.h"
 #include "core/spectrum/WidebandSpectrumCache.h"
 #include "core/PgxlConnection.h"
@@ -626,6 +712,7 @@
 #include "core/spectrum/ISpectrumSink.h"
 #include "core/TxInterlockPolicy.h"
 #include "core/TuneMemoryStore.h"
+#include "models/RotorCommandSink.h"
 #include "models/TunerModel.h"
 #include "models/ReceiverDspLoadSampler.h"
 #include "core/dsp/NnrLoadGovernor.h"
@@ -653,11 +740,13 @@
 #include "core/codec/CodecContext.h"  // SliceConfig (Phase 3F Sub-Epic B Task 16)
 #include "core/DdcAssignment.h"       // DdcAssignment (Phase 3F Sub-Epic B Task 16)
 #include "core/StationNetwork.h"  // StationBind (R-R3-22 station listeners)
+#include "core/StationAccessoryAdmission.h"
 #include "core/SkuUiProfile.h"  // issue #257 — setLastBandForTest passes the SKU into refreshAntennasFromAlex
 #include "core/safety/SwrProtectionController.h"
 #include "core/safety/TxInhibitMonitor.h"
 #include "core/safety/BandPlanGuard.h"
 #include "core/safety/TxTimeOutTimer.h"
+#include "core/safety/TransmitCutLine.h"
 
 #include <QByteArray>
 #include <QDateTime>
@@ -672,6 +761,8 @@
 #include <QThread>
 #include <QPointer>
 #include <QVariant> // Remote Daemon R2 Task 8: applyMirroredValue(name, value)
+
+class QTimer;   // Core speaker's delay readout (native audio plan Task 21)
 
 #include <limits>   // 2026-05-22 NaN sentinel for m_lastEmittedRxMeterOffsetDb
 
@@ -722,6 +813,7 @@ class SliceMeterPump;
 // translation unit that touches RadioModel.h.
 class WidebandFftEngine;
 // 3M-1a G.1: forward declarations for TX-side components.
+class CatService;
 class MoxController;
 struct KeyerIdentity;
 class TxChannel;
@@ -802,6 +894,7 @@ struct FreeDVStation;
 // mode flips to RADE), but exposes wireRadeChannel(sliceId, channel, slice)
 // to attach the channel's snrChanged / syncChanged / rxTextDecoded
 // signals into the slot graph.
+class RadeWaveformModel;
 class RadeChannel;
 
 // Phase 3R K-bench forward decl: Resampler is used by RadioModel to
@@ -811,10 +904,16 @@ class Resampler;
 class StationTgxlController;
 class StationPgxlController;
 class StationRfKitController;
+class StationRotorController;
+namespace RotorLink { class RotorModel; }
 class StationTciController;
 class StationTciModel;
+class StationCatController;
+class StationCatModel;
+class CatControl;
 class SliceOwnership;
 class RfKitBandFollow;
+class MainPowerMeter;
 class AmplifierModel;
 class RfKitModel;
 class AccessoryDataModel;
@@ -834,7 +933,7 @@ class ConnectionDiagnostics;
 //                kept off main because WDSP fexchange2 with bfo=1 can
 //                block on Sem_OutReady and would otherwise freeze the
 //                Qt event loop, deadlocking against wdspmain.
-class NEREUS_CORE_EXPORT RadioModel : public QObject {
+class NEREUS_CORE_EXPORT RadioModel : public QObject, public RotorCommandSink {
     Q_OBJECT
 
     Q_PROPERTY(QString settingsSaveError READ settingsSaveError NOTIFY settingsSaveErrorChanged)
@@ -943,6 +1042,28 @@ class NEREUS_CORE_EXPORT RadioModel : public QObject {
     Q_PROPERTY(QString rxFilter0LowPassReason READ rxFilter0LowPassReason NOTIFY lowPassHoldChanged)
     Q_PROPERTY(int rxFilter0LowPassSlice READ rxFilter0LowPassSlice NOTIFY lowPassHoldChanged)
     Q_PROPERTY(QString diversityState READ diversityState NOTIFY diversityStateChanged)
+    // Radio speaker (R-SPK-11): the level and mute of the receive audio fed
+    // to the radio's own speaker out, and the speaker amplifier choice
+    // (0 Normal, 1 Off while transmitting, 2 Always off). Saved per radio
+    // (R-SPK-12). Declared after every existing property so no ordinal
+    // moves (R-SPK-14).
+    Q_PROPERTY(int radioSpeakerVolume READ radioSpeakerVolume WRITE setRadioSpeakerVolume NOTIFY radioSpeakerVolumeChanged)
+    Q_PROPERTY(bool radioSpeakerMuted READ radioSpeakerMuted WRITE setRadioSpeakerMuted NOTIFY radioSpeakerMutedChanged)
+    Q_PROPERTY(int speakerAmplifierMode READ speakerAmplifierMode WRITE setSpeakerAmplifierMode NOTIFY speakerAmplifierModeChanged)
+    // 0 no radio, 1 available, 2 available but needs an add-on board (HL2).
+    Q_PROPERTY(int radioSpeakerAvailability READ radioSpeakerAvailability NOTIFY radioSpeakerAvailabilityChanged)
+    Q_PROPERTY(bool speakerAmplifierAvailable READ speakerAmplifierAvailable NOTIFY speakerAmplifierAvailableChanged)
+    // Core speaker (native audio plan Task 21; R-AUD-25, R-AUD-28, D23):
+    // the Core's own sound card output. Level 0 to 100 and mute are the
+    // Core's master level and mute; device, devices, state and details are
+    // CoreSpeakerJson text (settled call 15). Declared after every
+    // existing property so no ordinal moves (ordinals 43 to 48).
+    Q_PROPERTY(int coreSpeakerVolume READ coreSpeakerVolume WRITE setCoreSpeakerVolume NOTIFY coreSpeakerVolumeChanged)
+    Q_PROPERTY(bool coreSpeakerMuted READ coreSpeakerMuted WRITE setCoreSpeakerMuted NOTIFY coreSpeakerMutedChanged)
+    Q_PROPERTY(QString coreSpeakerDevice READ coreSpeakerDevice WRITE setCoreSpeakerDevice NOTIFY coreSpeakerDeviceChanged)
+    Q_PROPERTY(QString coreSpeakerDevices READ coreSpeakerDevices NOTIFY coreSpeakerDevicesChanged)
+    Q_PROPERTY(QString coreSpeakerState READ coreSpeakerState NOTIFY coreSpeakerStateChanged)
+    Q_PROPERTY(QString coreSpeakerDetails READ coreSpeakerDetails WRITE setCoreSpeakerDetails NOTIFY coreSpeakerDetailsChanged)
 
 
 public:
@@ -975,6 +1096,10 @@ public:
 
     // Remote-daemon R2 Task 4.
     Role role() const { return m_role; }
+    /// Local: immutable process opt-in. Remote: explicit current Core catalogue.
+    bool radeV2Enabled() const;
+    void setStationRadeV2Enabled(bool enabled);
+
     void setReceiveOnlyStationPolicy(bool receiveOnly);
     bool receiveOnlyStationPolicy() const { return m_receiveOnlyStationPolicy; }
 
@@ -1176,7 +1301,8 @@ public:
 
     /// R-R3-47 / R-R3-22 / R-R3-48: the Core refused an accessory request,
     /// with its own reason. `device` says what it was about: "pgxl",
-    /// "tgxl", "rfkit", "interlock", "tci", "4o3a", or for a fault history
+    /// "tgxl", "rfkit", "interlock", "tci", "4o3a", "rotor" (every rotor
+    /// command), or for a fault history
     /// the device it names ("faults" for any other). Role::Remote only.
     /// Routed to accessoryRequestRefused, which MainWindow toasts and the
     /// pages that sent the request show, never to the slice toast.
@@ -1200,6 +1326,10 @@ public:
     /// stationCommandFinished for a sender that waits on its own command.
     /// Ends any page's claim on the command (noteAccessoryRequestShownOnPage).
     void reportStationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
+    /// Remote role: the Core's reply to CAT test command `commandId`
+    /// (testStationCatCommand), handed to catControl() before the
+    /// command's result is reported.
+    void reportStationCatTestReply(quint32 commandId, const QString& reply);
     /// Remote role only: a paired Core settings export completed or failed.
     /// coreXml is populated only after length, digest and XML validation.
     void reportStationSettingsBackupExportFinished(quint32 operationId, bool accepted,
@@ -1420,6 +1550,15 @@ public:
     // and fails on any other caller, so a new use has to come through that
     // list and say why the object it reaches is live on a remote model.
     AudioEngine*      localAudioDevices() { return m_audioEngine; }
+
+    // Native audio plan Task 20 (R-AUD-24, R-AUD-09, R-AUD-13): this
+    // computer's own PC mic, as the engine's TxInput role reports it
+    // (AudioEngine::roleStatus / roleStatusChanged). Off until the device
+    // layer starts. Read by the transmit panel's source badge only: it
+    // never gates keying (R-R3-36 stays on pcCaptureReady()) and it is not
+    // a property, so it is never mirrored to a remote window or the phone.
+    // pcMicStatusChanged fires when the status changes. Main thread.
+    AudioRoleStatus pcMicStatus() const { return m_pcMicStatus; }
 
     // ── Remote-daemon R2 Task 20: the reach-through audit ────────────────
     //
@@ -1979,6 +2118,18 @@ public:
                               const QList<const SliceModel*>& held,
                               const QList<const SliceModel*>& highPassOff = {}) const;
 
+    /// Where the radio's band filters combine and a 6 m slice shares an
+    /// input with other bands (codec::alex::combineRxBandSelections): what
+    /// the 6 m BPF/LNA costs the slices on that input, as sentences for
+    /// the shared-input reason. `lna` are the slices it is in for, `low`
+    /// those behind another row, which read lower, and `noFilter` those
+    /// whose row is not sent. `lnaDisabled`: Disable 6m LNA on RX took the
+    /// BPF/LNA out, and `noFilter` are the 6 m slices.
+    QString sharedLnaReason(const QList<const SliceModel*>& lna,
+                            const QList<const SliceModel*>& low,
+                            const QList<const SliceModel*>& noFilter,
+                            bool lnaDisabled) const;
+
     // Band-plan overlay manager — loaded once on construction from bundled
     // Qt resource JSON files. Active plan persists in AppSettings under
     // "BandPlanName". Phase 3G RX Epic sub-epic D.
@@ -2014,6 +2165,8 @@ public:
 
     // Sub-models
     MeterModel&       meterModel()       { return m_meterModel; }
+    // Inert model-owned CAT service; policy-ready lifecycle callers start it.
+    CatService* catService() const { return m_catService; }
     TransmitModel&    transmitModel()    { return m_transmitModel; }
 
     // Slice management (client-side — radio has no slice concept)
@@ -2158,6 +2311,19 @@ public:
     /// Mirrors Thetis's receiver-enable order: push the DSPRX state, then
     /// SetChannelState(ch, 1, 0) (console.cs:37359-37361 [v2.10.3.15]).
     void activateSliceChannel(SliceModel* slice);
+
+    /// Push a slice's whole state to its WDSP channel: AGC and its advanced
+    /// values, NB and its tuning, the NR tuning and selection, SNB, APF,
+    /// squelch, mute, pan, BIN and AF gain, after mode, filter, AGC mode
+    /// and RF gain. The block connectToRadio ran for slice A alone;
+    /// activateSliceChannel runs it for every slice. `loadNr3Model` also
+    /// loads the station's NR3 model (connectToRadio only).
+    /// `applyNrSelection` pushes the active NR slot inside the block
+    /// (connectToRadio); activateSliceChannel pushes it itself, last.
+    /// False when the slice, the channel or this model went away during
+    /// the push: the caller must not use them again.
+    [[nodiscard]] bool pushSliceStateToChannel(SliceModel* slice, RxChannel* rxCh,
+                                               bool loadNr3Model, bool applyNrSelection);
 
     /// Stop a slice's WDSP channel running. The channel object stays open for
     /// whichever slice takes the id next. Thetis's disable half:
@@ -2447,7 +2613,7 @@ public:
     /// is a host and sharing it is the point. It was briefly a caller-
     /// supplied flag; every caller that forgot it silently reintroduced the
     /// coupled-pan defect, so the decision lives with the data it depends on.
-    int addSlice(const QString& initialPanId = QString());
+    int addSlice(const QString& initialPanId = QString(), bool restoreSavedState = false);
 
     /// Takes a slice ID (see sliceById), not a list position. sliceRemoved
     /// carries the same id.
@@ -2658,7 +2824,13 @@ public:
     /// check is deliberately skipped on that path: the station
     /// owns the slice list and enforces its own cap, with its own reason,
     /// which comes back through reportStationSliceCommandRejected().
-    Q_INVOKABLE void addSliceOnPan(const QString& panId);
+    // `restoreSavedState` (2026-10-11): the slice comes back as it was last
+    // saved (Slice<N>/LastBand and that band's keys) instead of starting on
+    // the active slice's frequency and mode. The standalone app asks for it
+    // for the slices it makes for empty pans at connect, so receivers B to D
+    // return like A. A slice with nothing saved, and every slice asked for
+    // without it (+RX, a layout change, a session verb), starts fresh.
+    Q_INVOKABLE void addSliceOnPan(const QString& panId, bool restoreSavedState = false);
 
     /// Re-point any slice whose pan is not in `livePanIds` at the first one
     /// that is. Returns how many moved.
@@ -3037,6 +3209,13 @@ public:
     void setContainerManager(class ContainerManager* cm) { m_containerManager = cm; }
     QTimer* autoAgcTimer() const { return m_autoAgcTimer; }
 
+    /// True while a source of its own (the headless Core's DaemonAgcSource)
+    /// writes each slice's station Auto AGC noise floor. Otherwise this
+    /// model writes it on the Auto AGC tick from the slice's registered
+    /// tracker, so a window signed in to a desktop window's Core reads the
+    /// floor that desktop window shows.
+    void setAutoAgcFloorPublishedBySource(bool on) { m_autoAgcFloorPublishedBySource = on; }
+
     // 3M-1a G.1: expose MoxController so MainWindow can wire
     // StepAttenuatorController::onMoxHardwareFlipped (F.2 connect) after
     // both objects exist.  Non-owning; lifetime is RadioModel's lifetime.
@@ -3047,6 +3226,104 @@ public:
     // (MoxController::isMox(), or its state is not Rx). A remote window
     // holds the Core's value as it last heard it.
     bool isTransmitting() const;
+
+    // ── Radio speaker (R-SPK-05 to R-SPK-07, R-SPK-11, R-SPK-12) ────────
+    // RADIO level 0 to 100, RADIO mute and the amplifier choice (0 Normal,
+    // 1 Off while transmitting, 2 Always off). Setters clamp, emit only on
+    // a change, save under hardware/<mac>/RadioSpeaker/ for the radio this
+    // model is or was last connected to (held in memory while no radio is
+    // known), and forward: level and mute to the AudioEngine, mute and the
+    // choice to the connection. Owner thread.
+    static constexpr int kRadioSpeakerNoRadio = 0;
+    static constexpr int kRadioSpeakerAvailable = 1;
+    static constexpr int kRadioSpeakerNeedsAddOn = 2;
+    int radioSpeakerVolume() const { return m_radioSpeakerVolume; }
+    void setRadioSpeakerVolume(int volume);
+    bool radioSpeakerMuted() const { return m_radioSpeakerMuted; }
+    void setRadioSpeakerMuted(bool muted);
+    int speakerAmplifierMode() const { return m_speakerAmplifierMode; }
+    void setSpeakerAmplifierMode(int mode);
+    // 0 no radio, 1 available, 2 available but the radio needs its audio
+    // add-on board (Hermes Lite 2, D11).
+    int radioSpeakerAvailability() const { return m_radioSpeakerAvailability; }
+    // The amplifier switch exists: a HardwareProfile::hasAudioAmplifier
+    // board on Protocol 2 (R-SPK-08).
+    bool speakerAmplifierAvailable() const { return m_speakerAmplifierAvailable; }
+    // "No radio connected" with no radio; empty when available.
+    QString radioSpeakerUnavailableReason() const;
+    // "No radio connected", "Not tested on the ANAN-G2E." (D17) or
+    // "This radio has no switchable speaker amplifier."; empty when
+    // available.
+    QString speakerAmplifierUnavailableReason() const;
+    // Why the amplifier is off right now (R-SPK-10); empty while it is on
+    // and when it is unavailable.
+    QString speakerAmplifierStatus() const { return m_speakerAmplifierStatus; }
+    // R-SPK-16: the RADIO tooltip. In a remote window "Radio speaker at
+    // the Core (shared with every window and the phone)", locally "Radio
+    // speaker"; on a Hermes Lite 2 the add-on note follows on its own line
+    // (R-SPK-07); with no radio speaker to set, the reason instead.
+    QString radioSpeakerToolTip() const;
+    // R-SPK-07 / D11: the Hermes Lite 2's headphone output needs its audio
+    // add-on board, which the radio cannot report.
+    static QString radioSpeakerAddOnNote();
+    // Remote role (radioSpeakerVersion 1): the Core's two reports as it
+    // sent them (radioSpeakerAvailability 0 to 2, speakerAmplifierAvailable),
+    // applied by StationClient. False for any other name or a bad value, and
+    // on a Role::Local model. clearStationRadioSpeaker drops them when the
+    // link ends.
+    bool applyStationRadioSpeakerValue(const QByteArray& name, const QVariant& value);
+    void clearStationRadioSpeaker();
+
+    // ── Core speaker (native audio plan Task 21; R-AUD-25, R-AUD-28,
+    // R-AUD-30, D23, D31, design choices 8 and 9) ─────────────────────────
+    // On the Core (setCoreSpeakerHost(true), nereusd): the level and mute
+    // are AudioEngine::setVolume / setMasterMuted, loaded from and saved to
+    // audio/Master/Volume ("0.720" form; 50 when never saved, settled call
+    // 29) and audio/Master/Muted; the device and the settable details
+    // (bufferFrames, delayMs, sampleRate) are the speakers role's
+    // audio/Speakers keys, applied through setSpeakersConfig. They change
+    // only what the Core's sound card plays (R-AUD-28). In a remote window
+    // the values are the Core's as it sent them, and the setters write
+    // through the mirror only while the Core offers them
+    // (coreSpeakerVersion 1). Anywhere else the setters change nothing.
+    // Owner thread.
+    int coreSpeakerVolume() const { return m_coreSpeakerVolume; }
+    void setCoreSpeakerVolume(int volume);
+    bool coreSpeakerMuted() const { return m_coreSpeakerMuted; }
+    void setCoreSpeakerMuted(bool muted);
+    // {"id":"...","name":"..."}: {"id":"","name":""} for the Core's
+    // default, {"id":"(none)","name":""} for "(none)" (settled call 12,
+    // also while the Core waits for a pick).
+    QString coreSpeakerDevice() const { return m_coreSpeakerDevice; }
+    void setCoreSpeakerDevice(const QString& json);
+    QString coreSpeakerDevices() const { return m_coreSpeakerDevices; }
+    QString coreSpeakerState() const { return m_coreSpeakerState; }
+    QString coreSpeakerDetails() const { return m_coreSpeakerDetails; }
+    void setCoreSpeakerDetails(const QString& json);
+    // The Core binds the six to its engine (DaemonApp). Call
+    // setCoreSpeakerDesktop first: on a box that starts into a desktop
+    // (R-AUD-30), with no saved speakers Engine, DeviceId or DeviceName
+    // and no audio_device in the config file (settled call 11), the Core
+    // waits for a pick (D31): "(none)" chosen without saving it, no card
+    // opened, the state waitingForPick.
+    void setCoreSpeakerDesktop(bool desktop, bool configNamesDevice);
+    void setCoreSpeakerHost(bool host);
+    bool coreSpeakerHost() const { return m_coreSpeakerHost; }
+    // The Core speaker can be set from here: on the Core, or in a remote
+    // window whose Core offers it.
+    bool coreSpeakerAvailable() const;
+    // A remote window whose signed-in Core does not offer it.
+    bool coreSpeakerNeedsNewerCore() const;
+    // Empty while available; "This Core can't set its speaker from here.
+    // Update the Core." for an older Core; "Connect to the Core to change
+    // these." while it cannot be reached.
+    QString coreSpeakerUnavailableReason() const;
+    // Remote role (coreSpeakerVersion 1): the Core's devices and state as
+    // it sent them, applied by StationClient. False for any other name, a
+    // value that does not decode, and on a model that is not remote.
+    // clearStationCoreSpeaker drops them when the link ends.
+    bool applyStationCoreSpeakerValue(const QByteArray& name, const QVariant& value);
+    void clearStationCoreSpeaker();
 
     // RADE end-of-over callsigns: the radio is sending FreeDV's end-of-over
     // frame after an operator's release (MoxController's end-of-over tail).
@@ -3203,6 +3480,11 @@ public:
     /// that needs "where is this slice transmitting" should come here
     /// rather than re-derive the offset.
     quint64 txFrequencyForSlice(const SliceModel* slice) const;
+
+    /// The radio NCO and TX analyzer's baseband origin. During Tune this
+    /// subtracts the existing signed tone from dial+XIT, so the tone lands
+    /// on txFrequencyForSlice(). Other transmit modes keep dial+XIT.
+    quint64 txNcoFrequencyForSlice(const SliceModel* slice) const;
 
     // Phase 3F Sub-Epic D Task 13: NereusSDR-original FFT fan-out router.
     // Wires receiverId -> N pans so a single DDC FFT pipeline can feed
@@ -3400,6 +3682,11 @@ public:
     void wireRadeChannel(int sliceId, NereusSDR::RadeChannel* channel,
                          NereusSDR::SliceModel* slice);
 
+    // Existing audio observation only. The getter is stable; refresh never
+    // creates a DSP owner, microphone stream, connection or transmit key.
+    RadeWaveformModel* radeWaveformModel();
+    void synchronizeWaveformEndpoints();
+
     // RADE reason (2026-09-30), NereusSDR-original. How the last attempt to
     // start a slice's RADE decoder ended, kept while the slice stays in RADE
     // so its radeReason can say why it is silent. Main thread only.
@@ -3496,6 +3783,7 @@ public:
     // the Core mirrors them (`amplifier`, `rfkit`). Non-null from
     // construction. A Local model binds them to its own connections; a
     // Remote model's hold the Core's values only.
+    MainPowerMeter* mainPowerMeter() const { return m_mainPowerMeter; }
     AmplifierModel* amplifierModel() const { return m_amplifierModel; }
     RfKitModel*     rfKitModel()     const { return m_rfKitModel; }
     // R-R3-48: the Core's station TCI server as the `stationTci` object.
@@ -3504,8 +3792,26 @@ public:
     StationTciModel* stationTciModel() const { return m_stationTciModel; }
     // R-R3-48: the Core's station TCI server (nullptr outside the Core).
     StationTciController* stationTciController() const { return m_stationTci.get(); }
+    // CAT setup from a connected desktop (stationCatVersion 1): the Core's
+    // CAT as the `stationCat` object. Non-null from construction; filled by
+    // the Core's publisher, and from the Core's values in a remote window.
+    StationCatModel* stationCatModel() const { return m_stationCatModel; }
+    // The Core's CAT publisher and commands (nullptr outside the Local role).
+    StationCatController* stationCatController() const { return m_stationCat.get(); }
+    // What the CAT pages, the CAT applet, the CAT log window and the status
+    // bar read and change: this window's own CatService (Local) or the
+    // Core's CAT (Remote). Non-null from construction.
+    CatControl* catControl() const { return m_catControl; }
     // R-R3-47: the Core's RF-Kit controller (nullptr outside the Core).
     StationRfKitController* stationRfKitController() const { return m_stationRfKit; }
+    // Rotor control plan Task 3c: the Core's rotor (nullptr outside the Core).
+    // Task 4c: a desktop running its own radio is a Core here too; a window
+    // on a remote Core never has one.
+    StationRotorController* stationRotorController() const { return m_stationRotor; }
+    // Rotor control plan Task 4b: the rotor as the `rotor` object. Non-null
+    // from construction; follows the Core's controller on the Core, and
+    // holds the Core's values in a remote window.
+    RotorLink::RotorModel* rotorModel() const { return m_rotorModel; }
     // SmartSDR API server on TCP 4992. Owned by RadioModel; lifetime matches.
     // Used by MainWindow to push slice/transmit state so PGXL/TGXL pull the
     // current band/freq via the SmartSDR API rather than from a stale cache.
@@ -3533,8 +3839,60 @@ public:
 
     // R3 station-owned accessory lifecycle. Installed by DaemonApp before
     // radio startup, independently of the temporary receive-only policy.
-    void enableStationAccessoryIdentity();
+    // Makes the rotor too, through enableStationRotor().
+    // 2026-10-11: a desktop window running its own radio installs it too
+    // (GuiSessionCoordinator), with TypedAddress, so the windows and phones
+    // signed in to it get its Tuner Genius, Power Genius and RF-Kit as
+    // nereusd's clients get the Core's. Its links behave on the wire as
+    // they did in a window with no controller.
+    void enableStationAccessoryIdentity(
+        StationAccessoryAdmission admission = StationAccessoryAdmission::Identified);
     bool stationAccessoryIdentityEnabled() const { return m_stationTgxl != nullptr; }
+    // The Connect and Disconnect of the window that runs the radio (its
+    // Tuner, Amplifier and RF-Kit applets and its Setup pages). One owner
+    // per device: with the station controllers installed the dial and the
+    // hang-up go through them, so every window and client of this Core sees
+    // the same connection; without them (a model nobody installed them on)
+    // the link is dialed directly, as before. Local role only; a remote
+    // window asks its Core (IStationLink) instead.
+    void connectTgxlFromWindow(const QString& host, quint16 port);
+    void disconnectTgxlFromWindow();
+    void connectPgxlFromWindow(const QString& host, quint16 port);
+    void disconnectPgxlFromWindow();
+    void connectRfKitFromWindow(const QString& host, quint16 port);
+    void disconnectRfKitFromWindow();
+    // Rotor control plan Task 4c: the antenna rotor alone (cty.dat, the
+    // controller from the saved Rotor/* settings, rotorModel() bound to it).
+    // nereusd and a desktop running its own radio reach it through
+    // enableStationAccessoryIdentity(); a model with no station accessories
+    // may call it by itself. Local role only; a second call
+    // makes nothing. The controller lives as long as this model: a switch to
+    // a remote Core replaces the whole model, which closes the rotor's port.
+    void enableStationRotor();
+    // Rotor control plan Task 5: the one way a window turns the rotor
+    // (RotorCommandSink). The local controller when this process runs the
+    // rotor; otherwise the remote Core over the station link; otherwise
+    // refused with the reason.
+    bool requestRotorTarget(double azimuthDeg, double elevationDeg,
+                            QString* reason) override;
+    bool requestStopRotor(QString* reason) override;
+    // Rotor control plan Task 6: the rest of the sink, routed the same way.
+    // A nudge from this process's own windows holds under session 0, the
+    // owner the Core gives every window that is not a remote session.
+    bool rotorControlAvailable(QString* reason) const override;
+    bool requestTurnRotorToCall(const QString& call, bool longPath,
+                                QString* reason) override;
+    bool requestNudgeRotor(Nudge direction, bool active, QString* reason) override;
+    // Rotor control plan Task 7: the setup and the presets, routed the same
+    // way. Locally the setup is checked against the contract's tables first
+    // ("That rotor setup is not valid."), as the Core checks a remote one.
+    bool requestConfigureRotor(const Setup& setup, QString* reason) override;
+    bool requestRotorPresets(const QString& presets, QString* reason) override;
+    // Final review I3: counted. Locally the rotor object scans while any is
+    // open; on a remote Core this window asks it every
+    // RotorLink::RotorModel::kRemoteSetupAskMs while any is open.
+    void setRotorSetupViewOpen(bool open) override;
+    quint32 lastRotorCommandId() const override { return m_lastRotorCommandId; }
     bool configureTgxlForStation(const QString& host, quint16 port, QString* reason);
     bool disconnectTgxlForStation(QString* reason);
     // R-R3-47 / R-R3-22: the Core's Power Genius XL, as the tuner's above.
@@ -3554,6 +3912,15 @@ public:
     // that does not own its accessories, while the radio is on the air, and
     // while the Core is not connected to the amp; nothing is sent then.
     bool setPgxlOperateForStation(bool on, QString* reason);
+    // This computer's own applet's OPERATE or STANDBY: the same line through
+    // the same PgxlConnection, for any app that runs its own radio. It does
+    // not ask for the station amplifier object, which only a Core that
+    // shares its accessories has (enableStationAccessoryIdentity); the
+    // local click was routed through setPgxlOperateForStation and so did
+    // nothing on a desktop app. Refused in a remote window, on the air,
+    // while the tuner tunes or the amp is switching (pgxlSwitchRefusal),
+    // and while this app is not connected to the amp; nothing is sent then.
+    bool setPgxlOperateFromApplet(bool on, QString* reason);
     // A window's Scan LAN: as scanTgxlLanForStation, for Power Genius
     // announcements (StationPgxlController::expectedProduct()). Nothing is
     // sent to any device.
@@ -3964,10 +4331,27 @@ public:
     // each value.
     void applyClaritySmoothDefaults();
 
+    // Records that the smooth-defaults profile has been applied (the
+    // "DisplayProfileApplied" key). The key is this model's bookkeeping:
+    // Setup's "Reset to Smooth Defaults" calls this instead of writing the
+    // key itself, as it uses setClarityEnabled for "ClarityEnabled".
+    void markDisplayProfileApplied();
+
     // Radio info
     QString name() const { return m_name; }
     QString model() const { return m_model; }
     QString version() const { return m_version; }
+
+    /// The second firmware number of the radio version() names, or 0 when
+    /// it reported none. The stored radio record is written when a connect
+    /// starts and version() when one succeeds, so a failed connect to
+    /// another radio leaves them apart: the record's number counts only
+    /// while its first number is version(). A Core sends this over the
+    /// station link (firmwareBeta 1); a remote window reads the Core's.
+    int firmwareBetaVersion() const;
+    /// version() with that second number where the radio has one
+    /// (RadioInfo::firmwareText): "22.14", or "22", or empty with no radio.
+    QString firmwareText() const;
 
     // Remote Daemon R2 Task 8: StateMirror::applyInbound()'s hook for the
     // three RadioModel properties above with no Q_PROPERTY WRITE (name,
@@ -4200,7 +4584,7 @@ public:
     void applyCoreConnectionAge(std::optional<qint64> ageMs);
     QString connectedRadioName() const;       // RadioInfo.name / "—"
     QString connectionProtocolText() const;   // "1" or "2" / "—"
-    QString connectionFirmwareText() const;   // "v27" / "—"
+    QString connectionFirmwareText() const;   // "v27", "v22.14" / "—"
     QString connectionIpText() const;         // "192.168.x.y : port" / "—"
     QString connectionMacText() const;        // "AA:BB:CC:DD:EE:FF" / "—"
     int     connectionSampleRateHz() const;   // 0 if disconnected
@@ -4315,9 +4699,11 @@ public:
     //
     // Emits dspChangeMeasured(elapsedMs) if a WDSP channel rebuild occurred.
     //
-    // DspOptionsPage calls this when a combo changes and the combo's mode
-    // matches the current slice mode (design Section 4B: live-apply if same
-    // mode, persist-only otherwise — applies on next mode-switch).
+    // DspOptionsPage calls this when a combo changes, with the combo's mode
+    // (design Section 4B: live-apply if same mode, persist-only otherwise —
+    // applies on next mode-switch). Each slice is judged by its own mode:
+    // every receiver whose slice is in forMode's group takes the change, and
+    // the TX channel when the TX-bound slice is in it.
     //
     // Must be called on the main thread.
     void rebuildDspOptionsForMode(DSPMode forMode);
@@ -4484,6 +4870,7 @@ public:
             board, defaultModelForBoard(board));
         m_calController.setHardwareModel(m_hardwareProfile.model);
         applyRxOnly();   // Task 16: the kit runs receive only
+        refreshRadioSpeakerReports();
     }
 
     // Phase 3P-I-a T14 — test-only hooks. Allow tests to inject a mock
@@ -4508,6 +4895,7 @@ public:
     void wireReceiverManagerHardwarePushesForTest() { wireReceiverManagerHardwarePushes(); }
     void injectConnectionForTest(RadioConnection* conn) {
         m_connection = conn;
+        syncTransmitCutTargets();
         setConnectionState(conn != nullptr ? ConnectionState::Connected
                                             : ConnectionState::Disconnected);
     }
@@ -4582,6 +4970,9 @@ public:
     void wireMicCodecForTest() { connectMicCodecSignals(); }
     void wireRadioSpeakerOutputForTest() { connectRadioSpeakerOutput(); }
     void unwireRadioSpeakerOutputForTest() { disconnectRadioSpeakerOutput(); }
+    // Radio speaker: the per-radio load connectToRadio runs for
+    // m_lastRadioInfo (pair with setLastRadioInfoForTest).
+    void loadRadioSpeakerForConnectForTest() { loadRadioSpeakerForConnect(); }
     // Task 13: wire the injected connection's user digital inputs to the
     // TX inhibit monitor, and undo it, without the full connect pipeline.
     void wireTxInhibitInputForTest() { connectTxInhibitInput(); }
@@ -4649,6 +5040,17 @@ public:
     // schedule on the next event loop iteration, so QCoreApplication::processEvents
     // can drive the deferred completion synchronously.
     void setTuneOffSettleMsForTest(int ms) noexcept { m_tuneOffSettleMs = ms; }
+    // TGXL autotune: the RF settle between the carrier gate opening and the
+    // `autotune` command (kTgxlRfSettleMs in release). A test can lengthen
+    // it so its own setup cannot outrun the window, and observe each settle
+    // callback: `cycle` is the tune cycle that armed it, `stale` is true
+    // when that cycle (or its carrier) is no longer current, so the
+    // callback sends nothing.
+    void setTgxlRfSettleMsForTest(int ms) noexcept { m_tgxlRfSettleMs = ms; }
+    void setTgxlSettleFiredObserverForTest(std::function<void(quint64 cycle, bool stale)> observer)
+    {
+        m_tgxlSettleFiredObserverForTest = std::move(observer);
+    }
     bool tuneOffPendingForTest()          const noexcept { return m_pendingTuneOff; }
 
     // 3M-1b I.3: inject HPSDRHW board type to select the per-family Radio Mic
@@ -4710,6 +5112,11 @@ public:
         m_lastRadioInfo = info;
     }
 
+    // The version string a successful connect sets, which the seam above
+    // leaves alone: tests of what a Core reports for its radio's firmware
+    // pin both.
+    void setVersionForTest(const QString& version) { m_version = version; }
+
     // Codex review round 7, PR #293 — drive the I/Q tap fork directly.
     // Production reaches it from the iqDataForReceiver lambda installed in
     // wireConnectionSignals, which needs DSP threads, an RxDspWorker and a
@@ -4741,6 +5148,11 @@ public:
                           userAdc0Raw, userAdc1Raw, supplyRaw);
         m_forceTxForTest = false;
     }
+
+    // Drives the steady clock handlePaTelemetry reads (nanoseconds), so a
+    // test can time the HL2 temperature's 8 ms polls without sleeping. Once
+    // set, every later telemetry call on this model uses the value given.
+    void setPaTelemetryNowNsForTest(qint64 nowNs) { m_paTelemetryNowNsForTest = nowNs; }
 
     // P1 full-parity §3.5 test seam — pure-function counterpart of the
     // percent-to-wire-byte SWR-foldback formula inlined at every
@@ -4805,7 +5217,11 @@ public:
     // Production code never calls this — m_txChannel is wired by the
     // WDSP-init lambda inside connectToRadio() (see "createTxChannel(kTxChannelId)"
     // around RadioModel.cpp:1514).
-    void injectTxChannelForTest(class TxChannel* ch) { m_txChannel = ch; }
+    void injectTxChannelForTest(class TxChannel* ch)
+    {
+        m_txChannel = ch;
+        syncTransmitCutTargets();
+    }
     void bindTxEqProfileChannelForTest(TxChannel* ch) { bindTxEqProfileChannel(ch); }
     void bindCfcProfileChannelForTest(TxChannel* ch) { bindCfcProfileChannel(ch); }
     void replayCfcProfileForTest() { replayCfcProfile(); }
@@ -5057,6 +5473,19 @@ public slots:
     // (MoxController::latchStopAllTx).
     void stopAllTx(const QString& message = QString());
 
+    // The transmit cut (2026-10-15). transmitCutLine() is the line a thread
+    // other than main (RemoteTxCutGuard) cuts through: it closes the TX
+    // channel's RF gate and sets the connection's cut latch
+    // (RadioConnection::cutTransmit), and its targets always follow this
+    // model's connection and TX channel. catchUpTransmitCut(stopText) runs
+    // on the main thread once it is free again: stopAllTx(stopText) (which
+    // does nothing when nothing is keyed, and is skipped when all that is
+    // left is a release already under way, an earlier stop's), then
+    // clearTransmitCut posted to the connection, queued behind the MOX off
+    // stopAllTx posted, so the next key keys normally.
+    std::shared_ptr<TransmitCutLine> transmitCutLine() const { return m_transmitCutLine; }
+    void catchUpTransmitCut(const QString& stopText);
+
 public:
     // ── iPhone app plan Task 38 (R-IOS-04, D29): the transmit time-out ──
     //
@@ -5139,6 +5568,7 @@ public slots:
     // on unheld transmit takes it) and the tune's MOX key is that device's.
     // setTune(false) ends it as any TUNE ends.
     void setTune(bool on, const KeyerIdentity& keyer);
+    bool endTuneIfRequest(quint64 tag, quint64 expectedAcceptedGeneration);
 
     // TGXL autotune orchestration (NereusSDR-native, no Thetis source).
     //
@@ -5610,6 +6040,20 @@ public slots:
 
 signals:
     void diversityStateChanged(const QString& state);
+    // Radio speaker (R-SPK-11).
+    void radioSpeakerVolumeChanged(int volume);
+    void radioSpeakerMutedChanged(bool muted);
+    void speakerAmplifierModeChanged(int mode);
+    void radioSpeakerAvailabilityChanged(int availability);
+    void speakerAmplifierAvailableChanged(bool available);
+    // Core speaker (native audio plan Task 21).
+    void coreSpeakerVolumeChanged(int volume);
+    void coreSpeakerMutedChanged(bool muted);
+    void coreSpeakerDeviceChanged(const QString& json);
+    void coreSpeakerDevicesChanged(const QString& json);
+    void coreSpeakerStateChanged(const QString& json);
+    void coreSpeakerDetailsChanged(const QString& json);
+    void speakerAmplifierStatusChanged();
     void infoChanged();
     // Task 33: stopAllTx stopped a transmission. A non-empty message is for
     // the operator (MainWindow shows it for 10 s, as Thetis's
@@ -5808,6 +6252,9 @@ signals:
     /// physical ADC (the extended pan's wideband wings) has to listen here.
     /// Codex, PR #318.
     void streamAdcRoutingChanged();
+    // Display pill plan Task 9: applyPanGridSetting(key) ran. A window's
+    // own pan models (PanModels) re-read the band's dB max and min from it.
+    void panGridSettingChanged(const QString& key);
 
     /// iPhone app Task 75 (the several-devices design, ruling 5.11a, D61):
     /// slice `sliceId` crossed a band edge and the receive antenna stayed on
@@ -5926,6 +6373,7 @@ signals:
     // nrCannotRunReason may have changed for a reason DspAssetService's own
     // signals do not carry: whether the Core says (stationDspAssetVersion).
     void nrAvailabilityChanged();
+    void radeV2AvailabilityChanged();
     // Remote-window parity Task 16: dspOptionsLastApplyMs() changed.
     void dspOptionsLastApplyMsChanged(qint64 elapsedMs);
     // Fix wave (M2): stationRadioWaiting() changed.
@@ -5974,6 +6422,8 @@ signals:
     /// release). Shown as a local refusal is; the buttons follow the Core.
     void remoteTransmitRefused(const QString& reason);
     void remoteMicSourceStateChanged();
+    // Native audio plan Task 20 (R-AUD-24): pcMicStatus() changed.
+    void pcMicStatusChanged();
 
     // ── Plan 4 D8: per-profile TX filter relay signal ─────────────────────────
     //
@@ -6161,6 +6611,7 @@ private:
     // is down (no link, or stationLinkReady() false).
     bool remoteCoreLinkDown() const;
     void updateAutoAgc();
+    void publishStationAutoAgcNoiseFloors();
 
     // RADE end-of-over callsigns (MoxController::setEndOfOverTail). Starts
     // the tail when this release is an operator's and the transmitter runs
@@ -6464,6 +6915,30 @@ private:
     // before the connection goes.
     void connectRadioSpeakerOutput();
     void disconnectRadioSpeakerOutput();
+    // Radio speaker (R-SPK-05, R-SPK-12): load m_lastRadioInfo's saved
+    // values (or seed them) and push them to the engine and connection.
+    void loadRadioSpeakerForConnect();
+    void saveRadioSpeaker();
+    // Constructor wiring for the CW or Tune flag and the status line.
+    void wireRadioSpeakerState();
+    // Recompute availability, amplifier availability and the status line,
+    // emitting what changed.
+    void refreshRadioSpeakerReports();
+    // R-SPK-15: the CW or Tune flag, sent to the connection on a change.
+    bool computeSidetoneExpected() const;
+    void refreshSidetoneExpected();
+    // Remote role: the link says the Core offers the radio speaker
+    // (IStationLink::radioSpeakerAvailable).
+    bool stationOffersRadioSpeaker() const;
+    // Core speaker (Task 21): the link says the Core offers it
+    // (IStationLink::coreSpeakerAvailable).
+    bool stationOffersCoreSpeaker() const;
+    // On the Core: recompute device, devices, state and details from the
+    // engine and the saved keys, emitting what changed.
+    void refreshCoreSpeaker();
+    void followCoreSpeakerCatalogue();
+    void setCoreSpeakerText(QString& member, const QString& value,
+                            void (RadioModel::*changed)(const QString&));
     // Task 13: the radio's user digital inputs reach TxInhibitMonitor
     // (PollTXInhibit, console.cs:25849-25887 [v2.10.3.15]). Called from
     // wireConnectionSignals.
@@ -6590,6 +7065,12 @@ public:
     // tweak when they immediately close the app. No-op when nothing's
     // pending. Idempotent — calling repeatedly is safe.
     void flushPendingSettingsSave();
+    // The timed form of the save above: the values are taken on this
+    // thread and the file is written on AppSettings' writer thread. A save
+    // takes 140 to 470 ms on a Rock 5C, and the Core sends its receive
+    // audio from this thread (bench 2026-10-10: tuning stuttered in every
+    // remote window). The result arrives in onBackgroundSettingsSaveFinished.
+    void flushPendingSettingsSaveInBackground();
     /// iPhone app Task 73: the coalesced settings save, for a store the
     /// Core's session server changed (a device's saved slices).
     void requestSettingsSave() { scheduleSettingsSave(); }
@@ -7000,12 +7481,20 @@ private:
     void publishRadeModeSlices();
     int addSliceImpl(int requestedId, const QString& initialPanId,
                      const ReceiveSliceState* restoreSeed = nullptr,
-                     bool bindRestored = false);
+                     bool bindRestored = false,
+                     bool restoreSavedState = false);
 
     /// iPhone app Task 73: every slice's `active` from its owner's active
     /// slice, and activeSlice() moved to the station-level one (emitting
     /// the active-slice signals when it moves). Local only.
     void applyActiveSlices();
+
+    /// Ruling 5.10: reruns applyActiveSlices when SliceOwnership changes a
+    /// device's active slice (adoptUnowned at admission among others), so
+    /// each device sees exactly one slice marked active. Skipped inside
+    /// addSliceImpl and removeSliceImpl, which end with their own call;
+    /// a change that arrives while it runs makes it run once more.
+    void remarkActiveSlicesForOwnership();
 
     /// The operator's reason for a refused add at the slice cap:
     /// "<radio> supports a maximum of <cap> slices" ("1 slice" for one), or,
@@ -7088,6 +7577,13 @@ private:
     RadioConnection* m_connection{nullptr};
     QThread*         m_connThread{nullptr};
 
+    // The transmit cut line (2026-10-15): shared with RemoteTxCutGuard,
+    // which may outlive this model. Its targets are set wherever
+    // m_connection or m_txChannel is set, injected or cleared, before either
+    // object can be destroyed (syncTransmitCutTargets).
+    std::shared_ptr<TransmitCutLine> m_transmitCutLine{std::make_shared<TransmitCutLine>()};
+    void syncTransmitCutTargets() { m_transmitCutLine->setTargets(m_connection, m_txChannel); }
+
     // I/Q DSP worker (owned, lives on m_dspThread). Fed by a queued
     // connection from ReceiverManager::iqDataForReceiverStamped (R-R3-40).
     RxDspWorker*     m_dspWorker{nullptr};
@@ -7159,6 +7655,31 @@ private:
     QElapsedTimer m_nnrGovernorClock;
     QHash<int, qint64> m_nnrLimitReadbackPending;
     QThread*         m_dspThread{nullptr};
+    std::unique_ptr<RadeWaveformModel> m_radeWaveforms;
+    int m_waveformTxSlice = -1;
+    quint64 m_waveformTxGeneration = 0;
+    int m_waveformMicSource = -1;
+    quint64 m_waveformMicObservationEpoch = 0;
+    quint64 m_waveformPcRevision = 0;
+    quint64 m_waveformPcSourceRevision = 0;
+    quint32 m_waveformPcCaptureGeneration = 0;
+    QString m_waveformPcConfiguredDevice;
+    QString m_waveformPcActualDevice;
+    QPointer<TxWorkerThread> m_waveformTxWorker;
+    QByteArray m_waveformTxWriter;
+    quint64 m_waveformTxLineGeneration = 0;
+    quint64 m_waveformFeedChange = 0;
+    QHash<QByteArray, quint64> m_waveformMicLineGenerations;
+    quint64 m_nextWaveformMicLineGeneration = 0;
+    struct WaveformRxIdentity {
+        quint64 routeSerial = 0;
+        int streamIndex = -1;
+        quint64 streamEpoch = 0;
+        QPointer<RxDspWorker> worker;
+        quint64 generation = 0;
+    };
+    QHash<int, WaveformRxIdentity> m_waveformRxIdentities;
+    quint64 m_nextWaveformRxGeneration = 0;
     QHash<int, RadeRxRoute> m_radeRxRoutes;
     quint64 m_nextRadeRxRouteSerial{0};
 
@@ -7222,6 +7743,13 @@ private:
     std::array<quint16, 100> m_hl2TempRing{};
     int m_hl2TempCount{0};   // 0..100 — slots filled
     int m_hl2TempHead{0};    // next slot to write
+    // The ring is filled on mi0bot's 8 ms poll, not one entry per
+    // telemetry call, so it spans 800 ms at any status rate (see
+    // handlePaTelemetry). Cleared when the connection leaves Connected.
+    qint64  m_hl2TempLastPollNs{0};  // time of the latest 8 ms poll
+    quint16 m_hl2TempHeld{0};        // latest reading, held between calls
+    // Test-only clock for handlePaTelemetry (setPaTelemetryNowNsForTest).
+    std::optional<qint64> m_paTelemetryNowNsForTest;
 
     // Settings hygiene — validated against caps at connect time.
     // Phase 3P-H Task 2.
@@ -7371,6 +7899,13 @@ private:
     // iPhone app Task 73 (ruling 5.11): the frequency the FreeDV Reporter
     // lists, the station-level active slice's; published when connected.
     quint64 m_freedvWantedHz{0};
+    // Ruling 5.10 (remarkActiveSlicesForOwnership): how many add or remove
+    // sequences are open, which re-mark the slices themselves at their end;
+    // whether a re-mark is running; and whether another change came in
+    // while it ran.
+    int m_activeSliceSequences{0};
+    bool m_remarkingActiveSlices{false};
+    bool m_remarkActiveSlicesAgain{false};
 
     // View hooks (non-owning, set by MainWindow). Phase 3G-8 + 3G-9c +
     // 3M-5d (m_txAnalyzer).
@@ -7573,6 +8108,7 @@ private:
     // Remote-daemon R2 Task 4: non-owning; see attachStation()/
     // detachStation() above.
     NereusSDR::IStationLink* m_station{nullptr};
+    bool m_stationRadeV2Enabled{false};
     // iPhone app plan Task 78.
     bool m_stationMayCloseLastSlice{false};
     QPointer<QObject> m_stationDevices;
@@ -7657,8 +8193,24 @@ private:
     QString m_receiveLayoutRestoreState;
     QString m_receiveLayoutRestoreMessage;
     bool m_settingsRetryScheduled{false};
+    // The background save whose result is still awaited; 0 when none is.
+    quint64 m_backgroundSettingsSaveTicket{0};
+    enum class SettingsSaveMode { Blocking, Background };
+    void flushPendingSettingsSave(SettingsSaveMode mode);
+    void scheduleSettingsSaveRetry();
+    void onBackgroundSettingsSaveFinished(quint64 ticket, bool saved, const QString& error);
     QString m_settingsSaveError;
     QSet<int> m_dirtySettingsSliceIds;
+    // Latest captured value for each fully qualified per-band key. No map
+    // change hooks run until the existing save/explicit recall boundary.
+    QHash<int, QMap<QString, QVariant>> m_pendingBandSettings;
+    void materializePendingBandSettings(int sliceId);
+    // A write of a held key by anyone but materializePendingBandSettings()
+    // is newer than the held copy, so that key leaves the hold and the
+    // other write survives. The rest of the hold is still saved.
+    void onSettingsKeyWritten(const QString& key);
+    int m_settingsWriteObserverId = 0;
+    bool m_materializingPendingBandSettings = false;
     // Phase 3P-I-a — dirty flag for AlexController persistence.
     // AlexController::antennaChanged can fire 14× during load(); the
     // flag + scheduleSettingsSave() timer coalesces them into a single
@@ -7765,6 +8317,7 @@ private:
 
     // From Thetis v2.10.3.13 console.cs:46057 — tmrAutoAGC (500ms interval)
     QTimer* m_autoAgcTimer{nullptr};
+    bool m_autoAgcFloorPublishedBySource{false};
     NoiseFloorTracker* m_noiseFloorTracker{nullptr};
     QMap<int, NoiseFloorTracker*> m_streamNoiseFloors;
     // Task 3.1 view hook — non-owning, set by MainWindow.
@@ -7838,6 +8391,19 @@ private:
     //   (round-robin priority bank0 > bank10), this produced an RF spike past
     //   the radio's spec at high tune-slider settings.  Issue #177.
     bool m_pendingTuneOff{false};
+    // NereusSDR-original tune cycle lifetime; not a permission identity.
+    KeyerIdentity m_tuneCycleKeyer{KeyerIdentity::station(PttMode::Manual)};
+    quint64 m_tuneCycleSerial{0};
+    quint64 m_tuneAcceptedGeneration{0};
+    bool m_tuneCycleGuarded{false};
+    // True while setTune(true) reports its own start, which adopts a TUNE
+    // still turning off rather than leaving its off to finish.
+    bool m_tuneStartObserving{false};
+    // CAT review X5: the serial of a setTune(true) still setting up (0 when
+    // none), so a newer request that cuts it short gets its off finished.
+    quint64 m_tuneStartingSerial{0};
+    void finishCutShortTuneStart(quint64 tag);
+    bool tuneCycleCurrent(quint64 serial) const;
 
     // m_tuneOffSettleMs: explicit 100 ms wait between MoxController::rxReady
     //   and completeTuneOff().  Mirrors `await Task.Delay(100)` at Thetis
@@ -7881,6 +8447,9 @@ private:
     // accessor and docs/architecture/2026-05-26-phase3f-sub-epic-c-tx-arbiter-lifecycle-plan.md
     // Task 6.
     TxSliceArbiter* m_txSliceArbiter{nullptr};
+
+    // Qt child, stopped before transmit/model retirement.
+    CatService* m_catService{nullptr};
     UnkeyGate* m_unkeyGate{nullptr};   // Task 34, Qt-parented to this
 
     // Phase 3F Sub-Epic D Task 13: receiver -> pan FFT fan-out router.
@@ -8001,6 +8570,47 @@ private:
     // Radio codec (2026-09-30): the audio engine's radio output tap,
     // forwarding to the connection (connectRadioSpeakerOutput).
     std::unique_ptr<MasterMixAudioTap>     m_radioSpeakerTap;
+    // Radio speaker (R-SPK-11). Owner thread. m_radioSpeakerHeld: a value
+    // was set while no radio was known; the next radio with nothing saved
+    // takes it.
+    int  m_radioSpeakerVolume{50};
+    bool m_radioSpeakerMuted{false};
+    int  m_speakerAmplifierMode{0};
+    bool m_radioSpeakerHeld{false};
+    // True while loadRadioSpeakerForConnect applies loaded values, so the
+    // setters it calls save nothing (nothing is written until a value
+    // changes, R-SPK-05).
+    bool m_radioSpeakerLoading{false};
+    int  m_radioSpeakerAvailability{0};
+    bool m_speakerAmplifierAvailable{false};
+    QString m_speakerAmplifierStatus;
+    // R-SPK-15: the CW or Tune flag as last sent, and the hold that keeps
+    // it up after Tune ends until the radio has unkeyed.
+    bool m_sidetoneExpected{false};
+    bool m_tuneSidetoneHold{false};
+    // Remote role: the Core's reports as it last sent them.
+    int  m_stationRadioSpeakerAvailability{0};
+    bool m_stationSpeakerAmplifierAvailable{false};
+    // Core speaker (Task 21). Owner thread. The text members hold the
+    // CoreSpeakerJson forms: the Core's own, or in a remote window the
+    // Core's as it sent them.
+    bool m_coreSpeakerHost{false};
+    bool m_coreSpeakerDesktop{false};
+    bool m_coreSpeakerConfigNamesDevice{false};
+    bool m_coreSpeakerWaiting{false};
+    int  m_coreSpeakerVolume{50};
+    bool m_coreSpeakerMuted{false};
+    // Native audio plan Task 20 (R-AUD-24): the TxInput role's last status.
+    AudioRoleStatus m_pcMicStatus;
+    QString m_coreSpeakerDevice;
+    QString m_coreSpeakerDevices;
+    QString m_coreSpeakerState;
+    QString m_coreSpeakerDetails;
+    // The format the speakers last opened with (speakersConfigChanged).
+    QString m_coreSpeakerNegotiated;
+    QPointer<QObject> m_coreSpeakerCatalogue;
+    QTimer* m_coreSpeakerTimer{nullptr};
+    QList<QMetaObject::Connection> m_coreSpeakerConnections;
     std::unique_ptr<RadioMicSource>        m_radioMicSource;
     // VAX TX consumer (added 2026-05-06, eager-borg-d64bed).  Pulls
     // audio from /nereussdr-vax-tx shared memory via AudioEngine and
@@ -8239,16 +8849,40 @@ private:
     QHash<QString, StationLanScan> m_stationLanScans;
     StationPgxlController* m_stationPgxl{nullptr};
     TunerModel*     m_tunerModel{nullptr};
+    MainPowerMeter* m_mainPowerMeter{nullptr};
     AmplifierModel* m_amplifierModel{nullptr};
     RfKitModel*     m_rfKitModel{nullptr};
     // R-R3-47 / R-R3-48: the Core's RF-Kit controller, station TCI server
     // and its state, and the RF-Kit's band follow over that server.
     StationRfKitController* m_stationRfKit{nullptr};
+    // Rotor control plan Task 3c: the Core's rotor, made beside the other
+    // station accessories (enableStationAccessoryIdentity), or alone on a
+    // desktop running its own radio (enableStationRotor); Qt child.
+    StationRotorController* m_stationRotor{nullptr};
+    // Rotor control plan Task 4b: see rotorModel(); Qt child.
+    RotorLink::RotorModel*  m_rotorModel{nullptr};
+    // Rotor control plan Task 6: see lastRotorCommandId().
+    quint32 m_lastRotorCommandId{0};
+    // Final review I3: the open rotor setup views, and (on a remote Core)
+    // the timer that asks the Core to keep reading its ports; Qt child.
+    int     m_rotorSetupViews{0};
+    QTimer* m_rotorSetupAsk{nullptr};
+    // Re-review N6: whether the Core controlled a rotor at the last link
+    // report, so a setup view open before the capability arrived asks the
+    // moment it does (reportStationLinkStateChanged).
+    bool    m_rotorControlSeen{false};
+    // One ask (`refreshRotorPorts`) of a Core that controls a rotor.
+    void askCoreForRotorPorts();
     StationTciModel*        m_stationTciModel{nullptr};
     // M6: owned here and destroyed first in ~RadioModel (they hold this
     // model's slices and receivers), not through Qt parenting.
     std::unique_ptr<StationTciController> m_stationTci;
     std::unique_ptr<RfKitBandFollow>      m_rfKitBandFollow;
+    // CAT setup from a connected desktop: the `stationCat` object and, on
+    // the Core, its publisher (destroyed first in ~RadioModel).
+    StationCatModel*                      m_stationCatModel{nullptr};
+    std::unique_ptr<StationCatController> m_stationCat;
+    CatControl*                           m_catControl{nullptr};
     // Follow-up 3: accessory requests whose refusal their page shows.
     QHash<quint32, QPointer<QObject>> m_pageShownAccessoryRequests;
 
@@ -8309,6 +8943,10 @@ private:
     static constexpr int kTgxlDeviceCycleStartMs = 3000;
     static constexpr int kTgxlCarrierReadyMs = 3000;
     static constexpr int kTgxlRfSettleMs = 150;
+    // The settle length in use: kTgxlRfSettleMs except under
+    // setTgxlRfSettleMsForTest.
+    int m_tgxlRfSettleMs{kTgxlRfSettleMs};
+    std::function<void(quint64, bool)> m_tgxlSettleFiredObserverForTest;
     // Completion ownership: actual channel, its latest run request and
     // the tune cycle that requested it. The completion is always queued.
     QPointer<TxChannel> m_tgxlCarrierChannel;

@@ -21,6 +21,14 @@
 
 using namespace NereusSDR;
 
+// MinGW imports a static constexpr member of an exported class by address
+// when it is bound to a reference (QCOMPARE does), and the Core DLL never
+// exports one, so this test did not link on Windows. It reads these
+// copies by value instead.
+namespace {
+constexpr double kMaxNotchWidthHz = NereusSDR::NotchModel::kMaxNotchWidthHz;
+} // namespace
+
 class TestNotchPersistence : public QObject {
     Q_OBJECT
 
@@ -509,7 +517,7 @@ private slots:
 
         // Width clamped as setWidth clamps it; out of range refused whole.
         QVERIFY(m.move(id, 14081000.0, 1.0e9));
-        QCOMPARE(m.notchById(id)->widthHz, NotchModel::kMaxNotchWidthHz);
+        QCOMPARE(m.notchById(id)->widthHz, kMaxNotchWidthHz);
         const Notch held = *m.notchById(id);
         QVERIFY(!m.move(id, NotchModel::kMaxNotchCentreHz + 1.0, 100.0));
         QVERIFY(!m.move(id, NotchModel::kMaxNotchCentreHz, 400.0));

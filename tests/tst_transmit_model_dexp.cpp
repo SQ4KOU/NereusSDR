@@ -40,6 +40,27 @@
 
 using namespace NereusSDR;
 
+// MinGW imports a static constexpr member of an exported class by address
+// when it is bound to a reference (QCOMPARE does), and the Core DLL never
+// exports one, so this test did not link on Windows. It reads these
+// copies by value instead.
+namespace {
+constexpr double kDexpAttackTimeMsMax = NereusSDR::TransmitModel::kDexpAttackTimeMsMax;
+constexpr double kDexpAttackTimeMsMin = NereusSDR::TransmitModel::kDexpAttackTimeMsMin;
+constexpr double kDexpDetectorTauMsMax = NereusSDR::TransmitModel::kDexpDetectorTauMsMax;
+constexpr double kDexpDetectorTauMsMin = NereusSDR::TransmitModel::kDexpDetectorTauMsMin;
+constexpr double kDexpExpansionRatioDbMax = NereusSDR::TransmitModel::kDexpExpansionRatioDbMax;
+constexpr double kDexpExpansionRatioDbMin = NereusSDR::TransmitModel::kDexpExpansionRatioDbMin;
+constexpr double kDexpFilterCutHzMax = NereusSDR::TransmitModel::kDexpFilterCutHzMax;
+constexpr double kDexpFilterCutHzMin = NereusSDR::TransmitModel::kDexpFilterCutHzMin;
+constexpr double kDexpHysteresisRatioDbMax = NereusSDR::TransmitModel::kDexpHysteresisRatioDbMax;
+constexpr double kDexpHysteresisRatioDbMin = NereusSDR::TransmitModel::kDexpHysteresisRatioDbMin;
+constexpr double kDexpLookAheadMsMax = NereusSDR::TransmitModel::kDexpLookAheadMsMax;
+constexpr double kDexpLookAheadMsMin = NereusSDR::TransmitModel::kDexpLookAheadMsMin;
+constexpr double kDexpReleaseTimeMsMax = NereusSDR::TransmitModel::kDexpReleaseTimeMsMax;
+constexpr double kDexpReleaseTimeMsMin = NereusSDR::TransmitModel::kDexpReleaseTimeMsMin;
+} // namespace
+
 namespace {
 const QString kMac = QStringLiteral("dexp:test:mac");
 }
@@ -186,37 +207,37 @@ private slots:
     void dexpDetectorTauMs_clampBelowMin() {
         TransmitModel t;
         t.setDexpDetectorTauMs(0.5);
-        QCOMPARE(t.dexpDetectorTauMs(), TransmitModel::kDexpDetectorTauMsMin);
+        QCOMPARE(t.dexpDetectorTauMs(), kDexpDetectorTauMsMin);
     }
 
     void dexpDetectorTauMs_clampAboveMax() {
         TransmitModel t;
         t.setDexpDetectorTauMs(150.0);
-        QCOMPARE(t.dexpDetectorTauMs(), TransmitModel::kDexpDetectorTauMsMax);
+        QCOMPARE(t.dexpDetectorTauMs(), kDexpDetectorTauMsMax);
     }
 
     void dexpAttackTimeMs_clampBelowMin() {
         TransmitModel t;
         t.setDexpAttackTimeMs(0.1);
-        QCOMPARE(t.dexpAttackTimeMs(), TransmitModel::kDexpAttackTimeMsMin);
+        QCOMPARE(t.dexpAttackTimeMs(), kDexpAttackTimeMsMin);
     }
 
     void dexpAttackTimeMs_clampAboveMax() {
         TransmitModel t;
         t.setDexpAttackTimeMs(500.0);
-        QCOMPARE(t.dexpAttackTimeMs(), TransmitModel::kDexpAttackTimeMsMax);
+        QCOMPARE(t.dexpAttackTimeMs(), kDexpAttackTimeMsMax);
     }
 
     void dexpReleaseTimeMs_clampBelowMin() {
         TransmitModel t;
         t.setDexpReleaseTimeMs(0.0);
-        QCOMPARE(t.dexpReleaseTimeMs(), TransmitModel::kDexpReleaseTimeMsMin);
+        QCOMPARE(t.dexpReleaseTimeMs(), kDexpReleaseTimeMsMin);
     }
 
     void dexpReleaseTimeMs_clampAboveMax() {
         TransmitModel t;
         t.setDexpReleaseTimeMs(9999.0);
-        QCOMPARE(t.dexpReleaseTimeMs(), TransmitModel::kDexpReleaseTimeMsMax);
+        QCOMPARE(t.dexpReleaseTimeMs(), kDexpReleaseTimeMsMax);
     }
 
     // ── Persistence across instances ──────────────────────────────
@@ -330,25 +351,25 @@ private slots:
     void dexpExpansionRatioDb_clampBelowMin() {
         TransmitModel t;
         t.setDexpExpansionRatioDb(-5.0);
-        QCOMPARE(t.dexpExpansionRatioDb(), TransmitModel::kDexpExpansionRatioDbMin);
+        QCOMPARE(t.dexpExpansionRatioDb(), kDexpExpansionRatioDbMin);
     }
 
     void dexpExpansionRatioDb_clampAboveMax() {
         TransmitModel t;
         t.setDexpExpansionRatioDb(99.0);
-        QCOMPARE(t.dexpExpansionRatioDb(), TransmitModel::kDexpExpansionRatioDbMax);
+        QCOMPARE(t.dexpExpansionRatioDb(), kDexpExpansionRatioDbMax);
     }
 
     void dexpHysteresisRatioDb_clampBelowMin() {
         TransmitModel t;
         t.setDexpHysteresisRatioDb(-1.0);
-        QCOMPARE(t.dexpHysteresisRatioDb(), TransmitModel::kDexpHysteresisRatioDbMin);
+        QCOMPARE(t.dexpHysteresisRatioDb(), kDexpHysteresisRatioDbMin);
     }
 
     void dexpHysteresisRatioDb_clampAboveMax() {
         TransmitModel t;
         t.setDexpHysteresisRatioDb(50.0);
-        QCOMPARE(t.dexpHysteresisRatioDb(), TransmitModel::kDexpHysteresisRatioDbMax);
+        QCOMPARE(t.dexpHysteresisRatioDb(), kDexpHysteresisRatioDbMax);
     }
 
     // ── Persistence across instances ──────────────────────────────
@@ -437,13 +458,13 @@ private slots:
     void dexpLookAheadMs_clampBelowMin() {
         TransmitModel t;
         t.setDexpLookAheadMs(1.0);
-        QCOMPARE(t.dexpLookAheadMs(), TransmitModel::kDexpLookAheadMsMin);
+        QCOMPARE(t.dexpLookAheadMs(), kDexpLookAheadMsMin);
     }
 
     void dexpLookAheadMs_clampAboveMax() {
         TransmitModel t;
         t.setDexpLookAheadMs(5000.0);
-        QCOMPARE(t.dexpLookAheadMs(), TransmitModel::kDexpLookAheadMsMax);
+        QCOMPARE(t.dexpLookAheadMs(), kDexpLookAheadMsMax);
     }
 
     // ── Persistence across instances ──────────────────────────────
@@ -554,25 +575,25 @@ private slots:
     void dexpLowCutHz_clampBelowMin() {
         TransmitModel t;
         t.setDexpLowCutHz(50.0);
-        QCOMPARE(t.dexpLowCutHz(), TransmitModel::kDexpFilterCutHzMin);
+        QCOMPARE(t.dexpLowCutHz(), kDexpFilterCutHzMin);
     }
 
     void dexpLowCutHz_clampAboveMax() {
         TransmitModel t;
         t.setDexpLowCutHz(20000.0);
-        QCOMPARE(t.dexpLowCutHz(), TransmitModel::kDexpFilterCutHzMax);
+        QCOMPARE(t.dexpLowCutHz(), kDexpFilterCutHzMax);
     }
 
     void dexpHighCutHz_clampBelowMin() {
         TransmitModel t;
         t.setDexpHighCutHz(50.0);
-        QCOMPARE(t.dexpHighCutHz(), TransmitModel::kDexpFilterCutHzMin);
+        QCOMPARE(t.dexpHighCutHz(), kDexpFilterCutHzMin);
     }
 
     void dexpHighCutHz_clampAboveMax() {
         TransmitModel t;
         t.setDexpHighCutHz(20000.0);
-        QCOMPARE(t.dexpHighCutHz(), TransmitModel::kDexpFilterCutHzMax);
+        QCOMPARE(t.dexpHighCutHz(), kDexpFilterCutHzMax);
     }
 
     // ── Persistence across instances ──────────────────────────────

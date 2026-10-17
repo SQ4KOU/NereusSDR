@@ -232,6 +232,38 @@ private slots:
         model.injectConnectionForTest(nullptr);
     }
 
+    // ── A row's bypass where the radio's own bypass passes nothing ───────
+    // The Anvelina Pro 3 (codec::alex::receiveBypassSelection, a bench
+    // measurement quoted there): a checked row, and the Alex-2 master
+    // bypass, send the five ordinary band filters. A frequency no row holds
+    // is still 0x20, and without the argument every row is Thetis's 0x20.
+    void rowBypass_takesTheRadiosReceiveBypass()
+    {
+        const quint8 five = receiveBypassSelection(HPSDRModel::ANVELINAPRO3);
+        QCOMPARE(five, quint8(0x10 | 0x08 | 0x04 | 0x01 | 0x02));
+        AlexHpfEdges e = AlexHpfEdges::thetisDefaults();
+        e.bpf1[2].bypass = true;
+        QCOMPARE(computeRxPreselector(7.1, HPSDRHW::OrionMKII, e), kBypass);
+        QCOMPARE(computeRxPreselector(7.1, HPSDRHW::OrionMKII, e, five), five);
+        QCOMPARE(computeRxPreselector(14.2, HPSDRHW::OrionMKII, e, five), quint8(0x01));
+        QCOMPARE(computeRxPreselector(0.9, HPSDRHW::OrionMKII, e, five), kBypass);
+        // The radio that keeps its bypass hands 0x20 in.
+        QCOMPARE(computeRxPreselector(7.1, HPSDRHW::Saturn, e,
+                                      receiveBypassSelection(HPSDRModel::ANAN_G2)),
+                 kBypass);
+
+        // The Alex-2 bank: a row, then the master.
+        e.alex2[3].bypass = true;
+        QCOMPARE(computeAlex2Hpf(14.2, e), kBypass);
+        QCOMPARE(computeAlex2Hpf(14.2, e, five), five);
+        QCOMPARE(computeAlex2Hpf(7.1, e, five), quint8(0x04));
+        QCOMPARE(computeAlex2Hpf(0.9, e, five), kBypass);
+        e.alex2Bypass = true;
+        QCOMPARE(computeAlex2Hpf(7.1, e), kBypass);
+        QCOMPARE(computeAlex2Hpf(7.1, e, five), five);
+        QCOMPARE(computeAlex2Hpf(0.9, e, five), five);
+    }
+
     // ── Protocol 2 (G2), the BPF1 rows ───────────────────────────────────
     void p2_bpf1RowBypassReachesAlex0()
     {

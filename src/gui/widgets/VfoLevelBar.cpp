@@ -14,6 +14,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - JJ's option B: fit small workspace text to the approved
+//                 11 logical-pixel floor. J.J. Boyd (KG4VCF), AI-assisted
+//                 via OpenAI Codex. Classic geometry and colors retained.
 //   2026-04-16 — Ported/adapted in C++20/Qt6 for NereusSDR by
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.
@@ -28,6 +31,8 @@
 
 #include "VfoLevelBar.h"
 #include "VfoStyles.h"
+#include "gui/styles/WorkspacePreview.h"
+#include <QFontMetrics>
 #include <QLinearGradient>
 #include <QPainter>
 #include <algorithm>
@@ -68,6 +73,17 @@ double VfoLevelBar::fillFraction() const {
                                 static_cast<double>(kCeilingDbm));
     return (v - kFloorDbm) / (kCeilingDbm - kFloorDbm);
 }
+QSize VfoLevelBar::sizeHint() const {
+    if (!WorkspacePreview::enabled()) { return {230, 26}; }
+    QFont ticks = font();
+    ticks.setPixelSize(WorkspacePreview::readableTextPixelSize(8));
+    QFont readout = font();
+    readout.setPixelSize(WorkspacePreview::readableTextPixelSize(10));
+    readout.setBold(true);
+    return {230, 4 + QFontMetrics(ticks, this).height() + 2
+                    + std::max(14, QFontMetrics(readout, this).height())};
+}
+QSize VfoLevelBar::minimumSizeHint() const { return {200, sizeHint().height()}; }
 void VfoLevelBar::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, false);
@@ -81,18 +97,27 @@ void VfoLevelBar::paintEvent(QPaintEvent*) {
     // regardless of how Qt resolves the layout's stretch policy
     // after the RADE SNR row was added below.
     constexpr int kTopPad = 4;
-    const int tickH = 8;
+    QFont tickFont = p.font();
+    tickFont.setPixelSize(WorkspacePreview::readableTextPixelSize(8));
+    QFont dbmFont = p.font();
+    dbmFont.setPixelSize(WorkspacePreview::readableTextPixelSize(10));
+    dbmFont.setBold(true);
+    const QFontMetrics tickMetrics(tickFont, this);
+    const QFontMetrics dbmMetrics(dbmFont, this);
+    const int tickH = WorkspacePreview::enabled() ? tickMetrics.height() + 2 : 8;
 
     // ── dBm readout width reservation ──────────────────────────────────
-    static constexpr int kDbmWidth = 52;
-    const int barW = width() - kDbmWidth - 2;
+    const int kDbmWidth = WorkspacePreview::enabled()
+        ? std::max(52, dbmMetrics.horizontalAdvance(QStringLiteral("-130 dBm")) + 2) : 52;
+    const int readoutGap = WorkspacePreview::enabled() ? 4 : 2;
+    const int barW = width() - kDbmWidth - readoutGap;
 
     // ── Tick strip above the bar ───────────────────────────────────────
     // Tick labels for S1, S3, S5, S7, S9, +20, +40
     static constexpr float kTickDbm[]    = {-121, -109, -97, -85, -73, -53, -33};
     static constexpr const char* kTickTxt[] = {"S1","3","5","7","9","+20","+40"};
     p.setPen(kLabelMuted);
-    QFont f = p.font(); f.setPixelSize(8); p.setFont(f);
+    p.setFont(tickFont);
     for (int i = 0; i < 7; ++i) {
         double frac = (kTickDbm[i] - kFloorDbm) / (kCeilingDbm - kFloorDbm);
         int x = static_cast<int>(frac * (barW - 1));
@@ -125,7 +150,7 @@ void VfoLevelBar::paintEvent(QPaintEvent*) {
         p.drawText(labelRect, alignment, QString::fromLatin1(kTickTxt[i]));
     }
     const int barTop = kTopPad + tickH;
-    const QRect barRect(0, barTop, width() - kDbmWidth - 2, height() - barTop);
+    const QRect barRect(0, barTop, barW, height() - barTop);
 
     // ── Bar itself (ported from AetherSDR LevelBar::paintEvent) ────────
     p.fillRect(barRect, QColor(0x10, 0x10, 0x1c));
@@ -151,9 +176,6 @@ void VfoLevelBar::paintEvent(QPaintEvent*) {
     const QRect dbmRect(barRect.right() + 4, barRect.y(),
                         kDbmWidth, barRect.height());
     p.setPen(isAboveS9() ? kMeterGreen : kMeterCyan);
-    QFont dbmFont = p.font();
-    dbmFont.setPixelSize(10);
-    dbmFont.setBold(true);
     p.setFont(dbmFont);
     p.drawText(dbmRect, Qt::AlignVCenter | Qt::AlignLeft, readoutText());
 }

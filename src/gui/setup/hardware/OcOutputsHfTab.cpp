@@ -35,6 +35,17 @@
 //                 Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - The pin matrices are one grid with the P1-P7 headers, each
+//                box as wide as its indicator, so every header sits over its
+//                column; the N2ADR caption shows on an HL2 only. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - D25: the matrix and bottom rows stack when narrow
+//                (SetupFit::FitRow), each matrix shows whole inside the
+//                scrolling tab, the pin-action headers may break after a plus
+//                sign, the N2ADR caption wraps only when the row is narrow,
+//                and leftover height goes to the bottom of the tab instead of
+//                a blank band above the TX Pin Action header row. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -76,8 +87,10 @@
 //============================================================================================//
 
 #include "OcOutputsHfTab.h"
+#include "IndicatorColumn.h"
 #include "HardwareTransmitGate.h"
 #include "gui/UnbuiltFeatures.h"
+#include "gui/setup/SetupFit.h"
 
 #include "core/AppSettings.h"
 #include "core/OcMatrix.h"
@@ -89,6 +102,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFrame>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -161,12 +175,24 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
         auto* n2adrHint = new QLabel(
             tr("N2ADR Filter (HL2): Hardware → HL2 I/O Board"),
             this);
+        // The pointer names an HL2 tab, so it shows on an HL2 only
+        // (setN2adrHintVisible, from HardwarePage). mi0bot shows its N2ADR
+        // Filter control on this tab for the HL2 alone (setup.cs:20191-20238
+        // [v2.10.3.13-beta2]); Thetis keeps it hidden (setup.designer.cs:16828
+        // [v2.10.3.15]).
+        n2adrHint->setObjectName(QStringLiteral("ocN2adrHint"));
+        // D25: the pointer wraps rather than widening the tab, and takes
+        // the row's spare width (below) so it wraps only when the row is
+        // narrow.
+        n2adrHint->setWordWrap(true);
+        n2adrHint->hide();
+        m_n2adrHint = n2adrHint;
         n2adrHint->setStyleSheet(QStringLiteral(
             "QLabel { color: #888; font-style: italic; font-size: 10px; }"));
         n2adrHint->setToolTip(tr(
             "On Hermes Lite 2, N2ADR filter board control is configured "
             "on the HL2 I/O Board tab."));
-        row->addWidget(n2adrHint);
+        row->addWidget(n2adrHint, 1);
 
         m_allowHotSwitching = new QCheckBox(tr("Allow hot switching"), this);
         m_allowHotSwitching->setToolTip(tr("Allow OC output lines to switch while transmitting"));
@@ -193,7 +219,10 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
     // ── Row 2: RX/TX matrix side by side ────────────────────────────────────
     // Source: Thetis setup.designer.cs chkPenOCrcv* + chkPenOCxmit* [@501e3f5]
     {
-        auto* matrixRow = new QHBoxLayout();
+        // D25: the two matrices stack, RX first, when the tab is narrower
+        // than the two side by side.
+        auto* matrixRow = new SetupFit::FitRow();
+        matrixRow->setObjectName(QStringLiteral("ocMatrixRow"));
 
         auto* rxGroup = new QGroupBox(tr("RX OC Pins per Band"), this);
         rxGroup->setStyleSheet(QStringLiteral(
@@ -215,7 +244,9 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
 
     // ── Row 3: Pin actions + USB BCD + Ext PA + Live OC state ───────────────
     {
-        auto* bottomRow = new QHBoxLayout();
+        // D25: the groups stack in reading order when they do not fit.
+        auto* bottomRow = new SetupFit::FitRow();
+        bottomRow->setObjectName(QStringLiteral("ocBottomRow"));
 
         // ── TX Pin Action mapping ────────────────────────────────────────────
         // Source: Thetis setup.designer.cs grpTransmitPinActionHF [@501e3f5]
@@ -232,7 +263,12 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
                 auto* hdrRow = new QHBoxLayout();
                 hdrRow->addWidget(new QLabel(tr("Pin"), actionGroup), 1);
                 for (int a = 0; a < kActionCount; ++a) {
-                    auto* lbl = new QLabel(QString::fromUtf8(kActionLabels[a]), actionGroup);
+                    // D25: the header may break after a "+" (a zero-width
+                    // space), so the group fits a narrow window.
+                    auto* lbl = new QLabel(QString::fromUtf8(kActionLabels[a])
+                                               .replace(QLatin1Char('+'),
+                                                        QStringLiteral("+\u200B")),
+                                           actionGroup);
                     lbl->setAlignment(Qt::AlignCenter);
                     lbl->setWordWrap(true);
                     hdrRow->addWidget(lbl, 2);
@@ -412,6 +448,10 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
         outerLayout->addLayout(bottomRow);
     }
 
+    // D25: the groups keep their own height; what is left of the tab goes
+    // below them (it was spread into the TX Pin Action header row).
+    outerLayout->addStretch(1);
+
     // ── Wire master toggles → AppSettings ────────────────────────────────────
     // Issue #174: removed n2adrFilter writer — see Row 1 cleanup notes.
     // R-R3-21: the checkbox mirrors PennyLaneController, which saves under
@@ -468,6 +508,13 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
     onLiveStateChanged();
 }
 
+void OcOutputsHfTab::setN2adrHintVisible(bool visible)
+{
+    if (m_n2adrHint != nullptr) {
+        m_n2adrHint->setVisible(visible);
+    }
+}
+
 // ── buildMatrixGrid ───────────────────────────────────────────────────────────
 
 void OcOutputsHfTab::buildMatrixGrid(QGroupBox* group, bool tx)
@@ -477,45 +524,49 @@ void OcOutputsHfTab::buildMatrixGrid(QGroupBox* group, bool tx)
     scroll->setFrameShape(QFrame::NoFrame);
 
     auto* inner = new QWidget();
-    auto* grid = new QVBoxLayout(inner);
-    grid->setSpacing(1);
+    // One grid for the header and the band rows, so each P1-P7 header sits
+    // centred over its column of check boxes (the header used to be its own
+    // row of fixed-width labels spread by the layout while the boxes packed
+    // at the left).
+    auto* grid = new QGridLayout(inner);
+    grid->setHorizontalSpacing(0);
+    grid->setVerticalSpacing(1);
     grid->setContentsMargins(2, 2, 2, 2);
+    grid->setColumnMinimumWidth(0, 52);
+    for (int pin = 0; pin < kPinCount; ++pin) {
+        grid->setColumnMinimumWidth(pin + 1, 28);
+    }
+    grid->setColumnStretch(kPinCount + 1, 1);
 
     // Column header row: "Band" + "P1" … "P7"
     {
-        auto* hdrRow = new QHBoxLayout();
         auto* bandHdr = new QLabel(tr("Band"), inner);
         bandHdr->setFixedWidth(52);
-        hdrRow->addWidget(bandHdr);
+        grid->addWidget(bandHdr, 0, 0);
         for (int pin = 0; pin < kPinCount; ++pin) {
             auto* lbl = new QLabel(tr("P%1").arg(pin + 1), inner);
             lbl->setAlignment(Qt::AlignCenter);
-            lbl->setFixedWidth(28);
-            hdrRow->addWidget(lbl);
+            grid->addWidget(lbl, 0, pin + 1, Qt::AlignHCenter);
         }
-        grid->addLayout(hdrRow);
     }
 
     // One row per band
     auto& dest = tx ? m_txPins : m_rxPins;
 
+    int gridRow = 1;
     for (const Band band : kRowOrder) {
         const int bi = perBandStateSlot(band);
         bool grey = bandIsGrey(band);
-
-        auto* bandRow = new QHBoxLayout();
-        bandRow->setSpacing(0);
 
         auto* bandLbl = new QLabel(bandLabel(band), inner);
         bandLbl->setFixedWidth(52);
         if (grey) {
             bandLbl->setEnabled(false);
         }
-        bandRow->addWidget(bandLbl);
+        grid->addWidget(bandLbl, gridRow, 0);
 
         for (int pin = 0; pin < kPinCount; ++pin) {
             auto* cb = new QCheckBox(inner);
-            cb->setFixedWidth(28);
             cb->setEnabled(!grey);
             cb->setToolTip(tr("%1 OC pin %2, band %3")
                                .arg(tx ? tr("TX") : tr("RX"))
@@ -532,15 +583,16 @@ void OcOutputsHfTab::buildMatrixGrid(QGroupBox* group, bool tx)
                         }
                     });
 
-            bandRow->addWidget(cb);
+            IndicatorColumn::fitToIndicator(cb);
+            grid->addWidget(cb, gridRow, pin + 1, Qt::AlignHCenter);
         }
-
-        bandRow->addStretch();
-        grid->addLayout(bandRow);
+        ++gridRow;
     }
 
-    grid->addStretch();
+    grid->setRowStretch(gridRow, 1);
     scroll->setWidget(inner);
+    // D25: the tab scrolls, so the matrix shows whole inside its group.
+    SetupFit::showWhole(scroll);
 
     auto* groupLayout = new QVBoxLayout(group);
     groupLayout->addWidget(scroll);

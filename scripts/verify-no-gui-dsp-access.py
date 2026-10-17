@@ -111,13 +111,12 @@ LOCAL_AUDIO_PATTERN = re.compile(r"\blocalAudioDevices\s*\(")
 LOCAL_AUDIO_DEFINITION = "src/models/RadioModel.h"
 # Repo-relative path -> number of localAudioDevices() CALLS in it.
 LOCAL_AUDIO_ALLOWLIST = {
-    # wrapWithAudioBackendStrip(): the backend strip (backend name, Rescan,
-    # Open logs) above every Setup > Audio page.
-    "src/gui/SetupDialog.cpp": 1,
-    # Setup > Audio > Devices: Speakers, Headphones and Microphone cards.
-    "src/gui/setup/AudioDevicesPage.cpp": 1,
-    # Setup > Audio > TX Input: PC microphone device, backend, buffer and
-    # Test Mic.
+    # Setup > Audio > Outputs (R-SPK-21): this computer's speakers, PC
+    # volume and mute, headphones, the Sound system line and Rescan
+    # devices. Its Radio speaker controls go through RadioModel.
+    "src/gui/setup/AudioOutputsPage.cpp": 1,
+    # Setup > Audio > Microphone (R-SPK-21): the PC microphone card, Test
+    # Mic and the capture status with Retry.
     "src/gui/setup/AudioTxInputPage.cpp": 1,
     # Setup > Audio > VAX: this computer's VAX outputs, which a remote
     # window feeds from the Core's receiver streams (R-R3-44).
@@ -132,14 +131,20 @@ LOCAL_AUDIO_ALLOWLIST = {
     # container VAX 1 / VAX 2 buttons, which open and close this computer's
     # VAX outputs as Setup > Audio > VAX does (R-R3-49); and the VAX
     # first-run check's Apply, which binds this computer's VAX outputs to
-    # its new virtual cables in a remote window too (R-R3-44, parity Task 11);
+    # its new virtual cables in a remote window too (R-R3-44, parity Task 11),
+    # and the check itself, whose cable lists and Rescan now follow this
+    # computer's device catalogue (R-AUD-03, R-AUD-06);
     # and this computer's MON output choice, which a remote window sends the
     # Core as the transmit monitor's route (R-IOS-13, parity Task 32).
-    "src/gui/MainWindow.cpp": 6,
+    "src/gui/MainWindow.cpp": 7,
     # The TX applet's MON output pair (Speakers / Phones): this computer's
     # monitor routing, a window-scope setting, live in a remote window as
     # in a local one (R-R3-49, parity Task 2).
     "src/gui/applets/TxApplet.cpp": 1,
+    # A remote window's rigctld (2026-10-15): while it keys, it reads what
+    # programs play into this computer's VAX TX device and sends it as the
+    # key's program audio; on the key it drops what was played before.
+    "src/gui/RemoteRigctlServer.cpp": 2,
     # The Core's catalogue: whether the station computer publishes VAX
     # devices (AudioEngine::vaxOutputsAllowed), read only, so the VAX Audio
     # tool is offered only where it can open (iPhone app plan Task 25, D41).

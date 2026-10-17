@@ -1,0 +1,128 @@
+# Longpath Provenance: NereusSDR derived-file inventory
+
+This document lists every NereusSDR source file derived from, translated
+from, or materially based on Longpath (oe5sos/Longpath). Per-file license
+headers live in the source files themselves; this index is the grep-able
+summary.
+
+NereusSDR is distributed under GPLv3 (root `LICENSE`). Longpath is a fork of
+NereusSDR and is GPLv3 at project level, so the two are compatible. See the
+License section below.
+
+## Upstream
+
+| Field | Value |
+|---|---|
+| Project | Longpath |
+| Repository | https://github.com/oe5sos/Longpath |
+| Revision | 551576e30c42731c6d51ce005c5f23ec38be391c (v0.6.7-1) |
+| Lineage | a fork of NereusSDR, renamed; rotor work since 2026-08-07 |
+| Primary author | Martin Fischer (OE5SOS) |
+| Local reference clone | `../Longpath/`, pinned at `551576e`. Never pulled mid-task; re-pinning is deliberate and re-verifies every cite. |
+| Language | C++20 / Qt6 |
+| License | GPLv3 at project level (the project's LICENSE file) |
+
+Longpath grew out of NereusSDR. Some Longpath files carry
+a Longpath banner with AetherSDR attribution (for example
+`src/gui/StyleConstants.h`); NereusSDR copies those banners byte-for-byte.
+Where an upstream file has no top-of-file copyright or GPL header, the
+NereusSDR header says so and the project-level LICENSE applies.
+
+## License
+
+Longpath ships the GNU General Public License version 3 as its root
+`LICENSE`, with NereusSDR's `LICENSE-NOTICE` and the Samphire
+`LICENSE-DUAL-LICENSING` statement carried over from NereusSDR. The rotor
+files ported so far are Longpath-original (no Thetis code, no Samphire
+contribution) and carry no per-file GPL header; the project-level `LICENSE`
+applies, and each NereusSDR file says so in its port-citation block.
+NereusSDR is also GPLv3, so no compatibility note is needed.
+
+## When entries get added
+
+A row is added to the table below, in the **same commit** that introduces
+the ported logic, whenever a NereusSDR file ports, translates, or materially
+re-expresses logic or values from a Longpath source file. The procedure is
+the one in `HOW-TO-PORT.md`:
+
+- Copy the Longpath file's header block (its `// ===` banner,
+  "Longpath-original" note and "Modification history (Longpath)" block, or
+  the leading comment block where a file has no banner) byte for byte under
+  `// --- From <file> ---`, together with a NereusSDR port-citation block
+  and a "Modification history (NereusSDR)" block. The workspace preview
+  files put the Longpath banner first; the rotor files put the NereusSDR
+  block first.
+- Add a `// From Longpath <path>:<line> [@<sha>]` inline cite at every
+  ported function, type and constant.
+- Keep every inline comment inside ported logic verbatim, German ones
+  included.
+- User-facing strings are reworded in plain English operator words, with no
+  dashes and no cites; NereusSDR's palette replaces Longpath's.
+
+## Legend
+
+Derivation type:
+- `port` or `Port`: direct reimplementation in NereusSDR of a Longpath source file
+- `Port (values)`, `Port (table)`, `Port (helper)`, `Port (helpers)`,
+  `Port (fills)`, `Port (structure)`: a port of only the named part of the
+  Longpath source; the Notes column says which part
+- `reference`  : consulted for behavior during independent implementation
+- `structural` : architectural template with substantive behavioral echo
+
+## Files
+
+| NereusSDR file | Longpath source | Line ranges | Type | Notes |
+|---|---|---|---|---|
+| src/gui/styles/WorkspacePalette.h | src/gui/StyleConstants.h; src/gui/styles/ThemeQss.cpp | StyleConstants.h 90-1110; ThemeQss.cpp 36-153 | Port (values) | Glass and Depth palette values as named constants and roles; role names from ThemeQss.cpp. Workspace preview only. |
+| src/gui/styles/WorkspacePalette.cpp | src/gui/styles/ThemeQss.cpp; src/gui/StyleConstants.h | ThemeQss.cpp 36-153 | Port (table) | Role table and the legacy-colour table. Differs from upstream: no blanket #203040 row, no inset row, no identity, instrument or txfilter rows, no current-value rows. |
+| src/gui/styles/WorkspaceStyle.h | src/gui/StyleConstants.h; src/gui/styles/ThemeQss.cpp | StyleConstants.h 70-1401; ThemeQss.cpp 284-288 | Port (values) | Font ladder, caps tracking, mono families, scroll bar stylesheet. |
+| src/gui/styles/WorkspaceStyle.cpp | src/gui/StyleConstants.h; src/gui/styles/ThemeQss.cpp | StyleConstants.h 544-1401; ThemeQss.cpp 284-288 | Port (helpers) | capsFont, monoFont, paintInsetTop, paintGlassChip, shiftL, glassPanelFill, titleBarStyle; scrollBarStyle(): kScrollBarStyle (StyleConstants.h 1273-1283) at the platform bar thickness. |
+| src/gui/styles/WorkspaceComponents.h | src/gui/StyleConstants.h | StyleConstants.h 705-1283 | Port (values) | Raised, pressed, glass-selected and sunken fills and edges for the component treatment; raisedFillOf(): the three-stop raisedFill (705-718); indicatorRules(): kCheckBoxStyle and kRadioButtonStyle hover, checked and radius rules (1135-1158); tableRules(): the table grid and header hairline colours of tableStyle() (StyleConstants.h 956-993). Workspace preview only. |
+| src/gui/styles/WorkspaceComponents.cpp | src/gui/StyleConstants.h | StyleConstants.h 705-1283 | Port (fills) | Fill and edge values, and sliderHStyle, sliderVStyle and kSliderStyle as they are, geometry included (897-943, 1230-1239); the check box and radio rules (1097-1158); the roles of greenCheckedStyle, amberCheckedStyle and dspToggleStyle (799-895) in a raised form that is JJ's choice. Longpath padding and font sizes are not ported; the radius is its 7 px on a 26 px field scaled to the control height (kComboStyle, 1117). componentize() itself is NereusSDR-original. tableRules() ports tableStyle()'s grid (kBorderSubtle) and title hairline (kBorder) colours; the header fill and section edges are NereusSDR's. |
+| src/gui/containers/WorkspaceHeader.h | src/gui/applets/GridCellWidget.cpp | GridCellWidget.cpp 1-10 (banner) | Port (structure) | The group header's row (stripe, grab handle, title, buttons) follows GridCellWidget's title bar. The source chip, lock glyph, entry header and dot corner are NereusSDR-original. Workspace preview only. |
+| src/gui/containers/WorkspaceHeader.cpp | src/gui/applets/GridCellWidget.cpp | GridCellWidget.cpp 59-155 | Port (values) | Header stylesheet and top radius, margins and spacing, 3 px stripe, ⋮⋮ grip at 11 px, 16x14 buttons and their stylesheet. Height 18 (Longpath 22), the entry header and the chip are the workspace review's proposal. |
+| src/gui/containers/EdgeDockStrip.h | src/gui/applets/AppletGrid.cpp; src/gui/StyleConstants.h; src/gui/WindowPlacement.h | AppletGrid.cpp 24; StyleConstants.h 750; WindowPlacement.h 58 | Port (values) | 6 px strip padding and gap from kCellGap, 6 px handle from kSplitterHandlePx, 8 px alignment grid from kSnapGridPx. Longpath has no four-edge docking: the strips, the edge area and the drop preview are NereusSDR-original. Workspace preview only. |
+| src/gui/containers/EdgeDockStrip.cpp | src/gui/WindowPlacement.cpp | WindowPlacement.cpp 140-147 | Port (helper) | workspaceSnappedTopLeft() follows snappedTopLeft(). Differs from upstream: Alt bypasses the grid (Longpath uses Ctrl; NereusSDR already uses Ctrl to round to 10), and the grid is off by default. |
+| src/gui/instruments/FrequencyInstrument.h | src/gui/instruments/FrequencyInstrument.h | FrequencyInstrument.h 1-208 | Port | Namespace Longpath becomes NereusSDR. Frequency readout with per-digit wheel tuning and three forms. Workspace preview only. |
+| src/gui/instruments/FrequencyInstrument.cpp | src/gui/instruments/FrequencyInstrument.h; src/gui/instruments/FrequencyInstrument.cpp | FrequencyInstrument.h 1-208; FrequencyInstrument.cpp 1-763 | Port | Namespace Longpath becomes NereusSDR. LP_MONO_QSS becomes Workspace::kMonoQssFamilies through .arg(). Style:: resolves through InstrumentStyle.h. |
+| src/gui/instruments/NeedleInstrument.h | src/gui/instruments/NeedleInstrument.h | NeedleInstrument.h 1-181 | Port | Namespace Longpath becomes NereusSDR. Needle meter. |
+| src/gui/instruments/NeedleInstrument.cpp | src/gui/instruments/NeedleInstrument.h; src/gui/instruments/NeedleInstrument.cpp | NeedleInstrument.h 1-181; NeedleInstrument.cpp 1-450 | Port | Namespace Longpath becomes NereusSDR. Three constants unused upstream carry [[maybe_unused]]. |
+| src/gui/instruments/BarInstrument.h | src/gui/instruments/BarInstrument.h | BarInstrument.h 1-174 | Port | Namespace Longpath becomes NereusSDR. Bar meter. |
+| src/gui/instruments/BarInstrument.cpp | src/gui/instruments/BarInstrument.h; src/gui/instruments/BarInstrument.cpp | BarInstrument.h 1-174; BarInstrument.cpp 1-381 | Port | Namespace Longpath becomes NereusSDR. |
+| src/gui/instruments/InstrumentFooter.h | src/gui/instruments/InstrumentFooter.h | InstrumentFooter.h 1-65 | Port | Namespace Longpath becomes NereusSDR. Reading footer under the instruments. |
+| src/gui/instruments/InstrumentFooter.cpp | src/gui/instruments/InstrumentFooter.h; src/gui/instruments/InstrumentFooter.cpp | InstrumentFooter.h 1-65; InstrumentFooter.cpp 1-97 | Port | Namespace Longpath becomes NereusSDR. |
+| src/gui/instruments/InstrumentPainter.h | src/gui/instruments/InstrumentPainter.h | InstrumentPainter.h 1-172 | Port | Namespace Longpath becomes NereusSDR. Trough, fade, glow and needle painting shared by the instruments. |
+| src/gui/instruments/InstrumentPainter.cpp | src/gui/instruments/InstrumentPainter.h; src/gui/instruments/InstrumentPainter.cpp | InstrumentPainter.h 1-172; InstrumentPainter.cpp 1-473 | Port | Namespace Longpath becomes NereusSDR. Style::role resolves to Workspace::role. |
+| src/gui/instruments/InstrumentSpine.h | src/gui/instruments/InstrumentSpine.h | InstrumentSpine.h 1-239 | Port | Namespace Longpath becomes NereusSDR. Arc and linear geometry. |
+| src/gui/instruments/InstrumentSpine.cpp | src/gui/instruments/InstrumentSpine.h; src/gui/instruments/InstrumentSpine.cpp | InstrumentSpine.h 1-239; InstrumentSpine.cpp 1-249 | Port | Namespace Longpath becomes NereusSDR. |
+| src/gui/instruments/ReadingSource.h | src/gui/instruments/ReadingSource.h | ReadingSource.h 1-185 | Port | Namespace Longpath becomes NereusSDR. Reading descriptors and scales. Adds ReadingDescriptor::available (NereusSDR). |
+| src/gui/instruments/ReadingSource.cpp | src/gui/instruments/ReadingSource.h; src/gui/instruments/ReadingSource.cpp | ReadingSource.h 1-185; ReadingSource.cpp 1-388 | Port | Namespace Longpath becomes NereusSDR. NoiseFloor (9) and RadeSnr (10) are local ids, marked unavailable: no NereusSDR producer. MeterBinding is unchanged. TX: ALC gains a scale from Thetis MeterManager.cs (NereusSDR addition, see THETIS-PROVENANCE). |
+| src/gui/instruments/PeakHold.h | src/gui/instruments/PeakHold.h | PeakHold.h 1-103 | Port | Namespace Longpath becomes NereusSDR. Peak hold. |
+| src/gui/widgets/BandwidthFilterPane.h | src/gui/widgets/BandwidthFilterPane.h | BandwidthFilterPane.h 1-172 | Port | Namespace Longpath becomes NereusSDR. Filter passband pane. |
+| src/gui/widgets/BandwidthFilterPane.cpp | src/gui/widgets/BandwidthFilterPane.h; src/gui/widgets/BandwidthFilterPane.cpp | BandwidthFilterPane.h 1-172; BandwidthFilterPane.cpp 1-755 | Port | Namespace Longpath becomes NereusSDR. |
+| src/core/antenna/AmateurBands.h | src/core/antenna/AmateurBands.h | AmateurBands.h 1-89 | Port | Namespace Longpath becomes NereusSDR. IARU band plan table (Qt only). Namespace Longpath::AmateurBands becomes NereusSDR::AmateurBands. |
+| src/core/antenna/AmateurBands.cpp | src/core/antenna/AmateurBands.h; src/core/antenna/AmateurBands.cpp | AmateurBands.h 1-89; AmateurBands.cpp 1-163 | Port | Namespace Longpath becomes NereusSDR. |
+| src/gui/instruments/LongpathContent.cpp | src/gui/applets/BandwidthFilterApplet.cpp | BandwidthFilterApplet.cpp 779-837 | Port (values) | Passband trace refresh interval (50 ms) and density (one point per 12 device pixels, 64 to 400). The registry factories, the slice and MeterPoller bindings and the trace accessor over SpectrumWidget::renderedPixels() are NereusSDR-original. Workspace preview only. |
+| src/gui/widgets/PillStyle.h | src/gui/widgets/CommandBar.h | CommandBar.h 3-58 (banner), 167-183 | Port (values) | CommandBar::pillStyle(), kPillHeight (27) and kPillRadius (6) only, as namespace PillStyle. CommandBar itself is not ported. Workspace preview only. |
+| src/gui/widgets/PillStyle.cpp | src/gui/widgets/CommandBar.h; src/gui/widgets/CommandBar.cpp | CommandBar.h 3-58 (banner); CommandBar.cpp 1-17 (banner), 59-98 | Port | pillStyle() verbatim. Style:: resolves through InstrumentStyle.h. |
+| src/gui/widgets/ProfileRail.h | src/gui/widgets/ProfileRail.h | ProfileRail.h 3-44 (banner), 46-198 | Port | Namespace Longpath becomes NereusSDR. Reads WorkspaceProfiles (ids) instead of LayoutProfiles (names); adds manageRequested(), badgeButton(), plusButton() and setPlacementToggleOffered(). Workspace preview only. |
+| src/gui/widgets/ProfileRail.cpp | src/gui/widgets/ProfileRail.h; src/gui/widgets/ProfileRail.cpp | ProfileRail.h 3-44 (banner); ProfileRail.cpp 1-421 | Port | User strings in English, comments verbatim. ScopedChildWidget replaced by a window-parented QPointer menu. Context menu gains Manage Profiles; the move-the-rail item can be left out. |
+| tests/visual/LongpathControlStyles.h | src/gui/StyleConstants.h; src/gui/styles/AppTheme.h; src/gui/styles/PopupMenuStyle.h; src/gui/styles/ThemeQss.cpp | StyleConstants.h 1-25 (banner), 705-732, 766-824, 897-943, 1075-1082, 1087-1158, 1160-1224, 1230-1269; AppTheme.h 1-20 (banner), 36-164; PopupMenuStyle.h 1-15 (banner), 21-37; ThemeQss.cpp 290-307 | Port | Visual preview tool only (the controls-sheet scene), never linked into the app. Longpath's control stylesheets verbatim with German comments kept: sliderHStyle, sliderVStyle, kComboStyle, kCheckBoxStyle, kRadioButtonStyle, formFieldStyle, kSliderStyle, kButtonStyle, kTabStyle, kGroupBoxStyle, the button bases, kPopupMenu, applyDarkPalette and applyAppBaselineQss. Namespace NereusSDR::Preview::LongpathLook. kScrollBarStyle (StyleConstants.h 1271-1283) and shiftL() are the existing Workspace:: ports; hexRole is the identity, formInt returns its fallback and themed() is QssTranslator. |
+| tests/tst_bandwidth_filter_pane_paint.cpp | src/gui/widgets/BandwidthFilterPane.h; src/gui/widgets/BandwidthFilterPane.cpp | BandwidthFilterPane.h 1-51 (banner); BandwidthFilterPane.cpp 1-11 (banner), 32-76, 109-174, 205-218, 227-246, 279-679 | Port | Test only, never linked into the app. ReferencePane is a line-for-line copy of the pane's drawing (the label helpers, setTrace, plotRect, hzToX, zoneAt, paintEvent) as it stood in src/gui/widgets/BandwidthFilterPane.cpp at 1a660005c, comments verbatim, kept so that every frame the pane paints after its cost work can be compared with it pixel for pixel. The lap() lines marked "test:" are added for pass timing. Date: 2026-10-11. |
+| `src/core/RotorHeading.h` | `src/core/RotorPeilung.h` | 1-52 (`kHoechstens`, `lies()`) | `port` | Strict heading checks: empty, not-a-number, infinite, below 0 and above 360 refused, never wrapped; 360 is north and is sent as 0. `lies()` becomes `parse()`; `accept()` applies the same checks to a number. German comments kept verbatim. Rotor control plan, Task 3a. Date: 2026-10-08. |
+| `src/core/RotorRoute.h` | `src/core/BeamHeading.h` | 1-91 (`Stop`, `Move`, `plan()`, `wrap360()`) | `port` | `Stop` becomes `EndStop` (the wire's `endStop` enum); `Move` gains `routeKnown` and `targetSpanDeg`. Extended to rotors with overlap (span from the counter-clockwise stop, up to 450 degrees, nearer of two span positions) and `SpanTracker`, NereusSDR's own, which follows modulo-360 replies by continuity. `greatCircle()`, `longPath()` and `advice()` not taken. Rotor control plan, Task 3a. Date: 2026-10-08. |
+| `src/core/RotorRoute.cpp` | `src/core/BeamHeading.cpp` | 1-89 (`wrap360()`, `plan()`) | `port` | `plan()` split into `planFree` (no stop, shorter way) and `planOnSpan` (from the rotor's span position, overlap aware); the "long way round" note kept above 270 degrees of travel, reworded. Rotor control plan, Task 3a. Date: 2026-10-08. |
+| `src/core/RotorModels.h` | `src/core/RotorModels.h` | 1-117 (`RotorModel`, `commonRotorModels()`, `commonRotorBauds()`) | `port` | The curated Hamlib model list and baud rates. Every model number checked again against Hamlib master `include/hamlib/rotlist.h` (`@50fc454`, read 2026-10-08), cited per entry; names and notes reworded in plain English. Rotor control plan, Task 3a. Date: 2026-10-08. |
+| `src/core/RotctldProcess.h` | `src/core/RotctldProcess.h` | 1-141 (`RotctldProcess`) | `port` | Starts Hamlib's rotctld on the loopback for driver 4: finds the binary (PATH, Homebrew, MacPorts, and for NereusSDR the Linux places the Core on a Rock 5C uses and Homebrew on Linux), the `-m -r -s -T 127.0.0.1 -t` arguments, a free port when the preferred one is held, restart, stop on exit (also on application quit). `grundAus()` becomes `reasonFromStderr()`; a test override for the binary; the missing-binary reason is the remote rotor control document's. German comments kept verbatim. Rotor control plan, Task 3b. Date: 2026-10-08. |
+| `src/core/RotctldProcess.cpp` | `src/core/RotctldProcess.cpp` | 1-254 (`findBinary()`, `arguments()`, `grundAus()`, `start()`, `restart()`, `stop()`) | `port` | As the header; error text reworded in plain operator words without dashes. Rotor control plan, Task 3b. Date: 2026-10-08. |
+| `src/core/RotorConnection.h` | `src/core/RotctldClient.cpp` | 26-30 (`kArrivedDeg`) | `reference` | `kArrivedDeg` 1.5, the arrival tolerance the design takes from Longpath, cited where declared; the rest of the header is NereusSDR-native. Rotor control plan, Task 3b. Date: 2026-10-08. |
+| `src/core/RotorConnection.cpp` | `src/core/RotctldClient.cpp` | 191-225, 266-286 (`moveCommand()`, `moveTo()`, `parsePosition()`), 69-90 (reply watchdog) | `reference` | NereusSDR-native rotor link (GS-232A/B over serial, rotctld over TCP, protocol facts from Hamlib). Consulted for the `P` number format (two decimals, C locale), sending the last read elevation with an azimuth set, "an RPRT line is never a position", the one-command-at-a-time poll and the reply watchdog; `kArrivedDeg` (line 30) is cited where used. Rotor control plan, Task 3b. Date: 2026-10-08. |
+| `tests/tst_rotctld_process.cpp` | `tests/tst_rotctld_process.cpp` | 1-9, 30-72, 130-178 | `port` | The command-line and stderr-reason cases, comments verbatim (German kept); the model-list cases not taken (`tst_rotor_route` covers `RotorModels.h`). NereusSDR adds binary lookup and start, stop, restart and held-port cases against a stand-in script. Rotor control plan, Task 3b. Date: 2026-10-08. |
+| `src/gui/widgets/RotorDialWidget.h` | `src/gui/widgets/RotorDialWidget.h` | 34-55, 84, 101-117, 188-198, 235-236, 249 (`State`, `Shape`, the tape span, the beam width, the shared geometry note) | `port` | The dial reads the Core's rotor object instead of being told each value; drag aims and letting go sends one turn (the desktop touch rule); Longpath's click-to-aim and double-click-to-turn, the simulated needle, the transparent image and the landscape layout not taken. Tape span 200 degrees as the rotor mockup draws it. German comments kept verbatim. Rotor control plan, Task 6. Date: 2026-10-08. |
+| `src/gui/widgets/RotorDialWidget.cpp` | `src/gui/widgets/RotorDialWidget.cpp` | 36-81 (palette), 119-181 (shape, menu, sizes, bearing), 373-386 (`bearingAt`), 438-606 (`setShape`, `paintTape`, `bearingAtTape`), 624-951 (`paintFace`) | `port` | The face geometry: rings, three-step ticks, degree labels and cardinals on one ring, travel pie (the Core's predicted route, none while it is unknown), beam wedge, tapered needle with counterweight and halo, dashed target with halo, rim triangle, gradient hub, lamp. NereusSDR adds the end stop on the rim, the elevation quarter gauge on az/el rotors, a muted stale needle and no needle when the heading is unknown; the readout lives in the Rotor applet. Mockup colours replace Longpath's palette; menu words in English. Rotor control plan, Task 6. Date: 2026-10-08. |
+
+NereusSDR-original files that use the palette but port nothing
+(QssTranslator, WorkspacePreview, InstrumentStyle.h, LongpathContent.h,
+WorkspaceProfiles, WorkspaceProfilesDialog, ProfileRailDock and the
+call-site branches) carry a
+`no-port-check:` marker and are not listed.

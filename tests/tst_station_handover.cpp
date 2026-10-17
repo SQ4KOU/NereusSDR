@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLocalSocket>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QScopeGuard>
@@ -91,6 +92,22 @@ bool restoreSettingsFile(const QString& settingsPath)
         && QFile::rename(preservedSettingsPath(settingsPath), settingsPath);
 }
 
+// Whether the control socket is listening. On Unix it is a file, so its
+// path appears and goes. Windows uses a named pipe with no file on disk, so
+// try to connect to it instead.
+bool controlSocketPresent(const QString& socketPath)
+{
+#ifdef Q_OS_WIN
+    QLocalSocket probe;
+    probe.connectToServer(socketPath);
+    const bool connected = probe.waitForConnected(100);
+    probe.abort();
+    return connected;
+#else
+    return QFileInfo::exists(socketPath);
+#endif
+}
+
 QByteArray fileBytes(const QString& path)
 {
     QFile file(path);
@@ -124,10 +141,16 @@ private slots:
         QVERIFY(!competitor.acquire(0, &error));
         QVERIFY(!error.isEmpty());
         QFile oldLock(competitor.lockPath());
+#ifdef Q_OS_WIN
+        // QLockFile on Windows opens its file with no sharing, so a live
+        // owner's lock cannot be opened, let alone aged, by anyone else.
+        QVERIFY(!oldLock.open(QIODevice::ReadWrite));
+#else
         QVERIFY(oldLock.open(QIODevice::ReadWrite));
         QVERIFY(oldLock.setFileTime(QDateTime::currentDateTime().addSecs(-60),
                                    QFileDevice::FileModificationTime));
         oldLock.close();
+#endif
         QVERIFY(!competitor.acquire(0, &error));
 
         const QString otherProfile = profileName();
@@ -186,7 +209,7 @@ private slots:
         });
         QVERIFY(daemon.waitForStarted());
         const bool ready = QTest::qWaitFor([&] {
-            return QFileInfo::exists(socketPath);
+            return controlSocketPresent(socketPath);
         }, 15000);
         QVERIFY2(ready, qPrintable(QStringLiteral("socket %1, daemon state %2, output: %3")
             .arg(socketPath).arg(int(daemon.state()))
@@ -202,7 +225,7 @@ private slots:
         QCOMPARE(command.exitCode(), 0);
         QVERIFY(command.readAllStandardOutput().contains("The Core handed back the radio."));
         QVERIFY(profileLock.acquire(1000));
-        QCOMPARE(QFileInfo::exists(socketPath), false);
+        QCOMPARE(controlSocketPresent(socketPath), false);
         // The old listener's later destructor cannot unlink this new
         // owner's socket path after the lock has transferred.
         StationControlSocket successor([](const QStringList&) {
@@ -211,7 +234,7 @@ private slots:
         QVERIFY(successor.listen(socketPath));
         QVERIFY(daemon.waitForFinished(5000));
         QCOMPARE(daemon.exitCode(), 0);
-        QVERIFY(QFileInfo::exists(socketPath));
+        QVERIFY(controlSocketPresent(socketPath));
         successor.close();
         profileLock.release();
     }
@@ -241,7 +264,7 @@ private slots:
             QDir(AppSettings::resolveConfigDir(profile)).removeRecursively();
         });
         QVERIFY(daemon.waitForStarted());
-        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(socketPath), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(controlSocketPresent(socketPath), 10000);
         QVERIFY(!profileLock.acquire(0));
         const StationControlReply reply = StationControlSocket::request(
             socketPath, {QStringLiteral("release")});
@@ -279,7 +302,7 @@ private slots:
         });
         QVERIFY(daemon.waitForStarted());
         const bool ready = QTest::qWaitFor([&] {
-            return QFileInfo::exists(socketPath);
+            return controlSocketPresent(socketPath);
         }, 15000);
         QVERIFY2(ready, qPrintable(QStringLiteral("socket %1, daemon state %2, output: %3")
             .arg(socketPath).arg(int(daemon.state()))
@@ -357,7 +380,7 @@ private slots:
             QDir(directory).removeRecursively();
         });
         QVERIFY(daemon.waitForStarted());
-        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(socketPath), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(controlSocketPresent(socketPath), 10000);
         const QByteArray originalBytes = fileBytes(settingsPath);
         QVERIFY2(!originalBytes.isEmpty(), qPrintable(settingsPath));
         const QString sentinelPath = QDir(directory).filePath(QStringLiteral("handover-sentinel"));
@@ -423,7 +446,7 @@ private slots:
             QDir(AppSettings::resolveConfigDir(profile)).removeRecursively();
         });
         QVERIFY(daemon.waitForStarted());
-        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(socketPath), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(controlSocketPresent(socketPath), 10000);
         const StationControlReply refused = StationControlSocket::request(
             socketPath, {QStringLiteral("release")});
         QVERIFY(!refused.ok);
@@ -467,7 +490,7 @@ private slots:
             QDir(AppSettings::resolveConfigDir(profile)).removeRecursively();
         });
         QVERIFY(daemon.waitForStarted());
-        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(socketPath), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(controlSocketPresent(socketPath), 10000);
 
         QLocalSocket client;
         client.connectToServer(socketPath);

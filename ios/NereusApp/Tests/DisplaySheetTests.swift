@@ -165,7 +165,7 @@ struct DisplaySheetTests {
         #expect(rig.main.display.paletteName == nil)
     }
 
-    @Test("Clarity, Auto and Manual set the level mode, and the note follows; noise-floor AGC lights none")
+    @Test("All five requested level modes have their own choice, note and coherent flags")
     func levels() async throws {
         let rig = try Rig()
         await quiet()
@@ -178,12 +178,18 @@ struct DisplaySheetTests {
         display.select(.manual)
         #expect(rig.main.band.settings.waterfallLevelMode == .manual)
         #expect(display.levelNote == "Manual uses the levels set in Setup.")
-        rig.main.changeDisplay { $0.waterfallLevelMode = .noiseFloorAgc }
-        #expect(display.level == nil)
-        #expect(display.levelNote == nil)
+        display.select(.floor)
+        #expect(display.level == .floor)
+        #expect(display.levelNote == "The Core's noise floor sets Low; the saved High remains remembered.")
+        #expect(!rig.main.band.settings.clarityEnabled && rig.main.band.settings.waterfallAgc
+            && rig.main.band.settings.waterfallNfAgc && !rig.main.band.settings.useSpectrumMinMax)
+        display.select(.scale)
+        #expect(display.level == .scale)
+        #expect(display.levelNote == "The live spectrum minimum and maximum set the waterfall levels.")
+        #expect(!rig.main.band.settings.clarityEnabled && rig.main.band.settings.useSpectrumMinMax)
     }
 
-    @Test("without the Core's extras Clarity, Auto and the band's switches are greyed and the waterfall is manual")
+    @Test("without Core extras requested Clarity stays selected, unavailable actions refuse edits, and painting uses kept levels")
     func olderCore() async throws {
         let rig = try Rig(extras: 0)
         await quiet()
@@ -191,8 +197,11 @@ struct DisplaySheetTests {
         #expect(!display.extrasAvailable)
         #expect(!display.isAvailable(.clarity))
         #expect(!display.isAvailable(.auto))
-        #expect(display.isAvailable(.manual))
-        #expect(display.level == .manual)
+        #expect(!display.isAvailable(.floor))
+        #expect(display.isAvailable(.manual) && display.isAvailable(.scale))
+        // V29 shows the requested mode independently of a missing measured
+        // floor. A manual fallback is not a persisted mode conversion.
+        #expect(display.level == .clarity)
         display.select(.auto)
         #expect(rig.main.band.settings.waterfallLevelMode == .clarity)
         for feature in DisplaySheetModel.Feature.allCases {
@@ -201,6 +210,13 @@ struct DisplaySheetTests {
         }
         #expect(rig.main.band.settings == .desktopDefaults)
         #expect(!display.retuneAvailable)
+        let band = rig.main.band
+        band.endpointId = 1
+        #expect(!band.state.expectsExtras)
+        band.receive(.displayFrame(BandFixturesApp.frame(level: -100, sequence: 1)))
+        #expect(band.state.history.currentLevels == band.settings.manualLevels)
+        #expect(band.effectiveWaterfallLevels == nil)
+        #expect(band.settings.waterfallLevelMode == .clarity)
     }
 
     @Test("Re-tune asks the Core for this pan's display endpoint only when the Core offers it, and shows its refusal")
@@ -266,34 +282,35 @@ struct DisplaySheetTests {
         #expect(display.range == 80)
     }
 
-    @Test("Line sets the trace's width in whole screen pixels, from one pixel to 3 points, and is kept")
+    @Test("Line shows0.1...5 physical pixels, keeps points, and survives restart")
     func line() async throws {
         let rig = try Rig()
         await quiet()
         let display = rig.main.display
-        #expect(display.line == 0.5)
-        #expect(DisplaySheetModel.lineText(display.line) == "0.5 pt")
+        // Approved V29 supersedes the old point-facing1...9px control;
+        // the original0.5point default and persistence representation stay.
+        #expect(rig.main.band.settings.traceWidthPoints == 0.5)
+        #expect(display.line(scale: 3) == 1.5)
+        #expect(DisplaySheetModel.lineText(display.line(scale: 3)) == "1.5 px")
         let range = DisplaySheetModel.lineRange(scale: 3)
-        #expect(range.min == 1.0 / 3)
-        #expect(range.max == 3)
-        #expect(range.step == 1.0 / 3)
+        #expect(range.min == 0.1 && range.max == 5 && range.step == 0.1)
         display.setLine(0.1, scale: 3)
-        #expect(rig.main.band.settings.traceWidthPoints == 1.0 / 3)
-        #expect(DisplaySheetModel.lineText(display.line) == "0.33 pt")
+        #expect(abs(rig.main.band.settings.traceWidthPoints - 0.1 / 3) < 1e-9)
+        #expect(DisplaySheetModel.lineText(display.line(scale: 3)) == "0.1 px")
         display.setLine(0.9, scale: 3)
-        #expect(abs(rig.main.band.settings.traceWidthPoints - 1) < 1e-9)
-        #expect(DisplaySheetModel.lineText(display.line) == "1 pt")
+        #expect(abs(rig.main.band.settings.traceWidthPoints - 0.3) < 1e-9)
+        #expect(DisplaySheetModel.lineText(display.line(scale: 3)) == "0.9 px")
         display.setLine(9, scale: 3)
-        #expect(rig.main.band.settings.traceWidthPoints == 3)
-        display.setLine(0.5, scale: 2)
+        #expect(rig.main.band.settings.traceWidthPoints == 5.0 / 3)
+        display.setLine(1, scale: 2)
         #expect(rig.main.band.settings.traceWidthPoints == 0.5)
         let again = try Rig(suite: rig.suite)
         #expect(again.main.band.settings.traceWidthPoints == 0.5)
         display.setLine(2, scale: 3)
         let kept = try Rig(suite: rig.suite)
-        #expect(abs(kept.main.band.settings.traceWidthPoints - 2) < 1e-9)
-        // The band draws the kept width.
-        #expect(abs(kept.main.band.overlays(scale: 3).settings.traceWidthPixels(scale: 3) - 6) < 1e-9)
+        #expect(abs(kept.main.band.settings.traceWidthPoints - 2.0 / 3) < 1e-9)
+        // The kept physical width actually reaches the painter.
+        #expect(abs(kept.main.band.overlays(scale: 3).settings.traceWidthPixels(scale: 3) - 2) < 1e-9)
     }
 
     // MARK: Kept, redrawn and sent
@@ -456,24 +473,38 @@ struct DisplaySheetTests {
 
     // MARK: Desktop parity (Task 54e)
 
-    @Test("Colour gain and Black level start at the desktop's 45 and 104, stay in range, are kept, and colour each new line")
+    @Test("Current60/57 trims clamp to0...100, reach mode-aware painting, and survive restart")
     func colourGainAndBlackLevel() async throws {
         let rig = try Rig()
         await quiet()
         let display = rig.main.display
-        #expect(display.colorGain == 45)
-        #expect(display.blackLevel == 104)
-        #expect(rig.main.band.state.levelAdjustment == .init(colorGain: 45, blackLevel: 104))
+        // Approved current centers replace legacy45/104 units. The old
+        // explicit Adjustment initializer still means legacy arithmetic;
+        // actual typed settings carry the requested mode and remembered High.
+        #expect(display.colorGain == 60)
+        #expect(display.blackLevel == 57)
+        #expect(rig.main.band.state.levelAdjustment == .init(colorGain: 60, blackLevel: 57,
+            mode: .clarity, storedHighDbm: -62))
         display.setColorGain(200)
         #expect(display.colorGain == 100)
         display.setBlackLevel(-5)
         #expect(display.blackLevel == 0)
         display.setColorGain(20)
         display.setBlackLevel(90)
-        #expect(rig.main.band.state.levelAdjustment == .init(colorGain: 20, blackLevel: 90))
+        #expect(rig.main.band.state.levelAdjustment == .init(colorGain: 20, blackLevel: 90,
+            mode: .clarity, storedHighDbm: -62))
         let again = try Rig(suite: rig.suite)
         #expect(again.main.display.colorGain == 20)
         #expect(again.main.display.blackLevel == 90)
+        display.select(.manual)
+        rig.main.changeDisplay { $0.waterfallLowDbm = -130; $0.waterfallHighDbm = -125 }
+        let adjustment = rig.main.band.state.levelAdjustment
+        #expect(adjustment == .init(colorGain: 20, blackLevel: 90, mode: .manual, storedHighDbm: -125))
+        let painted = rig.main.band.settings.manualLevels.adjusted(by: adjustment)
+        // Low=-130+(90-57)*0.5; High's +12dB trim would violate the
+        // approved5dB effective gap, so it carries above that trimmed Low.
+        #expect(painted.lowDbm == -113.5 && painted.highDbm == -108.5)
+        #expect(rig.main.band.settings.waterfallLowDbm == -130 && rig.main.band.settings.waterfallHighDbm == -125)
         // The phone's own drawing: nothing goes to the Core.
         rig.main.subscriber.receive(.mediaState(.connected))
         #expect(await settle { rig.sent.count == 1 })

@@ -70,6 +70,7 @@
 
 #include <QMetaType>
 #include <QString>
+#include <QVector>
 
 #include <array>
 
@@ -213,6 +214,10 @@ QString bandKeyName(Band b);
 /// for auto-selecting the per-band grid slot. User can always override
 /// via direct setBand() if the auto-derived band is wrong.
 Band bandFromFrequency(double hz);
+
+/// Existing union band-identity boundaries visible in a frequency window.
+/// This lookup does not define a new region-specific legal allocation table.
+QVector<double> hamBandEdgesHz(double minHz, double maxHz);
 
 /// Maps a 0-based `BandButtonItem` UI index to the corresponding Band.
 /// Button order: 160m, 80m, 60m, 40m, 30m, 20m, 17m, 15m, 12m, 10m, 6m,

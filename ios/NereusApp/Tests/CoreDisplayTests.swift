@@ -52,6 +52,26 @@ struct CoreDisplayTests {
             key: key, origin: rig.settings.origin, properties: [.init(name: key, value: .utf8(value))])))
     }
 
+    typealias Sizing = StationCatalog.Display.FftSizing
+
+    /// A setting as the Core holds it, written from elsewhere.
+    private func store(_ rig: Rig, _ key: String, _ value: String) {
+        rig.settings.apply(.settingsValue(LinkMessage.SettingsValue(
+            key: key, origin: "the-core", properties: [.init(name: key, value: .utf8(value))])))
+    }
+
+    /// Sizing is Fixed on the Core, so the Size control is in charge.
+    private func fixedInCharge(_ rig: Rig) {
+        store(rig, Sizing.settingsKey, Sizing.fixed.rawValue)
+    }
+
+    /// Sizing is Hz/bin on the Core at the coarsest target, which leaves
+    /// the built-in size, so the Hz/bin target is in charge.
+    private func hzPerBinInCharge(_ rig: Rig) {
+        store(rig, CoreDisplayModel.hzPerBinKey, "200")
+        store(rig, Sizing.settingsKey, Sizing.hzPerBin.rawValue)
+    }
+
     /// The Core's catalogue again without its `display`, as an older Core sends it.
     private func withoutDisplay(_ rig: Rig) async {
         guard case .text(let json)? = rig.mirror.object("catalog")?["json"],
@@ -73,6 +93,7 @@ struct CoreDisplayTests {
     func timeoutRestoresLatestCore() async throws {
         let clock = TestLinkClock()
         let rig = try Rig(clock: clock)
+        fixedInCharge(rig)
         await quiet()
         let core = rig.main.coreDisplay
         let size = try #require(core.sizeControl)
@@ -115,9 +136,10 @@ struct CoreDisplayTests {
         #expect(core.groups.allSatisfy { !$0.title.isEmpty })
     }
 
-    @Test("FFT size steps through the Core's sizes and is written to the Core, one write at a time")
+    @Test("in Fixed, FFT size steps through the Core's sizes and is written to the Core, one write at a time")
     func fftSize() async throws {
         let rig = try Rig()
+        fixedInCharge(rig)
         await quiet()
         let core = rig.main.coreDisplay
         let size = try #require(core.sizeControl)
@@ -155,6 +177,7 @@ struct CoreDisplayTests {
     func binDiagnosticLateNewerNoteOwner() async throws {
         let clock = TestLinkClock()
         let rig = try Rig(clock: clock)
+        hzPerBinInCharge(rig)
         await quiet()
         let core = rig.main.coreDisplay
         var records: [DisplayBinDiagnostic] = []
@@ -165,6 +188,9 @@ struct CoreDisplayTests {
         let first = try #require(records.last { $0.stage == .writeAttempt }?.edit)
         await clock.advance(by: 5_000)
         #expect(await settle { records.contains { $0.stage == .writeOutcome && $0.edit == first && $0.outcome == .notConfirmed } })
+        // Fixed chosen elsewhere puts the Size control in charge.
+        fixedInCharge(rig)
+        #expect(await settle { core.sizingMode == .fixed })
         core.setSizeIndex(1)
         #expect(await settle { writes(rig).count == 2 })
         let sizeWrite = try #require(writes(rig).last)
@@ -182,6 +208,7 @@ struct CoreDisplayTests {
     func binDiagnosticExpiredSameKeySuppressed() async throws {
         let clock = TestLinkClock()
         let rig = try Rig(clock: clock)
+        hzPerBinInCharge(rig)
         await quiet()
         let core = rig.main.coreDisplay
         var records: [DisplayBinDiagnostic] = []
@@ -219,6 +246,7 @@ struct CoreDisplayTests {
     @Test("bin diagnostics trace the offer, echo, plan and subscription without extra writes")
     func binDiagnosticBoundaries() async throws {
         let rig = try Rig()
+        hzPerBinInCharge(rig)
         await quiet()
         var records: [DisplayBinDiagnostic] = []
         let core = rig.main.coreDisplay
@@ -245,9 +273,10 @@ struct CoreDisplayTests {
         #expect(writes(rig).count == 1 && rig.sent.count == 2)
     }
 
-    @Test("the subscription asks for the Size setting as its floor, and the Hz/bin target holds the bin width")
+    @Test("in Hz/bin the subscription asks for the size the target needs, and the target holds the bin width")
     func subscriptionFollowsTheCore() async throws {
         let rig = try Rig()
+        hzPerBinInCharge(rig)
         await quiet()
         let core = rig.main.coreDisplay
         #expect(await settle { core.binWidthText == "46.875" })
@@ -259,7 +288,7 @@ struct CoreDisplayTests {
         // The bin width before the Core grants a size: the pan's rate over the planned size.
         #expect(core.binWidthText == "46.875")
         #expect(core.binWidthLabel == rig.main.catalogFeed.catalog?.display?.binWidth.label)
-        // Hz/bin target 5: 192 kHz / 5 needs 65536 bins, finer than the floor.
+        // Hz/bin target 5: 192 kHz / 5 needs 65536 bins, finer than the built-in size.
         let target = try #require(core.hzPerBinControl)
         core.set(target, to: 5)
         #expect(await settle { writes(rig).last?.key == CoreDisplayModel.hzPerBinKey })
@@ -292,6 +321,7 @@ struct CoreDisplayTests {
     @Test("a valid Core FFT grant takes precedence over the current planned width")
     func grantedWidthTakesPrecedence() async throws {
         let rig = try Rig()
+        hzPerBinInCharge(rig)
         let core = rig.main.coreDisplay
         #expect(await settle { core.binWidthText == "46.875" })
         rig.main.receive(.mediaState(.connected))
@@ -332,6 +362,7 @@ struct CoreDisplayTests {
     @Test("shared grant diagnostics keep the actual readout and add no writes")
     func binDiagnosticSharedGrant() async throws {
         let rig = try Rig()
+        hzPerBinInCharge(rig)
         var diagnostics: [DisplayBinDiagnostic] = []
         rig.main.band.binDiagnostic = { diagnostics.append($0) }
         var readouts: [DisplayBinDiagnostic] = []
@@ -386,8 +417,13 @@ struct CoreDisplayTests {
         core.set(averaging, to: averaging.options[1].value)
         #expect(rig.main.band.settings.waterfallAveraging.rawValue == Int(averaging.options[1].value))
         let time = try #require(display.control(subscribe: CoreDisplayModel.Field.traceAverageTime))
+        // The Core's own range: 1 to 9999 ms by 1.
+        #expect(time.range == StationCatalog.Range(min: 1, max: 9999, step: 1))
         core.set(time, to: 123)
-        #expect(rig.main.band.settings.spectrumAverageTimeMs == 120)
+        #expect(rig.main.band.settings.spectrumAverageTimeMs == 123)
+        core.set(time, to: 0)
+        #expect(rig.main.band.settings.spectrumAverageTimeMs == 1)
+        core.set(time, to: 123)
         #expect(writes(rig).isEmpty)
         // Kept for the pan.
         let again = try Rig(suite: rig.suite)
@@ -420,6 +456,8 @@ struct CoreDisplayTests {
         #expect(!core.available)
         #expect(core.sizeControl == nil && core.hzPerBinControl == nil)
         #expect(core.sizeIndex == nil && core.sizeIndexRange == nil)
+        #expect(core.sizingControl == nil && core.sizingMode == nil)
+        #expect(BandSubscriber.averageTimeFloorMs(rig.main.catalogFeed.catalog?.display) == 10)
         core.setSizeIndex(3)
         await quiet()
         #expect(writes(rig).isEmpty)
@@ -431,6 +469,182 @@ struct CoreDisplayTests {
         #expect(rig.sent.last?.windowType == BandSubscriber.defaultWindowType)
         #expect(rig.sent.last?.fps == BandSubscriber.defaultFps)
         #expect(core.binWidthLabel == CoreDisplayModel.binWidthFallbackLabel)
+    }
+
+    // MARK: Sizing
+
+    @Test("Sizing starts in Auto: Size and the Hz/bin target are gray with their reasons and show what runs")
+    func sizingAuto() async throws {
+        let rig = try Rig()
+        await quiet()
+        let core = rig.main.coreDisplay
+        let sizing = try #require(core.sizingControl)
+        let size = try #require(core.sizeControl)
+        let target = try #require(core.hzPerBinControl)
+        // The desktop pages' order: Sizing, Size, Hz/bin Target, Window.
+        #expect(core.groups.first?.controls.map(\.settingsKey)
+                == [Sizing.settingsKey, CoreDisplayModel.fftSizeKey, CoreDisplayModel.hzPerBinKey, CoreDisplayModel.windowKey])
+        #expect(sizing.options.map(\.label) == ["Auto", "Hz/bin", "Fixed"])
+        #expect(sizing.options.map(\.token) == ["Auto", "HzPerBin", "Fixed"])
+        #expect(core.sizingMode == .auto && core.value(sizing) == 0 && core.reason(sizing) == nil)
+        #expect(core.reason(size) == "Sizing is Auto, so the zoom sets the FFT size. Choose Fixed to set it yourself.")
+        #expect(core.reason(target) == "Choose Hz/bin under Sizing to set the bin width yourself.")
+        #expect(core.sizingReason(size) == core.reason(size) && core.sizingReason(target) == core.reason(target))
+        // Gray shows what the pan runs: 4096 at 192 kHz, and its bin width
+        // for the target, with nothing remembered. Never 0, never "Off".
+        #expect(await settle { core.value(size) == 4096 })
+        #expect(core.runningFftSize == 4096 && core.runningBinWidthHz == 46.875)
+        #expect(core.value(target) == 46.875)
+        #expect(core.value(target).map(target.text) != target.offLabel)
+        // The stored size plays no part in Auto, in the plan or on the row.
+        store(rig, CoreDisplayModel.fftSizeKey, "65536")
+        await quiet()
+        #expect(core.value(size) == 4096 && core.sizeIndex == 0)
+        #expect(rig.main.subscriber.plannedFftSize == 4096)
+        // A gray control takes no change.
+        core.setSizeIndex(3)
+        core.set(target, to: 5)
+        await quiet()
+        #expect(writes(rig).isEmpty)
+        // The target is offered from one step above its "Off".
+        #expect(core.range(target) == StationCatalog.Range(min: 0.5, max: 200, step: 0.5))
+        #expect(core.range(size) == nil)
+        // The Core remembers the last target: that is shown instead.
+        store(rig, Sizing.rememberedTargetKey, "12.5")
+        #expect(await settle { core.value(target) == 12.5 })
+    }
+
+    @Test("choosing a mode writes the choice, then the target: the running width into Hz/bin, 0 into Auto and Fixed")
+    func choosingAMode() async throws {
+        let rig = try Rig()
+        await quiet()
+        let core = rig.main.coreDisplay
+        let sizing = try #require(core.sizingControl)
+        let size = try #require(core.sizeControl)
+        let target = try #require(core.hzPerBinControl)
+        rig.main.subscriber.receive(.mediaState(.connected))
+        #expect(await settle { rig.sent.count == 1 && core.value(size) == 4096 })
+        // Into Hz/bin with nothing remembered: 46.875 Hz rounded up to the
+        // step, so the size does not double.
+        core.set(sizing, to: 1)
+        #expect(await settle { writes(rig).count == 1 })
+        #expect(writes(rig)[0] == (Sizing.settingsKey, "HzPerBin"))
+        // Shown at once, before the Core answers.
+        #expect(core.sizingMode == .hzPerBin && core.value(target) == 47)
+        await quiet()
+        #expect(writes(rig).count == 1, "the target waits for the Core to take the choice")
+        echo(rig, Sizing.settingsKey, "HzPerBin")
+        #expect(await settle { writes(rig).count == 2 })
+        #expect(writes(rig)[1] == (CoreDisplayModel.hzPerBinKey, "47"))
+        echo(rig, CoreDisplayModel.hzPerBinKey, "47")
+        #expect(await settle { core.reason(target) == nil && core.value(target) == 47 })
+        #expect(core.reason(size) == "Sizing is Hz/bin, so the bin width sets the FFT size. Choose Fixed to set it yourself.")
+        #expect(rig.main.subscriber.plannedFftSize == 4096)
+        // In charge, the target moves the size; 0 is not a choice.
+        core.set(target, to: 0)
+        #expect(await settle { writes(rig).count == 3 })
+        #expect(writes(rig)[2] == (CoreDisplayModel.hzPerBinKey, "0.5"))
+        echo(rig, CoreDisplayModel.hzPerBinKey, "0.5")
+        // Never a transform longer than 0.7 s: 131072 at 192 kHz.
+        #expect(await settle { rig.main.subscriber.plannedFftSize == 131_072 })
+        core.set(target, to: 5)
+        #expect(await settle { writes(rig).count == 4 })
+        echo(rig, CoreDisplayModel.hzPerBinKey, "5")
+        #expect(await settle { rig.sent.last?.fftSize == 65_536 })
+        // The Core remembers the target Hz/bin held.
+        store(rig, Sizing.rememberedTargetKey, "5")
+
+        // Into Fixed: the choice, then 0. Size is in charge and runs as stored.
+        core.set(sizing, to: 2)
+        #expect(await settle { writes(rig).count == 5 })
+        #expect(writes(rig)[4] == (Sizing.settingsKey, "Fixed"))
+        echo(rig, Sizing.settingsKey, "Fixed")
+        #expect(await settle { writes(rig).count == 6 })
+        #expect(writes(rig)[5] == (CoreDisplayModel.hzPerBinKey, "0"))
+        echo(rig, CoreDisplayModel.hzPerBinKey, "0")
+        #expect(await settle { core.sizingMode == .fixed && core.reason(size) == nil })
+        #expect(core.reason(target) == CoreDisplayModel.targetText)
+        #expect(await settle { rig.sent.last?.fftSize == 4096 && rig.sent.last?.tier == .wide })
+        // Gray, the target shows the remembered 5, not 0.
+        #expect(core.value(target) == 5)
+        core.setSizeIndex(2)
+        #expect(await settle { writes(rig).count == 7 })
+        #expect(writes(rig)[6] == (CoreDisplayModel.fftSizeKey, "16384"))
+        echo(rig, CoreDisplayModel.fftSizeKey, "16384")
+        #expect(await settle { rig.sent.last?.fftSize == 16_384 && rig.sent.last?.tier == .wide })
+
+        // Back into Hz/bin: the remembered target, not the running width.
+        core.set(sizing, to: 1)
+        #expect(await settle { writes(rig).count == 8 })
+        echo(rig, Sizing.settingsKey, "HzPerBin")
+        #expect(await settle { writes(rig).count == 9 })
+        #expect(writes(rig)[8] == (CoreDisplayModel.hzPerBinKey, "5"))
+        echo(rig, CoreDisplayModel.hzPerBinKey, "5")
+        #expect(await settle { rig.sent.last?.fftSize == 65_536 })
+
+        // Into Auto: the choice, then 0; the zoom picks again.
+        core.set(sizing, to: 0)
+        #expect(await settle { writes(rig).count == 10 })
+        #expect(writes(rig)[9] == (Sizing.settingsKey, "Auto"))
+        echo(rig, Sizing.settingsKey, "Auto")
+        #expect(await settle { writes(rig).count == 11 })
+        #expect(writes(rig)[10] == (CoreDisplayModel.hzPerBinKey, "0"))
+        echo(rig, CoreDisplayModel.hzPerBinKey, "0")
+        #expect(await settle { core.sizingMode == .auto && rig.sent.last?.fftSize == 4096 })
+        // Choosing the mode already in charge writes nothing.
+        core.set(sizing, to: 0)
+        await quiet()
+        #expect(writes(rig).count == 11 && core.note == nil)
+    }
+
+    @Test("a Core that never wrote the choice reads as it runs; a refused choice writes no target")
+    func sizingOnReadAndRefusal() async throws {
+        let rig = try Rig()
+        await quiet()
+        let core = rig.main.coreDisplay
+        let sizing = try #require(core.sizingControl)
+        let target = try #require(core.hzPerBinControl)
+        // No choice stored, a target above 0: Hz/bin.
+        store(rig, CoreDisplayModel.hzPerBinKey, "12.5")
+        #expect(await settle { core.sizingMode == .hzPerBin && core.value(sizing) == 1 })
+        #expect(core.reason(target) == nil && core.value(target) == 12.5)
+        #expect(await settle { rig.main.subscriber.plannedFftSize == 16_384 })
+        // "HzPerBin" stored with no target runs as Auto, and reads as Auto.
+        store(rig, Sizing.settingsKey, "HzPerBin")
+        store(rig, CoreDisplayModel.hzPerBinKey, "0")
+        #expect(await settle { core.sizingMode == .auto && core.value(sizing) == 0 })
+        #expect(await settle { rig.main.subscriber.plannedFftSize == 4096 })
+        // The Core refuses Fixed: its words show, and no target follows.
+        core.set(sizing, to: 2)
+        #expect(await settle { writes(rig).count == 1 })
+        rig.settings.apply(.settingsReject(LinkMessage.SettingsReject(
+            key: Sizing.settingsKey, properties: [], reason: "Not now.")))
+        #expect(await settle { core.note == "Not now." })
+        await quiet()
+        #expect(writes(rig).count == 1)
+        #expect(core.sizingMode == .auto)
+    }
+
+    @Test("an averaging time goes to the Core from 1 ms where it offered that")
+    func averagingFromOneMillisecond() async throws {
+        let rig = try Rig()
+        await quiet()
+        let core = rig.main.coreDisplay
+        let display = try #require(rig.main.catalogFeed.catalog?.display)
+        #expect(BandSubscriber.averageTimeFloorMs(display) == 1)
+        let time = try #require(display.control(subscribe: CoreDisplayModel.Field.traceAverageTime))
+        let waterfall = try #require(display.control(subscribe: CoreDisplayModel.Field.waterfallAverageTime))
+        core.set(time, to: 1)
+        core.set(waterfall, to: 2)
+        rig.main.subscriber.receive(.mediaState(.connected))
+        #expect(await settle { rig.sent.count == 1 })
+        let sent = try #require(rig.sent.last)
+        #expect(sent.extras?.averageTimeMs == 1 && sent.extras?.waterfallAverageTimeMs == 2)
+        #expect(throws: Never.self) { try DisplayEndpointRequest.validate(sent, gates: rig.main.subscriber.gates) }
+        // The same settings to a Core that offered nothing lower than 10 ms.
+        let older = rig.main.band.settings.extrasRequest(gates: rig.main.subscriber.gates,
+                                                         averageTimeFloorMs: BandSubscriber.averageTimeFloorMs(nil))
+        #expect(older?.averageTimeMs == 10 && older?.waterfallAverageTimeMs == 10)
     }
 
     @Test("a setting the Core refuses shows its words")
@@ -457,7 +671,8 @@ struct CoreDisplayTests {
     @Test("the new words are plain and promise nothing to come")
     func plainWords() {
         for text in [CoreDisplayModel.olderCoreText, CoreDisplayModel.choiceNotSentText, CoreDisplayModel.refusedText,
-                     CoreDisplayModel.binWidthFallbackLabel, DisplayOnThisPhonePage.coreNote] {
+                     CoreDisplayModel.binWidthFallbackLabel, DisplayOnThisPhonePage.coreNote,
+                     CoreDisplayModel.sizeAutoText, CoreDisplayModel.sizeHzPerBinText, CoreDisplayModel.targetText] {
             let words = text.lowercased().split { !$0.isLetter }
             for promise in ["yet", "soon", "later", "coming", "build", "bench", "station", "capability", "grant"] {
                 #expect(!words.contains(Substring(promise)), "\(text)")
@@ -495,7 +710,8 @@ struct CoreDisplayTests {
     func queuedDisplayTouchHasSnapshotOwner(reconnect: Bool) async throws {
         let rig = try Rig(clock: TestLinkClock())
         let core = rig.main.coreDisplay
-        #expect(await settle { core.available })
+        fixedInCharge(rig)
+        #expect(await settle { core.available && core.sizingMode == .fixed })
         core.setSizeIndex(1)
         #expect(await settle { writes(rig).count == 1 })
         core.setSizeIndex(2)
@@ -506,7 +722,9 @@ struct CoreDisplayTests {
         if reconnect {
             rig.settings.handle(.stateChanged(.receivingSnapshot))
             rig.settings.apply(.authResult(.init(accepted: true, reason: "", retryable: false)))
-            rig.settings.apply(.settingsSnapshot(.init(properties: [])))
+            rig.settings.apply(.settingsSnapshot(.init(properties: [
+                .init(name: Sizing.settingsKey, value: .utf8(Sizing.fixed.rawValue)),
+            ])))
             rig.settings.handle(.stateChanged(.ready))
             #expect(rig.settings.currentSnapshotIdentity != prior)
             core.setSizeIndex(3)
@@ -532,7 +750,8 @@ struct CoreDisplayTests {
         let clock = TestLinkClock()
         let rig = try Rig(clock: clock)
         let core = rig.main.coreDisplay
-        #expect(await settle { core.available })
+        fixedInCharge(rig)
+        #expect(await settle { core.available && core.sizingMode == .fixed })
         core.setSizeIndex(1)
         #expect(await settle { writes(rig).count == 1 })
         await clock.advance(by: 5_000)
@@ -561,7 +780,7 @@ struct CoreDisplayTests {
         let defaults = try #require(UserDefaults(suiteName: rig.suite))
         let spots = SpotsModel(records: nil, mirror: rig.mirror, commands: nil, settings: rig.settings,
                                slices: rig.main.slices, catalogFeed: rig.main.catalogFeed,
-                               phone: PhoneSettings(defaults: defaults))
+                               phone: PhoneSettings(defaults: defaults), rotor: rig.main.rotor)
         spots.write(SpotsModel.lifetimeKey, "120", for: nil)
         #expect(await settle { writes(rig).count == 2 })
         await clock.advance(by: 5_000)

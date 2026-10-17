@@ -13,6 +13,9 @@
 // DSP worker, and the new drain size still lands before the next batch.
 // J.J. Boyd (KG4VCF), with AI-assisted implementation via Anthropic Claude
 // Code.
+// 2026-10-12: an Anvelina Pro 3's third stream is routed from DDC5.
+// J.J. Boyd (KG4VCF), with AI-assisted implementation via Anthropic Claude
+// Code.
 // =================================================================
 #include <QtTest/QtTest>
 #include <QRegularExpression>
@@ -39,6 +42,7 @@
 #include "core/codec/P1CodecRedPitaya.h"
 #include "core/codec/P1CodecStandard.h"
 #include "core/codec/P2CodecHermes.h"
+#include "core/codec/P2CodecOrionMkII.h"
 #include "core/codec/P2CodecSaturn.h"
 #include "models/RadioModel.h"
 #include "models/RxDspWorker.h"
@@ -332,6 +336,44 @@ private slots:
         // Streams 2..4 are idle: no DDC, and no stale routing left behind.
         QCOMPARE(model.ddcForStream(2), -1);
         QCOMPARE(model.receiverManager()->ddcIndex(2), -1);
+    }
+
+    // An Anvelina Pro 3 on Protocol 2 hosts its third stream on DDC5 (the
+    // codec's order, tst_codec_5_slice_assignment). The slice and the
+    // receiver that takes the radio's packets must both follow: a receiver
+    // still listening for DDC4 would hear nothing at all.
+    void anvelina_third_stream_is_routed_from_ddc5()
+    {
+        RadioModel model;
+        P2CodecOrionMkII codec;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.receiverManager()->setP2Codec(&codec);
+        model.configureStreamPool(5, 5, 192000);
+        for (int st = 0; st < 5; ++st) {
+            model.receiverManager()->createReceiver();
+        }
+
+        const int a = model.addSlice();
+        model.slices().at(a)->setFrequency(3800000.0);
+        const int b = model.addSlice();
+        model.slices().at(b)->setFrequency(7150000.0);
+        const int c = model.addSlice();
+        model.slices().at(c)->setFrequency(18125000.0);
+
+        SliceModel* third = model.slices().at(c);
+        QCOMPARE(third->streamIndex(), 2);
+        QCOMPARE(model.ddcForStream(0), 2);
+        QCOMPARE(model.ddcForStream(1), 3);
+        QCOMPARE(model.ddcForStream(2), 5);
+        QCOMPARE(third->ddcIndex(), 5);
+        QCOMPARE(model.receiverManager()->ddcIndex(2), 5);
+        QCOMPARE(model.receiverManager()->receiverConfig(2).ddcIndex, 5);
+
+        // The fourth stream is idle, and nothing is left listening on DDC4.
+        QCOMPARE(model.ddcForStream(3), -1);
+        for (int st = 0; st < 5; ++st) {
+            QVERIFY(model.receiverManager()->ddcIndex(st) != 4);
+        }
     }
 
     void published_assignment_updates_slice_and_receiver_physical_routing()
@@ -746,6 +788,123 @@ private slots:
         QVERIFY(!model.setStreamSampleRate(0, 192000));
         // R-R3-39: the WDSP and worker sides of the change run on the receive lane.
         QVERIFY(model.waitForReceiveLaneForTest());
+
+        for (int st = 0; st < 2; ++st) {
+            QCOMPARE(model.streamActiveForTest(st), streamsBefore[st].active);
+            QCOMPARE(model.streamCentreHzForTest(st), streamsBefore[st].centreHz);
+            QCOMPARE(model.streamSampleRateHzForTest(st), streamsBefore[st].rateHz);
+        }
+
+        const std::array<int, 3> ids{{a, b, c}};
+        for (int i = 0; i < 3; ++i) {
+            const SliceModel* slice = model.sliceById(ids[i]);
+            QCOMPARE(slice->streamIndex(), slicesBefore[i].stream);
+            QCOMPARE(slice->shiftOffsetHz(), slicesBefore[i].shiftHz);
+            QCOMPARE(slice->sampleRateHz(), slicesBefore[i].rateHz);
+        }
+
+        for (int st = 0; st < 2; ++st) {
+            const ReceiverConfig after =
+                model.receiverManager()->receiverConfig(st);
+            QCOMPARE(after.frequencyHz, receiversBefore[st].frequencyHz);
+            QCOMPARE(after.sampleRate, receiversBefore[st].sampleRate);
+            QCOMPARE(after.active, receiversBefore[st].active);
+        }
+
+        for (int i = 0; i < 3; ++i) {
+            const RxChannel* channel = engine->rxChannel(ids[i]);
+            QCOMPARE(channel->sampleRate(), wdspBefore[i].first);
+            QCOMPARE(channel->bufferSize(), wdspBefore[i].second);
+        }
+
+        QCOMPARE(centres.count(), 0);
+        QCOMPARE(bindings.count(), 0);
+        QCOMPARE(assignments.count(), 0);
+    }
+
+    // A rejected restored preference must not claim a rate the DDC never adopted.
+    void rejected_restored_rate_keeps_effective_rate_and_geometry()
+    {
+        RadioModel model;
+        WdspEngine* engine = model.wdspEngine();
+        engine->m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+
+        model.configureStreamPool(/*userDdcCount*/ 2, /*maxSlices*/ 3, 192000);
+        model.receiverManager()->createReceiver();
+        model.receiverManager()->createReceiver();
+        model.openRxChannelPool(3, bufferSizeForRate(192000), 192000);
+
+        const int a = model.addSlice();
+        model.sliceById(a)->setFrequency(14200000.0);
+        model.setStreamSampleRate(0, 768000);
+        // R-R3-39: the WDSP and worker sides of the change run on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
+
+        const int b = model.addSlice();
+        model.sliceById(b)->setFrequency(14400000.0);
+        QCOMPARE(model.sliceById(b)->streamIndex(), 0);
+
+        const int c = model.addSlice();
+        model.sliceById(c)->setFrequency(7100000.0);
+        QCOMPARE(model.sliceById(c)->streamIndex(), 1);
+        QCOMPARE(model.activeStreamCount(), 2);
+
+        struct StreamSnapshot {
+            bool active;
+            double centreHz;
+            int rateHz;
+        };
+        const std::array<StreamSnapshot, 2> streamsBefore{{
+            {model.streamActiveForTest(0),
+             model.streamCentreHzForTest(0),
+             model.streamSampleRateHzForTest(0)},
+            {model.streamActiveForTest(1),
+             model.streamCentreHzForTest(1),
+             model.streamSampleRateHzForTest(1)}
+        }};
+
+        struct SliceSnapshot {
+            int stream;
+            double shiftHz;
+            int rateHz;
+        };
+        const std::array<SliceSnapshot, 3> slicesBefore{{
+            {model.sliceById(a)->streamIndex(),
+             model.sliceById(a)->shiftOffsetHz(),
+             model.sliceById(a)->sampleRateHz()},
+            {model.sliceById(b)->streamIndex(),
+             model.sliceById(b)->shiftOffsetHz(),
+             model.sliceById(b)->sampleRateHz()},
+            {model.sliceById(c)->streamIndex(),
+             model.sliceById(c)->shiftOffsetHz(),
+             model.sliceById(c)->sampleRateHz()}
+        }};
+
+        const std::array<ReceiverConfig, 2> receiversBefore{{
+            model.receiverManager()->receiverConfig(0),
+            model.receiverManager()->receiverConfig(1)
+        }};
+        const std::array<std::pair<int, int>, 3> wdspBefore{{
+            {engine->rxChannel(a)->sampleRate(), engine->rxChannel(a)->bufferSize()},
+            {engine->rxChannel(b)->sampleRate(), engine->rxChannel(b)->bufferSize()},
+            {engine->rxChannel(c)->sampleRate(), engine->rxChannel(c)->bufferSize()}
+        }};
+
+        QSignalSpy centres(&model, &RadioModel::streamCentreChanged);
+        QSignalSpy bindings(&model, &RadioModel::streamBindingsChanged);
+        QSignalSpy assignments(&model, &RadioModel::ddcAssignmentRequested);
+
+        QSignalSpy rejected(&model, &RadioModel::sliceRetuneRejected);
+        model.sliceById(a)->setSampleRateHz(192000);
+        model.applyRestoredSampleRate(model.sliceById(a));
+        // R-R3-39: the WDSP and worker sides of the change run on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
+
+        QCOMPARE(rejected.count(), 1);
+        QCOMPARE(rejected.first().at(0).toInt(), a);
+        QCOMPARE(model.sliceById(a)->frequency(), 14200000.0);
+        QCOMPARE(model.sliceById(b)->frequency(), 14400000.0);
+        QCOMPARE(model.sliceById(c)->frequency(), 7100000.0);
 
         for (int st = 0; st < 2; ++st) {
             QCOMPARE(model.streamActiveForTest(st), streamsBefore[st].active);

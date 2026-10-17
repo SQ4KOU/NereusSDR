@@ -30,6 +30,8 @@ final class TransmitModel: ObservableObject {
     @Published private(set) var ptt = PttController.Snapshot()
     /// The Core's transmit state as the PTT and the keyed view read it.
     @Published private(set) var report = TransmitStateReport()
+    /// Display-only source selection; the radio readings and control paths stay separate.
+    @Published private(set) var meterRule = TransmitMeterRule(radioForwardW: nil, radioSwr: nil)
     /// The radio's readings while keyed.
     @Published private(set) var forwardWatts = 0.0
     @Published private(set) var swr = 1.0
@@ -1733,6 +1735,18 @@ final class TransmitModel: ObservableObject {
         set(\.keyedForwardWatts, keyedReadingsCurrent ? keyedPower.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } : nil)
         set(\.keyedSwr, keyedReadingsCurrent ? keyedRatio.flatMap { $0.isFinite && $0 >= 1 ? $0 : nil } : nil)
         set(\.keyedMicLevelDb, keyedReadingsCurrent ? TxStage.reading(state?["micLevelDb"].number) : nil)
+        func meterAmplifier(_ object: MirrorObject?, powerGenius: Bool) -> TransmitMeterRule.Amplifier {
+            let present = keyedReadingsCurrent && object?["present"].flag == true
+            let values = MeterReadout.accessory(powerGenius ? .powerGenius : .rfKit, present: present,
+                transmitting: object?["transmitting"].flag == true, forwardW: object?["forwardPowerW"].number,
+                swr: object?["swr"].number)
+            return .init(present: present, operate: object?["operate"].flag == true,
+                         forwardW: values.forwardW, swr: values.swr)
+        }
+        set(\.meterRule, TransmitMeterRule(powerGenius: meterAmplifier(amplifier, powerGenius: true),
+            rfKit: meterAmplifier(rfkit, powerGenius: false), radioForwardW: keyedForwardWatts, radioSwr: keyedSwr,
+            radioScaleTopW: (catalog ?? slices.catalog)?.meters.rfPower.maxW ?? 120,
+            radioLimitW: (catalog ?? slices.catalog)?.meters.rfPower.redFromW ?? 100))
         set(\.readingsSent, state != nil)
         set(\.txReadingsVersion, mirror.capabilityVersion(Self.txReadingsCapability))
         set(\.compressionDb, state?[Self.compressionReading].number)

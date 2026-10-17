@@ -1,3 +1,54 @@
+// Ported from Thetis Project Files/Source/Console/display.cs.
+// Modification history (NereusSDR):
+//   2026-10-13: J.J. Boyd (KG4VCF), OpenAI Codex; partial product matching
+//               and cached readout formatting, preserving legacy formulas.
+//=================================================================
+// display.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley (W5WC)
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Waterfall AGC Modifications Copyright (C) 2013 Phil Harman (VK6APH)
+// Transitions to directX and continual modifications Copyright (C) 2020-2026 Richard Samphire (MW0LGE)
+//=================================================================
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+
 #pragma once
 
 // no-port-check: NereusSDR-original IMD-overlay class implementing the
@@ -16,7 +67,7 @@
 // Two-tone IMD measurement overlay — peak detection, IMD3/IMD5
 // labeling, EMA smoothing, and readout-text formatting.  Renders
 // nothing itself; SpectrumWidget owns the QPainter draw call and
-// calls into ImdOverlay for the values + the formatted strings.
+// consumes accepted cached values and the formatted strings.
 //
 // Show condition (from Thetis display.cs:5008 [v2.10.3.13]):
 //   show_imd_measurements = local_mox && _testing_imd
@@ -44,6 +95,8 @@
 #include <QObject>
 #include <QString>
 #include <vector>
+#include <array>
+#include <optional>
 
 namespace NereusSDR {
 
@@ -124,6 +177,15 @@ public:
                                  Maximum& outImd3L, Maximum& outImd3U,
                                  Maximum& outImd5L, Maximum& outImd5U);
 
+    // Partial matches preserve the same source search geometry as the legacy
+    // all-products labeler, without exposing uninitialized output arguments.
+    struct ProductMatches {
+        bool fundamentalsResolved{false};
+        std::array<std::optional<Maximum>, 6> peaks;
+        std::array<std::optional<int>, 6> expectedSampleIndex;
+    };
+    static ProductMatches matchImdProducts(const std::vector<Maximum>& peaks);
+
     // EMA-smooth the labeled values into m_readout.  Direct port of
     // Thetis display.cs:5589-5641 [v2.10.3.13]:
     //   first call (when uninitialised): copy raw values verbatim
@@ -141,6 +203,7 @@ public:
         QString val2;      // relative dB column (6 lines)
     };
     ReadoutText formatReadout() const;
+    static ReadoutText formatReadout(const ImdReadout& readout);
 
     // Read-only access to the smoothed readout.  Returned by const-ref
     // for tests + external diagnostics.

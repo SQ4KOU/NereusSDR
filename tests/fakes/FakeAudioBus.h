@@ -75,6 +75,17 @@ public:
         return toCopy;
     }
 
+    // Records each read that returns audio and the backlog it asked for,
+    // then reads as pull().
+    qint64 pullKeepingBacklog(char* data, qint64 maxBytes, qint64 maxBacklogBytes) override {
+        const qint64 got = pull(data, maxBytes);
+        if (got > 0) {
+            ++m_keepingBacklogReads;
+            m_lastMaxBacklogBytes = maxBacklogBytes;
+        }
+        return got;
+    }
+
     float rxLevel() const override { return 0.0f; }
     float txLevel() const override { return 0.0f; }
 
@@ -87,6 +98,8 @@ public:
     const QByteArray& buffer() const { return m_buffer; }
 
     int pullCount() const { return m_pulls; }
+    int keepingBacklogReads() const { return m_keepingBacklogReads; }
+    qint64 lastMaxBacklogBytes() const { return m_lastMaxBacklogBytes; }
     int flushCount() const { return m_flushes; }
 
     // Force-toggle isOpen() to false so AudioEngine::rxBlockReady's
@@ -127,6 +140,8 @@ private:
     QByteArray  m_pullData;
     qint64      m_pullPos{0};
     int         m_pulls{0};
+    int         m_keepingBacklogReads{0};
+    qint64      m_lastMaxBacklogBytes{-1};
 };
 
 } // namespace NereusSDR

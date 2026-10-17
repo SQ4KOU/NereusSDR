@@ -120,7 +120,7 @@ const QList<State> kAllStates{State::NotConnected, State::WaitingForAudio, State
 const QList<Fault> kAllFaults{Fault::SpeakerOpenFailed, Fault::SpeakerTimingUnavailable,
                               Fault::SpeakerCallbackTooLarge, Fault::SpeakerStalled,
                               Fault::SpeakerWriteFailed, Fault::DecoderUnavailable,
-                              Fault::NoPackets,
+                              Fault::SpeakerFormatUnsupported, Fault::NoPackets,
                               Fault::DecodeFailed, Fault::ClockBuffer};
 
 // A failure recorded in session epoch 4, connection A, context 10, while
@@ -360,6 +360,9 @@ private slots:
                  QStringLiteral("Audio could not be sent to the speaker device."));
         QCOMPARE(remoteAudioProblemText(Fault::DecoderUnavailable),
                  QStringLiteral("The audio decoder could not start on this computer."));
+        QCOMPARE(remoteAudioProblemText(Fault::SpeakerFormatUnsupported),
+                 QStringLiteral("The speaker device is set to a format remote playback cannot "
+                                "play. Choose another sample rate, channel setting or device."));
         // The receiver recovers from these by itself; they never persist.
         for (Fault fault : kInterruptionFaults) {
             QCOMPARE(remoteAudioProblemText(fault), QStringLiteral("Audio was interrupted."));

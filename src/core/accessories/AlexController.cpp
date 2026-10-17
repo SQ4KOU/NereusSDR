@@ -44,6 +44,18 @@
 //   2026-09-30 - setLowPassHold emits lowPassHoldChanged in place of
 //                bpfStateChanged. NereusSDR-original. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - setBandFiltersCombine: Auto keeps a chain filtered over
+//                more than one band where the radio's band filters combine.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-11 - setCombineNote: what sharing the 6 m BPF/LNA costs the
+//                chain's slices, after the bands in reasonText.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-11 - recomputeBpf: Auto counts the chain's filter selections,
+//                not its band names, so two filters under one name (WWV
+//                on 5 and 15 MHz) are a band difference. NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Alex.cs header (lines 1-23) ===
@@ -176,6 +188,31 @@ void AlexController::setWidebandActive(int adc, bool on)
     recomputeBpf(adc);
 }
 
+// NereusSDR-original. The fact about the radio is
+// codec::alex::combinesRxBandFilters, a bench measurement quoted there.
+void AlexController::setBandFiltersCombine(int adc, bool on)
+{
+    if (adc < 0 || adc >= 2) { return; }
+    if (m_bandFiltersCombine[adc] == on) { return; }
+    m_bandFiltersCombine[adc] = on;
+    recomputeBpf(adc);
+}
+
+bool AlexController::bandFiltersCombine(int adc) const
+{
+    if (adc < 0 || adc >= 2) { return false; }
+    return m_bandFiltersCombine[adc];
+}
+
+// NereusSDR-original. RadioModel words it (republishAlexAdcSlices).
+void AlexController::setCombineNote(int adc, const QString& note)
+{
+    if (adc < 0 || adc >= 2) { return; }
+    if (m_combineNote[adc] == note) { return; }
+    m_combineNote[adc] = note;
+    recomputeBpf(adc);
+}
+
 // Plan Task 14 re-review N4 (Phase 3F design section 16.4.1): WIDE means
 // the chain is bypassed on the wire. An Alex tab switch can put the bypass
 // there over a filtered band, so the chain's state has to know about it.
@@ -233,20 +270,41 @@ void AlexController::recomputeBpf(int adc)
     } else {
         // Auto mode: inspect slice bands on this ADC.
         // 0 bands -> idle/filtered; 1 band -> Filtered at that band;
-        // 2+ distinct bands -> BYPASS (multi-band attenuation trade-off).
+        // 2+ distinct bands -> BYPASS (multi-band attenuation trade-off),
+        // or every band's filter at once where the radio's filters combine.
         // Phase 3F Task 13 — NereusSDR-original; no Thetis port.
+        //
+        // The entries are one per filter selection the chain's slices need
+        // (notifySlicesOnAdc), so two entries are two selections even under
+        // one band name: WWV on 5 and on 15 MHz, or general-coverage slices
+        // either side of a filter edge. Counted by entry, each band named
+        // once.
         std::set<Band> uniqueBands;
+        int selections = 0;
         for (Band b : m_slicesPerAdc[adc]) {
-            if (b != Band::Count) { uniqueBands.insert(b); }
+            if (b != Band::Count) { uniqueBands.insert(b); ++selections; }
         }
 
-        if (uniqueBands.empty()) {
+        if (selections == 0) {
             s.effective = BpfEffective::Filtered;
             s.reasonText = QStringLiteral("%1 (idle)").arg(bandLabel(s.currentBpfBand));
-        } else if (uniqueBands.size() == 1) {
+        } else if (selections == 1) {
             s.currentBpfBand = *uniqueBands.begin();
             s.effective = BpfEffective::Filtered;
             s.reasonText = bandLabel(s.currentBpfBand);
+        } else if (m_bandFiltersCombine[adc]) {
+            // 2+ selections where the band filters combine: every one is
+            // made, so each slice hears through its own band's filter
+            // (setBandFiltersCombine).
+            s.currentBpfBand = *uniqueBands.begin();
+            s.effective = BpfEffective::Filtered;
+            QStringList bandList;
+            for (Band b : uniqueBands) { bandList << bandLabel(b); }
+            s.reasonText = bandList.join(QStringLiteral(" + "));
+            // What the combined selection costs them (setCombineNote).
+            if (!m_combineNote[adc].isEmpty()) {
+                s.reasonText += QStringLiteral(" (%1)").arg(m_combineNote[adc]);
+            }
         } else {
             // 2+ distinct bands on this ADC -> BYPASS
             s.effective = BpfEffective::Bypass;

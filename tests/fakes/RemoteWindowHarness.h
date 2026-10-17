@@ -73,6 +73,8 @@
 //                                    holding the Core's slice-access
 //                                    updates, sliceAccessCommands().
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-08  J.J. Boyd / KG4VCF  useNamedIsolatedProfile().
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -169,6 +171,10 @@ public:
     /// QVERIFY the result: false means AppSettings was already on another
     /// file, which is then left untouched.
     [[nodiscard]] static bool useIsolatedProfile(const QString& tag);
+    /// useIsolatedProfile() under exactly `profile`, with no process id
+    /// in the name. The caller makes sure no other process uses the same
+    /// name at the same time.
+    [[nodiscard]] static bool useNamedIsolatedProfile(const QString& profile);
     /// Empties the isolated profile between cases. False, touching
     /// nothing, unless AppSettings is still on the verified profile.
     [[nodiscard]] static bool clearIsolatedProfile();

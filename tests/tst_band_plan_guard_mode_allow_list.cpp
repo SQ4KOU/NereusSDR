@@ -13,6 +13,20 @@ class TestBandPlanGuardModeAllowList : public QObject
     Q_OBJECT
 private slots:
     // ── isModeAllowedForTx: allowed modes ──────────────────────────────────
+    void experimentalModesFollowRadeBandRules()
+    {
+        BandPlanGuard guard;
+        for (int id : {14, 15}) {
+            const DSPMode mode = static_cast<DSPMode>(id);
+            QVERIFY(guard.isModeAllowedForTx(mode));
+            QVERIFY(guard.checkMoxAllowed(Region::UnitedStates, 14'200'000, mode,
+                                          Band::Band20m, Band::Band20m, false, false,
+                                          id == 14 ? 650 : -2350, id == 14 ? 2350 : -650).ok);
+            QVERIFY(!guard.checkMoxAllowed(Region::UnitedStates, 14'349'900, mode,
+                                           Band::Band20m, Band::Band20m, false, false,
+                                           650, 2350).ok);
+        }
+    }
     void lsb_isAllowed();
     void usb_isAllowed();
     void digl_isAllowed();

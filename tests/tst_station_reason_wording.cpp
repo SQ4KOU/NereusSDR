@@ -50,6 +50,16 @@
 // in use compare as they are ("slice removed", "slice stream binding
 // changed"). The last two are plain as written and are scanned anyway.
 //
+//   2026-10-11  J.J. Boyd / KG4VCF  Band filters that combine: RadioModel's
+//                                    sharedLnaReason is scanned, and the
+//                                    note it gives the filter label
+//                                    (AlexController's m_combineNote) is
+//                                    read by sharedLnaNoteWordsArePlain.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-10  J.J. Boyd / KG4VCF  Native audio plan: the Core speaker's
+//                                    and the Windows VAX source's greyed
+//                                    reasons are the window's own.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 2:
 //                                    changeRefusal replaces sliceRefusal;
 //                                    a listener's refusal words scanned.
@@ -82,6 +92,10 @@
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12  J.J. Boyd / KG4VCF  CAT reconfiguration: scan both validators
+//                                    and serial conflicts; guard the exact
+//                                    validation refusal forwards.
+//                                    AI tooling: OpenAI Codex.
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4b (R-IOS-01,
 //                                    R-R3-21): created. AI-assisted via
 //                                    Anthropic Claude Code.
@@ -260,6 +274,38 @@
 //   2026-10-01  J.J. Boyd / KG4VCF  DaemonApp's radioChangeStoppedReason
 //                                    is scanned.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-07  J.J. Boyd / KG4VCF  CAT setup from a connected desktop:
+//                                    StationCatController's and
+//                                    StationCatModel's reasons are scanned;
+//                                    stationCatUnavailableReason is the
+//                                    window's own. AI tooling: Claude Code.
+//   2026-10-07  J.J. Boyd / KG4VCF  CatControl's notConnectedReason is
+//                                    scanned; its unavailableReason is the
+//                                    window's own. AI tooling: Claude Code.
+//   2026-10-08  J.J. Boyd / KG4VCF  Rotor bench fix: RotorConnection's
+//                                    "not answering" fault is scanned.
+//   2026-10-08  J.J. Boyd / KG4VCF  Remote rotor control: the rotor's
+//                                    reasons are scanned (StationRotorController,
+//                                    RotctldProcess, RotorModel, the
+//                                    dispatcher's and IStationLink's rotor
+//                                    words, RadioModel's rotor requests);
+//                                    SpotBeamTurner's are the window's own.
+//                                    AI tooling: Claude Code.
+//   2026-10-12  J.J. Boyd / KG4VCF  The C-Tune pin refusals forward the
+//                                    holder's words (sliceHolderWords).
+//                                    SliceAccessMirror's holderWords and
+//                                    receiverHeldReason (a remote window's
+//                                    copy of the pin refusals) are scanned.
+//                                    AI tooling: Claude Code.
+//   2026-10-12  J.J. Boyd / KG4VCF  The notices that name the device that
+//                                    acted (a take, a pan move, a take of
+//                                    control) forward sliceHolderWords'
+//                                    words. AI tooling: Claude Code.
+//   2026-10-15  J.J. Boyd / KG4VCF  takerName and moverName, forwarded by
+//                                    name, are held to sliceHolderWords
+//                                    where they are assigned
+//                                    (deviceWordsNotFromSliceHolderWords).
+//                                    AI tooling: Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -283,6 +329,28 @@ namespace {
 QString sourcePath(const QString& relative)
 {
     return QDir(QStringLiteral(NEREUS_SOURCE_DIR)).filePath(relative);
+}
+
+// StationReceivers.cpp's notices forward takerName and moverName by name
+// (their forwards entries). A bare name in forwards says nothing about
+// where the words came from, so every assignment to one in `code` must
+// take sliceHolderWords' words: a name, or the Core's own words for a
+// device with none. Returns each assignment that does not, and counts them
+// all in `assignments`.
+QStringList deviceWordsNotFromSliceHolderWords(const QString& code, int* assignments)
+{
+    static const QRegularExpression assignment(
+        QStringLiteral("\\b(?:takerName|moverName)\\s*=(?!=)\\s*([^;]*);"));
+    QStringList problems;
+    QRegularExpressionMatchIterator it = assignment.globalMatch(code);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        ++*assignments;
+        if (!match.captured(1).startsWith(QStringLiteral("sliceHolderWords("))) {
+            problems.append(match.captured(0).simplified());
+        }
+    }
+    return problems;
 }
 
 bool identifierChar(QChar c)
@@ -831,6 +899,20 @@ const QStringList& unkeyEventLogText()
 const QList<ReasonSource>& reasonSources()
 {
     static const QList<ReasonSource> sources{
+        // Local CAT configuration failures are shown by the Setup page.
+        // Scan both validators' own sentences, including lambda failure calls.
+        {"src/core/cat/CatSettings.cpp", {QStringLiteral("validate")}, {}, 5, {},
+         {QStringLiteral("text")}},
+        {"src/core/cat/CatSettings.cpp", {QStringLiteral("validateGlobal")}, {}, 8, {},
+         {QStringLiteral("text")}},
+        // Serial-device conflicts are CatService's own words; validation
+        // failures come from the two scanned CatSettings functions above.
+        // The regression below checks each refuse() argument and its exact
+        // validator-to-reason forwarding, as well as the helper's text.
+        {"src/core/cat/CatService.cpp",
+         {QStringLiteral("reconfigureChannel"), QStringLiteral("reconfigureGlobal")}, {}, 3,
+         {QStringLiteral("other"), QStringLiteral("endpoint.config.channel")},
+         {QStringLiteral("text"), QStringLiteral("reason")}},
         // Shared radio-mic refusals reach Core replies as well as the window.
         {"src/core/session/RemoteMicSource.h",
          {QStringLiteral("remoteRadioVoxReason"), QStringLiteral("remoteRadioProgramReason"),
@@ -845,6 +927,14 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("named(top)"), QStringLiteral("lower.first()"),
           QStringLiteral("joinRangeNames(lower)"), QStringLiteral("off.first()"),
           QStringLiteral("joinRangeNames(off)")}},
+        // Where the band filters combine (the Anvelina Pro 3): what the 6 m
+        // BPF/LNA costs the slices sharing its input, joined to
+        // rxFilter0LowPassReason. The slices are named by letter and band
+        // ("B on 20m"), one or several joined by joinRangeNames.
+        {"src/models/RadioModel.cpp", {QStringLiteral("sharedLnaReason")},
+         {QStringLiteral("%1 on %2")}, 8,
+         {QStringLiteral("named(noFilter)"), QStringLiteral("named(lna)"),
+          QStringLiteral("named(low)")}},
         // RADE reason: a slice's radeReason, why a RADE slice has no
         // working decoder. The slices are named by letter.
         {"src/models/RadioModel.cpp", {QStringLiteral("radeStartReason")}, {}, 6,
@@ -880,7 +970,10 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("letter"),
           // Slice control plan Task 4: the controller's or the taker's
           // name (the operator's own words, ruling 4.3) and the letter.
-          QStringLiteral("name, letter"), QStringLiteral("planDevice(taker).name, letter"),
+          // The taker by sliceHolderWords: a name, or the Core's own words
+          // for a device with none, with a capital at the sentence's start.
+          QStringLiteral("name, letter"),
+          QStringLiteral("sliceHolderWords(taker, WordsPlace::SentenceStart), letter"),
           // Slice control plan Task 17: sliceHolderWords' kind word for a
           // device with no name (DeviceSessionRegistry::kindWord, lowercase).
           QStringLiteral("kind")},
@@ -907,6 +1000,9 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("AmplifierModel::readOnlyReason()"),
           QStringLiteral("RfKitModel::readOnlyReason()"),
           QStringLiteral("StationTciModel::readOnlyReason()"),
+          QStringLiteral("StationCatModel::readOnlyReason()"),
+          // Remote rotor control: the `rotor` object's, scanned below.
+          QStringLiteral("RotorLink::RotorModel::readOnlyReason()"),
           // Parity Task 19: the `spotSources` object's, scanned below.
           QStringLiteral("SpotSourceHost::readOnlyReason()"),
           // Fix wave after parity Tasks 19 and 21 (I5): the radio verbs'
@@ -1050,13 +1146,19 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("QString::fromLatin1(kCentreRefusedReason)"),
           QStringLiteral("moved ? QString() : QString::fromLatin1(kCentreRefusedReason)"),
           QStringLiteral("affected.isEmpty() ? QString::fromLatin1(kChangedReason) : QString()"),
-          QStringLiteral("pinReason(planDevice(anchor).name)"),
+          // The holder is named by sliceHolderWords (StationServer.cpp,
+          // scanned there): a name, "the Core" or the plain word for a kind.
+          QStringLiteral("pinReason(sliceHolderWords(anchor))"),
           // Slice control plan Task 8: the same, the anchor not connected.
-          QStringLiteral("awayPinReason(planDevice(anchor).name)"),
+          QStringLiteral("awayPinReason(sliceHolderWords(anchor))"),
           QStringLiteral("olderWindowAskReason(namesOf(check.named))"),
-          QStringLiteral("takenOverReason(planDevice(taker).name)"),
-          QStringLiteral("sliceMovedReason(planDevice(requester).name, letters)"),
-          QStringLiteral("sliceClosedReason(planDevice(requester).name, lettersOf(it.value()))"),
+          // takerName and moverName are sliceHolderWords' (StationServer.cpp,
+          // scanned there): a name, or the Core's own words for a device
+          // with none. theDeviceWordsTheNoticesForwardAreSliceHolderWords
+          // holds every assignment to them to that.
+          QStringLiteral("takenOverReason(takerName)"),
+          QStringLiteral("sliceMovedReason(moverName, letters)"),
+          QStringLiteral("sliceClosedReason(moverName, lettersOf(it.value()))"),
           // Slice control plan Task 9: a closed slice's listeners are told;
           // listenedClosedReason's literals, scanned here.
           QStringLiteral("listenedClosedReason(why, name, lettersOf(it.value()))"),
@@ -1156,6 +1258,11 @@ const QList<ReasonSource>& reasonSources()
                          "alex->setRxAntForBand(Band(band), antenna)"),
           // A function of this file, its literal scanned here.
           QStringLiteral("notRepresentableReason()"),
+          // Remote rotor control: the rotor verbs' two refusals of this
+          // file, their literals scanned here, and IStationLink's words for
+          // a Core without a rotor controller (scanned below).
+          QStringLiteral("rotorUnreadableReason()"), QStringLiteral("rotorSetupInvalidReason()"),
+          QStringLiteral("rotorUnavailableReason()"),
           // Level Cal: RadioModel::requestStartLevelCalibration's refusal,
           // worded in LevelCalibrationService.cpp and LevelCalibrationRun.cpp
           // (both scanned below) or RadioModel.cpp's on-air words.
@@ -1408,6 +1515,9 @@ const QList<ReasonSource>& reasonSources()
          19, {},
          {// Parameters and fields that carry this file's own reasons.
           QStringLiteral("reason"), QStringLiteral("prior.reason"),
+          // RadeWaveformModel::endpointState() and the display stream's
+          // waveform refusal/retirement state carry reasons into this file.
+          QStringLiteral("state.reason"), QStringLiteral("stream.reason"),
           QStringLiteral("admitted.refusal"), QStringLiteral("stream.profileRefusal"),
           QStringLiteral("m_headphones.profileRefusal"), QStringLiteral("m_audioProfileRefusal"),
           // iPhone app plan Task 23: a refused opusBitrate's words, scanned
@@ -1461,6 +1571,71 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("readOnlyReason"), QStringLiteral("receiveOnlyOperateReason")}, {}, 2},
         {"src/models/RfKitModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
         {"src/models/StationTciModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
+        // CAT setup from a connected desktop: the `stationCat` object's
+        // read-only reason.
+        {"src/models/StationCatModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
+        // CAT setup from a connected desktop: the four CAT commands'
+        // refusals (the local CAT page's own words for a configuration the
+        // Core did not take).
+        {"src/core/cat/StationCatController.cpp", {}, {}, 4, {},
+         {// Each refuse() helper's argument, this file's own literals.
+          QStringLiteral("why")}},
+        // CAT setup from a connected desktop: a remote window's own words
+        // while it is not connected to the Core.
+        {"src/core/cat/CatControl.cpp", {QStringLiteral("notConnectedReason")}, {}, 1},
+        // Remote rotor control: the seven rotor verbs' refusals, the
+        // contract's words (StationRotorController), sent as their
+        // command.result by the dispatcher.
+        {"src/core/StationRotorController.cpp",
+         {QStringLiteral("setReason"), QStringLiteral("noRotorReason"),
+          QStringLiteral("notConnectedReason"), QStringLiteral("azimuthOnlyReason"),
+          QStringLiteral("notANumberReason"), QStringLiteral("outOfRangeReason"),
+          QStringLiteral("noGridReason"), QStringLiteral("callNotPlacedReason"),
+          QStringLiteral("rotctldMissingReason"), QStringLiteral("unknownSerialPortReason"),
+          QStringLiteral("setupInvalidReason"), QStringLiteral("turnable"), QStringLiteral("acceptTarget"),
+          QStringLiteral("setRotorTarget"), QStringLiteral("turnRotorToCall"),
+          QStringLiteral("stopRotor"), QStringLiteral("nudgeRotor"),
+          QStringLiteral("configureRotor"), QStringLiteral("setRotorPresets")},
+         {}, 8, {},
+         {// setReason's parameter: the reasons above, this entry's own literals.
+          QStringLiteral("text")}},
+        // Rotor bench fix: a GS-232 controller that never answers on its
+        // port, the rotor's fault (the port's name inserted).
+        // Final review M8: the link's faults in plain words (the raw Qt, OS
+        // and Hamlib text is logged), the operator's own address, port
+        // and serial port inserted.
+        {"src/core/RotorConnection.cpp",
+         {QStringLiteral("notAnsweringReason"), QStringLiteral("noAnswerReason"),
+          QStringLiteral("unreachableReason"), QStringLiteral("controllerRefusedReason"),
+          QStringLiteral("rotctldStoppedReason"), QStringLiteral("serialOpenReason"),
+          QStringLiteral("serialLostReason")},
+         {}, 16,
+         {QStringLiteral("serialPort"), QStringLiteral("host"), QStringLiteral("port"),
+          QStringLiteral("portName")}},
+        // Remote rotor control: configureRotor's refusal when Hamlib's
+        // rotctld is missing (StationRotorController::rotctldMissingReason).
+        // Final review M8: rotctld that would not start, in plain words.
+        {"src/core/RotctldProcess.cpp",
+         {QStringLiteral("notInstalledReason"), QStringLiteral("startFailedReason")}, {}, 3},
+        // Remote rotor control: the `rotor` object's read-only reason.
+        {"src/models/RotorModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
+        // Remote rotor control: a Core without a rotor controller, sent by
+        // StationServer and the dispatcher; a remote window shows the same
+        // words when its Core is older than the rotor.
+        {"src/core/session/IStationLink.h", {QStringLiteral("rotorUnavailableReason")}, {}, 1},
+        // Remote rotor control: a window's rotor commands. They pass on the
+        // controller's refusal (scanned above) or the Core's command.result
+        // through the link, or IStationLink's words; the setup check is
+        // the controller's, shared with the dispatcher (final review M11),
+        // and its sentence is scanned with the controller above.
+        {"src/models/RadioModel.cpp",
+         {QStringLiteral("requestRotorTarget"), QStringLiteral("requestStopRotor"),
+          QStringLiteral("rotorControlAvailable"), QStringLiteral("requestTurnRotorToCall"),
+          QStringLiteral("requestNudgeRotor"), QStringLiteral("requestConfigureRotor"),
+          QStringLiteral("requestRotorPresets")},
+         {}, 1, {},
+         {QStringLiteral("sent.reason"), QStringLiteral("IStationLink::rotorUnavailableReason()"),
+          QStringLiteral("StationRotorController::setupInvalidReason()")}},
         // Parity Task 19 (R-IOS-25): the spots.* refusals and the
         // `spotSources` object's read-only reason.
         // Parity Task 21 (R-IOS-18): the station radio verbs' refusals and
@@ -1491,7 +1666,14 @@ const QList<ReasonSource>& reasonSources()
         // it holds back a change to a slice it only listens to. The slice
         // letter (A to P) and the controller's name, the operator's own
         // word (ruling 4.3).
-        {"src/core/session/SliceAccessMirror.cpp", {QStringLiteral("listenerReason")}, {}, 3,
+        // receiverHeldReason: its copy of the Core's two C-Tune pin
+        // refusals (StationReceivers.cpp, pinReason and awayPinReason),
+        // shown on the held switch of a pan whose receiver another device
+        // holds. holderWords names the holder for both.
+        {"src/core/session/SliceAccessMirror.cpp",
+         {QStringLiteral("listenerReason"), QStringLiteral("holderWords"),
+          QStringLiteral("receiverHeldReason")},
+         {}, 7,
          {QStringLiteral("letter"), QStringLiteral("owner"),
           // Slice control plan Task 17: the controller's kind word.
           QStringLiteral("kind")}},
@@ -1543,6 +1725,9 @@ const QList<ReasonSource>& reasonSources()
           // the Core's LAN scan for it and the saved address.
           QStringLiteral("stationPgxlControlAllowed"), QStringLiteral("setPgxlOperateForStation"),
           QStringLiteral("scanPgxlLanForStation"), QStringLiteral("setPgxlAddressForStation"),
+          // 2026-10-11: this computer's own OPERATE and STANDBY click, on an
+          // app that does not share its amplifier.
+          QStringLiteral("setPgxlOperateFromApplet"),
           // R-R3-49 (parity Task 10): the RF-Kit's OPERATE and STANDBY,
           // antenna, TCI mode and saved address.
           QStringLiteral("stationRfKitControlAllowed"),
@@ -1789,6 +1974,22 @@ const QList<AppSideReason>& appSideReasons()
         {"src/models/RadioModel.cpp", "mirrorTxProfilesFromStation",
          "a window's TX profile requests: it shows the link's own reason for a request it "
          "could not send"},
+        // R-SPK-06 / R-SPK-14: why RADIO and the amplifier choice are
+        // greyed; the window's own words or IStationLink's (registered
+        // there).
+        {"src/models/RadioModel.cpp", "radioSpeakerUnavailableReason",
+         "a window's own reason RADIO is greyed: no radio, or the link's older-Core reason"},
+        {"src/models/RadioModel.cpp", "speakerAmplifierUnavailableReason",
+         "a window's own reason the speaker amplifier choice is greyed"},
+        // Native audio plan Task 21: why the Core speaker card is greyed;
+        // the window's own words or IStationLink's (registered there).
+        {"src/models/RadioModel.cpp", "coreSpeakerUnavailableReason",
+         "a window's own reason the Core speaker is greyed: no link to the Core, or the "
+         "link's older-Core reason"},
+        // Native audio plan (R-AUD-19): why "VAX TX (virtual device)" is
+        // greyed on Windows; this window's own tooltip, never sent.
+        {"src/models/TransmitModel.cpp", "vaxSourceUnavailableReason",
+         "a window's own reason the VAX transmit source is greyed on Windows"},
         {"src/models/RadioModel.cpp", "noStationReason",
          "a remote window's own notice when it has no link to the Core"},
         // Fix round 1 (minor 4): the link-down words MOX, TUNE and 2-TONE
@@ -1819,6 +2020,22 @@ const QList<AppSideReason>& appSideReasons()
         // radio without the switch, the window's own words.
         {"src/models/RadioModel.cpp", "hfPaSwitchUnavailableReason",
          "a window's own reason Disable HF PA is disabled on this radio"},
+        {"src/core/session/IStationLink.h", "stationCatUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/cat/CatControl.cpp", "unavailableReason",
+         "a window's own reason its CAT pages are disabled: none for its own "
+         "CAT, otherwise notConnectedReason or stationCatUnavailableReason"},
+        // Remote rotor control: the desktop's Turn beam action on a spot.
+        // Its words are StationRotorController's (scanned) or the reason a
+        // window's rotor command gives back (RadioModel, scanned).
+        {"src/models/SpotBeamTurner.cpp", "setReason",
+         "stores the reason a window's own Turn beam action was refused"},
+        {"src/models/SpotBeamTurner.cpp", "noBearingReason",
+         "a window's own reason Turn beam is disabled: StationRotorController's words"},
+        {"src/models/SpotBeamTurner.cpp", "rotorUnavailableReason",
+         "a window's own reason Turn beam is disabled: StationRotorController's or the link's words"},
+        {"src/models/SpotBeamTurner.cpp", "turnBeam",
+         "a window's own Turn beam: passes on its disabled reason or its rotor command's refusal"},
         {"src/core/session/IStationLink.h", "pgxlDeviceSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "tgxlDeviceSettingsUnavailableReason",
@@ -1879,6 +2096,14 @@ const QList<AppSideReason>& appSideReasons()
         // Level Cal fix wave: a slice on the other ADC's preamp choice on a
         // Core without stepAtt's rx2PreampMode.
         {"src/core/session/IStationLink.h", "rx2PreampModeUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // R-SPK-06 / R-SPK-14: the radio speaker (RADIO and the amplifier
+        // choice) on a Core without radioSpeakerVersion 1.
+        {"src/core/session/IStationLink.h", "radioSpeakerUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // Native audio plan Task 21: the Core speaker on a Core without
+        // coreSpeakerVersion 1.
+        {"src/core/session/IStationLink.h", "coreSpeakerUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         // R-R3-49 (parity Task 16): the filter graph's curve.
         {"src/core/session/IStationLink.h", "filterResponseUnavailableReason",
@@ -1989,10 +2214,15 @@ const QList<ReasonSource>& propertyTextSources()
         // Band names ("20m"), one or several joined with " + ". On the HL2
         // the slice the filter board is off for, by letter and band ("slice
         // B on WWV"), which RadioModel::republishAlexAdcSlices passes in.
+        // Where the band filters combine, what sharing the 6 m BPF/LNA
+        // costs ("6m LNA in: HF reads low"), which the same function words
+        // and passes in (setCombineNote); sharedLnaNoteWordsArePlain reads
+        // those words.
         {"src/core/accessories/AlexController.cpp", {QStringLiteral("recomputeBpf")}, {}, 3,
          {QStringLiteral("bandLabel(s.currentBpfBand)"),
           QStringLiteral("bandList.join(QStringLiteral(\" + \"))"),
-          QStringLiteral("m_switchBypassDetail[adc]")},
+          QStringLiteral("m_switchBypassDetail[adc]"),
+          QStringLiteral("m_combineNote[adc]")},
          // One band's name alone: the reason when one band is filtered.
          {QStringLiteral("bandLabel(s.currentBpfBand)")}},
         {"src/core/dsp/NnrSettings.h", {QStringLiteral("nnrLimitExplanation")}, {}, 4},
@@ -2064,13 +2294,19 @@ struct ForwardingSite {
     const char* file;
     const char* function;
     const char* callee;
+    const char* calleeFile;
+    const char* calleeFunction;
 };
 
 const QList<ForwardingSite>& forwardingSites()
 {
     static const QList<ForwardingSite> sites{
-        {"src/core/RxChannel.cpp", "setNnrTuning", "NnrAdapter::apply"},
-        {"src/core/RxChannel.cpp", "setNnrDiagnostics", "NnrAdapter::setDiagnostics"},
+        {"src/core/RxChannel.cpp", "setNnrTuning", "NnrAdapter::apply",
+         "src/core/dsp/NnrAdapter.cpp", ""},
+        {"src/core/RxChannel.cpp", "setNnrDiagnostics", "NnrAdapter::setDiagnostics",
+         "src/core/dsp/NnrAdapter.cpp", ""},
+        {"src/core/cat/CatModelAdapter.cpp", "mayChangeGlobalDsp",
+         "m_model->stationOnAirRefusal", "src/models/RadioModel.cpp", "stationOnAirRefusal"},
     };
     return sites;
 }
@@ -2397,6 +2633,87 @@ private slots:
         QVERIFY(forwardProblems.first().contains(QStringLiteral("diversityEligibility(otherId, &code)")));
     }
 
+    void catConfigurationReasonsAndValidatorForwardsAreScanned()
+    {
+        // CAT's local refuse(text) helper has the same one-argument shape
+        // as fail(text). Normalize only these audited bodies so every
+        // argument, including a one-word or forwarded one, gets checked.
+        static const QRegularExpression refuseCall(QStringLiteral("\\brefuse(?=\\s*\\()"));
+        struct Producer {
+            const char* file;
+            const char* function;
+            const char* validator;
+            const char* literal;
+            int ownReasons;
+        };
+        const QList<Producer> producers{
+            {"src/core/cat/CatSettings.cpp", "validate", "",
+             "Invalid CAT PTY dialect.", 5},
+            {"src/core/cat/CatSettings.cpp", "validateGlobal", "",
+             "Input PTT has no input source. Choose a source, then turn it on.", 8},
+            {"src/core/cat/CatService.cpp", "reconfigureChannel", "validate",
+             "That serial device is already used by Input PTT.", 2},
+            {"src/core/cat/CatService.cpp", "reconfigureGlobal", "validateGlobal",
+             "That serial device is already used by CAT %1.", 1},
+        };
+        for (const Producer& producer : producers) {
+            const QString file = QString::fromLatin1(producer.file);
+            const QString function = QString::fromLatin1(producer.function);
+            const auto source = std::find_if(reasonSources().cbegin(), reasonSources().cend(),
+                [&file, &function](const ReasonSource& entry) {
+                    return QLatin1String(entry.file) == file && entry.functions.contains(function);
+                });
+            QVERIFY(source != reasonSources().cend());
+            QVERIFY(source->notReasons.isEmpty());
+            const auto bodies = functionsIn(codeOf(sourcePath(file)),
+                QRegularExpression(QStringLiteral("^%1$").arg(function)));
+            QCOMPARE(bodies.size(), 1);
+            QString body = bodies.first().body;
+            body.replace(refuseCall, QStringLiteral("fail"));
+            const auto problems = [&source](const QString& code) {
+                QStringList result;
+                for (const ReasonText& reason : reasonsIn(code)) {
+                    result.append(problemsOf(reason, source->plainInserts, source->forwards));
+                }
+                return result;
+            };
+            const QList<ReasonText> reasons = reasonsIn(body);
+            QCOMPARE(std::count_if(reasons.cbegin(), reasons.cend(),
+                [](const ReasonText& reason) { return !reason.forwarded; }), producer.ownReasons);
+            QVERIFY2(problems(body).isEmpty(), qPrintable(problems(body).join(QLatin1Char('|'))));
+            const QString literal = QString::fromLatin1(producer.literal);
+            QCOMPARE(body.count(literal), 1);
+            QString malformed = body;
+            malformed.replace(literal, QStringLiteral("EINVAL"));
+            QVERIFY(problems(malformed).join(QLatin1Char('|')).contains(QStringLiteral("EINVAL")));
+
+            if (QString::fromLatin1(producer.validator).isEmpty()) {
+                continue;
+            }
+            // The specific refusal must come from the correct scanned
+            // validator, then pass unchanged to the out-parameter helper.
+            const QRegularExpression chain(QStringLiteral(
+                "if\\s*\\(\\s*!CatSettings::%1\\(config, &reason\\)\\)\\s*\\{"
+                "\\s*qCWarning\\(lcCat\\) << reason;\\s*return refuse\\(reason\\);")
+                .arg(QString::fromLatin1(producer.validator)));
+            QVERIFY2(chain.match(bodies.first().body).hasMatch(), producer.function);
+            QVERIFY(scanned(QStringLiteral("src/core/cat/CatSettings.cpp"),
+                            QString::fromLatin1(producer.validator)));
+            QCOMPARE(body.count(QStringLiteral("return fail(reason);")), 1);
+            QString unknownForward = body;
+            unknownForward.replace(QStringLiteral("return fail(reason);"),
+                                   QStringLiteral("return fail(otherReason);"));
+            QVERIFY(problems(unknownForward).join(QLatin1Char('|')).contains(
+                QStringLiteral("passes on otherReason")));
+            // Registration is per function. A later CAT writer is still
+            // unplaced until its own words and forwards are audited.
+            QVERIFY(!unplacedReasonSites(file,
+                QStringLiteral("bool futureCatSetting(QString* reason) { "
+                               "*reason = QStringLiteral(\"The Core refused it.\"); return false; }"))
+                .isEmpty());
+        }
+    }
+
     // TX diagnostics lane: the unkey event lines' literals are exempt as
     // log text only while they are: each is written in unkeyEventLines and
     // nowhere else in the file, and the lines that function returns go to
@@ -2505,13 +2822,11 @@ private slots:
                                             .arg(QLatin1String(site.file),
                                                  QLatin1String(site.function),
                                                  QLatin1String(site.callee))));
-            const QString calleeClass =
-                QString::fromLatin1(site.callee).section(QStringLiteral("::"), 0, 0);
-            QVERIFY2(scanned(QStringLiteral("src/core/dsp/%1.cpp").arg(calleeClass), QString()),
-                     site.callee);
+            QVERIFY2(scanned(QString::fromLatin1(site.calleeFile),
+                             QString::fromLatin1(site.calleeFunction)), site.callee);
             ++checked;
         }
-        QCOMPARE(checked, 2);
+        QCOMPARE(checked, 3);
     }
 
     void notchConstantsArePlain()
@@ -2532,6 +2847,48 @@ private slots:
             ++checked;
         }
         QCOMPARE(checked, 2);
+    }
+
+    void sharedLnaNoteWordsArePlain()
+    {
+        // The note RadioModel::republishAlexAdcSlices gives
+        // AlexController::setCombineNote, shown after the bands in the
+        // filter label ("80m + 40m + 6m (6m LNA in: HF reads low)"). That
+        // function is far larger than its wording, so the statements that
+        // word the note are read here: what is added to `costs`, and the
+        // note's opening words.
+        static const QRegularExpression republish(QStringLiteral("^republishAlexAdcSlices$"));
+        static const QRegularExpression statement(
+            QStringLiteral("\\b(?:costs\\s*<<|combineNote\\[adc\\]\\s*=)[^;]*;"));
+        static const QRegularExpression literal(
+            QStringLiteral("QStringLiteral\\(\\s*\"([^\"]*)\"\\s*\\)"));
+        static const QRegularExpression letter(QStringLiteral("[A-Za-z]"));
+        const QString code = codeOf(sourcePath(QStringLiteral("src/models/RadioModel.cpp")));
+        const QList<FunctionBody> functions = functionsIn(code, republish);
+        QCOMPARE(functions.size(), 1);
+        QStringList words;
+        QRegularExpressionMatchIterator statements =
+            statement.globalMatch(functions.first().body);
+        while (statements.hasNext()) {
+            QRegularExpressionMatchIterator literals =
+                literal.globalMatch(statements.next().captured(0));
+            while (literals.hasNext()) {
+                // A separator (" + ", ", ") and the "%1: %2" frame have no
+                // words of their own.
+                const QString text = literals.next().captured(1);
+                if (letter.match(QString(text).remove(QRegularExpression(
+                        QStringLiteral("%\\d")))).hasMatch()) {
+                    words.append(text);
+                }
+            }
+        }
+        for (const QString& text : std::as_const(words)) {
+            const QString problem = wordingProblemIn(text);
+            QVERIFY2(problem.isEmpty(),
+                     qPrintable(text + QStringLiteral(" [") + problem + QLatin1Char(']')));
+        }
+        // "HF reads low", "%1 filter out", "6m LNA in", "6m LNA off on RX".
+        QVERIFY2(words.size() >= 4, qPrintable(words.join(QLatin1Char('|'))));
     }
 
     void everyStationPropertyTextIsPlain()
@@ -2836,6 +3193,32 @@ private slots:
                            .arg(name);
         told.remove(name);
         QVERIFY2(wordingProblemIn(told).isEmpty(), qPrintable(told));
+    }
+
+    void theDeviceWordsTheNoticesForwardAreSliceHolderWords()
+    {
+        const QString code =
+            codeOf(sourcePath(QStringLiteral("src/core/session/StationReceivers.cpp")));
+        QVERIFY(!code.isEmpty());
+        int assignments = 0;
+        const QStringList problems = deviceWordsNotFromSliceHolderWords(code, &assignments);
+        QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QLatin1Char('\n'))));
+        // The pan move's mover and the two takes' takers, so the scan
+        // cannot pass on nothing.
+        QVERIFY2(assignments >= 3, qPrintable(QString::number(assignments)));
+
+        // The guard fails on a device's name alone.
+        const QString words =
+            QStringLiteral("takerName = sliceHolderWords(taker, WordsPlace::SentenceStart)");
+        QVERIFY(code.contains(words));
+        QString nameAlone = code;
+        nameAlone.replace(nameAlone.indexOf(words), words.size(),
+                          QStringLiteral("takerName = planDevice(taker).name"));
+        int again = 0;
+        const QStringList caught = deviceWordsNotFromSliceHolderWords(nameAlone, &again);
+        QCOMPARE(caught.size(), 1);
+        QVERIFY(caught.first().contains(QStringLiteral("planDevice(taker).name")));
+        QCOMPARE(again, assignments);
     }
 
     void everyReasonTheFixturesRecordIsPlain()

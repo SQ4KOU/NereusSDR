@@ -21,6 +21,9 @@
 // Modification history (NereusSDR):
 //   2026-07-30 Created in C++20/Qt6 for NereusSDR by J.J. Boyd (KG4VCF),
 //              with AI-assisted transformation via Anthropic Claude Code.
+//   2026-10-09 paintEvent draws the toast's own style sheet frame and
+//              severity bar. J.J. Boyd (KG4VCF), AI-assisted via
+//              Anthropic Claude Code.
 // =================================================================
 //
 // no-port-check: NereusSDR-original
@@ -71,6 +74,7 @@ public:
 
 protected:
     void mousePressEvent(QMouseEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
 
 private:
     QString m_message;

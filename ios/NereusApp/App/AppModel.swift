@@ -80,6 +80,12 @@ final class AppModel: ObservableObject {
     lazy var diversity = DiversityModel(mirror: mirror, phone: phoneSettings, commands: commands,
         slices: main.slices, captureSender: { [route] in route.captureCommandSender() })
     lazy var coreLog = CoreLogModel(mirror: mirror, commands: commands, records: records)
+    /// The speaker at the radio, as the Sound panel shows it: one level and
+    /// mute the Core keeps for every window and phone (R-SPK-20).
+    lazy var radioSpeaker = RadioSpeakerModel(mirror: mirror)
+    /// The speaker at the Core, as the Sound panel shows it: its level and
+    /// mute, kept by the Core for every window and phone (R-AUD-29).
+    lazy var coreSpeaker = CoreSpeakerModel(mirror: mirror)
     /// The Setup pages the Core describes (R-IOS-18), for as long as it
     /// sends them in the current session.
     let setupFeed: SetupDescriptionFeed
@@ -115,6 +121,10 @@ final class AppModel: ObservableObject {
             }
             return range.map { SetupDescription.Range(minimum: $0.min, maximum: $0.max, step: $0.step) }
         }
+        // What Spectrum Defaults' Size and Hz/bin Target show while Sizing
+        // has another control in charge (description 28).
+        dispatcher.runningFftSize = { [weak core = main.coreDisplay] in core?.runningFftSize }
+        dispatcher.runningBinWidthHz = { [weak core = main.coreDisplay] in core?.runningBinWidthHz }
         paValues.configure(dispatcher)
         return dispatcher
     }()
@@ -259,7 +269,8 @@ final class AppModel: ObservableObject {
         main.modMonitor = ModMonitorModel(mirror: mirror, commands: commands, records: records, settings: settings,
                                           slices: main.slices, phone: phoneSettings)
         spots = SpotsModel(records: records, mirror: mirror, commands: commands, settings: settings,
-                           slices: main.slices, catalogFeed: main.catalogFeed, phone: phoneSettings)
+                           slices: main.slices, catalogFeed: main.catalogFeed, phone: phoneSettings,
+                           rotor: main.rotor)
         freedv = FreeDVReporterModel(records: records, mirror: mirror, commands: commands, settings: settings,
                                      spots: spots, slices: main.slices, catalogFeed: main.catalogFeed,
                                      phone: phoneSettings)

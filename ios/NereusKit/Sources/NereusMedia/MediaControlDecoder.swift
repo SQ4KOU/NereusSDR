@@ -48,11 +48,15 @@ public enum MediaControlDecoder {
     // MARK: Display
 
     /// `context`: 19 keys, plus `wideband` exactly when `wideband` is true,
-    /// plus the five grant keys exactly when `grant` is true.
+    /// plus the five grant keys exactly when `grant` is true, plus
+    /// `transmit` exactly when `transmit` is true, plus `pictureGeneration`
+    /// exactly when `picture` is true.
     public static func context(_ payload: [String: LinkJSON], wideband expectsWideband: Bool,
                                grant expectsGrant: Bool,
-                               transmit expectsTransmit: Bool = false) -> MediaControlEvent.DisplayContext? {
+                               transmit expectsTransmit: Bool = false,
+                               picture expectsPicture: Bool = false) -> MediaControlEvent.DisplayContext? {
         let expected = 19 + (expectsWideband ? 1 : 0) + (expectsGrant ? 5 : 0) + (expectsTransmit ? 1 : 0)
+            + (expectsPicture ? 1 : 0)
         guard payload.count == expected, isOp(payload, "context"), string(payload["connectionId"]) != nil,
               let endpointId = whole(payload["endpointId"], 1...maxUInt32),
               let revision = whole(payload["revision"], 1...maxUInt32),
@@ -109,12 +113,24 @@ public enum MediaControlDecoder {
             }
             transmit = value
         }
+        // A connection that declared the picture gets `pictureGeneration` in
+        // every context (the media control document, "The picture a context
+        // continues"): a context generation, so never zero and never newer
+        // than the context that states it.
+        var picture: UInt32?
+        if expectsPicture {
+            guard let value = whole(payload["pictureGeneration"], 1...maxUInt32) else {
+                return nil
+            }
+            picture = UInt32(value)
+        }
         return MediaControlEvent.DisplayContext(
             endpointId: UInt32(endpointId), revision: UInt32(revision), contextGeneration: UInt32(generation),
             sourceStream: Int(stream), sourceCentreHz: sourceCentre, sampleRateHz: rate, centreHz: centre,
             spanHz: span, wideCentreHz: wideCentre, wideSpanHz: wideSpan, traceSamples: Int(trace),
             waterfallSamples: Int(waterfall), wideSamples: Int(wide), minDbm: minDbm, maxDbm: maxDbm,
-            fps: Int(fps), framesPerLine: Int(lines), wideband: wideband, grant: grant, transmit: transmit)
+            fps: Int(fps), framesPerLine: Int(lines), wideband: wideband, grant: grant, transmit: transmit,
+            pictureGeneration: picture)
     }
 
     /// A context's `wideband`: `{version, available, active}` while not

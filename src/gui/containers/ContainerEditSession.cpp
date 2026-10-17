@@ -1,10 +1,14 @@
 // no-port-check: NereusSDR-original stable-identity draft/rebase implementation.
 // Modification history (NereusSDR):
 //   2026-10-02 — Draft transactions by J.J. Boyd (KG4VCF), OpenAI Codex assisted.
+//   2026-10-11 - Apply commits through the caller's function when one is
+//                 given. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 #include "ContainerEditSession.h"
 #include <QHash>
 #include <QSet>
 #include <algorithm>
+#include <utility>
 namespace NereusSDR {
 namespace {
 const ContainerDocument* find(const WorkspaceDocument& doc, const QString& id)
@@ -38,7 +42,9 @@ void replace(WorkspaceDocument& doc, const QString& id, const ContainerDocument*
     if (current) { doc.containers.append(*current); }
 }
 }
-ContainerEditSession::ContainerEditSession(ContainerWorkspaceStore& store) : m_store(store)
+ContainerEditSession::ContainerEditSession(ContainerWorkspaceStore& store, Commit commit)
+    : m_store(store)
+    , m_commit(std::move(commit))
 {
     m_store.load(); m_base = m_store.snapshot(); m_draft = m_base;
 }
@@ -95,7 +101,7 @@ CommitResult ContainerEditSession::apply()
     }
     if (m_draft.mainContainerId!=m_base.mainContainerId) { merged.mainContainerId=m_draft.mainContainerId; }
     if (m_draft.extensions!=m_base.extensions) { merged.extensions=m_draft.extensions; }
-    const auto result=m_store.commit(merged,live.revision);
+    const auto result=m_commit ? m_commit(merged,live.revision) : m_store.commit(merged,live.revision);
     if (result.status==CommitStatus::Saved) { m_base=m_store.snapshot(); m_draft=m_base; m_casConflicts.clear(); }
     else if(result.status==CommitStatus::Conflict) {
         // The store is the final raw/revision arbiter. A race after our load

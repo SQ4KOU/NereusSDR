@@ -10,6 +10,9 @@
 // token sign-in and is saved with its identity from then on.
 // 2026-10-01: Authenticated Core address inventory and reconnect learning.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex. NereusSDR-original.
+// 2026-10-16: The Core's explicit empty address list clears its saved Core
+// addresses, and the reached ones it no longer names, but for the one in
+// use. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "gui/GuiConnectionController.h"
 #include "core/security/StationLabel.h"
@@ -35,6 +38,7 @@
 
 #include <QDateTime>
 #include <QNetworkInterface>
+#include <QScopedValueRollback>
 #include <QTimer>
 #include <QUrl>
 
@@ -178,6 +182,8 @@ GuiConnectionController::GuiConnectionController(QObject* parent)
         // radio. An already open picker still receives the error message.
         if (m_selector->isVisible()) { refresh(); }
     }, Qt::QueuedConnection);
+    connect(m_selector.get(), &QDialog::finished, this,
+            &GuiConnectionController::cancelSelectorDismissal);
     connect(m_selector.get(), &ConnectionSelector::connectRequested,
             this, &GuiConnectionController::queueConnect);
     connect(m_selector.get(), &ConnectionSelector::disconnectRequested,
@@ -247,6 +253,7 @@ void GuiConnectionController::shutdown()
     if (m_shuttingDown) { return; }
     m_shuttingDown = true;
     ++m_request;
+    cancelSelectorDismissal();
     m_selector->hide();
     m_selector->setCoreManagementAvailable(false);
     m_coreSettings.reset();
@@ -257,6 +264,7 @@ void GuiConnectionController::shutdown()
 
 void GuiConnectionController::attachWindow(MainWindow* window)
 {
+    QObject::disconnect(m_selectorDismissal);
     m_selector->setCoreManagementAvailable(false);
     if (m_coreSettings) { m_coreSettings->retireBindings(); }
     for (const QMetaObject::Connection& connection : m_windowConnections) {
@@ -399,6 +407,7 @@ void GuiConnectionController::attachWindow(MainWindow* window)
                 }
             }));
     }
+    if (m_remoteControls) { armSelectorDismissal(); }
     refresh();
     if (m_selector->isVisible()) { scan(); }
 }
@@ -718,6 +727,9 @@ bool GuiConnectionController::isReadyToConnect(const RemoteStationOptions& conne
 void GuiConnectionController::showConnections()
 {
     if (m_shuttingDown) { return; }
+    // A queued local disconnect notification can raise an already-visible
+    // selector while its newly requested connection is still starting.
+    if (!m_selector->isVisible()) { cancelSelectorDismissal(); }
     refresh();
     m_selector->show();
     m_selector->raise();
@@ -735,7 +747,9 @@ void GuiConnectionController::scan()
 
 void GuiConnectionController::queueConnect(const QString& key)
 {
+    cancelSelectorDismissal();
     const quint64 request = ++m_request;
+    m_selectorConnectRequest = request;
     m_pendingConnectionIdentity.clear();
     if (key.startsWith(QLatin1String("saved:"))) {
         const auto target = m_store.target(key.mid(6));
@@ -754,10 +768,60 @@ void GuiConnectionController::queueConnect(const QString& key)
     QTimer::singleShot(0, this, [this, key, request] {
         if (!m_shuttingDown && request == m_request) {
             m_pendingConnectionIdentity.clear();
+            const QScopedValueRollback<quint64> executing(m_executingConnectRequest, request);
             connectTarget(key);
             refresh();
         }
     });
+}
+
+void GuiConnectionController::cancelSelectorDismissal()
+{
+    m_selectorConnectRequest = 0;
+    QObject::disconnect(m_selectorDismissal);
+}
+
+void GuiConnectionController::armSelectorDismissal(const QString& localRadioMac)
+{
+    QObject::disconnect(m_selectorDismissal);
+    const quint64 request = m_executingConnectRequest;
+    if (m_shuttingDown || request == 0 || request != m_request
+        || request != m_selectorConnectRequest || !m_selector->isVisible()
+        || !m_sessions.window()) { return; }
+    const quint64 generation = m_sessions.generation();
+    const QPointer<RadioModel> model(m_sessions.window()->radioModel());
+    const QPointer<RemoteConnectionController> remote(m_remoteControls);
+    // Local success belongs to the selected radio. Remote success belongs
+    // to the authenticated Core session, even when its radio is offline.
+    auto observe = [this, request, generation, model, remote, localRadioMac,
+                    started = false]() mutable {
+        if (m_shuttingDown || request != m_request || request != m_selectorConnectRequest
+            || generation != m_sessions.generation() || !model) { return; }
+        const ConnectionState state = remote ? remote->state() : model->connectionState();
+        if (state == ConnectionState::Connecting || state == ConnectionState::Probing) {
+            started = true;
+        } else if (state == ConnectionState::Connected) {
+            if (!remote && model->currentRadioMac().compare(localRadioMac, Qt::CaseInsensitive) != 0) { return; }
+            cancelSelectorDismissal();
+            m_selector->hide();
+        } else if (started) {
+            // Keep failures visible; later background retries do not own
+            // a dialog the operator may now be using to inspect or recover.
+            cancelSelectorDismissal();
+        }
+    };
+    if (remote) {
+        m_selectorDismissal = connect(remote, &RemoteConnectionController::changed, this, observe);
+    } else if (!localRadioMac.isEmpty()) {
+        m_selectorDismissal = connect(model, &RadioModel::connectionStateChanged, this, observe);
+    }
+}
+
+void GuiConnectionController::reconnectFromSelector()
+{
+    if (!m_remoteControls || !m_remoteControls->canConnect()) { return; }
+    armSelectorDismissal();
+    m_remoteControls->connectToStation();
 }
 
 bool GuiConnectionController::choose(const StationStartupSelection& choice, bool startConnection)
@@ -795,7 +859,7 @@ void GuiConnectionController::connectTarget(const QString& key)
     if (key == QLatin1String("local")) {
         if (choose({}, false)) { scan(); }
     } else if (key == QLatin1String("current")) {
-        if (m_remoteControls) { m_remoteControls->connectToStation(); }
+        if (m_remoteControls) { reconnectFromSelector(); }
     } else if (key.startsWith(QLatin1String("saved:"))) {
         const auto target = m_store.target(key.mid(6));
         if (!target) { m_selector->setNotice(tr("That saved Core is no longer available.")); return; }
@@ -816,7 +880,7 @@ void GuiConnectionController::connectTarget(const QString& key)
         const auto current = m_sessions.selection();
         if (current.savedId == target->id && sameConnection(current.connection, target->connection)) {
             if (needsFreshCanonicalSession(*target)) { choose({options, target->id, {}}, true); }
-            else if (m_remoteControls) { m_remoteControls->connectToStation(); }
+            else if (m_remoteControls) { reconnectFromSelector(); }
         } else {
             choose({options, target->id, {}}, true);
         }
@@ -840,7 +904,7 @@ void GuiConnectionController::connectTarget(const QString& key)
                         selection.connection.url = endpoint.url().toString();
                         selection.connection.allowUnpinned = false;
                         choose(selection, true);
-                    } else if (m_remoteControls) { m_remoteControls->connectToStation(); }
+                    } else if (m_remoteControls) { reconnectFromSelector(); }
                 } else {
                     choose(selection, true);
                 }
@@ -873,6 +937,7 @@ void GuiConnectionController::connectTarget(const QString& key)
         settings.setLastConnected(radio.macAddress);
         if (!settings.save()) { m_selector->setNotice(tr("The local radio preference could not be saved.")); }
         if (radio.inUse) { m_selector->setNotice(tr("This radio reports in use; attempting the explicitly selected connection.")); }
+        armSelectorDismissal(radio.macAddress);
         m_sessions.window()->radioModel()->connectToRadio(radio);
     }
     refresh();
@@ -881,6 +946,7 @@ void GuiConnectionController::connectTarget(const QString& key)
 void GuiConnectionController::disconnectCurrent()
 {
     ++m_request;
+    cancelSelectorDismissal();
     if (m_remoteControls) { m_remoteControls->disconnectFromStation(); }
     else if (m_sessions.window()) { m_sessions.window()->radioModel()->disconnectFromRadio(); }
     refresh();
@@ -1034,13 +1100,18 @@ void GuiConnectionController::rememberAuthenticatedRadio()
     }
     const auto& caps = client->capabilities();
     // Link 7.1: only this authenticated paired identity, after negotiated
-    // minor/capability support. Empty/absent/malformed lists retain history.
+    // minor/capability support. The Core's explicit empty list clears the
+    // saved Core addresses, so the merge below stops offering them; absent
+    // or malformed lists, or ones whose every entry is unusable, retain. A
+    // Core-named address an accepted list drops also leaves the reached
+    // addresses (cachedAddresses), but never the one this session is on.
     if (client->agreedMinor() >= 11 && caps.coreAddressesVersion >= 1
         && client->signedInWithDeviceKey()
         && !target->connection.identityFingerprint.isEmpty()) {
         QString error;
         if (!m_store.rememberCoreAddresses(target->id, client->stationIdentityFingerprint(),
-                                          client->remoteDevices()->coreInfo().coreAddresses, &error)) {
+                                          client->remoteDevices()->coreInfo().coreAddresses,
+                                          client->connectedUrl().toString(), &error)) {
             m_selector->setNotice(error);
         }
         target = m_store.target(target->id);

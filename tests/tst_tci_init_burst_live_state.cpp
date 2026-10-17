@@ -17,15 +17,48 @@
 
 #include <QtTest>
 #include <QSignalSpy>
+#include <QScopeGuard>
 #include <QWebSocket>
 #include "core/TciProtocol.h"
 #include "core/TciServer.h"
 #include "core/AppSettings.h"
+#include "core/MoxController.h"
+#include "core/RadioConnection.h"
+#include "core/TxSliceArbiter.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "TestMockRadioModel.h"
 
 using namespace NereusSDR;
+
+// A connected transport seam only: none of these calls reaches a radio.
+class InitBurstFakeConnection final : public RadioConnection {
+public:
+    void init() override {}
+    void connectToRadio(const RadioInfo&) override {}
+    void disconnect() override {}
+    void setReceiverFrequency(int, quint64) override {}
+    void setTxFrequency(quint64) override {}
+    void setActiveReceiverCount(int) override {}
+    void setSampleRate(int) override {}
+    void setAttenuator(int) override {}
+    void setPreamp(bool) override {}
+    void setTxDrive(int) override {}
+    void sendTxIq(const float*, int) override {}
+    void setWatchdogEnabled(bool) override {}
+    void setAntennaRouting(AntennaRouting) override {}
+    void setMox(bool) override {}
+    void setTrxRelay(bool) override {}
+    void setMicBoost(bool) override {}
+    void setLineIn(bool) override {}
+    void setMicTipRing(bool) override {}
+    void setMicBias(bool) override {}
+    void setLineInGain(int) override {}
+    void setUserDigOut(quint8) override {}
+    void setPuresignalRun(bool) override {}
+    void setMicPTTDisabled(bool) override {}
+    void setMicXlr(bool) override {}
+};
 
 class TestTciInitBurstLiveState : public QObject {
     Q_OBJECT
@@ -45,6 +78,13 @@ private slots:
     void agc_drives_agc_mode_and_gain_lines();
     // RED #5 -- mox + rit/xit + lock + globalMute drive their lines.
     void global_toggles_drive_their_lines();
+    void late_client_after_completed_handoff_gets_bound_tx_frequency_data();
+    void late_client_after_completed_handoff_gets_bound_tx_frequency();
+    void initial_tx_frequency_without_binding_retains_rx1_fallback();
+    void desktop_map_tx_frequency_hides_unmapped_bound_slice_data();
+    void desktop_map_tx_frequency_hides_unmapped_bound_slice();
+    void production_tx_slice_drives_trx_and_tune_lines_data();
+    void production_tx_slice_drives_trx_and_tune_lines();
     // RED #6 -- per-rx flags: sql, rxMute, nr, anf, apf, bin, nf, ctun, split.
     void per_rx_flags_drive_their_lines();
     // RED #7 -- balance + rxBalance per RX per channel.
@@ -85,6 +125,16 @@ private slots:
     // true (init) to false (live) between the two frames.
     void live_vfo_broadcast_reads_rx2_enabled_live();
     void existing_slice_after_deletion_gap_uses_stable_receiver_id();
+    void missing_slice_modes_are_not_advertised_data();
+    void missing_slice_modes_are_not_advertised();
+    void removed_slice_mode_commands_are_silent();
+    void vacant_receiver_mapping_does_not_alias_slice_a();
+    void receiver_availability_matches_actual_slices_data();
+    void receiver_availability_matches_actual_slices();
+    void explicit_receiver_availability_requires_a_live_mapping_data();
+    void explicit_receiver_availability_requires_a_live_mapping();
+    void live_receiver_availability_preserves_stable_ids_data();
+    void live_receiver_availability_preserves_stable_ids();
     void a_client_joining_before_the_drain_does_not_hide_a_centre_change();
 };
 
@@ -247,6 +297,274 @@ void TestTciInitBurstLiveState::global_toggles_drive_their_lines()
              "VFOALock on must flow into lock:0,true");
     QVERIFY2(burst.contains(QStringLiteral("mute:true;")),
              "Global mute on must flow into mute:true");
+}
+
+// PR #293 missed P2: a fresh connection after a completed handoff must
+// receive the bound slice's dial, even for an internal slice. Reading RX0
+// instead, or adding XIT to the dial already announced separately from
+// xit_enable/offset, points the app at another frequency/band. Only the
+// transport is fake; the model and arbiter are real.
+void TestTciInitBurstLiveState::late_client_after_completed_handoff_gets_bound_tx_frequency_data()
+{
+    QTest::addColumn<int>("txSliceId");
+    QTest::addColumn<bool>("xitEnabled");
+    QTest::addColumn<qint64>("expectedHz");
+    QTest::addColumn<QString>("expectedBand");
+    QTest::newRow("slice-b-with-xit") << 1 << true << qint64(21250000) << QStringLiteral("15m");
+    QTest::newRow("internal-slice-with-xit") << 2 << true << qint64(28500000) << QStringLiteral("10m");
+    QTest::newRow("internal-slice-xit-disabled") << 2 << false << qint64(28500000) << QStringLiteral("10m");
+}
+
+void TestTciInitBurstLiveState::late_client_after_completed_handoff_gets_bound_tx_frequency()
+{
+    QFETCH(int, txSliceId);
+    QFETCH(bool, xitEnabled);
+    QFETCH(qint64, expectedHz);
+    QFETCH(QString, expectedBand);
+    pinAppSettingsToCaptureConditions();
+    InitBurstFakeConnection connection;
+    RadioModel radio;
+    radio.configureStreamPool(5, 5, 192000);
+    radio.injectConnectionForTest(&connection);
+    const auto detachConnection = qScopeGuard([&radio] {
+        radio.injectConnectionForTest(nullptr);
+    });
+    QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 0);
+    QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 1);
+    QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 2);
+    SliceModel* const first = radio.sliceById(0);
+    SliceModel* const second = radio.sliceById(1);
+    SliceModel* const internal = radio.sliceById(2);
+    first->setFrequency(7150000.0);
+    second->setFrequency(21250000.0);
+    internal->setFrequency(28500000.0);
+    SliceModel* const txSlice = radio.sliceById(txSliceId);
+    txSlice->setXitHz(600);
+    txSlice->setXitEnabled(xitEnabled);
+    QVERIFY(radio.txBoundSlice() == first);
+    QVERIFY(!radio.mox());
+
+    // Capture receive and separate XIT state before the handoff. It must
+    // survive the handoff and the TX initialization repair unchanged, including stream
+    // centres (DDS), which need not equal a slice's receive dial.
+    TciProtocol beforeHandoff(&radio);
+    QStringList receiveLines;
+    for (const QString& line : beforeHandoff.buildInitBurst()) {
+        if (line.startsWith(QStringLiteral("vfo:"))
+            || line.startsWith(QStringLiteral("dds:"))
+            || line.startsWith(QStringLiteral("if:"))
+            || line.startsWith(QStringLiteral("xit_enable:"))
+            || line.startsWith(QStringLiteral("xit_offset:"))) {
+            receiveLines.append(line);
+        }
+    }
+    QVERIFY(!receiveLines.isEmpty());
+    QVERIFY(radio.requestTxHandoffToSlice(txSliceId));
+    QTRY_COMPARE(radio.txSliceArbiter()->txBoundSliceId(), txSliceId);
+    QCOMPARE(radio.txSliceArbiter()->pendingHandoffSliceId(), -1);
+    QCOMPARE(radio.txBoundSlice(), txSlice);
+    QVERIFY(!radio.mox());
+
+    // Attach the server after the handoff has completed. There is no
+    // queued handoff/VFO event to correct or mask a wrong initial burst.
+    TciServer server(&radio);
+    QVERIFY(server.start(0));
+    QWebSocket client;
+    QStringList frames;
+    connect(&client, &QWebSocket::textMessageReceived, this,
+            [&frames](const QString& frame) {
+                for (const QString& line : frame.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+                    frames.append(line.trimmed() + QLatin1Char(';'));
+                }
+            });
+    QSignalSpy connected(&client, &QWebSocket::connected);
+    client.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    QTRY_VERIFY_WITH_TIMEOUT(frames.contains(QStringLiteral("ready;")), 3000);
+    const QStringList initial = frames.mid(0, frames.indexOf(QStringLiteral("ready;")) + 1);
+    QCOMPARE(initial.count(QStringLiteral("tx_frequency:%1;").arg(expectedHz)), 1);
+    QCOMPARE(initial.count(QStringLiteral("tx_frequency_thetis:%1,%2,true,false;")
+                               .arg(expectedHz).arg(expectedBand)), 1);
+    QVERIFY(!initial.contains(QStringLiteral("tx_frequency:7150000;")));
+    QVERIFY(initial.contains(QStringLiteral("trx_count:2;")));
+    QVERIFY(initial.contains(QStringLiteral("vfo:0,0,7150000;")));
+    QVERIFY(initial.contains(QStringLiteral("vfo:1,0,21250000;")));
+    QStringList actualReceiveLines;
+    for (const QString& line : initial) {
+        if (line.startsWith(QStringLiteral("vfo:"))
+            || line.startsWith(QStringLiteral("dds:"))
+            || line.startsWith(QStringLiteral("if:"))
+            || line.startsWith(QStringLiteral("xit_enable:"))
+            || line.startsWith(QStringLiteral("xit_offset:"))) {
+            actualReceiveLines.append(line);
+        }
+        QVERIFY(!line.startsWith(QStringLiteral("vfo:2,")));
+        QVERIFY(!line.startsWith(QStringLiteral("dds:2,")));
+    }
+    QCOMPARE(actualReceiveLines, receiveLines);
+    QCOMPARE(first->frequency(), 7150000.0);
+    QCOMPARE(second->frequency(), 21250000.0);
+    QCOMPARE(internal->frequency(), 28500000.0);
+    QCOMPARE(radio.txBoundSlice(), txSlice);
+    QCOMPARE(txSlice->xitEnabled(), xitEnabled);
+    QCOMPARE(txSlice->xitHz(), 600);
+    QVERIFY(!radio.mox());
+    client.close();
+    server.stop();
+}
+
+// Preserve the legacy RX1 dial fallback when no TX-bound slice resolves;
+// an initialization repair must not introduce a new zero-frequency default.
+void TestTciInitBurstLiveState::initial_tx_frequency_without_binding_retains_rx1_fallback()
+{
+    pinAppSettingsToCaptureConditions();
+    InitBurstFakeConnection connection;
+    RadioModel radio;
+    radio.configureStreamPool(5, 5, 192000);
+    radio.injectConnectionForTest(&connection);
+    const auto detachConnection = qScopeGuard([&radio] {
+        radio.injectConnectionForTest(nullptr);
+    });
+    QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 0);
+    radio.sliceById(0)->setFrequency(7150000.0);
+    radio.txSliceArbiter()->releaseBinding();
+    QVERIFY(radio.txBoundSlice() == nullptr);
+    QVERIFY(!radio.mox());
+    TciProtocol protocol(&radio);
+    const QStringList burst = protocol.buildInitBurst();
+    QVERIFY(burst.contains(QStringLiteral("tx_frequency:7150000;")));
+    QVERIFY(burst.contains(QStringLiteral("tx_frequency_thetis:7150000,40m,false,false;")));
+    QVERIFY(burst.contains(QStringLiteral("vfo:0,0,7150000;")));
+    QVERIFY(!burst.contains(QStringLiteral("tx_frequency:0;")));
+    QVERIFY(radio.txBoundSlice() == nullptr);
+    QVERIFY(!radio.mox());
+}
+
+// Desktop-host mode maps this client's receivers to the station's own
+// slices. A TX binding on a slice outside that map (another device's)
+// must not leak its dial: the initial TX dial falls back to receiver 0's
+// mapped slice. A bound slice that is mapped is still announced.
+void TestTciInitBurstLiveState::desktop_map_tx_frequency_hides_unmapped_bound_slice_data()
+{
+    QTest::addColumn<int>("txSliceId");
+    QTest::addColumn<qint64>("expectedHz");
+    QTest::addColumn<QString>("expectedBand");
+    QTest::newRow("unmapped-phone-slice-bound") << 0 << qint64(7074000) << QStringLiteral("40m");
+    QTest::newRow("mapped-receiver-1-bound") << 1 << qint64(21074000) << QStringLiteral("15m");
+}
+
+void TestTciInitBurstLiveState::desktop_map_tx_frequency_hides_unmapped_bound_slice()
+{
+    QFETCH(int, txSliceId);
+    QFETCH(qint64, expectedHz);
+    QFETCH(QString, expectedBand);
+    pinAppSettingsToCaptureConditions();
+    InitBurstFakeConnection connection;
+    RadioModel radio;
+    radio.configureStreamPool(5, 5, 192000);
+    radio.injectConnectionForTest(&connection);
+    const auto detachConnection = qScopeGuard([&radio] {
+        radio.injectConnectionForTest(nullptr);
+    });
+    QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 0);
+    QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 1);
+    QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 2);
+    radio.sliceById(0)->setFrequency(3573000.0);
+    radio.sliceById(1)->setFrequency(21074000.0);
+    radio.sliceById(2)->setFrequency(7074000.0);
+    if (txSliceId != 0) {
+        QVERIFY(radio.requestTxHandoffToSlice(txSliceId));
+        QTRY_COMPARE(radio.txSliceArbiter()->txBoundSliceId(), txSliceId);
+    }
+    QCOMPARE(radio.txBoundSlice(), radio.sliceById(txSliceId));
+    QVERIFY(!radio.mox());
+
+    // Receiver 0 is the host's slice 2, receiver 1 its slice 1; slice 0
+    // belongs to another device and has no receiver here.
+    TciProtocol protocol(&radio);
+    protocol.setReceiverSliceMap([](int receiver) {
+        return receiver == 0 ? 2 : (receiver == 1 ? 1 : -1);
+    });
+    const QStringList burst = protocol.buildInitBurst();
+    QVERIFY(burst.contains(QStringLiteral("vfo:0,0,7074000;")));
+    QCOMPARE(burst.count(QStringLiteral("tx_frequency:%1;").arg(expectedHz)), 1);
+    QCOMPARE(burst.filter(QStringLiteral("tx_frequency_thetis:%1,%2,")
+                              .arg(expectedHz).arg(expectedBand)).size(), 1);
+    for (const QString& line : burst) {
+        QVERIFY2(!line.contains(QStringLiteral("3573000")), qPrintable(line));
+    }
+}
+
+// The production slice flags, including a desktop receiver map, choose
+// the receiver in the init burst. MOX and TUNE use the model's usual paths
+// with a fake transport and no TX channel or audio device.
+void TestTciInitBurstLiveState::production_tx_slice_drives_trx_and_tune_lines_data()
+{
+    QTest::addColumn<bool>("secondReceiverPresent");
+    QTest::addColumn<bool>("desktopMap");
+    QTest::newRow("slice-1-transmits") << true << false;
+    QTest::newRow("rx2-absent-falls-back") << false << false;
+    QTest::newRow("desktop-receiver-1-maps-slice-2") << true << true;
+}
+
+void TestTciInitBurstLiveState::production_tx_slice_drives_trx_and_tune_lines()
+{
+    QFETCH(bool, secondReceiverPresent);
+    QFETCH(bool, desktopMap);
+    pinAppSettingsToCaptureConditions();
+    InitBurstFakeConnection connection;
+    RadioModel radio;
+    radio.configureStreamPool(5, 5, 192000);
+    QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 0);
+    QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 1);
+    QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 2);
+    if (!secondReceiverPresent) {
+        radio.removeSlice(1);
+    }
+    // In the fallback case, a live TX flag elsewhere must not invent RX2.
+    const int txSliceId = desktopMap || !secondReceiverPresent ? 2 : 1;
+    for (SliceModel* slice : radio.slices()) {
+        slice->setTxSlice(slice->sliceIndex() == txSliceId);
+    }
+    radio.injectConnectionForTest(&connection);
+    const auto detachConnection = qScopeGuard([&radio] {
+        radio.injectConnectionForTest(nullptr);
+    });
+    radio.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+    radio.moxController()->setMoxCheck([] {
+        return safety::BandPlanGuard::MoxCheckResult{true, QString()};
+    });
+    radio.setTuneOffSettleMsForTest(0);
+    TciProtocol protocol(&radio);
+    if (desktopMap) {
+        protocol.setReceiverSliceMap([](int receiver) { return receiver == 1 ? 2 : 0; });
+    }
+    const int txReceiver = secondReceiverPresent ? 1 : 0;
+    QCOMPARE(protocol.transmitReceiverNow(), txReceiver);
+
+    radio.setMox(true);
+    QTRY_VERIFY(radio.mox());
+    const QStringList moxBurst = protocol.buildInitBurst();
+    QVERIFY(moxBurst.contains(QStringLiteral("trx:%1,true;").arg(txReceiver)));
+    QVERIFY(moxBurst.contains(QStringLiteral("trx:%1,false;").arg(1 - txReceiver)));
+    QVERIFY(!moxBurst.contains(QStringLiteral("trx:%1,true;").arg(1 - txReceiver)));
+    QVERIFY(moxBurst.contains(QStringLiteral("tune:0,false;")));
+    QVERIFY(moxBurst.contains(QStringLiteral("tune:1,false;")));
+    radio.setMox(false);
+    QTRY_VERIFY(!radio.mox());
+
+    radio.setTune(true);
+    QVERIFY(radio.tune());
+    QTRY_VERIFY(radio.mox());
+    const QStringList tuneBurst = protocol.buildInitBurst();
+    QVERIFY(tuneBurst.contains(QStringLiteral("trx:%1,true;").arg(txReceiver)));
+    QVERIFY(tuneBurst.contains(QStringLiteral("trx:%1,false;").arg(1 - txReceiver)));
+    QVERIFY(tuneBurst.contains(QStringLiteral("tune:%1,true;").arg(txReceiver)));
+    QVERIFY(tuneBurst.contains(QStringLiteral("tune:%1,false;").arg(1 - txReceiver)));
+    QVERIFY(!tuneBurst.contains(QStringLiteral("tune:%1,true;").arg(1 - txReceiver)));
+    radio.setTune(false);
+    QTRY_VERIFY(!radio.mox());
+    QTRY_VERIFY(!radio.tune());
 }
 
 void TestTciInitBurstLiveState::per_rx_flags_drive_their_lines()
@@ -841,6 +1159,280 @@ void TestTciInitBurstLiveState::
     p.enqueueLocalBroadcastCentre(0);
     (void)p.buildInitBurst();
     QVERIFY(!hasPrefix(drain(), QStringLiteral("dds:0,")));
+}
+
+void TestTciInitBurstLiveState::missing_slice_modes_are_not_advertised_data()
+{
+    QTest::addColumn<bool>("keepA");
+    QTest::addColumn<bool>("keepB");
+    QTest::newRow("slice-a-only") << true << false;
+    QTest::newRow("slice-b-only") << false << true;
+    QTest::newRow("no-slices") << false << false;
+}
+
+void TestTciInitBurstLiveState::missing_slice_modes_are_not_advertised()
+{
+    QFETCH(bool, keepA);
+    QFETCH(bool, keepB);
+    pinAppSettingsToCaptureConditions();
+    RadioModel radio;
+    radio.configureStreamPool(5, 5, 192000);
+    // A cold startup can have no slices. Removing the final live slice is
+    // deliberately refused by RadioModel, so do not model startup that way.
+    if (keepA || keepB) {
+        const int a = radio.addSlice(QStringLiteral("pan-0"));
+        const int b = radio.addSlice(QStringLiteral("pan-0"));
+        QCOMPARE(a, 0);
+        QCOMPARE(b, 1);
+        radio.sliceById(a)->setDspMode(DSPMode::DIGU);
+        radio.sliceById(b)->setDspMode(DSPMode::CWL);
+        if (!keepA) {
+            radio.removeSlice(a);
+        }
+        if (!keepB) {
+            radio.removeSlice(b);
+        }
+    }
+
+    TciProtocol protocol(&radio);
+    const QStringList burst = protocol.buildInitBurst();
+    QVERIFY(!burst.contains(QString()));
+    QVERIFY(!burst.contains(QStringLiteral("modulation:0,;")));
+    QVERIFY(!burst.contains(QStringLiteral("modulation:1,;")));
+    QCOMPARE(burst.contains(QStringLiteral("modulation:0,DIGU;")), keepA);
+    QCOMPARE(burst.contains(QStringLiteral("modulation:1,CWL;")), keepB);
+    QCOMPARE(protocol.handleCommand(QStringLiteral("modulation:0;")),
+             keepA ? QStringLiteral("modulation:0,DIGU;") : QString());
+    QCOMPARE(protocol.handleCommand(QStringLiteral("modulation:1;")),
+             keepB ? QStringLiteral("modulation:1,CWL;") : QString());
+}
+
+void TestTciInitBurstLiveState::removed_slice_mode_commands_are_silent()
+{
+    pinAppSettingsToCaptureConditions();
+    RadioModel radio;
+    radio.configureStreamPool(5, 5, 192000);
+    const int a = radio.addSlice(QStringLiteral("pan-0"));
+    const int b = radio.addSlice(QStringLiteral("pan-0"));
+    const int c = radio.addSlice(QStringLiteral("pan-0"));
+    QCOMPARE(a, 0);
+    QCOMPARE(b, 1);
+    QCOMPARE(c, 2);
+    radio.sliceById(a)->setDspMode(DSPMode::DIGU);
+    radio.sliceById(b)->setDspMode(DSPMode::CWL);
+    radio.sliceById(c)->setDspMode(DSPMode::CWU);
+    TciProtocol protocol(&radio);
+    QCOMPARE(protocol.handleCommand(QStringLiteral("modulation:1;")),
+             QStringLiteral("modulation:1,CWL;"));
+
+    radio.removeSlice(b);
+    QVERIFY(protocol.handleCommand(QStringLiteral("modulation:1;")).isEmpty());
+    QVERIFY(protocol.handleCommand(QStringLiteral("modulation:1,USB;")).isEmpty());
+    QVERIFY(!protocol.hasPendingNotification());
+    QVERIFY(protocol.handleCommand(QStringLiteral("modulation:2;")).isEmpty());
+    QVERIFY(protocol.handleCommand(QStringLiteral("modulation:2,USB;")).isEmpty());
+    QVERIFY(!protocol.hasPendingNotification());
+    QCOMPARE(radio.mode(c), QStringLiteral("CWU"));
+    QVERIFY(protocol.handleCommand(QStringLiteral("modulation:-1,USB;")).isEmpty());
+    QVERIFY(!protocol.hasPendingNotification());
+    QCOMPARE(radio.mode(a), QStringLiteral("DIGU"));
+
+    // Commands for the surviving Slice A still work under its stable RX1 ID.
+    QVERIFY(protocol.handleCommand(QStringLiteral("modulation:0,USB;")).isEmpty());
+    QCOMPARE(radio.mode(a), QStringLiteral("USB"));
+    QCOMPARE(protocol.takePendingNotification(), QStringLiteral("modulation:0,USB;"));
+    QVERIFY(!protocol.hasPendingNotification());
+}
+
+void TestTciInitBurstLiveState::vacant_receiver_mapping_does_not_alias_slice_a()
+{
+    pinAppSettingsToCaptureConditions();
+    RadioModel radio;
+    radio.configureStreamPool(5, 5, 192000);
+    QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 0);
+    radio.sliceById(0)->setDspMode(DSPMode::DIGU);
+    TciProtocol protocol(&radio);
+    protocol.setReceiverSliceMap([](int rx) { return rx == 0 ? 0 : -1; });
+    QVERIFY(protocol.buildInitBurst().contains(QStringLiteral("modulation:0,DIGU;")));
+    QVERIFY(protocol.handleCommand(QStringLiteral("modulation:1;")).isEmpty());
+    QVERIFY(protocol.handleCommand(QStringLiteral("modulation:1,USB;")).isEmpty());
+    QVERIFY(!protocol.hasPendingNotification());
+    QCOMPARE(radio.mode(0), QStringLiteral("DIGU"));
+}
+
+
+// Device-free availability matrix: no keying, DSP, or network transport.
+void TestTciInitBurstLiveState::receiver_availability_matches_actual_slices_data()
+{
+    QTest::addColumn<bool>("keepA");
+    QTest::addColumn<bool>("keepB");
+    QTest::newRow("a-only") << true << false;
+    QTest::newRow("b-only") << false << true;
+    QTest::newRow("cold-empty") << false << false;
+    QTest::newRow("both") << true << true;
+}
+
+void TestTciInitBurstLiveState::receiver_availability_matches_actual_slices()
+{
+    QFETCH(bool, keepA);
+    QFETCH(bool, keepB);
+    pinAppSettingsToCaptureConditions();
+    RadioModel radio;
+    radio.configureStreamPool(5, 5, 192000);
+    if (keepA || keepB) {
+        QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 0);
+        QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 1);
+        if (!keepA) { radio.removeSlice(0); }
+        if (!keepB) { radio.removeSlice(1); }
+    }
+    TciProtocol protocol(&radio);
+    const QStringList burst = protocol.buildInitBurst();
+    for (int rx : {0, 1}) {
+        const bool available = rx == 0 ? keepA : keepB;
+        const QString flag = available ? QStringLiteral("true") : QStringLiteral("false");
+        const QString rxLine = QStringLiteral("rx_enable:%1,%2;").arg(rx).arg(flag);
+        QVERIFY2(burst.contains(rxLine), qPrintable(rxLine));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_enable:%1;").arg(rx)), rxLine);
+        QVERIFY(burst.contains(QStringLiteral("tx_enable:%1,%2;").arg(rx).arg(flag)));
+        const QString channel = QStringLiteral("rx_channel_enable:%1,0,%2;").arg(rx).arg(flag);
+        QVERIFY(burst.contains(channel));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:%1,0;").arg(rx)), channel);
+        if (!available) {
+            QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:%1,0,true;").arg(rx)),
+                     QStringLiteral("rx_channel_enable:%1,0,false;").arg(rx));
+            QVERIFY(protocol.handleCommand(QStringLiteral("modulation:%1,USB;").arg(rx)).isEmpty());
+            QVERIFY(!protocol.hasPendingNotification());
+        }
+    }
+    QVERIFY(!burst.contains(QString()));
+    QVERIFY(!burst.contains(QStringLiteral("modulation:0,;")));
+    QVERIFY(!burst.contains(QStringLiteral("modulation:1,;")));
+
+    // A synthetic model's RX0 remains present; RX2 remains its explicit flag.
+    TestMockRadioModel mock;
+    for (bool mox : {false, true}) {
+        mock.setMox(mox);
+        for (bool rx2 : {false, true}) {
+            mock.setRx2Enabled(rx2);
+            TciProtocol synthetic(&mock);
+            for (int rx : {0, 1}) {
+                const bool enabled = !mox && (rx == 0 || rx2);
+                const QString wanted = QStringLiteral("rx_enable:%1,%2;").arg(rx)
+                    .arg(enabled ? QStringLiteral("true") : QStringLiteral("false"));
+                QVERIFY(synthetic.buildInitBurst().contains(wanted));
+                QCOMPARE(synthetic.handleCommand(QStringLiteral("rx_enable:%1;").arg(rx)), wanted);
+            }
+        }
+    }
+}
+
+void TestTciInitBurstLiveState::explicit_receiver_availability_requires_a_live_mapping_data()
+{
+    QTest::addColumn<int>("mappedId");
+    QTest::addColumn<bool>("remote");
+    QTest::newRow("local-vacant") << -1 << false;
+    QTest::newRow("local-stale-positive") << 4 << false;
+    QTest::newRow("remote-vacant") << -1 << true;
+    QTest::newRow("remote-stale-positive") << 4 << true;
+}
+
+void TestTciInitBurstLiveState::explicit_receiver_availability_requires_a_live_mapping()
+{
+    QFETCH(int, mappedId);
+    QFETCH(bool, remote);
+    pinAppSettingsToCaptureConditions();
+    RadioModel radio(remote ? RadioModel::Role::Remote : RadioModel::Role::Local);
+    radio.configureStreamPool(5, 5, 192000);
+    const int a = remote ? radio.addSliceWithStationId(0)
+                         : radio.addSlice(QStringLiteral("pan-0"));
+    QCOMPARE(a, 0);
+    radio.sliceById(0)->setDspMode(DSPMode::DIGU);
+    const double hz = radio.sliceById(0)->frequency();
+    TciProtocol protocol(&radio);
+    protocol.setReceiverSliceMap([mappedId](int) { return mappedId; });
+    protocol.setSliceWriteGate([](int) { return true; });
+    const QStringList burst = protocol.buildInitBurst();
+    for (int rx : {0, 1}) {
+        QVERIFY(burst.contains(QStringLiteral("rx_enable:%1,false;").arg(rx)));
+        QVERIFY(burst.contains(QStringLiteral("tx_enable:%1,false;").arg(rx)));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_enable:%1;").arg(rx)),
+                 QStringLiteral("rx_enable:%1,false;").arg(rx));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:%1,0,true;").arg(rx)),
+                 QStringLiteral("rx_channel_enable:%1,0,false;").arg(rx));
+        QVERIFY(protocol.handleCommand(QStringLiteral("modulation:%1,USB;").arg(rx)).isEmpty());
+        QVERIFY(protocol.handleCommand(QStringLiteral("vfo:%1,0,14074000;").arg(rx)).isEmpty());
+    }
+    QVERIFY(!protocol.hasPendingNotification());
+    QCOMPARE(radio.mode(0), QStringLiteral("DIGU"));
+    QCOMPARE(radio.sliceById(0)->frequency(), hz);
+    QVERIFY(!burst.contains(QStringLiteral("modulation:0,DIGU;")));
+    QVERIFY(!burst.contains(QStringLiteral("modulation:1,DIGU;")));
+}
+
+void TestTciInitBurstLiveState::live_receiver_availability_preserves_stable_ids_data()
+{
+    QTest::addColumn<bool>("remote");
+    QTest::newRow("local") << false;
+    QTest::newRow("remote-mirror") << true;
+}
+
+void TestTciInitBurstLiveState::live_receiver_availability_preserves_stable_ids()
+{
+    QFETCH(bool, remote);
+    pinAppSettingsToCaptureConditions();
+    RadioModel radio(remote ? RadioModel::Role::Remote : RadioModel::Role::Local);
+    radio.configureStreamPool(5, 5, 192000);
+    const auto add = [&radio, remote](int id) {
+        return remote ? radio.addSliceWithStationId(id) : radio.addSlice(QStringLiteral("pan-0"));
+    };
+    QCOMPARE(add(0), 0);
+    QCOMPARE(add(1), 1);
+    SliceModel* const b = radio.sliceById(1);
+    b->setDspMode(DSPMode::CWL);
+    TciServer server(&radio);
+    QVERIFY(server.start(0));
+    QWebSocket client;
+    QStringList frames;
+    connect(&client, &QWebSocket::textMessageReceived, this,
+            [&frames](const QString& frame) {
+                for (const QString& line : frame.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+                    frames.append(line.trimmed() + QLatin1Char(';'));
+                }
+            });
+    QSignalSpy connected(&client, &QWebSocket::connected);
+    client.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    QTRY_VERIFY_WITH_TIMEOUT(frames.contains(QStringLiteral("ready;")), 3000);
+    frames.clear();
+    if (remote) { radio.removeSliceWithStationId(0); }
+    else { radio.removeSlice(0); }
+    QVERIFY(radio.sliceById(0) == nullptr);
+    QCOMPARE(radio.sliceById(1), b);
+    QTRY_VERIFY_WITH_TIMEOUT(frames.contains(QStringLiteral("rx_enable:0,false;")), 3000);
+    QVERIFY(frames.contains(QStringLiteral("tx_enable:0,false;")));
+    frames.clear();
+    if (!remote) {
+        // Emit the settled state notification only; no MoxController walk or PTT.
+        QVERIFY(QMetaObject::invokeMethod(radio.moxController(), "moxStateChanged",
+                                         Qt::DirectConnection, Q_ARG(bool, true)));
+        QTRY_VERIFY_WITH_TIMEOUT(frames.contains(QStringLiteral("rx_enable:1,false;")), 3000);
+        QVERIFY(frames.contains(QStringLiteral("rx_enable:0,false;")));
+        frames.clear();
+        QVERIFY(QMetaObject::invokeMethod(radio.moxController(), "moxStateChanged",
+                                         Qt::DirectConnection, Q_ARG(bool, false)));
+        QTRY_VERIFY_WITH_TIMEOUT(frames.contains(QStringLiteral("rx_enable:1,true;")), 3000);
+        QVERIFY(frames.contains(QStringLiteral("rx_enable:0,false;")));
+        frames.clear();
+    }
+    QCOMPARE(add(0), 0);
+    QCOMPARE(radio.sliceById(1), b);
+    QTRY_VERIFY_WITH_TIMEOUT(frames.contains(QStringLiteral("rx_enable:0,true;")), 3000);
+    b->setDspMode(DSPMode::CWU);
+    QTRY_VERIFY_WITH_TIMEOUT(frames.contains(QStringLiteral("modulation:1,CWU;")), 3000);
+    QVERIFY(!frames.contains(QStringLiteral("modulation:0,CWU;")));
+    QVERIFY(!frames.contains(QStringLiteral("modulation:0,;")));
+    client.close();
+    server.stop();
 }
 
 QTEST_MAIN(TestTciInitBurstLiveState)

@@ -12,13 +12,19 @@ extension StationCatalog {
     /// sent; the app carries no copy of them.
     public struct Display: Equatable, Sendable, Decodable {
         /// One of a control's choices: the value it writes and its label.
-        public struct Option: Equatable, Sendable, Decodable {
+        public struct Option: Equatable, Sendable {
             public let value: Double
             public let label: String
+            /// The text a choice writes when the Core's setting holds a word
+            /// (Sizing's "Auto", "HzPerBin", "Fixed"); `value` is then the
+            /// option's place in the list. Nil for an option that writes its
+            /// number.
+            public let token: String?
 
-            public init(value: Double, label: String) {
+            public init(value: Double, label: String, token: String? = nil) {
                 self.value = value
                 self.label = label
+                self.token = token
             }
         }
 
@@ -86,6 +92,10 @@ extension StationCatalog {
             /// The value that means Off, with its label (the Hz/bin target).
             public let offValue: Double?
             public let offLabel: String?
+            /// The Core's setting that keeps this control's last value while
+            /// another control is in charge (the Hz/bin target's remembered
+            /// target); nil when the Core names none.
+            public let rememberedKey: String?
 
             /// The Core keeps this value for every device.
             public var isStation: Bool { scope == "station" }
@@ -135,7 +145,7 @@ extension StationCatalog {
 
             enum CodingKeys: String, CodingKey {
                 case settingsKey, scope, subscribe, page, group, label, kind, options, min, max, step, unit
-                case decimals, offValue, offLabel
+                case decimals, offValue, offLabel, rememberedKey
                 case defaultValue = "default"
             }
 
@@ -148,8 +158,24 @@ extension StationCatalog {
                 group = try container.decodeIfPresent(String.self, forKey: .group) ?? ""
                 label = try container.decode(String.self, forKey: .label)
                 kind = Kind(try container.decode(String.self, forKey: .kind))
-                defaultValue = try? container.decodeIfPresent(Double.self, forKey: .defaultValue)
-                options = try container.decodeIfPresent([Option].self, forKey: .options) ?? []
+                let sent = try container.decodeIfPresent([SentOption].self, forKey: .options) ?? []
+                let read = sent.enumerated().map { index, option in
+                    switch option.value {
+                    case .number(let number):
+                        return Option(value: number, label: option.label)
+                    case .text(let token):
+                        return Option(value: Double(index), label: option.label, token: token)
+                    }
+                }
+                options = read
+                if let number = try? container.decodeIfPresent(Double.self, forKey: .defaultValue) {
+                    defaultValue = number
+                } else if let token = try? container.decodeIfPresent(String.self, forKey: .defaultValue) {
+                    // A default sent as a word is the option that writes it.
+                    defaultValue = read.first { $0.token == token }?.value
+                } else {
+                    defaultValue = nil
+                }
                 min = try container.decodeIfPresent(Double.self, forKey: .min)
                 max = try container.decodeIfPresent(Double.self, forKey: .max)
                 step = try container.decodeIfPresent(Double.self, forKey: .step)
@@ -157,6 +183,32 @@ extension StationCatalog {
                 decimals = try container.decodeIfPresent(Int.self, forKey: .decimals)
                 offValue = try container.decodeIfPresent(Double.self, forKey: .offValue)
                 offLabel = try container.decodeIfPresent(String.self, forKey: .offLabel)
+                rememberedKey = try container.decodeIfPresent(String.self, forKey: .rememberedKey)
+            }
+
+            /// An option as the Core sends it: its value a number, or a word.
+            private struct SentOption: Decodable {
+                enum Value {
+                    case number(Double)
+                    case text(String)
+                }
+
+                let value: Value
+                let label: String
+
+                enum CodingKeys: String, CodingKey {
+                    case value, label
+                }
+
+                init(from decoder: any Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    label = try container.decode(String.self, forKey: .label)
+                    if let number = try? container.decode(Double.self, forKey: .value) {
+                        value = .number(number)
+                    } else {
+                        value = .text(try container.decode(String.self, forKey: .value))
+                    }
+                }
             }
         }
 
@@ -214,6 +266,124 @@ extension StationCatalog {
                 let size = Swift.max(floor, rounded(wanted))
                 return (size, size > floor)
             }
+
+            /// The FFT size to ask for under a Sizing choice (link 7.4,
+            /// `fftPlan`; the Swift twin of the desktop's `planDisplayFft`).
+            ///
+            /// - Fixed: exactly `storedSize` when it is one of the sizes the
+            ///   Size control offers, the built-in size otherwise; the zoom
+            ///   and a stray target play no part.
+            /// - Hz/bin with a target above 0: the smallest size whose bin is
+            ///   at or below the target, never below the built-in size and
+            ///   never a transform longer than ``FftSizing/maxTransformSeconds``.
+            /// - Auto, and Hz/bin with no target: enough bins for `pixels`
+            ///   across `spanHz`, never below the built-in size. The stored
+            ///   size plays no part.
+            ///
+            /// Fine when the size is above the built-in size and the mode is
+            /// not Fixed.
+            public func plan(mode: FftSizing, storedSize: Double, sampleRateHz: Double, pixels: Int, spanHz: Double,
+                             hzPerBinTarget: Double?) -> (fftSize: Int, fine: Bool) {
+                if mode == .fixed {
+                    return (FftSizing.fixedSize(storedSize), false)
+                }
+                let floor = Swift.max(FftSizing.defaultFftSize, Swift.max(1, minFftSize))
+                if mode == .hzPerBin, let target = hzPerBinTarget, target.isFinite, target > 0 {
+                    guard sampleRateHz.isFinite, sampleRateHz > 0 else {
+                        return (floor, false)
+                    }
+                    let size = Swift.min(Swift.max(rounded(sampleRateHz / target), floor),
+                                         Swift.max(floor, largestWithinTransformTime(sampleRateHz: sampleRateHz)))
+                    return (size, size > floor)
+                }
+                let wanted = spanHz > 0 ? sampleRateHz * Double(pixels) / spanHz : 0
+                let size = Swift.max(floor, rounded(wanted))
+                return (size, size > floor)
+            }
+
+            /// The largest size whose transform at `sampleRateHz` fills
+            /// within ``FftSizing/maxTransformSeconds`` (the desktop's
+            /// `autoZoomMaxFftSize`).
+            public func largestWithinTransformTime(sampleRateHz: Double) -> Int {
+                var size = Swift.max(1, minFftSize)
+                let limit = sampleRateHz * FftSizing.maxTransformSeconds
+                while size < maxFftSize && Double(size * 2) <= limit {
+                    size *= 2
+                }
+                return size
+            }
+        }
+
+        /// How the FFT size is chosen (the Core's `DisplayFftSizingMode`).
+        public enum FftSizing: String, Equatable, Sendable, CaseIterable {
+            /// The zoom picks the size.
+            case auto = "Auto"
+            /// The size follows the bin width the operator set.
+            case hzPerBin = "HzPerBin"
+            /// The Size control sets the size.
+            case fixed = "Fixed"
+
+            /// The Core's setting that holds the choice.
+            public static let settingsKey = "DisplayFftSizingMode"
+            /// The Core's setting that keeps the last Hz/bin target.
+            public static let rememberedTargetKey = "DisplayHzPerBinLastTarget"
+            /// The size a pan runs before any choice (the desktop's
+            /// `kDisplayFftSizeDefault`).
+            public static let defaultFftSize = 4096
+            /// The sizes the Size control offers: the built-in size doubled
+            /// up to six times.
+            public static let fixedSizes = (0...6).map { defaultFftSize << $0 }
+            /// The longest a transform may take to fill under a Hz/bin
+            /// target (the desktop's `kAutoZoomMaxTransformSeconds`).
+            public static let maxTransformSeconds = 0.7
+            /// The Hz/bin target's step, and its least and greatest.
+            public static let targetStep = 0.5
+            public static let targetRange = 0.5...200.0
+
+            /// The mode in charge, from the stored word and the stored
+            /// Hz/bin target (the desktop's `displayFftSizingModeOnRead`):
+            /// "Fixed" and "Auto" are themselves; anything else, a key never
+            /// written among them, is Hz/bin with a target above 0 and Auto
+            /// without.
+            public static func onRead(stored: String?, hzPerBinTarget: Double?) -> FftSizing {
+                switch stored {
+                case FftSizing.fixed.rawValue:
+                    return .fixed
+                case FftSizing.auto.rawValue:
+                    return .auto
+                default:
+                    if let target = hzPerBinTarget, target.isFinite, target > 0 {
+                        return .hzPerBin
+                    }
+                    return .auto
+                }
+            }
+
+            /// The size Fixed runs for a stored size: itself when it is one
+            /// of ``fixedSizes``, the built-in size otherwise.
+            public static func fixedSize(_ stored: Double) -> Int {
+                guard stored.isFinite, let size = Int(exactly: stored), fixedSizes.contains(size) else {
+                    return defaultFftSize
+                }
+                return size
+            }
+
+            /// The Hz/bin target that holds a running bin width: the width
+            /// rounded up to the target's step, inside its range; the
+            /// coarsest target when there is no width (the desktop's
+            /// `hzPerBinTargetForBinWidth`).
+            public static func hzPerBinTarget(forBinWidth width: Double) -> Double {
+                guard width.isFinite, width > 0 else {
+                    return targetRange.upperBound
+                }
+                let stepped = (width / targetStep).rounded(.up) * targetStep
+                return Swift.min(Swift.max(stepped, targetRange.lowerBound), targetRange.upperBound)
+            }
+        }
+
+        /// The Sizing control, when the Core describes one.
+        public var sizingControl: Control? {
+            control(settingsKey: FftSizing.settingsKey)
         }
 
         public let controls: [Control]

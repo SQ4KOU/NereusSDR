@@ -5,6 +5,7 @@
 #include "gui/SetupPage.h"
 #include "gui/CoreAddressController.h"
 #include "gui/setup/CoreSettingsContext.h"
+#include "gui/NereusGuiExport.h"
 #include <QPointer>
 
 class QButtonGroup;
@@ -13,7 +14,7 @@ class QStackedWidget;
 class QTabBar;
 namespace NereusSDR {
 class ThisCorePage;
-class CoresSetupPage final : public SetupPage {
+class NEREUS_GUI_EXPORT CoresSetupPage final : public SetupPage {
     Q_OBJECT
 public:
     explicit CoresSetupPage(CoreTargetStore* store, RadioModel* model = nullptr,

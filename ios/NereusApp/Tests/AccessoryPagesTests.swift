@@ -3,6 +3,7 @@
 
 import Foundation
 import NereusBand
+import NereusModels
 import NereusKitTesting
 import NereusLink
 import NereusMirror
@@ -39,7 +40,7 @@ struct AccessoryPagesTests {
                                        className: tuner ? "TunerModel" : "AmplifierModel", properties: [
             .init(name: "connectionPhase", value: .enumeration(6)),
             .init(name: tuner ? "isPresent" : "present", value: .bool(true)),
-        ] + fields)))
+        ] + (tuner ? [] : [.init(name: "transmitting", value: .bool(true))]) + fields)))
     }
 
     @Test("TX accessory readings retain distinct wire watts, ratios, temperature and relay values with units")
@@ -64,12 +65,12 @@ struct AccessoryPagesTests {
         #expect(model.tunerGeniusReadings.swr == 1.45)
         #expect(model.tunerGeniusReadings.relays == [12, 34, 56])
         #expect(TxAccessoryReadoutText.power(model.powerGeniusReadings.forwardW) == "1234 W")
-        #expect(TxAccessoryReadoutText.swr(model.tunerGeniusReadings.swr) == "1.45:1")
-        #expect(TxAccessoryReadoutText.temperature(model.powerGeniusReadings.temperatureC) == "48.5 °C")
+        #expect(TxAccessoryReadoutText.swr(model.tunerGeniusReadings.swr) == "1.45")
+        #expect(TxAccessoryReadoutText.temperature(model.powerGeniusReadings.temperatureC) == "48 °C")
         #expect(TxAccessoryReadoutText.relay(model.tunerGeniusReadings.relays[1]) == "34")
     }
 
-    @Test("TX accessory missing and invalid fields stay unavailable while genuine idle zero and one remain valid")
+    @Test("TX accessory missing and invalid fields stay unavailable while idle power and SWR are unavailable and temperature stays live")
     func txAccessoryReadoutValidation() {
         let store = MirrorStore(send: { _ in Issue.record("Readouts must send no message") })
         let model = readoutModel(store)
@@ -110,7 +111,7 @@ struct AccessoryPagesTests {
         #expect(model.powerGeniusReadings.swr == nil)
         #expect(model.powerGeniusReadings.temperatureC == -5)
         #expect(model.powerGenius?.temperatureC == -5)
-        #expect(TxAccessoryReadoutText.temperature(model.powerGeniusReadings.temperatureC) == "-5.0 °C")
+        #expect(TxAccessoryReadoutText.temperature(model.powerGeniusReadings.temperatureC) == "-5 °C")
         let coldMeter = LinearGauge(scale: .ampTemperature, value: model.powerGeniusReadings.temperatureC)
         #expect(coldMeter.value == -5)
         #expect(coldMeter.filledFraction == 0)
@@ -121,20 +122,20 @@ struct AccessoryPagesTests {
             .init(name: "swr", value: .f64(-1)), .init(name: "relayC1", value: .i64(-1))])
         model.refresh()
         #expect(model.tunerGeniusReadings == .init())
-        readoutObject(store, fields: [.init(name: "forwardPowerW", value: .f64(0)),
+        readoutObject(store, fields: [.init(name: "transmitting", value: .bool(false)), .init(name: "forwardPowerW", value: .f64(0)),
                                     .init(name: "swr", value: .f64(1)), .init(name: "temperatureC", value: .f64(0))])
         readoutObject(store, tuner: true, fields: [.init(name: "fwdPower", value: .f64(0)),
             .init(name: "swr", value: .f64(0.99)), .init(name: "relayC1", value: .i64(0)),
             .init(name: "relayL", value: .i64(255)), .init(name: "relayC2", value: .i64(0))])
         model.refresh()
-        #expect(model.powerGeniusReadings.forwardW == 0)
-        #expect(model.powerGeniusReadings.swr == 1)
+        #expect(model.powerGeniusReadings.forwardW == nil)
+        #expect(model.powerGeniusReadings.swr == nil)
         #expect(model.powerGeniusReadings.temperatureC == 0)
-        #expect(model.tunerGeniusReadings.forwardW == 0)
+        #expect(model.tunerGeniusReadings.forwardW == nil)
         #expect(model.tunerGeniusReadings.swr == nil)
         #expect(model.tunerGeniusReadings.relays == [0, 255, 0])
         #expect(TxAccessoryReadoutText.power(0) == "0 W")
-        #expect(TxAccessoryReadoutText.swr(1) == "1.00:1")
+        #expect(TxAccessoryReadoutText.swr(1) == "1.00")
     }
 
     @Test("TX accessory meters retain desktop scales and distinguish an unavailable bar from genuine zero")
@@ -402,11 +403,18 @@ struct AccessoryPagesTests {
         let (model, station) = try await connected()
         let accessories = model.main.accessories
         await station.deliverAccessories()
-        #expect(await settle { accessories.tunerGenius?.antenna == 1 })
+        // The session's own snapshot already holds a tuner, not connected and
+        // on antenna 1, so the antenna alone does not say the fake's tuner
+        // has reached the page. A tap before it has is refused by the page
+        // itself, as not connected, and never reaches the Core.
+        #expect(await settle { accessories.tunerGenius?.antenna == 1 && accessories.tunerAntennaReason == nil })
         let words = "The radio is on the air. Try again when it stops."
         station.refuseNext("setTgxlAntenna", reason: words)
         accessories.setTunerAntenna(3)
-        #expect(await settle { accessories.notes[.tunerGenius] == words })
+        // Any note ends the wait, and the expectation shows the words the
+        // page got.
+        _ = await settle { accessories.notes[.tunerGenius] != nil }
+        #expect(accessories.notes[.tunerGenius] == words)
         #expect(accessories.tunerGenius?.antenna == 1)
         accessories.dismissNote(.tunerGenius)
         #expect(accessories.notes[.tunerGenius] == nil)
@@ -489,7 +497,7 @@ struct AccessoryPagesTests {
         #expect(await settle { accessories.rfKit?.activeAntenna == 1 })
         let rfKit = try #require(accessories.rfKit)
         #expect(AccessoryStatusLine.rfKitHeader(rfKit) == "Through the Core \u{00B7} band from the radio")
-        #expect(Rf2ksPage.readings(rfKit) == "Fwd 0 W \u{00B7} SWR 1.00 \u{00B7} 53.2 V \u{00B7} 0.0 A")
+        #expect(Rf2ksPage.readings(rfKit) == "53.2 V \u{00B7} 0.0 A")
         #expect(Rf2ksPage.tunerWord(rfKit.tunerMode) == "BYPASS")
         #expect(AccessoriesModel.rfKitTunerNote
                 == "Use the amp's front panel for these. Its firmware doesn't accept tuner commands.")
@@ -1154,6 +1162,53 @@ struct AccessoryPagesTests {
             let url = URL(fileURLWithPath: directory).appendingPathComponent("\(name).png")
             try data.write(to: url)
             print("Wrote \(url.path)")
+        }
+    }
+}
+
+@MainActor
+extension AccessoryPagesTests {
+    @Test("Shared amplifier source and display readings")
+    func sharedAmplifierMeterRule() {
+        let main = TransmitMeterFixture.main()
+        #expect(LinearGauge.Scale.reflectedPower.max == 500)
+        #expect(LinearGauge.Scale.reflectedPower.yellowFrom.isInfinite && LinearGauge.Scale.reflectedPower.redFrom.isInfinite)
+        #expect(LinearGauge(scale: .reflectedPower, value: 600, readout: "600 W").filledFraction == 1)
+        let readings = main.accessories
+        #expect(readings.powerGeniusReadings.forwardW == 1236 && readings.powerGeniusReadings.swr == 1.12)
+        #expect(readings.powerGeniusReadings.reflectedW == MeterReadout.reflected(forwardW: 1236, swr: 1.12))
+        #expect(readings.rfKitReadings.reflectedW == 4)
+        #expect(readings.tunerGeniusReadings.reflectedW == MeterReadout.reflected(forwardW: 1236, swr: 1.12))
+        let idle = TransmitMeterFixture.main(keyed: false).accessories
+        #expect(idle.powerGeniusReadings.forwardW == nil && idle.powerGeniusReadings.swr == nil)
+        #expect(idle.tunerGeniusReadings.forwardW == nil && idle.tunerGeniusReadings.reflectedW == nil)
+        #expect(idle.rfKitReadings.forwardW == nil && idle.rfKitReadings.swr == nil)
+        #expect(idle.powerGeniusReadings.temperatureC == 41 && idle.rfKitReadings.temperatureC == 41)
+    }
+}
+
+@MainActor
+extension AccessoryPagesTests {
+    @Test("Approved meter source pictures")
+    func approvedMeterSourcePictures() async throws {
+        for keyed in [false, true] {
+            let main = TransmitMeterFixture.main(keyed: keyed)
+            let suffix = keyed ? "keyed" : "idle"
+            try await TransmitMeterPictures.capture(ScrollView { PowerGeniusPage(model: main.accessories, coreName: "Fixture", open: { _ in }) }, name: "meter-pgxl-" + suffix, check: { window in
+                #expect(Self.elements(labelled: "Fwd Pwr", in: window).first?.accessibilityValue == (keyed ? "1236 W" : "--"))
+                #expect(Self.elements(labelled: "SWR", in: window).first?.accessibilityValue == (keyed ? "1.12" : "--"))
+                #expect(Self.elements(labelled: "Ref Pwr", in: window).first?.accessibilityValue == (keyed ? "4 W" : "--"))
+            })
+            try await TransmitMeterPictures.capture(ScrollView { TunerGeniusPage(model: main.accessories, transmit: main.transmit, open: { _ in }) }, name: "meter-tgxl-" + suffix, check: { window in
+                #expect(Self.elements(labelled: "Fwd Pwr", in: window).first?.accessibilityValue == (keyed ? "1236 W" : "--"))
+                #expect(Self.elements(labelled: "SWR", in: window).first?.accessibilityValue == (keyed ? "1.12" : "--"))
+                #expect(Self.elements(labelled: "Ref Pwr", in: window).first?.accessibilityValue == (keyed ? "4 W" : "--"))
+            })
+            try await TransmitMeterPictures.capture(ScrollView { Rf2ksPage(model: main.accessories, open: { _ in }) }, name: "meter-rfkit-" + suffix, check: { window in
+                #expect(Self.elements(labelled: "Fwd Pwr", in: window).first?.accessibilityValue == (keyed ? "1236 W" : "--"))
+                #expect(Self.elements(labelled: "SWR", in: window).first?.accessibilityValue == (keyed ? "1.12" : "--"))
+                #expect(Self.elements(labelled: "Ref Pwr", in: window).first?.accessibilityValue == (keyed ? "4 W" : "--"))
+            })
         }
     }
 }

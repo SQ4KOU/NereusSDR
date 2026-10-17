@@ -10,6 +10,9 @@
 //   2026-04-16 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-10-11 — A second floor referred to a 4096-point FFT, for Auto
+//                 AGC-T (NereusSDR-original). J.J. Boyd (KG4VCF), with
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -67,6 +70,16 @@ namespace NereusSDR {
 
 NoiseFloorTracker::NoiseFloorTracker() = default;
 
+// NereusSDR-original. See the header.
+float NoiseFloorTracker::agcReferenceOffsetDb(int binCount) noexcept
+{
+    if (binCount <= 0) {
+        return 0.0f;
+    }
+    return 10.0f * std::log10(static_cast<float>(binCount)
+                              / static_cast<float>(kAgcReferenceFftSize));
+}
+
 void NoiseFloorTracker::feed(const QVector<float>& binsDbm, float frameIntervalMs)
 {
     if (binsDbm.isEmpty()) {
@@ -76,11 +89,17 @@ void NoiseFloorTracker::feed(const QVector<float>& binsDbm, float frameIntervalM
     // Compute bin average
     const float binAverage = std::accumulate(binsDbm.cbegin(), binsDbm.cend(), 0.0f)
                              / static_cast<float>(binsDbm.size());
+    // NereusSDR-original: the same frame referred to a 4096-point FFT.
+    // Per frame, so a size change needs no restart and never lags the
+    // frames that arrive at the new size.
+    const float agcBinAverage = binAverage
+        + agcReferenceOffsetDb(static_cast<int>(binsDbm.size()));
 
     // Fast attack: jump directly to bin average
     // From Thetis v2.10.3.13 display.cs:4648 — fast attack snap
     if (m_fastAttackPending) {
         m_lerpAverage = binAverage;
+        m_agcLerpAverage = agcBinAverage;
         m_elapsedMs = 0.0f;
         m_isGood = false;
         m_fastAttackPending = false;
@@ -91,6 +110,7 @@ void NoiseFloorTracker::feed(const QVector<float>& binsDbm, float frameIntervalM
     // From Thetis v2.10.3.13 display.cs:4660 — alpha from attack time
     const float alpha = 1.0f - std::exp(-frameIntervalMs / m_attackTimeMs);
     m_lerpAverage += alpha * (binAverage - m_lerpAverage);
+    m_agcLerpAverage += alpha * (agcBinAverage - m_agcLerpAverage);
 
     // Accumulate elapsed time and check convergence
     // From Thetis v2.10.3.13 display.cs:4670 — isGood after attack period

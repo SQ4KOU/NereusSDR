@@ -69,6 +69,9 @@
 //                 enabled with mi0bot's tooltip; a remote window needs a
 //                 Core at radioHardwareVersion 13 (setSwapAudioAvailable).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - D25: the top row of groups stacks when narrow
+//                 (SetupFit::FitRow). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -112,6 +115,7 @@
 #include "Hl2OptionsTab.h"
 #include "HardwareTransmitGate.h"
 #include "gui/UnbuiltFeatures.h"
+#include "gui/setup/SetupFit.h"
 
 #include "core/BoardCapabilities.h"
 #include "core/Hl2OptionsModel.h"
@@ -168,7 +172,10 @@ Hl2OptionsTab::Hl2OptionsTab(RadioModel* model, QWidget* parent)
     // [v2.10.3.13-beta2] — groupBoxHL2RXOptions @ (12, 15), grpIOPinState @
     // (12, 229).  We render side-by-side instead of stacked because Qt's
     // tab body is narrower in our SetupDialog than mi0bot's WinForms tab.
-    auto* topRow = new QHBoxLayout();
+    // D25: and stacked again, Hermes Lite Options first, when the tab is
+    // too narrow for the two side by side.
+    auto* topRow = new SetupFit::FitRow();
+    topRow->setObjectName(QStringLiteral("hl2OptionsTopRow"));
     topRow->setSpacing(8);
 
     auto* hermesGroup = new QGroupBox(tr("Hermes Lite Options"), this);

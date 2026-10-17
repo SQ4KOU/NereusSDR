@@ -86,10 +86,36 @@ struct KeyedMeterOverlayShotTests {
             #expect(model.main.keyedMeters.settings.meters(on: .radio) == [.rfPower, .swr, .mic])
             try await activate("keyedMeterSlot-0", in: window)
         }
+        for (name, operate, watts) in [("operate-keyed", true, 42.0), ("standby-keyed", false, 98.0)] {
+            model.mirror.apply(.delta(.init(key: "amplifier", properties: [
+                .init(name: "connectionPhase", value: .enumeration(6)), .init(name: "present", value: .bool(true)),
+                .init(name: "operate", value: .bool(operate)), .init(name: "transmitting", value: .bool(true)),
+                .init(name: "forwardPowerW", value: .f64(1236)), .init(name: "swr", value: .f64(1.12))])))
+            model.mirror.apply(.delta(.init(key: "txState", properties: [
+                .init(name: "forwardPowerWatts", value: .f64(watts)), .init(name: "swr", value: .f64(1.12))])))
+            model.main.transmit.refresh()
+            model.main.accessories.refresh()
+            try await shoot("meter-overlay-" + name, model: model) { window in
+                try await activate("keyedTab-Radio", in: window)
+                #expect(SetupTypedEntryTests.element("keyedMeterSlot-0", in: window)?.accessibilityValue == (operate ? "1236 W" : "98 W"))
+                #expect(SetupTypedEntryTests.element("keyedMeterSlot-1", in: window)?.accessibilityValue == "1.12")
+            }
+        }
+        model.main.transmit.tapPtt()
+        try #require(await settle { !model.main.transmit.ptt.transmitting })
+        model.mirror.apply(.delta(.init(key: "amplifier", properties: [
+            .init(name: "operate", value: .bool(true)), .init(name: "transmitting", value: .bool(false))])))
+        model.main.transmit.refresh()
+        model.main.accessories.refresh()
+        try await shoot("meter-overlay-operate-idle", model: model, expectedKeyed: false) { window in
+            #expect(SetupTypedEntryTests.element("keyedMeterSlot-0", in: window) == nil)
+        }
+        model.main.transmit.tapPtt()
+        try #require(await settle { model.main.transmit.ptt.transmitting })
         // Real nullable source mappings: only current present/connected equipment supplies them.
         model.mirror.apply(.delta(.init(key: "amplifier", properties: [
             .init(name: "connectionPhase", value: .enumeration(6)), .init(name: "present", value: .bool(true)),
-            .init(name: "forwardPowerW", value: .f64(850)), .init(name: "swr", value: .f64(1.12)),
+            .init(name: "transmitting", value: .bool(true)), .init(name: "forwardPowerW", value: .f64(850)), .init(name: "swr", value: .f64(1.12)),
             .init(name: "temperatureC", value: .f64(42))])))
         model.mirror.apply(.delta(.init(key: "tuner", properties: [
             .init(name: "connectionPhase", value: .enumeration(6)), .init(name: "isPresent", value: .bool(true)),
@@ -99,13 +125,13 @@ struct KeyedMeterOverlayShotTests {
         try await shoot("pttm-amp", model: model) { window in
             try await activate("keyedTab-Amp", in: window)
             #expect(SetupTypedEntryTests.element("keyedMeterSlot-0", in: window)?.accessibilityValue == "850 W")
-            #expect(SetupTypedEntryTests.element("keyedMeterSlot-1", in: window)?.accessibilityValue == "1.12:1")
+            #expect(SetupTypedEntryTests.element("keyedMeterSlot-1", in: window)?.accessibilityValue == "1.12")
             #expect(SetupTypedEntryTests.element("keyedMeterSlot-2", in: window)?.accessibilityValue == "42 °C")
         }
         try await shoot("pttm-tuner", model: model) { window in
             try await activate("keyedTab-Tuner", in: window)
             #expect(SetupTypedEntryTests.element("keyedMeterSlot-0", in: window)?.accessibilityValue == "830 W")
-            #expect(SetupTypedEntryTests.element("keyedMeterSlot-1", in: window)?.accessibilityValue == "1.08:1")
+            #expect(SetupTypedEntryTests.element("keyedMeterSlot-1", in: window)?.accessibilityValue == "1.08")
         }
         try await shoot("pttm-custom-picker", model: model) { window in
             try await activate("keyedTab-Custom", in: window)
@@ -192,7 +218,7 @@ struct KeyedMeterOverlayShotTests {
     }
 
     private func shoot(_ name: String, model: AppModel, sideways: Bool = false, light: Bool = false,
-                       large: Bool = false, check: (UIWindow) async throws -> Void) async throws {
+                       large: Bool = false, expectedKeyed: Bool = true, check: (UIWindow) async throws -> Void) async throws {
         let size = sideways ? CGSize(width: 874, height: 402) : CGSize(width: 402, height: 874)
         let window = try BandFlagShotTests.window(size: size)
         if sideways { window.frame.origin.y = 120 }
@@ -210,7 +236,7 @@ struct KeyedMeterOverlayShotTests {
         await ShotWait.laidOut(window)
         try await check(window)
         await ShotWait.laidOut(window)
-        try geometry(window)
+        try geometry(window, expectedKeyed: expectedKeyed)
         if let directory = ProcessInfo.processInfo.environment["NEREUS_MAIN_SHOTS"], !directory.isEmpty {
             let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
                 window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
@@ -221,7 +247,7 @@ struct KeyedMeterOverlayShotTests {
         // An open chooser belongs to this view's key, never the next render's view instance.
     }
 
-    private func geometry(_ window: UIWindow) throws {
+    private func geometry(_ window: UIWindow, expectedKeyed: Bool) throws {
         let bandView = try #require(descendants(window).compactMap { $0 as? MTKView }.first)
         let local = window.convert(bandView.bounds, from: bandView)
         let band = window.convert(local, to: window.screen.coordinateSpace)
@@ -229,7 +255,7 @@ struct KeyedMeterOverlayShotTests {
         let tabs = try #require(SetupTypedEntryTests.element("Sections", in: window)).accessibilityFrame
         for id in ["keyedTab-Radio", "keyedTab-Custom", "keyedMeterSlot-0", "keyedMeterSlot-1", "keyedMeterSlot-2", "keyedGauges", "keyedMeterChooser", "keyedMeterDone"] {
             guard let element = SetupTypedEntryTests.element(id, in: window) else {
-                #expect(!["keyedTab-Radio", "keyedTab-Custom", "keyedMeterSlot-0", "keyedMeterSlot-1", "keyedMeterSlot-2"].contains(id), "missing \(id)")
+                #expect(!expectedKeyed || !["keyedTab-Radio", "keyedTab-Custom", "keyedMeterSlot-0", "keyedMeterSlot-1", "keyedMeterSlot-2"].contains(id), "missing \(id)")
                 continue
             }
             let frame = element.accessibilityFrame

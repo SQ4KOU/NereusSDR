@@ -59,8 +59,8 @@ final class LiveActivityController: ObservableObject {
         var onAirElsewhere: String?
         /// The Core's count for the key now on.
         var keyedForSeconds: Int64 = 0
-        var forwardWatts = 0.0
-        var swr = 1.0
+        var forwardWatts: Double? = nil
+        var swr: Double? = nil
         /// -1 when no time-out applies.
         var timeOutRemainingSeconds: Int64 = -1
         /// The link went while this phone was keyed.
@@ -266,8 +266,8 @@ final class LiveActivityController: ObservableObject {
         inputs.transmitting = transmit.transmittingHere
         inputs.onAirElsewhere = transmit.onAirElsewhere
         inputs.keyedForSeconds = transmit.keyedForSeconds
-        inputs.forwardWatts = transmit.forwardWatts
-        inputs.swr = transmit.swr
+        inputs.forwardWatts = transmit.meterRule.forwardW
+        inputs.swr = transmit.meterRule.swr
         inputs.timeOutRemainingSeconds = transmit.timeOutRemainingSeconds
         inputs.lostWhileKeyed = transmit.ptt.state == .linkLost
         inputs.stop = transmit.ptt.stop

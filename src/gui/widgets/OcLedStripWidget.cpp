@@ -17,6 +17,11 @@
 //   2026-09-29 - The TX property (ucOCLedStrip.TX): a lit LED is drawn
 //                orange-red while the radio transmits. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - A DisplayBits change clears the old stretch and hides
+//                the old LEDs, so the new LEDs start at the left edge in
+//                even steps (the HL2 input strip sat shifted right over
+//                eight stale frames). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -61,6 +66,8 @@
 
 #include <QHBoxLayout>
 #include <QMouseEvent>
+
+#include <memory>
 
 namespace NereusSDR {
 
@@ -110,8 +117,14 @@ void OcLedStripWidget::setLedTooltip(int idx, const QString& tooltip)
 void OcLedStripWidget::rebuild()
 {
     // Clear any existing LEDs.
+    // Take every layout item, the old trailing stretch included: a stretch
+    // left ahead of the new LEDs pushes them sideways. An old LED stays a
+    // child until its deferred delete runs, so it is hidden first.
+    while (m_row->count() > 0) {
+        std::unique_ptr<QLayoutItem> item(m_row->takeAt(0));
+    }
     for (auto* led : m_leds) {
-        m_row->removeWidget(led);
+        led->hide();
         led->deleteLater();
     }
     m_leds.clear();

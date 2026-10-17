@@ -12,9 +12,19 @@
 //              what Thetis's options do, their defaults come from
 //              TciProtocol.h, and Forget follows Duplicate as in Thetis.
 //              J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-09 - D25: the Peripherals grid (960 px) cannot fit the Settings
+//              window, so it scrolls sideways inside its own frame
+//              (SetupFit::SidewaysFrame) instead of being squeezed. J.J. Boyd
+//              (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-11 - The Peripherals rows' Connect and Disconnect in a window
+//              running its own radio go through RadioModel
+//              (connect*FromWindow), the connection that window shares.
+//              J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "CatNetworkSetupPages.h"
+#include "gui/setup/SetupFit.h"
 #include "gui/StyleConstants.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "gui/LanScanDialog.h"
 #include "gui/OperatorReasonText.h"
 #include "core/AppSettings.h"
@@ -55,74 +65,6 @@ namespace NereusSDR {
 // CatSerialPortsPage
 // ---------------------------------------------------------------------------
 
-CatSerialPortsPage::CatSerialPortsPage(QWidget* parent)
-    : SetupPage(QStringLiteral("Serial Ports"), parent)
-{
-    buildUI();
-}
-
-void CatSerialPortsPage::buildUI()
-{
-    setStyleSheet(QString::fromLatin1(Style::kPageStyle));
-
-    static const char* kPortLabels[4] = {
-        "CAT Port 1", "CAT Port 2", "CAT Port 3", "CAT Port 4"
-    };
-
-    static const char* kBaudRates[] = {
-        "9600", "19200", "38400", "57600", "115200", nullptr
-    };
-
-    for (int i = 0; i < 4; ++i) {
-        auto* group = new QGroupBox(QString::fromLatin1(kPortLabels[i]), this);
-        group->setStyleSheet(QString::fromLatin1(Style::kGroupBoxStyle));
-
-        auto* grid = new QGridLayout(group);
-        grid->setSpacing(6);
-
-        // Column 0: Port label + combo
-        auto* portLabel = new QLabel(QStringLiteral("Port:"), group);
-        portLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
-        grid->addWidget(portLabel, 0, 0);
-
-        m_ports[i].portCombo = new QComboBox(group);
-        m_ports[i].portCombo->setStyleSheet(QString::fromLatin1(Style::kComboStyle));
-        m_ports[i].portCombo->addItem(QStringLiteral("(none)"));
-        m_ports[i].portCombo->setDisabled(true);
-        m_ports[i].portCombo->setToolTip(QStringLiteral("The serial port for this CAT connection"));
-        grid->addWidget(m_ports[i].portCombo, 0, 1);
-
-        // Column 2: Baud label + combo
-        auto* baudLabel = new QLabel(QStringLiteral("Baud:"), group);
-        baudLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
-        grid->addWidget(baudLabel, 0, 2);
-
-        m_ports[i].baudCombo = new QComboBox(group);
-        m_ports[i].baudCombo->setStyleSheet(QString::fromLatin1(Style::kComboStyle));
-        for (int b = 0; kBaudRates[b] != nullptr; ++b) {
-            m_ports[i].baudCombo->addItem(QString::fromLatin1(kBaudRates[b]));
-        }
-        m_ports[i].baudCombo->setDisabled(true);
-        m_ports[i].baudCombo->setToolTip(QStringLiteral("The serial speed (baud rate)"));
-        grid->addWidget(m_ports[i].baudCombo, 0, 3);
-
-        // Row 1: enable + status
-        m_ports[i].enableCheck = new QCheckBox(QStringLiteral("Enable"), group);
-        m_ports[i].enableCheck->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
-        m_ports[i].enableCheck->setDisabled(true);
-        m_ports[i].enableCheck->setToolTip(QStringLiteral("Turn this CAT port on"));
-        grid->addWidget(m_ports[i].enableCheck, 1, 0, 1, 2);
-
-        m_ports[i].statusLabel = new QLabel(QStringLiteral("Status: not connected"), group);
-        m_ports[i].statusLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
-        grid->addWidget(m_ports[i].statusLabel, 1, 2, 1, 2);
-
-        contentLayout()->addWidget(group);
-    }
-
-    contentLayout()->addStretch();
-}
-
 // ---------------------------------------------------------------------------
 // CatTciServerPage
 // Phase 20 (Phase 3J-1): 6-group-box TCI Server setup page.
@@ -146,8 +88,6 @@ void CatTciServerPage::buildUI()
     buildAudioStreamGroup();
     buildSensorsGroup();
     buildVfoQuirksGroup();
-
-    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -345,7 +285,7 @@ void CatTciServerPage::buildServerGroup()
     m_stationLine->setVisible(false);
     form->addRow(QString(), m_stationLine);
 
-    contentLayout()->addWidget(group);
+    addContent(group);
 }
 
 void CatTciServerPage::setRadioModel(NereusSDR::RadioModel* model)
@@ -503,11 +443,13 @@ void CatTciServerPage::buildCoreGroup()
         m_coreSettings.insert(QByteArrayLiteral("txChannel"), combo);
     }
     addSpin("rxSensorIntervalMs", tr("RX interval:"), 30, 1000, tr(" ms"),
-            tr("How often RX sensor data (signal level, AGC gain, etc.) is pushed to TCI clients "
-               "that subscribe to sensors (30 to 1000 ms)."));
+            tr("How often RX sensor values (signal level, AGC gain and so on) are sent "
+               "to an app that turns sensors on without choosing its own rate "
+               "(30 to 1000 ms)."));
     addSpin("txSensorIntervalMs", tr("TX interval:"), 30, 1000, tr(" ms"),
-            tr("How often TX sensor data (forward power, SWR, ALC, etc.) is pushed to TCI "
-               "clients that subscribe to sensors (30 to 1000 ms)."));
+            tr("How often TX sensor values (forward power, SWR, ALC and so on) are sent "
+               "to an app that turns sensors on without choosing its own rate "
+               "(30 to 1000 ms)."));
     // The three RX2 VFO options (TciProtocol.cpp applies them).
     addCheck("forgetRx2VfoBOnDisconnect", rx2VfoForgetLabel(), rx2VfoForgetTip());
     addCheck("useRx1VfoaForRx2Vfoa", rx2VfoUseRx1Label(), rx2VfoUseRx1Tip());
@@ -525,7 +467,7 @@ void CatTciServerPage::buildCoreGroup()
     m_coreReason->setTextFormat(Qt::PlainText);
     form->addRow(QString(), m_coreReason);
     m_coreGroup->hide();
-    contentLayout()->addWidget(m_coreGroup);
+    addContent(m_coreGroup);
 }
 
 void CatTciServerPage::refreshCoreGroup()
@@ -745,7 +687,7 @@ void CatTciServerPage::buildCompatibilityGroup()
     });
     form->addRow(QString(), m_cwBecomesCwuCheck);
 
-    contentLayout()->addWidget(group);
+    addContent(group);
 }
 
 // ---------------------------------------------------------------------------
@@ -795,7 +737,7 @@ void CatTciServerPage::buildIqStreamGroup()
     });
     form->addRow(QString(), m_alwaysStreamIqCheck);
 
-    contentLayout()->addWidget(group);
+    addContent(group);
     refreshIqStreamGroup();
 }
 
@@ -858,7 +800,7 @@ void CatTciServerPage::buildAudioStreamGroup()
     });
     form->addRow(tr("TX channel:"), m_txChannelCombo);
 
-    contentLayout()->addWidget(group);
+    addContent(group);
 }
 
 // ---------------------------------------------------------------------------
@@ -882,8 +824,9 @@ void CatTciServerPage::buildSensorsGroup()
     m_rxSensorSpin->setRange(30, 1000);
     m_rxSensorSpin->setSuffix(tr(" ms"));
     m_rxSensorSpin->setToolTip(
-        tr("How often RX sensor data (signal level, AGC gain, etc.) is pushed to "
-           "TCI clients that subscribe to sensors (30–1000 ms)."));
+        tr("How often RX sensor values (signal level, AGC gain and so on) are sent "
+           "to an app that turns sensors on without choosing its own rate "
+           "(30 to 1000 ms)."));
     m_rxSensorSpin->setValue(
         s.value(QStringLiteral("TciRxSensorIntervalMs"), 200).toInt());
     connect(m_rxSensorSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [](int v) {
@@ -898,8 +841,9 @@ void CatTciServerPage::buildSensorsGroup()
     m_txSensorSpin->setRange(30, 1000);
     m_txSensorSpin->setSuffix(tr(" ms"));
     m_txSensorSpin->setToolTip(
-        tr("How often TX sensor data (forward power, SWR, ALC, etc.) is pushed to "
-           "TCI clients that subscribe to sensors (30–1000 ms)."));
+        tr("How often TX sensor values (forward power, SWR, ALC and so on) are sent "
+           "to an app that turns sensors on without choosing its own rate "
+           "(30 to 1000 ms)."));
     m_txSensorSpin->setValue(
         s.value(QStringLiteral("TciTxSensorIntervalMs"), 200).toInt());
     connect(m_txSensorSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [](int v) {
@@ -909,15 +853,20 @@ void CatTciServerPage::buildSensorsGroup()
 
     // Informational note — not an AppSettings key
     auto* noteLabel = new QLabel(
-        tr("Effective rate is the minimum across all subscribed clients "
-           "(TciSensorManager aggregation)."),
+        tr("Apps that turn on sensors without choosing their own rate use these intervals. "
+           "Apps already connected keep the rate they started with. When apps use "
+           "different rates, all of them get updates at the fastest one."),
         group);
     noteLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
     noteLabel->setWordWrap(true);
     form->addRow(noteLabel);
 
-    contentLayout()->addWidget(group);
-    // R-R3-49: the sensor intervals are not applied yet; hidden until they are.
+    addContent(group);
+    // R-R3-49: the sensor intervals are applied and the group is shown.
+    // TciServer copies both into each app's session when it connects; an
+    // rx_sensors_enable / tx_sensors_enable without an interval uses them,
+    // and one shared timer runs at the shortest interval among the apps
+    // with sensors on (TciSensorManager::minimumRequiredInterval).
 }
 
 // ---------------------------------------------------------------------------
@@ -1024,7 +973,7 @@ void CatTciServerPage::buildVfoQuirksGroup()
     });
     form->addRow(QString(), m_copyRx2VfobToVfoaCheck);
 
-    contentLayout()->addWidget(group);
+    addContent(group);
 }
 
 // ---------------------------------------------------------------------------
@@ -1206,12 +1155,14 @@ void CatTciServerPage::refreshTciStatusDisplay()
     if (m_statusLabel) {
         if (m_tciServerRunning) {
             m_statusLabel->setText(
-                tr("<span style='color:#3DD068'>●</span> Running (%1 %2)")
+                tr("<span style='color:%3'>●</span> Running (%1 %2)")
                     .arg(m_tciClientCount)
-                    .arg(m_tciClientCount == 1 ? tr("client") : tr("clients")));
+                    .arg(m_tciClientCount == 1 ? tr("client") : tr("clients"))
+                    .arg(WorkspacePreview::statusColourName("#3DD068", "ok")));
         } else {
             m_statusLabel->setText(
-                tr("<span style='color:#D04040'>●</span> Stopped"));
+                tr("<span style='color:%1'>●</span> Stopped")
+                    .arg(WorkspacePreview::statusColourName("#D04040", "danger")));
         }
         m_statusLabel->setTextFormat(Qt::RichText);
     }
@@ -1228,62 +1179,6 @@ void CatTciServerPage::refreshTciStatusDisplay()
 // ---------------------------------------------------------------------------
 // CatTcpIpPage
 // ---------------------------------------------------------------------------
-
-CatTcpIpPage::CatTcpIpPage(QWidget* parent)
-    : SetupPage(QStringLiteral("TCP/IP CAT"), parent)
-{
-    buildUI();
-}
-
-void CatTcpIpPage::buildUI()
-{
-    setStyleSheet(QString::fromLatin1(Style::kPageStyle));
-
-    auto* group = new QGroupBox(QStringLiteral("TCP CAT"), this);
-    group->setStyleSheet(QString::fromLatin1(Style::kGroupBoxStyle));
-
-    auto* grid = new QGridLayout(group);
-    grid->setSpacing(6);
-
-    // Enable toggle
-    m_enableCheck = new QCheckBox(QStringLiteral("Enable TCP/IP CAT Server"), group);
-    m_enableCheck->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
-    m_enableCheck->setDisabled(true);
-    m_enableCheck->setToolTip(QStringLiteral("Turn on the network CAT server"));
-    grid->addWidget(m_enableCheck, 0, 0, 1, 2);
-
-    // Listen address (R-R3-21: "Listen on:", as on the TCI page)
-    auto* ipLabel = new QLabel(QStringLiteral("Listen on:"), group);
-    ipLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
-    grid->addWidget(ipLabel, 1, 0);
-
-    m_bindIpEdit = new QLineEdit(QStringLiteral("0.0.0.0"), group);
-    m_bindIpEdit->setStyleSheet(QString::fromLatin1(Style::kLineEditStyle));
-    m_bindIpEdit->setDisabled(true);
-    m_bindIpEdit->setToolTip(QStringLiteral("The network address the CAT server listens on"));
-    grid->addWidget(m_bindIpEdit, 1, 1);
-
-    // Port
-    auto* portLabel = new QLabel(QStringLiteral("Port:"), group);
-    portLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
-    grid->addWidget(portLabel, 2, 0);
-
-    m_portSpin = new QSpinBox(group);
-    m_portSpin->setStyleSheet(QString::fromLatin1(Style::kSpinBoxStyle));
-    m_portSpin->setRange(1024, 65535);
-    m_portSpin->setValue(4532);
-    m_portSpin->setDisabled(true);
-    m_portSpin->setToolTip(QStringLiteral("The network port the CAT server listens on (4532 by default, as rigctld uses)"));
-    grid->addWidget(m_portSpin, 2, 1);
-
-    // Status
-    m_statusLabel = new QLabel(QStringLiteral("Status: stopped"), group);
-    m_statusLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
-    grid->addWidget(m_statusLabel, 3, 0, 1, 2);
-
-    contentLayout()->addWidget(group);
-    contentLayout()->addStretch();
-}
 
 // ---------------------------------------------------------------------------
 // CatMidiControlPage
@@ -1339,8 +1234,7 @@ void CatMidiControlPage::buildUI()
     m_learnButton->setToolTip(QStringLiteral("Learn a control: move it on the MIDI device to assign it"));
     grid->addWidget(m_learnButton, 3, 0, 1, 2);
 
-    contentLayout()->addWidget(group);
-    contentLayout()->addStretch();
+    addContent(group);
 }
 
 // ---------------------------------------------------------------------------
@@ -1412,7 +1306,12 @@ PeripheralsPage::PeripheralsPage(RadioModel* model, QWidget* parent)
              QStringLiteral("PGXL_ManualPort"),
              9008);
 
-    outer->addWidget(group);
+    // D25: six columns that cannot fit the Settings window scroll sideways
+    // inside their own frame; they were squeezed below their minimum widths.
+    auto* groupFrame = new SetupFit::SidewaysFrame(this);
+    groupFrame->setObjectName(QStringLiteral("peripheralsTableFrame"));
+    groupFrame->setWidget(group);
+    outer->addWidget(groupFrame);
 
     // Footnote text (from design spec §5.3).
     auto* note = new QLabel(
@@ -2101,14 +2000,14 @@ void PeripheralsPage::onConnect(int rowIdx)
             return;
         }
         if (pgxl->isConnected()) {
-            pgxl->disconnect();
+            m_model->disconnectPgxlFromWindow();
         } else {
             if (host.isEmpty() || port == 0) {
                 qCWarning(lcPeripherals)
                     << "onConnect(PGXL): host or port not set; fill in the fields first";
                 return;
             }
-            pgxl->connectToPgxl(host, port);
+            m_model->connectPgxlFromWindow(host, port);
         }
     } else {
         // TGXL row (rowIdx == 0).
@@ -2118,14 +2017,14 @@ void PeripheralsPage::onConnect(int rowIdx)
             return;
         }
         if (tgxl->isConnected()) {
-            tgxl->disconnect();
+            m_model->disconnectTgxlFromWindow();
         } else {
             if (host.isEmpty() || port == 0) {
                 qCWarning(lcPeripherals)
                     << "onConnect(TGXL): host or port not set; fill in the fields first";
                 return;
             }
-            tgxl->connectToTgxl(host, port);
+            m_model->connectTgxlFromWindow(host, port);
         }
     }
 }

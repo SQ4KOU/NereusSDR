@@ -1,3 +1,7 @@
+// Modification history (NereusSDR):
+//   2026-10-12 - Track the approved workspace text minimum in paint caches.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
 #pragma once
 #include <optional>
 
@@ -10,6 +14,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Shared accessory display readings and independent legal
+//                 marker / display scale by J.J. Boyd (KG4VCF),
+//                 AI-assisted via OpenAI Codex.
 //   2026-10-04 — Selected RX source identity and RX-only presentation reset by
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-02 — Mixed container ownership, persistence and source routing by
@@ -123,6 +130,7 @@ public:
     // Source changes discard old samples before the new source is replayed.
     void clearReadingCache();
     int powerScale() const { return m_powerScale; }
+    double powerScaleTop() const { return m_powerScaleTop; }
     // GUI model adapters notify the actual owning face after child state changes.
     void invalidatePresentation(const MeterItem* item);
     void invalidateGeometry();
@@ -153,6 +161,7 @@ public:
     // and ANAN-G2-1K (1000 W max) both unreadable on the same scale.
     // Subscribed by MainWindow to RadioModel::currentRadioChanged.
     void rescalePowerMeters(int paMaxWatts);
+    void rescalePowerMeters(int limitWatts, double topWatts);
 
     // Container-level mode state, consumed by the Thetis visibility filter
     // rule (MeterManager.cs:31366-31368). mox == true means TX active;
@@ -248,6 +257,8 @@ private:
     quint64 m_readingInvalidations{0};
     void invalidateItemLayers(const MeterItem* item);
     int m_powerScale{0};
+    double m_powerScaleTop{0.0};
+    bool m_explicitPowerScale{false};
     std::optional<MeterItem::MeterUnit> m_unitMode;
     void invalidateReadingLayers(bool staticLayers = false);
 
@@ -283,6 +294,7 @@ private:
     QRhiTexture*                m_ovGpuTex{nullptr};
     QRhiSampler*                m_ovSampler{nullptr};
     QImage m_overlayStatic;
+    bool   m_readableTextCache{false};
     bool   m_overlayStaticDirty{true};
     QImage m_overlayDynamic;
     bool   m_overlayDynamicDirty{true};

@@ -5,4 +5,13 @@ set -e
 if [ "${1:-}" = configure ] && [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload || true
 fi
+# Network receive buffer limit. The package ships
+# /usr/lib/sysctl.d/10-nereusd.conf, which the system reads at every start.
+# Apply it now as well, only ever upward, and say what was done. Only on a
+# running system: inside an image build or a container, /proc is the build
+# host's, and the file takes effect when the installed system first starts.
+if [ "${1:-}" = configure ] && [ -d /run/systemd/system ] \
+        && [ -x /usr/libexec/nereusd/raise-receive-buffer-limit ]; then
+    /usr/libexec/nereusd/raise-receive-buffer-limit /usr/lib/sysctl.d/10-nereusd.conf || true
+fi
 exit 0

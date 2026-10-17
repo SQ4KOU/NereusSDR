@@ -32,6 +32,9 @@
 //                 Display Cal and Volts/Amps Calibration follow the transmit
 //                 settings gate instead of the transmit permission.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - Level Cal's message takes a row only while there is one
+//                 (setLevelCalStatusText). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -240,6 +243,7 @@ private:
     std::function<bool()> m_levelCalConfirm;
     std::function<void(const QString&, const QString&, bool)> m_levelCalTell;
     void refreshLevelCalControls();
+    void setLevelCalStatusText(const QString& text);
     void startLevelCalibration();
 
     // -- Group 3: HPSDR Freq Cal Diagnostic ------------------------------------

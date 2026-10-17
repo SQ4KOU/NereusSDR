@@ -3,7 +3,7 @@
 
 import Foundation
 import LinkSessionTestSupport
-import NereusKitTesting
+@testable import NereusKitTesting
 import NereusLink
 import Testing
 
@@ -61,6 +61,28 @@ struct FakeRendezvousMailboxTests {
         #expect(station.pairingConnectionCount == 0)
     }
 
+    @Test func mailboxOpenedWaitsUntilTheCoreCanReceiveItsFirstBody() async throws {
+        let station = try FakeStation(requiresPairing: true)
+        let opening = OpeningGate()
+        let events = MailboxEvents()
+        let mailbox = FakeRendezvousMailbox(station: station, beforePairingOpen: { await opening.hold() })
+        _ = try await mailbox.open { event in
+            events.record(event)
+        }
+        let nameplate = try #require(PairingClient.nameplate(ofNormalised: station.pairingCode))
+
+        #expect(mailbox.send(RendezvousMessage.mailboxOpen(nameplate: nameplate).encoded))
+        #expect(await opening.waitUntilHeld())
+        mailbox.ping()
+        #expect(await events.waitUntilPong())
+        #expect(!events.mailboxOpened)
+
+        opening.release()
+        #expect(await events.waitUntilMailboxOpened())
+        #expect(mailbox.send(RendezvousMessage.mailbox(body: "{\"type\":\"pair.start\"}").encoded))
+        mailbox.close()
+    }
+
     /// A connection that never opens.
     private struct FailingTransport: LinkTransport {
         func open(onEvent: @escaping @Sendable (LinkTransportEvent) async -> Void) async throws -> Data {
@@ -70,5 +92,87 @@ struct FakeRendezvousMailboxTests {
         @discardableResult func send(_ text: String) -> Bool { false }
         func ping() {}
         func close() {}
+    }
+
+    private final class OpeningGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var held = false
+        private var released = false
+        private var waiter: CheckedContinuation<Void, Never>?
+
+        func hold() async {
+            await withCheckedContinuation { continuation in
+                let resumeNow = lock.withLock { () -> Bool in
+                    held = true
+                    if released {
+                        return true
+                    }
+                    waiter = continuation
+                    return false
+                }
+                if resumeNow {
+                    continuation.resume()
+                }
+            }
+        }
+
+        func waitUntilHeld() async -> Bool {
+            await FakeRendezvousMailboxTests.waitUntil { self.lock.withLock { self.held } }
+        }
+
+        func release() {
+            let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+                released = true
+                defer { waiter = nil }
+                return waiter
+            }
+            waiting?.resume()
+        }
+    }
+
+    private final class MailboxEvents: @unchecked Sendable {
+        private let lock = NSLock()
+        private var opened = false
+        private var pong = false
+
+        var mailboxOpened: Bool {
+            lock.withLock { opened }
+        }
+
+        func record(_ event: LinkTransportEvent) {
+            switch event {
+            case .pong:
+                lock.withLock { pong = true }
+            case .text(let text):
+                guard let message = try? RendezvousMessage.decode(text, direction: .toClient),
+                      case .mailboxOpened = message else {
+                    return
+                }
+                lock.withLock { opened = true }
+            case .closed:
+                break
+            }
+        }
+
+        func waitUntilMailboxOpened(within timeout: Duration = .seconds(2)) async -> Bool {
+            await FakeRendezvousMailboxTests.waitUntil(within: timeout) { self.lock.withLock { self.opened } }
+        }
+
+        func waitUntilPong(within timeout: Duration = .seconds(2)) async -> Bool {
+            await FakeRendezvousMailboxTests.waitUntil(within: timeout) { self.lock.withLock { self.pong } }
+        }
+    }
+
+    private static func waitUntil(within timeout: Duration = .seconds(2),
+                                  _ condition: @escaping @Sendable () -> Bool) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if condition() {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return condition()
     }
 }

@@ -13,6 +13,11 @@
 //                Claude Code. HL2-only codec; mirrors mi0bot's
 //                literal WriteMainLoop_HL2 vs WriteMainLoop split.
 //                Fixes reported HL2 S-ATT bug at the wire layer.
+//   2026-10-14 - The HL2 I2C OUT debug line is kept (I2cOutLine) and
+//                printed by the caller once P1RadioConnection's frame lock
+//                is released, as the frame is now composed on the EP2
+//                sender thread. J.J. Boyd (KG4VCF), with AI-assisted
+//                implementation via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim mi0bot networkproto1.c header (lines 1-19) ===
@@ -40,6 +45,8 @@
 #pragma once
 
 #include "IP1Codec.h"
+
+#include <array>
 
 namespace NereusSDR { class IoBoardHl2; }  // forward decl — full header in .cpp
 
@@ -111,8 +118,36 @@ public:
     // Source: mi0bot networkproto1.c:898-943 [@c26a8a4]
     bool tryComposeI2cFrame(quint8 out[5], bool mox) const;
 
+    // The "HL2 I2C OUT" debug line of an I2C frame (2026-10-14). The frame
+    // is composed with P1RadioConnection's frame lock held, on the EP2
+    // sender thread, so tryComposeI2cFrame keeps the line here instead of
+    // printing it there. The caller takes the kept lines while it still
+    // holds the lock (takeI2cOutLog) and prints them (printI2cOutLine)
+    // once the lock is released. If nobody takes them (a compose outside
+    // the sender, a test), the lines are printed at once when the store
+    // is full, so none is lost.
+    struct I2cOutLine {
+        std::array<quint8, 5> cc{};
+        quint8 bus{0};
+        quint8 address{0};
+        quint8 control{0};
+        bool   isRead{false};
+        bool   needsResponse{false};
+    };
+    // One EP2 frame carries two subframes, and an I2C frame goes at most
+    // every third subframe, so a frame keeps one line at most.
+    static constexpr int kI2cOutLogLines = 4;
+    using I2cOutLog = std::array<I2cOutLine, kI2cOutLogLines>;
+    // Moves the kept lines to out, oldest first, and returns how many.
+    int takeI2cOutLog(I2cOutLog& out) const;
+    static void printI2cOutLine(const I2cOutLine& line);
+
 private:
     IoBoardHl2* m_io{nullptr};
+    // Lines kept by tryComposeI2cFrame; read and written with the frame
+    // lock held, as the rest of the compose path is.
+    mutable I2cOutLog m_i2cOutLog{};
+    mutable int m_i2cOutLogCount{0};
 };
 
 } // namespace NereusSDR

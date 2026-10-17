@@ -27,6 +27,7 @@
 #include <QTimer>
 
 #include <functional>
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
@@ -92,7 +93,7 @@ QList<QNetworkAddressEntry> localEntries();
 
 /// Reads the Core's interfaces while its control listener is up and says
 /// when the dialable addresses change.
-class CoreAddressWatcher final : public QObject {
+class NEREUS_CORE_EXPORT CoreAddressWatcher final : public QObject {
     Q_OBJECT
 
 public:

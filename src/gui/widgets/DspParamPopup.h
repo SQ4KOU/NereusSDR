@@ -12,6 +12,8 @@
 //                AetherSDR to NereusSDR; otherwise byte-for-byte.
 //                Authored by J.J. Boyd (KG4VCF) with AI-assisted
 //                review via Anthropic Claude Code.
+//   2026-10-12 - Bound quick controls to the invoking screen, with scrolling
+//                for oversized content. J.J. Boyd (KG4VCF), OpenAI Codex.
 // =================================================================
 
 #pragma once
@@ -22,6 +24,7 @@
 #include <functional>
 
 class QVBoxLayout;
+class QScrollArea;
 class QSlider;
 class QLabel;
 class QPushButton;
@@ -54,14 +57,27 @@ public:
     // Finalize layout (adds More Settings + Reset buttons)
     void finalize(std::function<void()> onMore, std::function<void()> onReset);
 
+    QSize sizeHint() const override;
+
     // Show anchored to a button position
     void showAt(const QPoint& globalPos);
 
 protected:
     bool event(QEvent* ev) override;
+    bool eventFilter(QObject* watched, QEvent* ev) override;
 
 private:
+    void containPopup();
+    void scheduleContainment();
+    QRect availableGeometry() const;
+
     QVBoxLayout* m_layout{nullptr};
+    QWidget* m_content{nullptr};
+    QScrollArea* m_scroll{nullptr};
+    QPoint m_anchor;
+    bool m_anchored{false};
+    bool m_containing{false};
+    bool m_containmentPending{false};
     QVector<std::function<void()>> m_resetters;
 };
 

@@ -64,6 +64,7 @@ let package = Package(
     name: "NereusKit",
     platforms: [.iOS("17.4"), .macOS(.v14)],
     products: [
+        .library(name: "NereusModels", targets: ["NereusModels"]),
         // What the app links: every module below the screens.
         .library(name: "NereusKit", targets: ["NereusModels", "NereusLink", "NereusMirror", "NereusMedia", "NereusBand"]),
         // What the app's tests link, never the app itself: a fake Core

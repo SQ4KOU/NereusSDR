@@ -63,6 +63,7 @@
 
 #include <QObject>
 #include <QString>
+#include "core/NereusCoreExport.h"
 
 // Forward declaration so RadeText.h does not pull in rade_api.h (and
 // librade's internals) at every callsite.
@@ -70,7 +71,7 @@ struct rade;
 
 namespace NereusSDR {
 
-class RadeText : public QObject {
+class NEREUS_CORE_EXPORT RadeText : public QObject {
     Q_OBJECT
 
 public:

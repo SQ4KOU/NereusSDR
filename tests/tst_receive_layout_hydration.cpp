@@ -7,8 +7,10 @@
 #include "core/AppSettings.h"
 #include "core/RadioConnection.h"
 #include "core/ReceiveLayoutStore.h"
+#include "core/SliceOwnership.h"
 #include "core/WdspEngine.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 using namespace NereusSDR;
 
@@ -193,6 +195,40 @@ private slots:
         QCOMPARE(diskSettings(), before);
         QCOMPARE(settings.snapshot({QString()}), memoryBefore);
         QVERIFY(!settings.contains("Slice1/LastBand"));
+    }
+
+    // Ruling 5.10: the owners and order a layout restores are re-marked
+    // once, after the last of them, not slice by slice. Restored one at a
+    // time, the station device's active slice would pass from 2 to 0 (the
+    // creation order) and back to 2 (the layout's order), and slice 2's
+    // `active` would flicker on the way.
+    void restoredOwnersAreMarkedOnceAtTheEnd()
+    {
+        RadioModel radio;
+        QCOMPARE(radio.addSlice(), 0);
+        auto layout = savedLayout();
+        for (ReceiveSliceState& state : layout.slices) {
+            state.owner = SliceOwnership::stationDevice();
+        }
+        int slice2Changes = 0;
+        int activeSliceMoves = 0;
+        connect(&radio, &RadioModel::sliceAdded, &radio, [&radio, &slice2Changes](int id) {
+            if (SliceModel* slice = radio.sliceById(id); slice != nullptr && id == 2) {
+                connect(slice, &SliceModel::activeChanged, &radio,
+                        [&slice2Changes] { ++slice2Changes; });
+            }
+        });
+        connect(&radio, &RadioModel::activeSliceChanged, &radio,
+                [&activeSliceMoves] { ++activeSliceMoves; });
+        QString error;
+        QVERIFY2(radio.hydrateReceiveLayout(kMac, layout, &error), qPrintable(error));
+        QVERIFY(radio.sliceById(2) != nullptr);
+        const SliceOwnership* ownership = radio.sliceOwnership();
+        QCOMPARE(ownership->activeFor(SliceOwnership::stationDevice()), 2);
+        QVERIFY(radio.sliceById(2)->isActive());
+        QVERIFY(!radio.sliceById(0)->isActive());
+        QVERIFY2(slice2Changes <= 1, qPrintable(QString::number(slice2Changes)));
+        QCOMPARE(activeSliceMoves, 1);
     }
 
     void nonzeroOnlyMembershipPreservesLastSliceInvariant()

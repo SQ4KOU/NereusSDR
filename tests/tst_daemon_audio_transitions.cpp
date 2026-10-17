@@ -31,8 +31,11 @@
 // context to play from.
 // =================================================================
 
+#include <QSemaphore>
+#include <atomic>
 #include <QtTest>
 
+#include "fakes/RecordingRtpSink.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/RadeChannel.h"
@@ -105,18 +108,18 @@ public:
     bool acceptDescription(const QString&, const QString&) override { return true; }
     bool acceptCandidate(const QString&, const QString&) override { return true; }
     bool sendDisplay(const QByteArray&) override { return readyState; }
-    bool sendRtp(const QByteArray& packet) override
-    {
-        if (!readyState) { return false; }
-        rtpPackets.append(packet);
-        return true;
-    }
+    bool sendRtp(const QByteArray& packet) override { return rtpSink->sendRtpAccepted(packet); }
+    std::shared_ptr<MediaRtpSink> audioRtpSink() override { return rtpSink; }
     bool isReady() const override { return readyState; }
     void becomeReady() { readyState = true; emit ready(); }
 
-    bool readyState{false};
+    // R-AUD-SEND: the Core sends audio from its sender thread, through the
+    // sink; what the sink took is read under its lock.
+    const std::shared_ptr<Test::RecordingRtpSink> rtpSink{
+        std::make_shared<Test::RecordingRtpSink>()};
+    std::atomic<bool>& readyState{rtpSink->ready};
+    Test::SharedPacketList& rtpPackets{rtpSink->packets};
     StartOptions startOptions{Role::Answerer, 0};
-    QList<QByteArray> rtpPackets;
 };
 
 QJsonObject audioControl(quint32 revision, bool enabled)
@@ -259,7 +262,7 @@ void verifyContract(TransitionHarness& h, const char* phase,
     quint64 skippedPackets = 0;
     quint16 expectedSequence = firstSequence;
     quint32 previousTimestamp = 0;
-    const QList<QByteArray>& packets = h.mediaTransport->rtpPackets;
+    const QList<QByteArray> packets = h.mediaTransport->rtpPackets.snapshot();
     for (int i = 0; i < packets.size(); ++i) {
         const OpusRtpDecodeResult decoded = decoder.decodeRtp(packets.at(i), ssrc);
         const QString where = QStringLiteral("%1: packet %2").arg(QLatin1String(phase)).arg(i);
@@ -334,11 +337,27 @@ private slots:
 
         // A packet genuinely lost after the rate change still advances the
         // timestamp by 1920 while the sequence stays contiguous.
+        // R-AUD-SEND: the loss used to be made by stalling this thread,
+        // which drained the capture ring. The sender thread drains it now,
+        // and a stall here loses nothing, so the loss is made by a send
+        // that does not return: the sender thread is held inside it for
+        // the burst, and the ring fills behind it.
+        const std::shared_ptr<Test::RecordingRtpSink> sink = h.mediaTransport->rtpSink;
+        QSemaphore sendLetGo;
+        std::atomic<bool> holdSends{true};
+        sink->setHook([&](const QByteArray&) {
+            if (holdSends.load()) {
+                sendLetGo.acquire();
+            }
+        });
         for (int step = 0; step < kLossBurstSteps; ++step) {
             h.radio->fake().sendEp6Frames(kLossBurstEp6FramesPerStep);
             QThread::msleep(kLossBurstStepMs);
         }
         QThread::msleep(kLossStallMs);
+        holdSends.store(false);
+        sendLetGo.release(1);
+        sink->setHook({});
         // The ring's queued packets drain first; the ones after them are
         // new audio from beyond the loss, which makes the gap visible.
         QVERIFY2(h.pumpPackets(DaemonAudioSource::kQueueBlocks + kPacketsPerPhase),

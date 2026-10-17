@@ -36,6 +36,21 @@
 //                Minimum / Maximum) and the neighbour rule (setup.cs
 //                udAlex*LPF*_ValueChanged) shared by the tab and the Core.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - combinesRxBandFilters: the Anvelina Pro 3 passes nothing in
+//                bypass and takes several band filters at once (measured),
+//                and the 6 m LNA switches take the LNA out of such a
+//                selection. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-10-11 - receiveBypassSelection: on the Anvelina Pro 3 a receive
+//                bypass goes out as the five ordinary band filters together
+//                (measured), from the filter policy, from the HPF Bypass
+//                switch, and from a row's own bypass and the Alex-2 master
+//                bypass (rowBypass). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-11 - combineRxBandSelections: on the Anvelina Pro 3 the 6 m
+//                BPF/LNA and the 12/10 m row never go out together
+//                (measured: unstable); the BPF/LNA stays. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis console.cs header (lines 1-50) ===
@@ -198,7 +213,12 @@ struct AlexHpfEdges {
 // The row selection: the first row whose edges hold `freqMhz` gives its
 // filter (or 0x20 when its bypass is checked); no row gives 0x20. Compared
 // in whole hertz, as Thetis compares the decimal spinner values.
-quint8 selectAlexHpfRow(double freqMhz, const AlexHpfRows& rows) noexcept;
+//
+// `rowBypass` is what a checked row sends: Thetis's 0x20, or
+// receiveBypassSelection (below) for the radio whose bypass passes nothing.
+// A frequency no row holds is 0x20 either way. NereusSDR-original.
+quint8 selectAlexHpfRow(double freqMhz, const AlexHpfRows& rows,
+                        quint8 rowBypass = 0x20) noexcept;
 
 // Frequency → legacy Alex HIGH-PASS select bits (bank 10 C3 in the P1 packet,
 // or bytes 1432-1435 in the P2 CmdHighPriority packet).
@@ -236,8 +256,10 @@ quint8 computeRxPreselector(double freqMhz, NereusSDR::HPSDRHW board);
 // The same with the Alex tab's saved rows: the high-pass ladder's rows
 // (setAlexHPF) or, on the band-pass boards, the BPF1 rows
 // (setBPF1ForOrionIISaturn), each with its own per-row bypass.
+// `rowBypass` as at selectAlexHpfRow.
 quint8 computeRxPreselector(double freqMhz, NereusSDR::HPSDRHW board,
-                            const AlexHpfEdges& edges) noexcept;
+                            const AlexHpfEdges& edges,
+                            quint8 rowBypass = 0x20) noexcept;
 
 // The Alex-2 (second ADC) high-pass word with the saved rows and the
 // Alex-2 master bypass:
@@ -249,7 +271,9 @@ quint8 computeRxPreselector(double freqMhz, NereusSDR::HPSDRHW board,
 //         return;
 //     }
 // followed by the six rows over udAlex2*HPF* and chkAlex2*BPHPF.
-quint8 computeAlex2Hpf(double freqMhz, const AlexHpfEdges& edges) noexcept;
+// `rowBypass` as at selectAlexHpfRow; the master bypass sends it too.
+quint8 computeAlex2Hpf(double freqMhz, const AlexHpfEdges& edges,
+                       quint8 rowBypass = 0x20) noexcept;
 
 // True for the radios on which Thetis sets the Alex-2 high-pass from RX2:
 //   From Thetis console.cs:15435-15444 [v2.10.3.15] (UpdateRX2DDSFreq)
@@ -265,6 +289,101 @@ quint8 computeAlex2Hpf(double freqMhz, const AlexHpfEdges& edges) noexcept;
 //     {
 //         setAlex2HPF(rx2_dds_freq_mhz);
 bool usesAlex2Hpf(NereusSDR::HPSDRModel model) noexcept;
+
+// True for a radio whose receive band-pass board passes nothing in bypass
+// and passes each band through its own filter with several selected at
+// once. Slices on different bands sharing an input then get all of their
+// filters together, where the other radios take the bypass
+// (RadioModel::republishAlexAdcSlices).
+//
+// NereusSDR-original; not from Thetis, which sends the Anvelina Pro 3 the
+// ANAN-7000DLE's words and has one receiver per filter board. A bench
+// measurement, not a specification: an Anvelina Pro 3 (J.J. Boyd, KG4VCF,
+// 2026-10-11, firmware 22, Protocol 2), receivers on 40 m and 20 m sharing
+// input 1, levels from the radio's own I/Q in dBFS rms for the two:
+//   Alex0 receive half 0x1000, the bypass          -99.2 / -99.8
+//   0x0000, nothing selected                       -99.8 / -99.6
+//   0x0010, the 5.5 to 11 MHz filter               -53.0 / -94.7
+//   0x0002, the 11 to 22 MHz filter                -82.5 / -59.2
+//   0x0012, both filters                           -53.5 / -59.4
+//   0x1012, both filters and the bypass            -56.2 / -64.9
+// The bypass passed nothing with every value tried in Alex1's receive half
+// and in Alex0's low-pass half. Bit names from the Anvelina gateware, which
+// clocks the word out to the filter board unchanged:
+//   From n1gp-Anvelina_PROIII SPI.v:38-50 [@8e86a61]
+//     Bit 01 - 13 MHz HPF
+//     Bit 04 - 9.5 MHz HPF
+//     Bit 12 - HPF BYPASS
+// Input 1's board is the one measured. Input 2's has the same layout in the
+// gateware (SPI.v:56-68, the "_2" bits) and is taken to behave the same.
+bool combinesRxBandFilters(NereusSDR::HPSDRModel model) noexcept;
+
+// What a receive bypass goes out as: 0x20, the bypass, on every radio but
+// the one above, whose bypass passes nothing. There it is the five ordinary
+// band filters together, the 160, 80, 40, 20 and 12/10 m rows
+// (0x10 | 0x08 | 0x04 | 0x01 | 0x02, Alex0's receive half 0x0076), which is
+// the nearest thing to a bypass that board has.
+//
+// NereusSDR-original, from the same bench (2026-10-11, receive only):
+// receivers on 20 m, 80 m and 40 m sharing input 1, noise floor from the
+// radio's own I/Q in dBFS for the three:
+//   Alex0 receive half 0x1000, the bypass           -99.8 / -99.7 / -99.2
+//   0x0000, nothing selected                        -99.4 / -99.9 / -99.6
+//   each band behind its own filter alone           -69.3 / -61.7 / -63.2
+//   0x0076, the five rows                           -69.5 / -61.8 / -63.7
+//   0x0076 again, 20 s later                        -70.3 / -62.7 / -62.8
+//   0x007E, the five rows and the 6 m BPF/LNA       -81.6 / -78.4 / -80.5
+// The 6 m BPF/LNA (0x40) is not part of it: added to the five rows it took
+// 11 to 17 dB off each of the three. Neither is the bypass itself, which
+// cost two filters 3 to 5 dB when added to them (0x1012 above). So 6 m,
+// and anything below the 160 m row's lower edge, is not passed.
+//
+// Used where the filter policy reports a bypass (Force bypass, and extended
+// view, which also comes and goes for a moment when a slice takes a new
+// stream), for the Alex tab's HPF Bypass switch, and for a filter row's own
+// Bypass box and the Alex-2 master bypass (selectAlexHpfRow's rowBypass). A
+// slice alone below the lowest row keeps Thetis's 0x20: the five rows would
+// not pass it either, and the bypass was not measured there.
+quint8 receiveBypassSelection(NereusSDR::HPSDRModel model) noexcept;
+
+// The selection for a chain whose slices need several rows at once, on the
+// radio whose band filters combine (combinesRxBandFilters). `selections` is
+// the slices' selections added. NereusSDR-original; Thetis never selects
+// two rows. Two rules, from the same bench (2026-10-11, receive only: all
+// 64 combinations of the six rows, twice, receivers on 20 m, 80 m, 6 m and
+// 40 m sharing input 1).
+//
+// The bypass is left out while a row is among them: it passes nothing, and
+// it cost two filters 3 to 5 dB (0x1012 at combinesRxBandFilters).
+//
+// The 6 m BPF/LNA (0x40) and the 12/10 m row (0x02) never go out together:
+// with both selected the board was unstable. The 6 m receiver's level, from
+// the radio's own I/Q in dBFS, both passes:
+//   the BPF/LNA with any of the other four rows     -80.0 to -80.3
+//   0x000C, the BPF/LNA and the 12/10 m row         -78.4 / -78.4
+//   0x001C, those two and the 40 m row              -64.1 / -65.2
+//   0x000E, those two and the 20 m row              -41.4 / -41.4
+// and at 0x000E the strongest signal on the 20, 80 and 40 m receivers stood
+// over 50, 60 and 70 dB above the noise, against 29 to 43 dB with no
+// BPF/LNA.
+// The BPF/LNA is the one that stays (the maintainer's ruling, 2026-10-11),
+// so a slice in the 12/10 m row has no filter of its own while a 6 m slice
+// shares its input. What it hears then was not measured.
+//
+// With the BPF/LNA in, the other rows pass their bands at a lower level.
+// Noise floor in dBFS on 20 / 80 / 40 m:
+//   each band behind its own row alone               -69.3 / -61.7 / -63.2
+//   its own row and the BPF/LNA, first pass          -77.2 / -81.8 / -74.6
+//   the same, second pass                            -80.0 / -83.1 / -77.5
+// Signals fell with the noise: the strongest on each receiver stood 31 to
+// 42 dB over it behind the 80, 40 and 20 m rows with the BPF/LNA (0x003A,
+// 0x007A) and 29 to 43 dB behind the same rows without (0x0032, 0x0036,
+// 0x0076).
+//
+// `lnaStays` is false where the BPF/LNA is taken out of the selection after
+// this (Disable 6m LNA on RX, applyAlex1HpfSwitches): the 12/10 m row then
+// stays.
+quint8 combineRxBandSelections(quint8 selections, bool lnaStays) noexcept;
 
 // Frequency → Alex TRANSMIT low-pass select bits (bank 10 C4 in the P1 packet,
 // or bytes 1428-1431 in the P2 CmdHighPriority packet).
@@ -494,6 +613,9 @@ struct Alex1HpfSwitches {
     bool hpfBypass     {false};   // chkAlexHPFBypass   -> alex_hpf_bypass
     bool disable6mLnaOnRx {false};  // chkDisable6mLNAonRX -> disable_6m_lna_on_rx
     bool disable6mLnaOnTx {true};   // chkDisable6mLNAonTX -> disable_6m_lna_on_tx
+    // What hpfBypass sends: Thetis's 0x20, or receiveBypassSelection for the
+    // radio in use (RadioConnection::alexHpfSwitches). NereusSDR-original.
+    quint8 receiveBypass {0x20};
 };
 
 // The RX1 high-pass word (Alex0, SetAlexHPFBits) after those switches.
@@ -516,6 +638,13 @@ struct Alex1HpfSwitches {
 //   if (alex6bphpf_bypass || disable_6m_lna_on_rx || (_mox && disable_6m_lna_on_tx))
 //   { NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
 // (setBPF1ForOrionIISaturn: console.cs:7050).
+// A combined selection (combinesRxBandFilters) that holds the BPF/LNA with
+// other filters loses the BPF/LNA and keeps the others: the bypass passes
+// nothing on the radio that combines. NereusSDR-original; Thetis never
+// selects two rows.
+// On that radio alex_hpf_bypass sends switches.receiveBypass, the five band
+// filters, keyed or not, so no relay moves at a T/R change. The keyed
+// bypasses above (disable_hpf_on_tx, disable_hpf_on_ps) stay 0x20.
 
 // The PureSignal arm exists only in the band-pass function, which Thetis
 // runs for Orion MkII, Saturn and HermesC10 alone (usesBpf1Preselector,

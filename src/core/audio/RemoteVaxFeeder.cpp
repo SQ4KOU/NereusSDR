@@ -12,6 +12,14 @@
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-10-04: Preserve ingress arriving after the pump's snapshot.
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-09: native audio plan Task 6 (R-AUD-15): an output with its own
+//                 clock matcher is written as the audio arrives.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-16: The matcher's reserve grows after a dropout the audio
+//                 comes back from, and shrinks at a quiet restart; its
+//                 ratio is held and moved slowly from each window's mean
+//                 fill (arrival-compensated), as the remote microphone's is.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/audio/RemoteVaxFeeder.h"
@@ -45,6 +53,14 @@ VaxOutputPort VaxOutputPort::forEngine(AudioEngine* engine, int channel)
     };
     port.write = [engine, channel](const float* stereo, int frames) {
         return engine && engine->writeVaxOutput(channel, stereo, frames);
+    };
+    port.takesStereoMix = [engine, channel] {
+        return engine && engine->vaxOutputTakesStereoMix(channel);
+    };
+    port.restartClockMatch = [engine, channel] {
+        if (engine) {
+            engine->restartVaxOutputClockMatch(channel);
+        }
     };
     return port;
 }
@@ -292,11 +308,65 @@ qint64 RemoteVaxFeeder::pausedNs() const
     return std::max(kPausedNs, 2 * step);
 }
 
-void RemoteVaxFeeder::restartMatcher()
+void RemoteVaxFeeder::restartMatcher(int ringFrames)
 {
-    if (m_matcherReady) {
+    if (!m_matcherReady) {
+        return;
+    }
+    // The held ratio is kept (forceRatio survives configure() and reset());
+    // the fill window and the level it holds start afresh.
+    m_ratioWindowStartNs = -1;
+    m_ratioFillReference = -1;
+    // A restart answers any pending growth itself; what is queued by the
+    // time audio comes back is a backlog.
+    m_growPending = false;
+    m_trimOnReturn = true;
+    m_playedSinceRestart = false;
+    if (ringFrames != m_matcherRingFrames) {
+        m_matcherRingFrames = ringFrames;
+        m_matcherReady = m_matcher.configure(kInputChunkFrames, kOutputBlockFrames,
+                                             m_matcherRingFrames);
+    } else {
         m_matcher.reset();
     }
+}
+
+void RemoteVaxFeeder::quietRestart(qint64 now)
+{
+    m_growPending = false;
+    int ringFrames = m_matcherRingFrames;
+    if (ringFrames > kMatcherRingFrames && now - m_lastDropoutNs >= kShrinkAfterNs) {
+        ringFrames = std::max(ringFrames / 2, kMatcherRingFrames);
+        // The next step waits as long again.
+        m_lastDropoutNs = now;
+    }
+    restartMatcher(ringFrames);
+}
+
+bool RemoteVaxFeeder::audioWaiting(qint64 now) const
+{
+    // As drainHandoff() reads it: a chunk goes in only when every live
+    // slice holds one, so one slice gone silent is not audio back.
+    bool live = false;
+    for (const Source& source : m_sources) {
+        if (!isLive(source, now)) { continue; }
+        live = true;
+        if (source.handoff->usedBytes() / kFrameBytes < std::size_t(kInputChunkFrames)) {
+            return false;
+        }
+    }
+    return live;
+}
+
+unsigned RemoteVaxFeeder::liveSlots(qint64 now) const
+{
+    unsigned live = 0;
+    for (std::size_t i = 0; i < m_sources.size(); ++i) {
+        if (isLive(m_sources[i], now)) {
+            live |= 1u << i;
+        }
+    }
+    return live;
 }
 
 int RemoteVaxFeeder::drainHandoff(bool paced, qint64 now)
@@ -304,8 +374,9 @@ int RemoteVaxFeeder::drainHandoff(bool paced, qint64 now)
     if (paced) {
         if (!m_matcherTried) {
             m_matcherTried = true;
+            m_matcher.forceRatio(true, m_ratio);
             m_matcherReady = m_matcher.configure(kInputChunkFrames, kOutputBlockFrames,
-                                                 kMatcherRingFrames);
+                                                 m_matcherRingFrames);
         }
         if (!m_matcherReady) {
             // No rate matcher in this build: fall back to writing as the
@@ -346,14 +417,14 @@ int RemoteVaxFeeder::drainHandoff(bool paced, qint64 now)
     if (wentQuiet) {
         // The others waited kQuietNs for the slice that went quiet: that
         // much has piled up behind it. Keep a quarter of the matcher's ring
-        // (45 ms) and drop the rest, rather than overrun the matcher with
-        // it; the matcher ran dry during the wait anyway.
-        constexpr std::size_t kKeepFrames = std::size_t(kMatcherRingFrames / 4);
+        // (45 ms at the start) and drop the rest, rather than overrun the
+        // matcher with it; the matcher ran dry during the wait anyway.
+        const std::size_t keepFrames = std::size_t(m_matcherRingFrames / 4);
         for (Source& source : m_sources) {
             if (!source.wasLive) { continue; }
             const std::size_t used = source.handoff->usedBytes() / kFrameBytes;
-            if (used > kKeepFrames) {
-                trimHandoff(source, used - kKeepFrames);
+            if (used > keepFrames) {
+                trimHandoff(source, used - keepFrames);
             }
         }
     }
@@ -474,6 +545,24 @@ void RemoteVaxFeeder::pump()
 
     const std::optional<IAudioBus::OutputPacing> pacing =
         m_port.pacing ? m_port.pacing() : std::nullopt;
+    if (m_port.takesStereoMix && m_port.takesStereoMix()) {
+        // R-AUD-15: the output matches its device's clock itself, so what
+        // arrives is written as it arrives, 48 kHz stereo, into its
+        // matcher. Its control starts afresh with each new playback; the
+        // restart is applied at the first write.
+        if (m_state != State::Playing && m_port.restartClockMatch) {
+            m_port.restartClockMatch();
+        }
+        const int moved = drainHandoff(false, now);
+        if (moved > 0) {
+            m_lastInputNs = now;
+            m_state = State::Playing;
+        } else if (m_state == State::Playing && now - m_lastInputNs > kQuietNs) {
+            m_state = State::WaitingForAudio;
+        }
+        publish(m_state, pacing ? pacing->queuedFrames : 0);
+        return;
+    }
     if (!pacing) {
         // No playback timing to pace by (or the output is closed): write
         // what arrived as it arrives.
@@ -532,7 +621,46 @@ void RemoteVaxFeeder::pump()
         return;
     }
 
-    const int moved = drainHandoff(true, now);
+    if (m_growPending && m_matcherReady
+        && (now - m_lastInputNs > kQuietNs
+            || (m_liveAtUnderflow & ~liveSlots(now)) != 0)) {
+        // The source stopped rather than paused (all of it, or one slice
+        // of the mix): no more reserve.
+        quietRestart(now);
+    }
+    // Not an else: a backlog already waiting when the stop is seen is cut
+    // in the same pump.
+    if ((m_growPending || m_trimOnReturn) && m_matcherReady && audioWaiting(now)) {
+        if (m_growPending) {
+            // The link's audio is back within kQuietNs: a pause the
+            // reserve should ride out next time. The matcher is rebuilt
+            // before this audio goes in.
+            m_lastDropoutNs = m_underflowNs;
+            m_growPending = false;
+            if (m_matcherRingFrames < kMaxMatcherRingFrames) {
+                restartMatcher(std::min(2 * m_matcherRingFrames, kMaxMatcherRingFrames));
+            }
+        }
+        // The backlog past one Opus packet is dropped: the app has heard
+        // the gap already, and on top of the restarted matcher's half ring
+        // it would only add its length to the delay for good (or, after an
+        // outage, overflow the ring).
+        m_trimOnReturn = false;
+        constexpr std::size_t kKeepFrames = std::size_t(10 * kInputChunkFrames);
+        for (Source& source : m_sources) {
+            if (!isLive(source, now)) { continue; }
+            const std::size_t used = source.handoff->usedBytes() / kFrameBytes;
+            if (used > kKeepFrames) {
+                trimHandoff(source, used - kKeepFrames);
+            }
+        }
+    }
+    // Readiness is decided once, above: with the decision still open (no
+    // audio was waiting), a packet landing since then waits for the next
+    // pump's decision rather than resuming the matcher a grow would then
+    // rebuild while it plays.
+    const bool undecided = m_matcherReady && (m_growPending || m_trimOnReturn);
+    const int moved = undecided ? 0 : drainHandoff(true, now);
     if (!m_matcherReady) {
         // drainHandoff() fell back to direct writes.
         if (moved > 0) {
@@ -548,7 +676,7 @@ void RemoteVaxFeeder::pump()
     } else if (m_state == State::Playing && now - m_lastInputNs > kQuietNs) {
         // The Core went quiet: let the output run out rather than play the
         // rate matcher dry, and start afresh when audio returns.
-        restartMatcher();
+        quietRestart(now);
         m_state = State::WaitingForAudio;
     }
     if (m_state != State::Playing) {
@@ -574,11 +702,78 @@ void RemoteVaxFeeder::pump()
     }
     const RemoteAudioRateMatcherStats matcherStats = m_matcher.stats();
     if (matcherStats.underflows > 0 || matcherStats.overflows > 0) {
+        // A dropout the app heard. More reserve lets the next pause of the
+        // same length pass: at once after an overflow (a burst bigger than
+        // the ring), and after an underflow only if the audio comes back
+        // within kQuietNs.
         ++m_restarts;
-        restartMatcher();
+        if (matcherStats.overflows > 0 && m_playedSinceRestart) {
+            m_lastDropoutNs = now;
+            restartMatcher(std::min(2 * m_matcherRingFrames, kMaxMatcherRingFrames));
+        } else if (matcherStats.overflows > 0) {
+            // A first fill bigger than the ring: a backlog, not a burst
+            // the reserve should hold next time.
+            restartMatcher();
+        } else {
+            // Whether it was a dropout or the source stopping shows when the
+            // audio comes back (or does not).
+            restartMatcher();
+            m_growPending = true;
+            m_underflowNs = now;
+            m_liveAtUnderflow = liveSlots(now);
+        }
         m_state = State::WaitingForAudio;
+    } else {
+        m_playedSinceRestart = true;
+        holdRatio(matcherStats, now);
     }
     publish(m_state, queued);
+}
+
+void RemoteVaxFeeder::holdRatio(const RemoteAudioRateMatcherStats& matcherStats, qint64 now)
+{
+    if (!matcherStats.controlActive) {
+        // rmatch's 3.0 s startup (rmatch.c:514 [v2.10.3.15]): it measures nothing yet,
+        // and neither does this; the ratio holds.
+        m_ratioWindowStartNs = -1;
+        return;
+    }
+    // The fill with what has played since the last arrival added back:
+    // constant between arrivals and through a pause (the fill falls as the
+    // time since the last arrival grows), so a pause and its burst leave it
+    // where it was and it follows only the clocks; the mean fill falls by
+    // about p^2/(2 * 2000) ms for a p ms pause in a 2 s window.
+    const qint64 sinceInputNs = std::max<qint64>(0, now - m_lastInputNs);
+    const int fill = matcherStats.ringFillFrames + int(sinceInputNs * 48 / 1'000'000);
+    if (m_ratioWindowStartNs < 0) {
+        m_ratioWindowStartNs = now;
+        m_ratioLevelSum = 0.0;
+        m_ratioLevelSamples = 0;
+    }
+    m_ratioLevelSum += double(fill);
+    ++m_ratioLevelSamples;
+    if (now - m_ratioWindowStartNs < kRatioWindowNs) {
+        return;
+    }
+    // The first window after a restart sets the level to hold, within the
+    // ring's middle half: the reserve the start gave is kept, with no
+    // drain or fill toward a fixed point.
+    const double level = m_ratioLevelSum / m_ratioLevelSamples;
+    if (m_ratioFillReference < 0) {
+        m_ratioFillReference = std::clamp(int(level), m_matcherRingFrames / 4,
+                                          3 * m_matcherRingFrames / 4);
+    }
+    const double deviationMs = (level - m_ratioFillReference) / 48.0;
+    const double wantedPpm = -kRatioPpmPerMs * deviationMs;
+    if (std::abs(wantedPpm) > kMaxRatioPpm) {
+        ++m_ratioWindowsAtCap;
+    }
+    const double ppm = std::clamp(wantedPpm, -kMaxRatioPpm, kMaxRatioPpm);
+    m_ratio = 1.0 + ppm * 1e-6;
+    m_matcher.forceRatio(true, m_ratio);
+    m_ratioWindowStartNs = now;
+    m_ratioLevelSum = 0.0;
+    m_ratioLevelSamples = 0;
 }
 
 void RemoteVaxFeeder::publish(State state, int queuedFrames)
@@ -599,11 +794,16 @@ void RemoteVaxFeeder::publish(State state, int queuedFrames)
     }
     stats.handoffFrames = int(handoffBytes / kFrameBytes);
     stats.paced = m_haveConsumed || state == State::NoReader;
+    stats.matcherRingFrames = m_matcherReady ? m_matcherRingFrames : 0;
+    stats.ratioWindowsAtCap = m_ratioWindowsAtCap;
     if (m_matcherReady && state == State::Playing) {
         const RemoteAudioRateMatcherStats matcherStats = m_matcher.stats();
         stats.matcherFillFrames = std::max(0, matcherStats.ringFillFrames);
+        // The held ratio, once rmatch's 3.0 s startup has passed: a ratio
+        // still says the matcher is past its start, as it did when rmatch's
+        // control set it.
         if (matcherStats.controlActive) {
-            stats.ratio = matcherStats.currentRatio;
+            stats.ratio = m_ratio;
         }
     }
     std::lock_guard<std::mutex> lock(m_statsMutex);

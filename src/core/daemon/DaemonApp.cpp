@@ -5,6 +5,14 @@
 // rationale (R1 Task 10).
 //
 // Modification history (NereusSDR):
+//   2026-10-10: headless Core speaker (JJ's ruling, R-AUD-27): the Core's
+//               speaker plays every receiver
+//               (AudioEngine::setSpeakersPlayEverySlice). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09: native audio plan Task 21 (R-AUD-25, R-AUD-30, D31): the
+//               Core's RadioModel is the Core speaker's host, and on a box
+//               that starts into a desktop it waits for a pick. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-20: relay RadioModel connection state without dereferencing a
 //               RadioModel being destroyed, by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via OpenAI Codex.
@@ -157,6 +165,7 @@
 //               Anthropic Claude Code.
 // =================================================================
 
+#include "core/cat/CatService.h"
 #include "core/daemon/DaemonApp.h"
 #include "core/station/StationRadios.h"
 #include "core/station/StationHost.h"
@@ -167,6 +176,10 @@
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#if defined(NEREUS_HAVE_ALSA_DIRECT)
+#include "core/audio/AlsaDirectSystem.h"
+#include "core/audio/AudioTestBarrier.h"
+#endif
 #include "core/CoreInit.h"
 #include "core/FFTRouter.h"
 #include "core/LogCategories.h"
@@ -294,6 +307,31 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     // channels are on the operator's computer; outputs here would be
     // devices nothing on the Core host feeds.
     m_radioModel->audioEngine()->setVaxOutputsAllowed(false);
+    // JJ's ruling 2026-10-10 (R-AUD-27): the Core speaker plays every
+    // receiver, each at its slice's AF level and mute. This process has no
+    // window, so nobody is at a station device to listen in to a slice a
+    // remote window controls, and ruling 9.2 (the local output plays the
+    // station device's slices only) left the Core's sound card silent. A
+    // desktop that hosts a station never sets this and keeps ruling 9.2.
+    // VAX is not part of it: the VAX slice mask follows owners as before.
+    m_radioModel->audioEngine()->setSpeakersPlayEverySlice(true);
+    // Native audio plan Task 7: the audio engines for this process.
+    m_radioModel->audioEngine()->setAudioBackendContext({.daemon = true});
+    // Native audio plan Task 21: the Core speaker is this process's own
+    // sound card output, set from any window (D23). On a box that starts
+    // into a desktop (R-AUD-30, settled call 13) it waits for a pick unless
+    // one is saved or the config file names audio_device (D31, settled
+    // call 11).
+    bool startsIntoDesktop = false;
+#if defined(NEREUS_HAVE_ALSA_DIRECT)
+    if (!audioDevicesBarredForTestRun()) {
+        if (const std::unique_ptr<IAlsaDirectSystem> alsa = makeAlsaDirectSystem()) {
+            startsIntoDesktop = coreBoxStartsIntoDesktop(*alsa);
+        }
+    }
+#endif
+    m_radioModel->setCoreSpeakerDesktop(startsIntoDesktop, !cfg.audioDevice.isEmpty());
+    m_radioModel->setCoreSpeakerHost(true);
 #ifdef NEREUS_BUILD_TESTS
     m_radioModel->wdspEngine()->setSynchronousInitForTest(m_synchronousWdspForTest);
     if (m_radioInitializerForTest) {
@@ -439,6 +477,7 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     // way, but there is no reason to make it the only cover.
     StationHostOptions hosting;
     hosting.settings = &AppSettings::instance();
+    hosting.securityDirectory = m_securityDirectory;
     hosting.stationRadios = m_stationRadios.get();
     hosting.selectedRadioMac = [this] { return m_selectedRadioMac; };
     hosting.coreName = cfg.coreName;
@@ -471,6 +510,11 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     // edits must be tracked even if layout writeback awaits radio admission.
     m_radioModel->beginStationHandoverEditTracking();
     m_stationHost->start();
+    const QPointer<DaemonApp> catStartSelf(this);
+    const QPointer<RadioModel> catStartModel(m_radioModel.get());
+    m_radioModel->catService()->startConfigured();
+    if (!catStartSelf || !catStartModel || m_radioModel.get() != catStartModel
+        || runGeneration != m_radioRecoveryGeneration) { return false; }
 
     // Parity Task 19 (R-IOS-25; remote design section 6.4): the station's
     // spot sources (DX cluster, RBN, POTA, PSK Reporter) whose Auto-Connect
@@ -497,6 +541,12 @@ void DaemonApp::stop()
     // else goes, as beginStationRelease() does, so a SIGTERM never tears
     // the model down under a key.
     if (m_radioModel) {
+        const QPointer<DaemonApp> catStopSelf(this);
+        const QPointer<RadioModel> catStopModel(m_radioModel.get());
+        const quint64 catStopGeneration = m_radioRecoveryGeneration;
+        m_radioModel->catService()->stopAll();
+        if (!catStopSelf || !catStopModel || m_radioModel.get() != catStopModel
+            || catStopGeneration != m_radioRecoveryGeneration) { return; }
 #ifdef NEREUS_BUILD_TESTS
         if (m_stopAllTxForTest) {
             m_stopAllTxForTest();
@@ -611,6 +661,12 @@ void DaemonApp::beginStationRelease()
 {
     m_stationReleaseRadioRecoveryWasEnabled = m_radioRecoveryEnabled;
     if (m_radioModel) {
+        const QPointer<DaemonApp> catStopSelf(this);
+        const QPointer<RadioModel> catStopModel(m_radioModel.get());
+        const quint64 catStopGeneration = m_radioRecoveryGeneration;
+        m_radioModel->catService()->stopAll();
+        if (!catStopSelf || !catStopModel || m_radioModel.get() != catStopModel
+            || catStopGeneration != m_radioRecoveryGeneration) { return; }
 #ifdef NEREUS_BUILD_TESTS
         if (m_stopAllTxForTest) {
             m_stopAllTxForTest();
@@ -640,6 +696,14 @@ DaemonApp::StationReleaseRecoveryResult DaemonApp::recoverFailedStationRelease()
     // RadioModel; start() reuses the retained options, identity and model.
     m_stationHost->stop();
     if (!m_stationHost->start()) {
+        return StationReleaseRecoveryResult::Unavailable;
+    }
+    const QPointer<DaemonApp> catRecoverySelf(this);
+    const QPointer<RadioModel> catRecoveryModel(m_radioModel.get());
+    const quint64 catRecoveryGeneration = m_radioRecoveryGeneration;
+    m_radioModel->catService()->startConfigured();
+    if (!catRecoverySelf || !catRecoveryModel || m_radioModel.get() != catRecoveryModel
+        || catRecoveryGeneration != m_radioRecoveryGeneration) {
         return StationReleaseRecoveryResult::Unavailable;
     }
     if (m_stationReleaseRadioRecoveryWasEnabled) {

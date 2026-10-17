@@ -36,9 +36,41 @@ if test -f "$shipped_retention"; then
     mv "$retention.incomplete" "$retention"
 fi
 test -f "$retention"
+# BEGIN receive buffer limit
+# The radio socket asks for a 4 MB receive buffer and Linux grants at most
+# net.core.rmem_max, 212992 bytes on the Rock 5C as found (2026-10-10). A
+# stage that carries the setting gets it installed where the system reads it
+# at every start (packaging/nereusd-receive-buffer.conf, which the .deb
+# packages ship too), and applied now, only ever upward, by the helper the
+# stage carries. An older stage carries neither, and whatever is installed is
+# left as found. Where the installer rolls back, the file an earlier install
+# left is put back (it goes into files.tar) and one this install added is
+# removed. A limit already raised is never lowered.
+sysctl_conf=/usr/lib/sysctl.d/10-nereusd.conf
+rmem_max_file=/proc/sys/net/core/rmem_max
+sysctl_conf_added=0
+sysctl_conf_saved=()
+if [[ -e "$sysctl_conf" || -L "$sysctl_conf" ]]; then sysctl_conf_saved=("${sysctl_conf#/}"); fi
+install_receive_buffer_limit() {
+    local shipped="$1/usr/lib/sysctl.d/10-nereusd.conf"
+    local helper="$1/usr/local/libexec/nereusd/raise-receive-buffer-limit"
+    if [[ ! -s "$shipped" || ! -s "$helper" ]]; then
+        echo "this stage carries no network receive buffer setting; $sysctl_conf left as found"
+        return 0
+    fi
+    if [[ "${#sysctl_conf_saved[@]}" == 0 ]]; then sysctl_conf_added=1; fi
+    install -d -m 755 "$(dirname "$sysctl_conf")"
+    install -m 644 "$shipped" "$sysctl_conf"
+    sh "$helper" "$sysctl_conf" "$rmem_max_file" \
+        || echo "WARNING: the network receive buffer limit was not applied now; $sysctl_conf applies it at the next system start" >&2
+}
+remove_added_receive_buffer_limit() {
+    if [[ "$sysctl_conf_added" == 1 ]]; then rm -f "$sysctl_conf" || return 1; fi
+}
+# END receive buffer limit
 test ! -e "$backup"
 mkdir -m 700 "$backup"
-tar -C / -cpf "$backup/files.tar" usr/local/bin/nereusd usr/local/lib/librade.so usr/local/lib/librade.so.0.1 usr/lib/systemd/system/nereusd.service etc/nereusd.conf
+tar -C / -cpf "$backup/files.tar" usr/local/bin/nereusd usr/local/lib/librade.so usr/local/lib/librade.so.0.1 usr/lib/systemd/system/nereusd.service etc/nereusd.conf ${sysctl_conf_saved[@]+"${sysctl_conf_saved[@]}"}
 if test -e /usr/local/lib/libNereusCore.so; then
     cp -p /usr/local/lib/libNereusCore.so "$backup/libNereusCore.so"
 fi
@@ -81,6 +113,137 @@ restore_daemon_state() {
         fi
     fi
 }
+# BEGIN group drop-ins
+# Sound cards and serial accessories: the unit runs as a DynamicUser account
+# with no groups, so drop-ins grant the audio and dialout groups, as the
+# station images and the Pi 4 installers do (same content as
+# packaging/station-image/common/nereusd-audio.conf and nereusd-serial.conf).
+# Without the audio one the Core cannot open a sound card (seen on the Rock
+# 5C bench Core, 2026-10-10). A Core that lacks a grant gets it; an existing
+# one is left as found. Rollback removes only one this install added.
+dropin_dir=/etc/systemd/system/nereusd.service.d
+audio_dropin_added=0
+serial_dropin_added=0
+# One name per grant: <grant>.conf, the name every route writes. The Rock was
+# first set up by hand with nereusd-<grant>.conf; either name counts as
+# present, so a box never ends up with two files for one grant.
+existing_group_dropin() {
+    local f
+    for f in "$dropin_dir/$1.conf" "$dropin_dir/nereusd-$1.conf"; do
+        if [[ -e "$f" || -L "$f" ]]; then printf '%s\n' "$f"; return 0; fi
+    done
+    return 1
+}
+add_group_dropins() {
+    local found
+    if found=$(existing_group_dropin audio); then
+        echo "$found already exists; left unchanged"
+    else
+        audio_dropin_added=1
+        install -d -m 755 "$dropin_dir"
+        cat > "$dropin_dir/audio.conf" <<'AUDIO'
+# Sound cards on a Core: /dev/snd/* is root:audio on Debian, and a DynamicUser
+# account has no groups of its own.
+[Service]
+SupplementaryGroups=audio
+AUDIO
+        chmod 644 "$dropin_dir/audio.conf"
+        echo "added $dropin_dir/audio.conf"
+    fi
+    if found=$(existing_group_dropin serial); then
+        echo "$found already exists; left unchanged"
+    else
+        serial_dropin_added=1
+        install -d -m 755 "$dropin_dir"
+        cat > "$dropin_dir/serial.conf" <<'SERIAL'
+# Serial accessories on a station image: /dev/ttyUSB* and /dev/ttyACM* are
+# root:dialout on Debian, and a DynamicUser account has no groups of its own.
+[Service]
+SupplementaryGroups=dialout
+SERIAL
+        chmod 644 "$dropin_dir/serial.conf"
+        echo "added $dropin_dir/serial.conf"
+    fi
+}
+remove_added_group_dropins() {
+    local removed=0
+    if [[ "$audio_dropin_added" == 1 ]]; then rm -f "$dropin_dir/audio.conf" || removed=1; fi
+    if [[ "$serial_dropin_added" == 1 ]]; then rm -f "$dropin_dir/serial.conf" || removed=1; fi
+    return "$removed"
+}
+# END group drop-ins
+# BEGIN real-time priority drop-in
+# Real-time priority for the Core on the Radxa vendor kernel
+# (6.1.115-vendor-rk35xx, CONFIG_RT_GROUP_SCHED=y). While the cgroup CPU
+# controller is on, that kernel gives a service no real-time budget and
+# refuses its SCHED_FIFO requests, and a Core refused at start never asks
+# again (measured on the Rock 5C, 2026-10-11). On the Rock only the login
+# managers ask for the controller: Debian's user@.service does
+# (Delegate=pids memory cpu), so any login switches it on until about ten
+# seconds after the last logout. The drop-in takes cpu out of that list for
+# every user. The empty Delegate= comes first because a list adds to the one
+# before it: "Assigning the empty string will enable delegation, but reset
+# the list of controllers" (systemd.resource-control(5), systemd 257;
+# config_parse_delegate() in its src/core/load-fragment.c).
+# A kernel that does not report CONFIG_RT_GROUP_SCHED=y is left alone, and so
+# is an existing file. Rollback removes only one this install added.
+realtime_dropin=/etc/systemd/system/user@.service.d/nereusd-realtime-priority.conf
+kernel_config_gz=/proc/config.gz
+kernel_config_boot=/boot/config-$(uname -r)
+cgroup_controllers=/sys/fs/cgroup/cgroup.subtree_control
+realtime_dropin_added=0
+kernel_has_rt_group_sched() {
+    # No grep -q: it stops at the first match, and under pipefail the cut
+    # short gzip would then count as "not set".
+    if [[ -r "$kernel_config_gz" ]]; then
+        gzip -dc "$kernel_config_gz" | grep -x 'CONFIG_RT_GROUP_SCHED=y' > /dev/null
+    elif [[ -r "$kernel_config_boot" ]]; then
+        grep -x 'CONFIG_RT_GROUP_SCHED=y' "$kernel_config_boot" > /dev/null
+    else
+        return 1
+    fi
+}
+add_realtime_dropin() {
+    if [[ -e "$realtime_dropin" || -L "$realtime_dropin" ]]; then
+        echo "$realtime_dropin already exists; left unchanged"
+        return 0
+    fi
+    if ! kernel_has_rt_group_sched; then
+        echo "kernel does not report CONFIG_RT_GROUP_SCHED=y; $realtime_dropin not added"
+        return 0
+    fi
+    realtime_dropin_added=1
+    install -d -m 755 "${realtime_dropin%/*}"
+    cat > "$realtime_dropin" <<'REALTIME'
+# Written by the NereusSDR Core installer (scripts/radxa/install-core-selector.sh).
+# Login managers no longer ask for the cgroup CPU controller. On a kernel
+# built with CONFIG_RT_GROUP_SCHED=y that controller, once on, makes the
+# kernel refuse real-time priority to nereusd. The empty line resets the
+# list Debian ships (pids memory cpu); the next line puts back the rest.
+# Remove this file and run "systemctl daemon-reload" to undo it.
+[Service]
+Delegate=
+Delegate=pids memory
+REALTIME
+    chmod 644 "$realtime_dropin"
+    echo "added $realtime_dropin"
+}
+remove_added_realtime_dropin() {
+    if [[ "$realtime_dropin_added" == 1 ]]; then rm -f "$realtime_dropin" || return 1; fi
+}
+# Says what the Core is about to start under. It never fails an install.
+report_cpu_controller() {
+    local delegated controllers
+    delegated=$(systemctl show 'user@0.service' -p DelegateControllers --value 2> /dev/null) || delegated=unknown
+    controllers=$(cat "$cgroup_controllers" 2> /dev/null) || controllers=unknown
+    echo "login managers ask for cgroup controllers: ${delegated:-none}"
+    echo "cgroup controllers on as the Core starts: ${controllers:-none}"
+    if [[ " $controllers " == *" cpu "* ]] && kernel_has_rt_group_sched; then
+        echo "WARNING: the cgroup CPU controller is on as the Core starts. While it stays on, each audio thread of the Core is refused real-time priority when it starts, as a radio or client connects." >&2
+        echo "A login from before this change keeps it on until about ten seconds after it ends, or until a reboot for a user who lingers; audio threads that start after that get the priority." >&2
+    fi
+}
+# END real-time priority drop-in
 rollback() {
     local result=$?
     if test "$result" -ne 0; then
@@ -100,6 +263,9 @@ rollback() {
         rm -rf /usr/local/share/NereusSDR/models/dfnet3 /usr/local/share/NereusSDR/models/rnnoise /usr/local/share/doc/nereussdr/deepfilter || restored=0
         if test -f "$backup/assets.tar"; then tar -C / -xpf "$backup/assets.tar" || restored=0; fi
         restore_daemon_state || restored=0
+        remove_added_realtime_dropin || restored=0
+        remove_added_receive_buffer_limit || restored=0
+        remove_added_group_dropins || restored=0
         systemctl daemon-reload || restored=0
         if [[ "$restored" == 1 ]]; then
             systemctl start nereusd
@@ -140,7 +306,11 @@ sync -f /usr/local/share/NereusSDR/models/dfnet3/DeepFilterNet3_onnx.tar.gz
 for model in Default_large.bin Default_small.bin; do
     sync -f "/usr/local/share/NereusSDR/models/rnnoise/$model"
 done
+add_group_dropins
+install_receive_buffer_limit "$stage"
+add_realtime_dropin
 systemctl daemon-reload
+report_cpu_controller
 systemctl start nereusd
 sleep 8
 systemctl is-active --quiet nereusd

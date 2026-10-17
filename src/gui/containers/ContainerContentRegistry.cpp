@@ -1,5 +1,19 @@
 // no-port-check: NereusSDR-original content catalog and lossless meter adapter.
 // Modification history (NereusSDR):
+//   2026-10-09 - Workspace preview only: a preview tile has no background of
+//                 its own, so the container's background shows through it as
+//                 it does around the applet in the window. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - Workspace preview only: a widget factory registers its
+//                 declared properties (declaredProperties). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - Workspace preview only: createPreview passes the effective
+//                 context and the Preview render mode to widget factories.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - The Rotor applet (applet:rotor), rotor control plan Task 6, by
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-07 - Per-instance QWidget factories for the workspace preview
+//                 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-10-03 — Canonical independent control creation shortcuts by
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-03 — Plain preview and unavailable explanations by J.J. Boyd (KG4VCF),
@@ -7,9 +21,11 @@
 //   2026-10-02 — Mixed container ownership, persistence and source routing by
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 #include "ContainerContentRegistry.h"
+#include "gui/meters/WaveformMeterItem.h"
 #include "ContainerControlCatalog.h"
 #include "gui/meters/MeterItem.h"
 #include "core/UnbuiltFeatureList.h"
+#include "gui/styles/WorkspacePreview.h"
 #include <QUuid>
 #include <QJsonDocument>
 #include "gui/meters/presets/BarPresetItem.h"
@@ -54,6 +70,8 @@
 namespace NereusSDR {
 namespace {
 std::unique_ptr<MeterItem> allocate(const QString& type) {
+    if(type=="meter.radeMicWaveform") { return std::make_unique<WaveformMeterItem>(); }
+    if(type=="meter.radeSpeechWaveform") { return std::make_unique<WaveformMeterItem>(WaveformMeterItem::Source::DecodedSpeech); }
     if(type=="meter.powerSwr" || type=="PowerSwrPreset") { return std::make_unique<PowerSwrPresetItem>(); }
     if(type=="meter.ananMulti" || type=="AnanMM") { return std::make_unique<AnanMultiMeterItem>(); }
     if(type=="meter.crossNeedle" || type=="CrossNeedle") { return std::make_unique<CrossNeedleItem>(); }
@@ -145,7 +163,8 @@ QString ContainerContentRegistry::appletTypeForVisibilityId(const QString& id)
         {"Rx","rx"},{"Display","Display"},{"Tx","TX"},{"PhoneCw","PHCW"},
         {"Rade","RADE"},{"Vax","vax"},{"PureSignal","pure_signal"},
         {"ModMon","mod_monitor"},{"Tci","tci"},{"ClientChain","tci_clients"},
-        {"Amp","amp"},{"Tuner","tuner"},{"RfKit","RfKit"},{"SMeter","s_meter"}};
+        {"Cat","cat"},{"Amp","amp"},{"Tuner","tuner"},{"Rotor","rotor"},{"RfKit","RfKit"},
+        {"SMeter","s_meter"}};
     return aliases.contains(id) ? QStringLiteral("applet:") + aliases.value(id) : QString();
 }
 void ContainerContentRegistry::attachSingleton(const QString& typeId, QWidget* widget)
@@ -219,6 +238,8 @@ QString ContainerContentRegistry::unavailableReason(const QString& typeId) const
 }
 QVector<ContentDescriptor> ContainerContentRegistry::descriptors() const {
     QVector<ContentDescriptor> result;
+    result.append({"meter.radeMicWaveform","Microphone waveform",false,true,{}});
+    result.append({"meter.radeSpeechWaveform","Decoded speech waveform",false,true,{}});
     result.append({QStringLiteral("meter.powerSwr"),QStringLiteral("Power / SWR"),false,true,{}});
     result.append({QStringLiteral("meter.ananMulti"),QStringLiteral("ANAN multi meter"),false,true,{}});
     result.append({QStringLiteral("meter.crossNeedle"),QStringLiteral("Cross needle"),false,true,{}});
@@ -274,10 +295,12 @@ QVector<ContentDescriptor> ContainerContentRegistry::descriptors() const {
     result.append({QStringLiteral("applet:vax"), QStringLiteral("VAX"), true, true, {}});
     result.append({QStringLiteral("applet:pure_signal"), QStringLiteral("PureSignal"), true, true, {}});
     result.append({QStringLiteral("applet:mod_monitor"), QStringLiteral("Mod Monitor"), true, true, {}});
+    result.append({QStringLiteral("applet:cat"), QStringLiteral("CAT"), true, true, {}});
     result.append({QStringLiteral("applet:tci"), QStringLiteral("TCI"), true, true, {}});
     result.append({QStringLiteral("applet:tci_clients"), QStringLiteral("Client Chain"), true, true, {}});
     result.append({QStringLiteral("applet:amp"), QStringLiteral("Amplifier"), true, true, {}});
     result.append({QStringLiteral("applet:tuner"), QStringLiteral("Tuner"), true, true, {}});
+    result.append({QStringLiteral("applet:rotor"), QStringLiteral("Rotor"), true, true, {}});
     result.append({QStringLiteral("applet:RfKit"), QStringLiteral("RF Kit"), true, true, {}});
     result.append({QStringLiteral("applet:s_meter"), QStringLiteral("S-Meter"), true, true, {}});
     for (auto& descriptor : result) {
@@ -289,6 +312,7 @@ QVector<ContentDescriptor> ContainerContentRegistry::descriptors() const {
             descriptor.available = false; descriptor.unavailableReason = QStringLiteral("This capability is not built");
         }
     }
+    for (const QString& typeId : m_widgetFactoryOrder) { result.append(m_widgetFactories.value(typeId).descriptor); }
     for (auto& d : result) {
         if (m_unavailable.contains(d.typeId)) { d.available = false; d.unavailableReason = m_unavailable.value(d.typeId); }
     }
@@ -315,6 +339,7 @@ ContentEntry ContainerContentRegistry::makeEntry(const QString& typeId) const {
         return entry;
     }
     const auto item = allocate(typeId);
+    if (const auto* waveform=qobject_cast<const WaveformMeterItem*>(item.get())) { entry.config.insert("properties",waveform->configuration()); }
     if (const auto* face=qobject_cast<const BarPresetItem*>(item.get())) { entry.config.insert(QStringLiteral("properties"),face->configuration()); }
     if (const auto* face=qobject_cast<const CompositePresetItem*>(item.get())) { entry.config.insert(QStringLiteral("properties"),face->configuration()); }
     if (item) { entry.config.insert(QStringLiteral("legacyRecord"), item->serialize()); entry.canvasRect = QRectF(item->x(),item->y(),item->itemWidth(),item->itemHeight()); entry.paintOrder = item->zOrder(); }
@@ -341,7 +366,11 @@ MeterItem* ContainerContentRegistry::createMeterItem(const ContentEntry& entry, 
     const QString raw = entry.config.value(QStringLiteral("legacyRecord")).toString();
     auto* face=qobject_cast<BarPresetItem*>(item.get());
     auto* composite=qobject_cast<CompositePresetItem*>(item.get());
-    if(composite) {
+    auto* waveform=qobject_cast<WaveformMeterItem*>(item.get());
+    if(waveform) {
+        if(!raw.isEmpty() && !waveform->deserialize(raw)) { return nullptr; }
+        if(!waveform->applyConfiguration(entry.config.value("properties").toObject())) { return nullptr; }
+    } else if(composite) {
         if(!raw.isEmpty() && !composite->deserialize(raw)) { return nullptr; }
         if(!composite->applyConfiguration(entry.config.value(QStringLiteral("properties")).toObject())) { return nullptr; }
         composite->setPreviewInert(mode!=ContentRenderMode::Live);
@@ -352,7 +381,7 @@ MeterItem* ContainerContentRegistry::createMeterItem(const ContentEntry& entry, 
         if (!validBaseFields(raw) || raw.section(QLatin1Char('|'), 0, 0) != (entry.typeId=="meter.spacer" ? QStringLiteral("SPACER") : entry.typeId) || !item->deserialize(raw)) { return nullptr; }
     }
     const QJsonObject overrides = entry.config.value(QStringLiteral("overrides")).toObject();
-    if (!face && !composite && !overrides.isEmpty()) {
+    if (!face && !composite && !waveform && !overrides.isEmpty()) {
         QStringList fields = item->serialize().split(QLatin1Char('|'));
         for (auto it = overrides.begin(); it != overrides.end(); ++it) {
             bool ok = false; const int index = it.key().toInt(&ok);
@@ -362,8 +391,11 @@ MeterItem* ContainerContentRegistry::createMeterItem(const ContentEntry& entry, 
         const QString effective = fields.join(QLatin1Char('|'));
         if (!validBaseFields(effective) || !item->deserialize(effective)) { return nullptr; }
     }
-    if (entry.context.contains(QStringLiteral("bindingId"))) { item->setBindingId(entry.context.value(QStringLiteral("bindingId")).toInt()); }
-    item->setMmioBinding(QUuid(entry.context.value(QStringLiteral("mmioGuid")).toString()), entry.context.value(QStringLiteral("mmioVariable")).toString());
+    // PCM faces retain imported scalar/MMIO context as data, never activate it.
+    if (!waveform) {
+        if (entry.context.contains(QStringLiteral("bindingId"))) { item->setBindingId(entry.context.value(QStringLiteral("bindingId")).toInt()); }
+        item->setMmioBinding(QUuid(entry.context.value(QStringLiteral("mmioGuid")).toString()), entry.context.value(QStringLiteral("mmioVariable")).toString());
+    }
     if (entry.context.contains(QStringLiteral("stackSlot"))) {
         item->setStackSlot(entry.context.value(QStringLiteral("stackSlot")).toInt(-1));
         item->setSlotLocalY(entry.context.value(QStringLiteral("slotLocalY")).toDouble());
@@ -386,8 +418,62 @@ MeterItem* ContainerContentRegistry::createMeterItem(const ContentEntry& entry, 
     item->setParent(parent);
     return item.release();
 }
+void ContainerContentRegistry::registerWidgetFactory(const QString& typeId, const ContentDescriptor& descriptor, WidgetFactory factory,
+                                                     const QVector<ContentProperty>& properties)
+{
+    if (typeId.isEmpty() || !factory) { return; }
+    ContentDescriptor stored = descriptor;
+    stored.typeId = typeId;
+    stored.singleton = false;
+    if (!m_widgetFactories.contains(typeId)) { m_widgetFactoryOrder.append(typeId); }
+    m_widgetFactories.insert(typeId, {stored, std::move(factory), properties});
+    ++m_generation;
+    emit runtimeChanged();
+}
+void ContainerContentRegistry::unregisterWidgetFactory(const QString& typeId)
+{
+    if (!m_widgetFactories.remove(typeId)) { return; }
+    m_widgetFactoryOrder.removeAll(typeId);
+    ++m_generation;
+    emit runtimeChanged();
+}
+bool ContainerContentRegistry::hasWidgetFactory(const QString& typeId) const { return m_widgetFactories.contains(typeId); }
+QVector<ContentProperty> ContainerContentRegistry::declaredProperties(const QString& typeId) const
+{
+    const auto it = m_widgetFactories.constFind(typeId);
+    return it == m_widgetFactories.constEnd() ? QVector<ContentProperty>{} : it->properties;
+}
+QWidget* ContainerContentRegistry::createWidget(const ContentEntry& entry, QWidget* parent,
+                                                ContentRenderMode mode) const
+{
+    const auto it = m_widgetFactories.constFind(entry.typeId);
+    if (it == m_widgetFactories.constEnd() || !isAvailable(entry.typeId)) { return nullptr; }
+    QWidget* widget = it->factory(entry, parent, mode);
+    if (!widget) { return nullptr; }
+    if (widget->parentWidget() != parent) { widget->setParent(parent); }
+    widget->setProperty("containerFactoryType", entry.typeId);
+    widget->setProperty("containerEntryId", entry.id);
+    return widget;
+}
 QWidget* ContainerContentRegistry::createPreview(const ContentEntry& entry, QWidget* parent) const
 {
+    return createPreview(entry, parent, entry.context);
+}
+QWidget* ContainerContentRegistry::createPreview(const ContentEntry& entry, QWidget* parent,
+                                                 const QJsonObject& context) const
+{
+    if (hasWidgetFactory(entry.typeId) && isAvailable(entry.typeId)) {
+        // The live host's entry: the effective context in place of the
+        // entry's own, built inert.
+        ContentEntry effective = entry;
+        effective.context = context;
+        if (QWidget* view = createWidget(effective, parent, ContentRenderMode::Preview)) {
+            view->setAttribute(Qt::WA_TransparentForMouseEvents);
+            view->setProperty("freeCanvasMinimum", QSizeF(view->minimumSizeHint()));
+            view->setProperty("freeCanvasHint", view->sizeHint());
+            return view;
+        }
+    }
     if (!entry.typeId.startsWith("applet:") && isAvailable(entry.typeId)) {
         auto meter=std::make_unique<MeterWidget>();
         if (auto* item=createMeterItem(entry,meter.get(),ContentRenderMode::Preview)) {
@@ -397,6 +483,10 @@ QWidget* ContainerContentRegistry::createPreview(const ContentEntry& entry, QWid
     }
     auto* tile=new QWidget(parent); auto* layout=new QVBoxLayout(tile);
     tile->setMinimumHeight(64); tile->setStyleSheet("background:#172534;color:#c8d8e8;border:1px solid #203040;");
+    if (WorkspacePreview::enabled()) {
+        // The container's background (ContainerPreviewWidget) shows through.
+        tile->setStyleSheet("background:transparent;color:#c8d8e8;border:1px solid #203040;");
+    }
     const QString reason=entry.extensions.contains("unavailableReason") ? entry.extensions.value("unavailableReason").toString() : !isAvailable(entry.typeId) ? unavailableReason(entry.typeId)
         : (entry.typeId.startsWith("applet:") ? (entry.typeId=="applet:s_meter" ? tr("Existing S-meter view. Source changes take effect on Apply; preview controls are disabled.") : tr("This applet keeps its current radio and slice. Preview controls are disabled."))
         : tr("Unsupported configuration; original data retained."));
@@ -412,6 +502,9 @@ ContentEntry ContainerContentRegistry::captureMeterItem(const MeterItem& item, c
     const QString serialized = item.serialize();
     const auto* face=qobject_cast<const BarPresetItem*>(&item);
     const auto* composite=qobject_cast<const CompositePresetItem*>(&item);
+    const auto* waveform=qobject_cast<const WaveformMeterItem*>(&item);
+    if(waveform && entry.typeId.isEmpty()) { entry=makeEntry(waveform->typeId()); }
+    if(waveform) { entry.config.insert("properties",waveform->configuration()); entry.config.insert("legacyRecord",serialized); entry.extensions.remove("unavailableReason"); }
     if (face && entry.typeId.isEmpty()) { entry=makeEntry(face->typeId()); entry.config.insert(QStringLiteral("legacyRecord"),serialized); }
     if(composite && entry.typeId.isEmpty()) { entry=makeEntry(composite->typeId()); entry.config.insert(QStringLiteral("legacyRecord"),serialized); }
     if (entry.typeId.isEmpty()) { entry = makeEntry(serialized.section(QLatin1Char('|'),0,0)); entry.config.insert(QStringLiteral("legacyRecord"), serialized); }
@@ -420,7 +513,7 @@ ContentEntry ContainerContentRegistry::captureMeterItem(const MeterItem& item, c
     if(composite) { entry.config.insert(QStringLiteral("properties"),composite->configuration()); entry.extensions.remove(QStringLiteral("unavailableReason")); }
     auto baseline = allocate(entry.typeId);
     if (auto* web = qobject_cast<WebImageItem*>(baseline.get())) { web->setFetchEnabled(false); }
-    if (!face && !composite && baseline && baseline->deserialize(entry.config.value(QStringLiteral("legacyRecord")).toString())) {
+    if (!face && !composite && !waveform && baseline && baseline->deserialize(entry.config.value(QStringLiteral("legacyRecord")).toString())) {
         const QStringList before = baseline->serialize().split(QLatin1Char('|'));
         const QStringList after = serialized.split(QLatin1Char('|'));
         QJsonObject overrides = entry.config.value(QStringLiteral("overrides")).toObject();
@@ -436,9 +529,11 @@ ContentEntry ContainerContentRegistry::captureMeterItem(const MeterItem& item, c
         entry.canvasRect = QRectF(item.x(),item.y(),item.itemWidth(),item.itemHeight());
     }
     entry.paintOrder = item.zOrder();
-    entry.context.insert(QStringLiteral("bindingId"),item.bindingId());
-    entry.context.insert(QStringLiteral("mmioGuid"),item.mmioGuid().toString(QUuid::WithoutBraces));
-    entry.context.insert(QStringLiteral("mmioVariable"),item.mmioVariable());
+    if (!waveform) {
+        entry.context.insert(QStringLiteral("bindingId"),item.bindingId());
+        entry.context.insert(QStringLiteral("mmioGuid"),item.mmioGuid().toString(QUuid::WithoutBraces));
+        entry.context.insert(QStringLiteral("mmioVariable"),item.mmioVariable());
+    }
     entry.context.insert(QStringLiteral("stackSlot"),item.stackSlot());
     entry.context.insert(QStringLiteral("slotLocalY"),item.slotLocalY());
     entry.context.insert(QStringLiteral("slotLocalH"),item.slotLocalH());

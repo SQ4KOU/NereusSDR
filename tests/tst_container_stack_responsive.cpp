@@ -2,6 +2,14 @@
 // Modification history (NereusSDR):
 //   2026-10-04 — Live stack resize regressions by J.J. Boyd (KG4VCF),
 //                 AI-assisted via OpenAI Codex.
+//   2026-10-12 - The fixture's screen is taller than the stacks it shows:
+//                 a window is no taller than all the screens together,
+//                 and the test platform's one 800 px screen is shorter
+//                 than nine bars. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-11 - A widened auto-height stack comes to rest at its content's
+//                 height. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 #include <QtTest>
 #include <QApplication>
 #include <QDir>
@@ -17,7 +25,9 @@
 #include <QPainterPath>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSignalSpy>
 #include <QSplitter>
+#include <QStyle>
 #include <QTemporaryDir>
 #include "core/AppSettings.h"
 #include "gui/containers/ContainerContentHost.h"
@@ -25,6 +35,7 @@
 #include "gui/containers/ContainerManager.h"
 #include "gui/containers/ContainerWidget.h"
 #include "gui/containers/ContainerWorkspaceStore.h"
+#include "gui/containers/ScreenSource.h"
 #include "gui/meters/MeterWidget.h"
 #include "gui/meters/presets/BarPresetItem.h"
 
@@ -40,6 +51,19 @@ public:
     QSize sizeHint() const override { return {180, 48}; }
 };
 
+// One screen tall enough for every stack shown here at its natural height
+// (a window is never taller than all the screens together, and the test
+// platform has one screen of 800 x 800).
+class TallScreen : public ScreenSource {
+public:
+    QVector<ScreenInfo> screens() const override { return {primary()}; }
+    ScreenInfo primary() const override
+    {
+        constexpr QRect kTall(0, 0, 3840, 4320);
+        return ScreenInfo{QStringLiteral("Tall"), QStringLiteral("SN-TALL"), kTall, kTall};
+    }
+};
+
 // This fixture exercises the manager's real floating shell and arrange margins.
 // It has no MainWindow, discovery, RadioModel, poller or settings singleton.
 struct StackFixture {
@@ -51,10 +75,12 @@ struct StackFixture {
     QWidget dock;
     QSplitter splitter;
     ContainerContentRegistry registry;
+    TallScreen screens;
     ContainerManager manager{&dock, &splitter};
 
     StackFixture() {
         dock.resize(1200, 1000);
+        manager.setScreenSourceForTest(&screens);
         registry.attachSingleton("applet:rx", &applet);
         manager.setWorkspaceAdapter(&store, &registry);
     }
@@ -66,7 +92,7 @@ struct StackFixture {
         container.name = "Synthetic offline Slice A stack";
         container.layout = ContentLayout::VerticalStack;
         container.dockMode = DockMode::Floating;
-        container.header = HeaderMode::Always;
+        container.header = HeaderMode::Shown;
         container.geometry = QRect(40, 40, 640, 450);
         container.autoHeight = autoHeight;
         const QStringList variants{"signalMaxBin", "comp", "eq", "leveler", "cfc",
@@ -465,6 +491,70 @@ private slots:
         QCOMPARE(fixture.host()->preferredContentHeight(), natural);
         verifyHorizontalContainment(fixture);
         verifyRetainedContents(fixture, original);
+    }
+    void aWidenedAutoHeightStackComesToRest_data() {
+        QTest::addColumn<int>("bars");
+        QTest::addColumn<int>("from");
+        QTest::addColumn<int>("to");
+        QTest::newRow("one bar, a few pixels") << 1 << 360 << 366;
+        QTest::newRow("one bar") << 1 << 360 << 390;
+        QTest::newRow("three bars") << 3 << 360 << 480;
+        QTest::newRow("nine bars") << 9 << 320 << 640;
+    }
+    void aWidenedAutoHeightStackComesToRest() {
+        // Bars in an auto-height stack are taller when their rows are wider,
+        // so a widened window is too short for a moment and the vertical bar
+        // shows. Narrower rows need less height: read at that moment, the
+        // smaller height holds the window short, the bar hides, the rows
+        // widen and the bar shows again on every pass of the event loop.
+        // Here the row widget's resize queues a projection ahead of the bar,
+        // so the window is sized to the height with no bar. The host's event
+        // filter on the row widget is what does that: without it this case
+        // fails (26 height requests in the 40 quiet passes).
+        QFETCH(int, bars);
+        QFETCH(int, from);
+        QFETCH(int, to);
+        StackFixture fixture;
+        auto document = fixture.document(true);
+        document.containers.first().contents.resize(bars);
+        const auto committed = fixture.manager.commitWorkspace(document, 0);
+        QVERIFY2(committed.status == CommitStatus::Saved, qPrintable(committed.error));
+        ContainerWidget* container = fixture.manager.container("responsive-stack");
+        auto* scroll = fixture.host()->findChild<QScrollArea*>();
+        QVERIFY(scroll);
+        fixture.shell()->show();
+        fixture.shell()->resize(from, fixture.shell()->height());
+        settleLayouts(fixture.shell());
+        const int narrowPreferred = fixture.host()->preferredContentHeight();
+        QCOMPARE(fixture.shell()->height(), narrowPreferred + container->headerExtent());
+        // The style must take room for the bar, or there is nothing to prove.
+        QVERIFY(scroll->verticalScrollBar()->sizeHint().width() > 0);
+        QVERIFY(!scroll->verticalScrollBar()->style()->styleHint(QStyle::SH_ScrollBar_Transient, nullptr,
+                                                                 scroll->verticalScrollBar()));
+
+        fixture.shell()->resize(to, fixture.shell()->height());
+        // Plain passes of the event loop, as the running app makes them.
+        constexpr int kSettlePasses = 10;
+        constexpr int kQuietPasses = 40;
+        for (int pass = 0; pass < kSettlePasses; ++pass) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents);
+        }
+        QSignalSpy heightAsked(fixture.host(), &ContainerContentHost::preferredContentHeightChanged);
+        int barFlips = 0;
+        bool barShowing = scroll->verticalScrollBar()->isVisible();
+        for (int pass = 0; pass < kQuietPasses; ++pass) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents);
+            if (scroll->verticalScrollBar()->isVisible() != barShowing) {
+                barShowing = !barShowing;
+                ++barFlips;
+            }
+        }
+        QCOMPARE(heightAsked.count(), 0);
+        QCOMPARE(barFlips, 0);
+        QVERIFY(!scroll->verticalScrollBar()->isVisible());
+        QCOMPARE(scroll->verticalScrollBar()->maximum(), 0);
+        QVERIFY(fixture.host()->preferredContentHeight() > narrowPreferred);
+        QCOMPARE(fixture.shell()->height(), fixture.host()->preferredContentHeight() + container->headerExtent());
     }
     void heightOnlyGrowthAndScrollbarTransition_data() {
         QTest::addColumn<int>("dpr");

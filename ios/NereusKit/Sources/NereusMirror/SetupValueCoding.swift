@@ -23,6 +23,11 @@ public enum SetupValueCoding {
             if text.caseInsensitiveCompare(encoding.falseValue) == .orderedSame { return .bool(false) }
             return nil
         case .choice?:
+            if let literals = control.modern?.optionLiterals, !literals.isEmpty {
+                // A choice whose setting holds a word (V28's Sizing): the
+                // option that writes it.
+                return control.options?.first { literals[$0.value] == .text(text) }.map { .integer($0.value) }
+            }
             guard let ordinal = Int64(text.trimmingCharacters(in: .whitespaces)) else { return nil }
             if let options = control.options {
                 return options.contains { $0.value == ordinal } ? .integer(ordinal) : nil
@@ -61,6 +66,11 @@ public enum SetupValueCoding {
             return on ? encoding.trueValue : encoding.falseValue
         case (.choice?, _), (.integer?, _):
             guard let whole = value.whole, fits(value, control) else { return nil }
+            if control.kind == .choice, let literals = control.modern?.optionLiterals, !literals.isEmpty {
+                // A choice whose setting holds a word writes the word.
+                guard case .text(let word)? = literals[whole] else { return nil }
+                return word
+            }
             return String(whole)
         case (.slider?, _):
             guard fits(value, control) else { return nil }
@@ -157,7 +167,8 @@ public enum SetupValueCoding {
         return [range.minimum, range.maximum, range.step].allSatisfy { $0.rounded() == $0 }
     }
 
-    private static func decimalText(_ number: Double) -> String {
+    /// A number as a setting's string: whole without a point.
+    static func decimalText(_ number: Double) -> String {
         if number.rounded() == number, abs(number) < 9.0e15 {
             return String(Int64(number))
         }

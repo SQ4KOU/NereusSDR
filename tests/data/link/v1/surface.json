@@ -372,7 +372,7 @@
         {
             "kind": "i64",
             "name": "txReadingsVersion",
-            "value": 3
+            "value": 4
         },
         {
             "kind": "i64",
@@ -417,6 +417,11 @@
         {
             "kind": "i64",
             "name": "accessoryTxVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "remoteRotorControlVersion",
             "value": 1
         },
         {
@@ -532,6 +537,36 @@
         {
             "kind": "i64",
             "name": "radeReasonVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "stationCatVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "radioSpeakerVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "coreSpeakerVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "spectrumPictureVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "firmwareBeta",
+            "value": 0
+        },
+        {
+            "kind": "i64",
+            "name": "waveformVersion",
             "value": 1
         },
         {
@@ -1565,6 +1600,68 @@
             "arguments": [
                 {
                     "kind": "i64",
+                    "name": "channel",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "config",
+                    "optional": false
+                }
+            ],
+            "capability": "stationCatVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "setStationCatChannel"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "config",
+                    "optional": false
+                }
+            ],
+            "capability": "stationCatVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "setStationCatGlobal"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "requestId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "channel",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "command",
+                    "optional": false
+                }
+            ],
+            "capability": "stationCatVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "testStationCatCommand"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "stationCatVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "refreshStationCatDevices"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
                     "name": "mode",
                     "optional": false
                 },
@@ -1619,6 +1716,155 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "clearAccessoryFaults"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "f64",
+                    "name": "azimuthDeg",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "elevationDeg",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRotorControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "setRotorTarget"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "call",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "longPath",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRotorControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "turnRotorToCall"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remoteRotorControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "stopRotor"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "enum",
+                    "name": "direction",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "active",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRotorControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "nudgeRotor"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "enum",
+                    "name": "driver",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "serialPort",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "baud",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "host",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "hamlibModel",
+                    "optional": false
+                },
+                {
+                    "kind": "enum",
+                    "name": "axes",
+                    "optional": false
+                },
+                {
+                    "kind": "enum",
+                    "name": "endStop",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "rangeDeg",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "offsetDeg",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRotorControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "configureRotor"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remoteRotorControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "disconnectRotor"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "presets",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRotorControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "setRotorPresets"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remoteRotorControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "refreshRotorPorts"
         },
         {
             "arguments": [
@@ -3227,6 +3473,10 @@
                     "limit": [
                         "spectrumGrantVersion"
                     ],
+                    "pictureGeneration": [
+                        "spectrumGrantVersion",
+                        "spectrumPictureVersion"
+                    ],
                     "requestedPixels": [
                         "spectrumGrantVersion"
                     ],
@@ -3434,6 +3684,22 @@
                     "op",
                     "replaces"
                 ]
+            },
+            "waveform-stream-context": {
+                "capability": "waveformVersion",
+                "fields": [
+                    "availability",
+                    "connectionId",
+                    "deliveryGeneration",
+                    "enabled",
+                    "kind",
+                    "op",
+                    "reason",
+                    "revision",
+                    "sampleRateHz",
+                    "sliceId",
+                    "sourceGeneration"
+                ]
             }
         },
         "guiToCore": {
@@ -3580,11 +3846,17 @@
                     "remoteTxVersion": [
                         "remoteTxVersion"
                     ],
+                    "spectrumPictureVersion": [
+                        "spectrumPictureVersion"
+                    ],
                     "txDisplayVersion": [
                         "txDisplayVersion"
                     ],
                     "txMonitorAudioVersion": [
                         "txMonitorAudioVersion"
+                    ],
+                    "waveformVersion": [
+                        "waveformVersion"
                     ]
                 },
                 "fields": [
@@ -3726,6 +3998,17 @@
                     "connectionId",
                     "endpointId",
                     "op"
+                ]
+            },
+            "waveform-stream": {
+                "capability": "waveformVersion",
+                "fields": [
+                    "connectionId",
+                    "enabled",
+                    "kind",
+                    "op",
+                    "revision",
+                    "sliceId"
                 ]
             }
         },
@@ -5442,6 +5725,72 @@
                     "kind": "utf8",
                     "name": "diversityState",
                     "ordinal": 37
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "radioSpeakerVolume",
+                    "ordinal": 38
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "radioSpeakerMuted",
+                    "ordinal": 39
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "speakerAmplifierMode",
+                    "ordinal": 40
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "radioSpeakerAvailability",
+                    "ordinal": 41
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "speakerAmplifierAvailable",
+                    "ordinal": 42
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "coreSpeakerVolume",
+                    "ordinal": 43
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "coreSpeakerMuted",
+                    "ordinal": 44
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "coreSpeakerDevice",
+                    "ordinal": 45
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "coreSpeakerDevices",
+                    "ordinal": 46
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "coreSpeakerState",
+                    "ordinal": 47
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "coreSpeakerDetails",
+                    "ordinal": 48
                 }
             ]
         },
@@ -5652,6 +6001,197 @@
                 }
             ]
         },
+        "RotorModel": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7
+                    ],
+                    "kind": "enum",
+                    "name": "connectionPhase",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "connectionError",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4
+                    ],
+                    "kind": "enum",
+                    "name": "driver",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "label",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "serialPort",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "baud",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "host",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "port",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "serialPorts",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1
+                    ],
+                    "kind": "enum",
+                    "name": "axes",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rangeDeg",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2
+                    ],
+                    "kind": "enum",
+                    "name": "endStop",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "spanPositionDeg",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "travelDeg",
+                    "ordinal": 13
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "routeKnown",
+                    "ordinal": 14
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "offsetDeg",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "hamlibModel",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "rotctldAvailable",
+                    "ordinal": 17
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "positionFresh",
+                    "ordinal": 18
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "azimuthDeg",
+                    "ordinal": 19
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "elevationDeg",
+                    "ordinal": 20
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "targetAzimuthDeg",
+                    "ordinal": 21
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "targetElevationDeg",
+                    "ordinal": 22
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2
+                    ],
+                    "kind": "enum",
+                    "name": "motion",
+                    "ordinal": 23
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "presets",
+                    "ordinal": 24
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "fault",
+                    "ordinal": 25
+                }
+            ]
+        },
         "SetupDescription": {
             "properties": [
                 {
@@ -5777,6 +6317,12 @@
                     "kind": "bool",
                     "name": "onAir",
                     "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "receiverHolderDeviceId",
+                    "ordinal": 8
                 }
             ]
         },
@@ -5840,7 +6386,9 @@
                         10,
                         11,
                         12,
-                        13
+                        13,
+                        14,
+                        15
                     ],
                     "kind": "enum",
                     "name": "dspMode",
@@ -5948,7 +6496,9 @@
                         10,
                         11,
                         12,
-                        13
+                        13,
+                        14,
+                        15
                     ],
                     "kind": "enum",
                     "name": "dspMode",
@@ -7020,6 +7570,52 @@
                     "kind": "bool",
                     "name": "freedvReporterHidden",
                     "ordinal": 10
+                }
+            ]
+        },
+        "StationCatModel": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "global",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "channel1",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "channel2",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "channel3",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "channel4",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "platform",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "lastTest",
+                    "ordinal": 6
                 }
             ]
         },
@@ -8306,6 +8902,42 @@
                     "kind": "f64",
                     "name": "alcGroupDb",
                     "ordinal": 43
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "micPeakDb",
+                    "ordinal": 44
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "alcPeakDb",
+                    "ordinal": 45
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "compressionPeakDb",
+                    "ordinal": 46
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "eqPeakDb",
+                    "ordinal": 47
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "levelerPeakDb",
+                    "ordinal": 48
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "cfcPeakDb",
+                    "ordinal": 49
                 }
             ]
         },
@@ -8504,12 +9136,20 @@
             "key": "stationTci"
         },
         {
+            "class": "StationCatModel",
+            "key": "stationCat"
+        },
+        {
             "class": "AccessoryDataModel",
             "key": "accessoryData"
         },
         {
             "class": "AccessorySettingsModel",
             "key": "accessorySettings"
+        },
+        {
+            "class": "RotorModel",
+            "key": "rotor"
         },
         {
             "class": "StationDevicesFacade",
@@ -8615,6 +9255,7 @@
             "radios/",
             "ConnectionTargets/",
             "RemoteVax/",
+            "RemoteRigctld/",
             "SpotCollector",
             "Wsjtx"
         ],
@@ -8623,6 +9264,8 @@
             "DisplayFftWindow",
             "DisplayHzPerBinTarget",
             "DisplaySpectrumFps",
+            "DisplayFftSizingMode",
+            "DisplayHzPerBinLastTarget",
             "DisplayTxFftSize",
             "DisplayTxWindowType",
             "DisplayTxPanDetector",

@@ -823,7 +823,8 @@ private extension ConnectionPerformanceModel {
             return nil
         }
         let model = text("radioModel") ?? "model unavailable"
-        let firmware = text("firmwareVersion") ?? "firmware unavailable"
+        let firmware = text("firmwareVersion").map { RadioAtAGlance.firmwareText(first: $0, capabilities: caps) }
+            ?? "firmware unavailable"
         let protocolVersion: String
         if case .int(let number)? = caps["radioProtocol"], number == 1 || number == 2 {
             protocolVersion = "Protocol \(number)"

@@ -18,18 +18,28 @@
 // thresholds. Pixel sampling stays minimal because the CPU
 // QPainter path renders at multi-platform Qt versions.
 //
-// Six tests:
+// Eight tests:
 //   - emptyOverlayDrawsNothing
 //   - singleSpotDrawsOneLabel
 //   - overlappingSpotsStackVertically
 //   - overflowSpotsBecomeClusterBadge
 //   - clickRectAtSpotXTuneable
 //   - rejectsBeyondVisibleRange
+//   - spotListChangeInvalidatesStaticOverlay
+//   - spotDisplayInputsInvalidateStaticOverlay
+//
+// Modification history (NereusSDR):
+//   2026-10-09 - The GPU path draws the spot labels into its cached static
+//                overlay: a spot list change and every spot display input
+//                must invalidate it, not only repaint. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 
 #include <QtTest>
 #include <QImage>
 #include <QPainter>
 #include <QSignalSpy>
+
+#include <functional>
 
 #include "gui/SpectrumWidget.h"
 
@@ -72,6 +82,8 @@ private slots:
     void overflowSpotsBecomeClusterBadge();
     void clickRectAtSpotXTuneable();
     void rejectsBeyondVisibleRange();
+    void spotListChangeInvalidatesStaticOverlay();
+    void spotDisplayInputsInvalidateStaticOverlay();
 };
 
 void TestSpotOverlayRender::emptyOverlayDrawsNothing()
@@ -210,6 +222,65 @@ void TestSpotOverlayRender::rejectsBeyondVisibleRange()
     // Only the in-range spot should produce a click rect.
     QCOMPARE(sw.spotClickRectsForTest().size(), 1);
     QCOMPARE(sw.spotClickRectsForTest().first().freqMhz, 14.250);
+}
+
+// The GPU path paints the spot labels into its cached static overlay
+// (renderGpuFrame's overlay block), which is rebuilt only when it is marked
+// dirty. A new spot list must mark it, as setNotchMarkers does; an equal list
+// (the repaint guard) need not.
+void TestSpotOverlayRender::spotListChangeInvalidatesStaticOverlay()
+{
+#ifdef NEREUS_GPU_SPECTRUM
+    SpectrumWidget sw;
+    sw.resize(800, 400);
+    sw.setFrequencyRange(14'250'000.0, 96'000.0);
+    const QVector<SpectrumWidget::SpotMarker> one{makeSpot(1, QStringLiteral("TEST1"), 14.250)};
+
+    sw.clearOverlayStaticDirtyForTest();
+    sw.setSpotMarkers(one);
+    QVERIFY2(sw.overlayStaticDirtyForTest(), "a new spot list left the static overlay stale");
+
+    sw.clearOverlayStaticDirtyForTest();
+    sw.setSpotMarkers(one);
+    QVERIFY2(!sw.overlayStaticDirtyForTest(), "an equal spot list rebuilt the static overlay");
+
+    sw.clearOverlayStaticDirtyForTest();
+    sw.setSpotMarkers({});
+    QVERIFY2(sw.overlayStaticDirtyForTest(), "clearing the spots left the static overlay stale");
+#else
+    QSKIP("no cached overlay texture on the CPU-only spectrum path");
+#endif
+}
+
+// Every input drawSpotMarkers reads is in the same cached overlay.
+void TestSpotOverlayRender::spotDisplayInputsInvalidateStaticOverlay()
+{
+#ifdef NEREUS_GPU_SPECTRUM
+    SpectrumWidget sw;
+    sw.resize(800, 400);
+    const QList<QPair<const char*, std::function<void()>>> inputs = {
+        {"setHoverSpotIndexExternal", [&sw] { sw.setHoverSpotIndexExternal(3); }},
+        {"setSpotSourceVisible", [&sw] { sw.setSpotSourceVisible(QStringLiteral("RBN"), false); }},
+        {"setShowSpots", [&sw] { sw.setShowSpots(!sw.showSpots()); }},
+        {"setSpotFontSize", [&sw] { sw.setSpotFontSize(15); }},
+        {"setSpotMaxLevels", [&sw] { sw.setSpotMaxLevels(5); }},
+        {"setSpotStartPct", [&sw] { sw.setSpotStartPct(40); }},
+        {"setSpotOverrideColors", [&sw] { sw.setSpotOverrideColors(true); }},
+        {"setSpotOverrideBg", [&sw] { sw.setSpotOverrideBg(true); }},
+        {"setSpotColor", [&sw] { sw.setSpotColor(QColor(10, 20, 30)); }},
+        {"setSpotBgColor", [&sw] { sw.setSpotBgColor(QColor(40, 50, 60)); }},
+        {"setSpotBgOpacity", [&sw] { sw.setSpotBgOpacity(33); }},
+        {"loadSpotDisplaySettings", [&sw] { sw.loadSpotDisplaySettings(); }},
+    };
+    for (const auto& [name, apply] : inputs) {
+        sw.clearOverlayStaticDirtyForTest();
+        apply();
+        QVERIFY2(sw.overlayStaticDirtyForTest(),
+                 qPrintable(QStringLiteral("%1 left the static overlay stale").arg(QLatin1String(name))));
+    }
+#else
+    QSKIP("no cached overlay texture on the CPU-only spectrum path");
+#endif
 }
 
 QTEST_MAIN(TestSpotOverlayRender)

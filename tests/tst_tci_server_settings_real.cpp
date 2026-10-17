@@ -216,6 +216,77 @@ private slots:
         app.close();
         server.stop();
     }
+
+    // The shared sensor timers run at the shortest interval among the apps
+    // with sensors on. When the fast app leaves, they go back to the slower
+    // app's interval, and to the 200 ms idle default when none is left. In
+    // Thetis a leaving listener drops out of MinimumRequiredRx/TxSensorInterval
+    // (TCIServer.cs:8092-8130 [v2.10.3.15]) once the purge removes it
+    // (PurgingThreadStart, TCIServer.cs:7199-7221), and its own sensor timers stop
+    // (StopSocketListener, TCIServer.cs:3045-3056).
+    void sensorTimersFollowTheAppsThatAreLeft()
+    {
+        TciServer server(nullptr);
+        QVERIFY(server.start(0));
+        const QUrl url(QStringLiteral("ws://127.0.0.1:%1").arg(server.port()));
+        QWebSocket fast;
+        QWebSocket slow;
+        QSignalSpy fastConnected(&fast, &QWebSocket::connected);
+        QSignalSpy slowConnected(&slow, &QWebSocket::connected);
+        fast.open(url);
+        slow.open(url);
+        QVERIFY(fastConnected.count() == 1 || fastConnected.wait(2000));
+        QVERIFY(slowConnected.count() == 1 || slowConnected.wait(2000));
+        QTRY_COMPARE(server.clients().size(), 2);
+
+        slow.sendTextMessage(QStringLiteral("rx_sensors_enable:true,400;"));
+        slow.sendTextMessage(QStringLiteral("tx_sensors_enable:true,500;"));
+        QTRY_COMPARE(server.rxSensorTimerIntervalForTest(), 400);
+        QTRY_COMPARE(server.txSensorTimerIntervalForTest(), 500);
+        fast.sendTextMessage(QStringLiteral("rx_sensors_enable:true,50;"));
+        fast.sendTextMessage(QStringLiteral("tx_sensors_enable:true,60;"));
+        QTRY_COMPARE(server.rxSensorTimerIntervalForTest(), 50);
+        QTRY_COMPARE(server.txSensorTimerIntervalForTest(), 60);
+
+        // The fast app leaves without turning its sensors off.
+        fast.close();
+        QTRY_COMPARE(server.clients().size(), 1);
+        QCOMPARE(server.rxSensorTimerIntervalForTest(), 400);
+        QCOMPARE(server.txSensorTimerIntervalForTest(), 500);
+
+        // The last one leaves: the idle default.
+        slow.close();
+        QTRY_COMPARE(server.clients().size(), 0);
+        QCOMPARE(server.rxSensorTimerIntervalForTest(), 200);
+        QCOMPARE(server.txSensorTimerIntervalForTest(), 200);
+        server.stop();
+    }
+
+    // Stopping the server drops every app, so the shared sensor timers go
+    // back to the 200 ms idle default and a restarted server does not tick
+    // at the rate of an app from before the stop.
+    void stopResetsTheSensorTimers()
+    {
+        TciServer server(nullptr);
+        QVERIFY(server.start(0));
+        QWebSocket fast;
+        QSignalSpy connected(&fast, &QWebSocket::connected);
+        fast.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+        QVERIFY(connected.wait(2000));
+        QTRY_COMPARE(server.clients().size(), 1);
+        fast.sendTextMessage(QStringLiteral("rx_sensors_enable:true,50;"));
+        fast.sendTextMessage(QStringLiteral("tx_sensors_enable:true,60;"));
+        QTRY_COMPARE(server.rxSensorTimerIntervalForTest(), 50);
+        QTRY_COMPARE(server.txSensorTimerIntervalForTest(), 60);
+
+        server.stop();
+        QCOMPARE(server.rxSensorTimerIntervalForTest(), 200);
+        QCOMPARE(server.txSensorTimerIntervalForTest(), 200);
+        QVERIFY(server.start(0));
+        QCOMPARE(server.rxSensorTimerIntervalForTest(), 200);
+        QCOMPARE(server.txSensorTimerIntervalForTest(), 200);
+        server.stop();
+    }
     // Thetis keeps each app's audio stream channel count, 2 until the app
     // sends audio_stream_channels:1 or :2 (m_audioStreamChannels = 2,
     // TCIServer.cs:781; handleAudioStreamChannels, TCIServer.cs:6340-6354
@@ -573,8 +644,9 @@ private slots:
 
     // Receiver 1: channel 0 is RX2 on or off, channel 1 always false
     // ("no subrx"). A set would turn RX2 on or off in Thetis (RX2Enabled);
-    // TCI does not open or close receiver 1's slice, so nothing changes,
-    // and the requested value is echoed as Thetis does.
+    // TCI does not open or close receiver 1's slice, so nothing changes.
+    // An available receiver echoes the request as Thetis does; RX2 off
+    // means the synthetic receiver is unavailable and must answer false.
     void rxChannelEnableSecondReceiver_data()
     {
         QTest::addColumn<bool>("rx2On");
@@ -596,7 +668,9 @@ private slots:
         QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:1,0,false;")),
                  QStringLiteral("rx_channel_enable:1,0,false;"));
         QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:1,1,true;")),
-                 QStringLiteral("rx_channel_enable:1,1,true;"));
+                 QStringLiteral("rx_channel_enable:1,1,%1;").arg(on));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:1,1;")),
+                 QStringLiteral("rx_channel_enable:1,1,false;"));
         QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:1,0;")),
                  QStringLiteral("rx_channel_enable:1,0,%1;").arg(on));
         QCOMPARE(protocol.handleCommand(QStringLiteral("rx_enable:1;")),

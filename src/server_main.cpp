@@ -124,11 +124,15 @@
 //   2026-09-29: read the opt-in ICE check log switch (NEREUS_ICE_DIAG)
 //               before any peer or log line exists. J.J. Boyd (KG4VCF),
 //               with AI assistance via Anthropic Claude Code.
+//   2026-10-12: --security-dir and --dsp-cache-dir, the two folders the
+//               desktop app names for its background Core. J.J. Boyd
+//               (KG4VCF), with AI assistance via Anthropic Claude Code.
 // =================================================================
 
 #include "core/AppSettings.h"
 #include "core/AudioDeviceConfig.h"
 #include "core/CoreInit.h"
+#include "core/DspCacheLocation.h"
 #include "core/LogCategories.h"
 #include "core/RadioConnection.h"
 #include "core/BuildIdentity.h"
@@ -409,6 +413,21 @@ int main(int argc, char* argv[])
     QCommandLineOption yesOpt(QStringLiteral("yes"),
         QStringLiteral("With reset: go ahead without asking."));
     parser.addOption(yesOpt);
+    // The desktop app names these two when it starts this Core in the
+    // background, so the background Core is the app's own Core carried on:
+    // the one its devices are paired with, ready without building every
+    // FFT plan again (DaemonConfig.h, resolveDaemonFolderArgument).
+    QCommandLineOption securityDirOpt(QStringLiteral("security-dir"),
+        QStringLiteral("Keep this Core's certificate, identity and paired devices in this "
+                       "folder instead of the profile's own. Set by the desktop app for its "
+                       "background Core."),
+        QStringLiteral("folder"));
+    parser.addOption(securityDirOpt);
+    QCommandLineOption dspCacheDirOpt(QStringLiteral("dsp-cache-dir"),
+        QStringLiteral("Look for the saved FFT plans in this folder instead of this "
+                       "program's own. Set by the desktop app for its background Core."),
+        QStringLiteral("folder"));
+    parser.addOption(dspCacheDirOpt);
     parser.process(app);
     if (parser.isSet(buildInfoOpt)) {
         const QJsonObject identity{
@@ -524,6 +543,24 @@ int main(int argc, char* argv[])
         NereusSDR::AppSettings::setProfileOverride(profile);
     }
 
+    // Fatal for the same reason: an entry that names a folder that cannot
+    // be used would otherwise start a Core no paired device knows.
+    QString folderErr;
+    const QString securityDir = NereusSDR::resolveDaemonFolderArgument(
+        QStringLiteral("--security-dir"), parser.value(securityDirOpt),
+        parser.isSet(securityDirOpt), &folderErr);
+    if (!folderErr.isEmpty()) {
+        qCCritical(NereusSDR::lcApp).noquote() << folderErr;
+        return 3;
+    }
+    const QString dspCacheDir = NereusSDR::resolveDaemonFolderArgument(
+        QStringLiteral("--dsp-cache-dir"), parser.value(dspCacheDirOpt),
+        parser.isSet(dspCacheDirOpt), &folderErr);
+    if (!folderErr.isEmpty()) {
+        qCCritical(NereusSDR::lcApp).noquote() << folderErr;
+        return 3;
+    }
+
     // Every same-profile process serializes settings, identity and radio
     // ownership before CoreInit loads or writes anything in that profile.
     NereusSDR::StationHandover ownership(profile);
@@ -564,6 +601,18 @@ int main(int argc, char* argv[])
     // profile" apart from "the snapshot is empty because something is
     // broken". Idempotent -- see AppSettings::seedDaemonProfileMarker().
     NereusSDR::AppSettings::instance().seedDaemonProfileMarker();
+
+    // Said in the log, so a Core that is not the one a device is paired
+    // with, or that builds its plans again, can be told from its own file.
+    if (!securityDir.isEmpty()) {
+        qCInfo(NereusSDR::lcApp).noquote()
+            << "nereusd keeps its identity and paired devices in" << securityDir;
+    }
+    if (!dspCacheDir.isEmpty()) {
+        NereusSDR::DspCacheLocation::setDirectory(dspCacheDir);
+        qCInfo(NereusSDR::lcApp).noquote()
+            << "nereusd looks for its saved FFT plans in" << dspCacheDir;
+    }
 
     QString err;
     const NereusSDR::DaemonConfig cfg =
@@ -606,6 +655,7 @@ int main(int argc, char* argv[])
     // rather than relying solely on the implicit destructor call.
     NereusSDR::DaemonApp daemon;
     daemon.setLinkMajors(linkMajors);
+    daemon.setSecurityDirectory(securityDir);
 #ifdef NEREUS_BUILD_TESTS
     if (qEnvironmentVariableIsSet("NEREUS_HANDOVER_TEST_DISABLE_DISCOVERY")) {
         // Exercise a genuinely pending layout without LAN discovery.

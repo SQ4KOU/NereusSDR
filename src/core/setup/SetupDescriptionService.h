@@ -2,6 +2,7 @@
 // no-port-check: NereusSDR-original Setup description transport.
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
+#include "core/NereusCoreExport.h"
 #include "core/RadioDiscovery.h"
 
 #include <QJsonObject>
@@ -12,7 +13,7 @@ namespace NereusSDR {
 
 // The string properties are fixed so MirrorSchema can announce the same
 // ordinals to every client. Empty strings name categories not published yet.
-class SetupDescription final : public QObject {
+class NEREUS_CORE_EXPORT SetupDescription final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString general READ general NOTIFY descriptionsChanged)
     Q_PROPERTY(QString hardware READ hardware NOTIFY descriptionsChanged)
@@ -57,6 +58,8 @@ public:
     /// Version 24: TX Input's Line In Gain in 1.5 dB steps and the Saturn
     /// G2's Mic Tip-Ring row, exactly as published.
     static bool validateAudioV24Control(const QJsonObject& control);
+    /// Version 25: Outputs' three radio speaker rows, exactly as published.
+    static bool validateAudioV25Control(const QJsonObject& control);
     /// Version 19: DSP > CFC's band editor (`dsp.cfc.bands`), exactly as
     /// published: transmit's cfcProfile, applied with cfc.setProfile.
     static bool validateDspV19Control(const QJsonObject& control);

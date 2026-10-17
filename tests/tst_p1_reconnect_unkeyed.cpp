@@ -18,15 +18,44 @@
 //   2. After the loss a key is refused until it is released: setMox(true)
 //      leaves the wire unkeyed; setMox(false) then setMox(true) keys.
 //   3. A stale key set before connectToRadio does not reach the radio.
+//   4. The transmit cut (2026-10-15), Hermes and HL2: keyed, the frames
+//      the EP2 sender thread sends after the cut are unkeyed while m_mox is
+//      still set (the connection's thread is held, so the cut's queued
+//      unkey has not run), every ep2 frame after the unkey is unkeyed, a key
+//      is refused while it is set, and after clearTransmitCut a key goes
+//      out. The setters are posted, as RadioModel posts them, so they hold
+//      the frame lock.
+//   5. The transmit cut on every composer (no socket): the Hermes and HL2
+//      codecs, the HL2 I2C frame and the legacy compose path all compose
+//      C0 MOX = 0 while cut with m_mox still set, and both ep2 TX I/Q zones
+//      stay zero although the ring holds samples.
+//
+// Modification history (NereusSDR):
+//   2026-10-15: transmitCutUnkeysTheWireAndRefusesAKey. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-15: review fix wave: transmitCutUnkeysEveryComposer (HL2 I2C
+//               frame, legacy compose, I/Q zones). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-15: re-review: corrected the networkproto1.c cite for the
+//               MOX bit line. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-10-15: merge with the EP2 sender thread: the wire test proves the
+//               sender thread's frames are unkeyed while the cut's unkey
+//               is still queued, on Hermes and HL2, and posts its setters
+//               so they hold the frame lock. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 
 #include <QtTest/QtTest>
 #include <QElapsedTimer>
+#include <QThread>
 
 #include <functional>
 #include <memory>
+#include <vector>
 
 #include "core/P1RadioConnection.h"
 #include "core/HpsdrModel.h"
+#include "core/IoBoardHl2.h"
 #include "fakes/P1FakeRadio.h"
 
 using namespace NereusSDR;
@@ -156,6 +185,44 @@ void dropAndReconnect(P1FakeRadio& fake, P1RadioConnection& conn,
     QVERIFY(fake.metisStopCount() >= 1);
     // Past the priming bursts and well into the round robin.
     QTRY_VERIFY_WITH_TIMEOUT(fake.ep2CcReceived().size() >= 40, 3000);
+}
+
+// The silence deadline while the transmit cut test holds the connection's
+// thread; far longer than the hold, so the hold is never a lost link.
+constexpr int kCutHoldWatchdogMs = 3000;
+// How long the cut test may hold the connection's thread waiting for frames.
+constexpr int kCutHoldBoundMs = 1500;
+
+// Runs `work` as a queued call on the connection, as RadioModel posts its
+// setters, so it holds the frame lock (P1RadioConnection::event) and never
+// changes a frame input while the EP2 sender builds a frame. Returns once
+// it has run.
+template <typename F>
+void postAndWait(P1RadioConnection& conn, F work)
+{
+    bool ran = false;
+    QMetaObject::invokeMethod(&conn, [&ran, work] {
+        work();
+        ran = true;
+    }, Qt::QueuedConnection);
+    QTRY_VERIFY_WITH_TIMEOUT(ran, 3000);
+}
+
+// Waits, without running this thread's event loop, until the fake has
+// logged at least `count` ep2 frames. The fake and the EP2 sender run on
+// threads of their own, so frames keep coming while queued calls on this
+// thread wait. False if kCutHoldBoundMs passes first.
+bool waitForFramesHoldingThisThread(const P1FakeRadio& fake, qsizetype count)
+{
+    QElapsedTimer held;
+    held.start();
+    while (fake.ep2CcReceived().size() < count) {
+        if (held.elapsed() > kCutHoldBoundMs) {
+            return false;
+        }
+        QThread::msleep(1);
+    }
+    return true;
 }
 
 // Keys the link, drops it, and brings it back (dropAndReconnect).
@@ -301,6 +368,193 @@ private slots:
         conn.setMox(false);
         conn.disconnect();
         fake.stop();
+    }
+
+    void transmitCutUnkeysTheWireAndRefusesAKey_data()
+    {
+        QTest::addColumn<int>("board");
+        QTest::newRow("Hermes") << int(HPSDRHW::Hermes);
+        QTest::newRow("HermesLite") << int(HPSDRHW::HermesLite);
+    }
+
+    void transmitCutUnkeysTheWireAndRefusesAKey()
+    {
+        QFETCH(int, board);
+        P1FakeRadio fake;
+        fake.start();
+        std::unique_ptr<P1RadioConnection> connPtr =
+            bringLinkUp(fake, static_cast<HPSDRHW>(board));
+        QVERIFY2(connPtr != nullptr, "link never reached Connected");
+        P1RadioConnection& conn = *connPtr;
+        QTRY_VERIFY_WITH_TIMEOUT(fake.isRunning(), 3000);
+        // The test holds this thread below while the EP2 sender keeps
+        // sending; a short silence deadline would read that as a lost link.
+        conn.setReconnectTimingForTest(kCutHoldWatchdogMs, kTestReconnectIntervalMs);
+
+        postAndWait(conn, [&conn] { conn.setMox(true); });
+        QTRY_VERIFY_WITH_TIMEOUT(anyKeyed(fake.ep2CcReceived()), 3000);
+
+        // The cut, from this thread, which is the connection's. Its unkey is
+        // queued here and cannot run until this thread returns to its event
+        // loop, so m_mox stays set while the EP2 sender thread builds and
+        // sends frames. Those frames must already be unkeyed: the sender
+        // reads the cut itself.
+        conn.cutTransmit();
+        QVERIFY(conn.transmitCut());
+        // Frames built before the cut may still be on their way.
+        QVERIFY2(waitForFramesHoldingThisThread(fake, fake.ep2CcReceived().size() + 3),
+                 "the EP2 sender sent nothing after the cut");
+        const int fromFrame = int(fake.ep2CcReceived().size());
+        QVERIFY2(waitForFramesHoldingThisThread(fake, fromFrame + 20),
+                 "the EP2 sender sent nothing after the cut");
+        QVERIFY2(conn.moxForTest(), "the cut's unkey ran before the check");
+        const QList<QByteArray> held = fake.ep2CcReceived().mid(fromFrame);
+        const int keyedHeld = firstKeyed(held);
+        QVERIFY2(keyedHeld < 0,
+                 qPrintable(QStringLiteral("ep2 frame %1 of %2 sent after the cut carries "
+                                           "C0 MOX = 1").arg(keyedHeld).arg(held.size())));
+
+        // The unkey runs once this thread is back in its event loop, and
+        // every frame after it is unkeyed.
+        QTRY_VERIFY_WITH_TIMEOUT(!conn.moxForTest(), 3000);
+        fake.clearEp2CcLog();
+        QTRY_VERIFY_WITH_TIMEOUT(fake.ep2CcReceived().size() >= 20, 3000);
+        QCOMPARE(firstKeyed(fake.ep2CcReceived()), -1);
+
+        // Refused while cut.
+        postAndWait(conn, [&conn] { conn.setMox(true); });
+        QVERIFY(!conn.moxForTest());
+        fake.clearEp2CcLog();
+        QTRY_VERIFY_WITH_TIMEOUT(fake.ep2CcReceived().size() >= 20, 3000);
+        QCOMPARE(firstKeyed(fake.ep2CcReceived()), -1);
+
+        // Cleared: the next key goes out.
+        conn.clearTransmitCut();
+        QVERIFY(!conn.transmitCut());
+        postAndWait(conn, [&conn] { conn.setMox(true); });
+        QVERIFY(conn.moxForTest());
+        QTRY_VERIFY_WITH_TIMEOUT(anyKeyed(fake.ep2CcReceived()), 3000);
+
+        postAndWait(conn, [&conn] { conn.setMox(false); });
+        conn.disconnect();
+        fake.stop();
+    }
+
+    void transmitCutUnkeysEveryComposer_data()
+    {
+        QTest::addColumn<int>("board");
+        QTest::addColumn<bool>("legacy");
+        QTest::addColumn<bool>("i2c");
+        QTest::newRow("hermes codec") << int(HPSDRHW::Hermes) << false << false;
+        QTest::newRow("hl2 codec") << int(HPSDRHW::HermesLite) << false << false;
+        QTest::newRow("hl2 i2c frame") << int(HPSDRHW::HermesLite) << false << true;
+        QTest::newRow("legacy compose") << int(HPSDRHW::Hermes) << true << false;
+    }
+
+    void transmitCutUnkeysEveryComposer()
+    {
+        QFETCH(int, board);
+        QFETCH(bool, legacy);
+        QFETCH(bool, i2c);
+
+        // The legacy compose path is chosen when the codec is selected
+        // (selectCodec, from setBoardForTest).
+        if (legacy) {
+            qputenv("NEREUS_USE_LEGACY_P1_CODEC", "1");
+        }
+        IoBoardHl2 io;   // outlives the connection that points at it
+        P1RadioConnection conn;
+        conn.setBoardForTest(static_cast<HPSDRHW>(board));
+        qunsetenv("NEREUS_USE_LEGACY_P1_CODEC");
+        conn.setIoBoard(&io);
+
+        // One I2C write queued before each compose: the I2C frame replaces
+        // the bank's payload. Its C0 is the MOX bit with the chip select:
+        //   From mi0bot networkproto1.c:896 [@c26a8a4]: C0 = (unsigned char)XmitBit;
+        //   From mi0bot networkproto1.c:914 [@c26a8a4]: C0 |= (0x3c << 1) | (prn->i2c.ctrl_request << 7);    //I2C1 0x3c
+        const auto queueI2c = [&io, i2c]() {
+            if (!i2c) {
+                return;
+            }
+            IoBoardHl2::I2cTxn txn;
+            txn.bus = 0;
+            txn.address = 0x1D;
+            txn.control = 0x05;
+            txn.writeData = 0x42;
+            txn.isRead = false;
+            txn.needsResponse = false;
+            io.enqueueI2c(txn);
+        };
+        const auto c0Of = [&conn, &queueI2c](int bank) {
+            queueI2c();
+            quint8 out[5] = {};
+            conn.composeCcForBankForTest(bank, out);
+            return out[0];
+        };
+
+        // Keyed: bank 0 and bank 1 (or the I2C frame) carry MOX.
+        conn.setMox(true);
+        QVERIFY(conn.moxForTest());
+        if (i2c) {
+            QCOMPARE(int(c0Of(0)), 0x79);
+        }
+        // Bank 0 and bank 10 carry MOX on every composer; bank 1 (the TX
+        // frequency) carries it on the codecs only (the legacy path's
+        // frequency banks never set it, composeCcBankTxFreq).
+        QCOMPARE(int(c0Of(0) & 0x01), 1);
+        QCOMPARE(int(c0Of(10) & 0x01), 1);
+        if (!legacy) {
+            QCOMPARE(int(c0Of(1) & 0x01), 1);
+        }
+
+        // TX I/Q queued (I 0.5, Q 0.25) and drained past the key's zero
+        // cushion until a zone carries it: the zone check below can fail.
+        std::vector<float> iq(2 * 2000);
+        for (std::size_t i = 0; i < iq.size(); i += 2) {
+            iq[i] = 0.5f;
+            iq[i + 1] = 0.25f;
+        }
+        const auto iqZonesZero = [](const QByteArray& frame) {
+            for (const int zone : {16, 528}) {
+                for (int slot = 0; slot < 63; ++slot) {
+                    for (int b = 4; b < 8; ++b) {
+                        if (frame.at(zone + slot * 8 + b) != 0) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            return true;
+        };
+        bool carried = iqZonesZero(conn.sendTxIqAndCapture(iq.data(), 2000)) == false;
+        for (int i = 0; i < 12 && !carried; ++i) {
+            carried = !iqZonesZero(conn.sendTxIqAndCapture(nullptr, 0));
+        }
+        QVERIFY2(carried, "no TX I/Q reached a zone before the cut");
+        QVERIFY(conn.txIqBufferedSamplesForTest() >= 126);
+
+        // Cut: the unkey is queued, m_mox still set, yet every composer
+        // reads unkeyed and the zones stay zero with samples in the ring.
+        conn.cutTransmit();
+        QVERIFY(conn.transmitCut());
+        QVERIFY(conn.moxForTest());
+        if (i2c) {
+            QCOMPARE(int(c0Of(0)), 0x78);
+        }
+        QCOMPARE(int(c0Of(0) & 0x01), 0);
+        QCOMPARE(int(c0Of(10) & 0x01), 0);
+        QCOMPARE(int(c0Of(1) & 0x01), 0);
+        QVERIFY(conn.txIqBufferedSamplesForTest() >= 126);
+        QVERIFY(iqZonesZero(conn.sendTxIqAndCapture(iq.data(), 126)));
+        QVERIFY(iqZonesZero(conn.sendTxIqAndCapture(nullptr, 0)));
+
+        // The queued unkey runs; the cut stays until it is cleared.
+        QTRY_VERIFY_WITH_TIMEOUT(!conn.moxForTest(), 2000);
+        QVERIFY(conn.transmitCut());
+        conn.clearTransmitCut();
+        conn.setMox(true);
+        QCOMPARE(int(c0Of(0) & 0x01), 1);
+        conn.setMox(false);
     }
 
     void staleKeyBeforeConnectDoesNotReachTheRadio()

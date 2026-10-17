@@ -28,6 +28,10 @@
 //   2026-09-21  J.J. Boyd / KG4VCF  Restore WDSP's mode-dependent
 //                                    accumulator initialization after reset.
 //                                    AI-assisted transformation via OpenAI Codex.
+//   2026-10-12  J.J. Boyd / KG4VCF  Accepted Display call 51: derived
+//                                    window depth, idempotent configuration
+//                                    and changed-depth accumulator reset.
+//                                    AI-assisted via OpenAI Codex.
 // =================================================================
 
 //=================================================================
@@ -117,10 +121,29 @@ void SpectrumAvenger::resize(int numPixels)
 
 void SpectrumAvenger::setNumAverage(int numFrames)
 {
-    m_numAverage = std::max(1, std::min(numFrames, kMaxAverage));
-    m_availFrames = 0;
-    m_avInIdx = 0;
-    m_avOutIdx = 0;
+    const int clamped = std::max(1, std::min(numFrames, kMaxAverage));
+    if (m_numAverage == clamped) {
+        return;
+    }
+    m_numAverage = clamped;
+    // NereusSDR: callers configure each incoming display row. An unchanged
+    // depth must retain its ring, and a changed depth must clear the sum as
+    // well as the indices so the first new row is not added to stale power.
+    clear();
+}
+
+// NereusSDR display glue: accepted live HTML:1406 / call 51. The studied
+// Thetis specHPSDR.cs:351–378 [v2.10.3.15] sets per-plane depth alongside
+// alpha but truncates; the approved reference explicitly rounds instead.
+int SpectrumAvenger::windowFramesForTimeMs(int timeMs, int fps)
+{
+    constexpr double kMillisecondsPerSecond = 1000.0;
+    constexpr int kMinDisplayFps = 1;
+    constexpr int kMinAverageTimeMs = 1; // live HTML avgFrames / avgBack input floor
+    const double frames = std::round(static_cast<double>(std::max(fps, kMinDisplayFps))
+        * static_cast<double>(std::max(timeMs, kMinAverageTimeMs)) / kMillisecondsPerSecond);
+    return static_cast<int>(std::clamp(frames,
+        static_cast<double>(kMinWindowFrames), static_cast<double>(kMaxAverage)));
 }
 
 void SpectrumAvenger::clear()

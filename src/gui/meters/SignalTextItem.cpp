@@ -116,6 +116,11 @@ mw0lge@grange-lane.co.uk
 
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
+// Modification history (NereusSDR):
+//   2026-10-12 - Apply the approved workspace-only 11 px text minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
+#include "gui/styles/WorkspacePreview.h"
 #include "SignalTextItem.h"
 #include "ResponsiveText.h"
 
@@ -292,7 +297,7 @@ void SignalTextItem::paint(QPainter& p, int widgetW, int widgetH)
 
     // Step 3: main value text (centered, large)
     if (m_showValue) {
-        QFont mainFont(m_fontFamily, static_cast<int>(clampedSize));
+        QFont mainFont = WorkspacePreview::readableFont(QFont(m_fontFamily, static_cast<int>(clampedSize)), p.device());
         mainFont.setBold(true);
         p.setFont(mainFont);
         p.setPen(m_colour);
@@ -315,7 +320,7 @@ void SignalTextItem::paint(QPainter& p, int widgetW, int widgetH)
         }
 
         const float smallSize = std::max(6.0f, clampedSize * 0.4f);
-        QFont smallFont(m_fontFamily, static_cast<int>(smallSize));
+        QFont smallFont = WorkspacePreview::readableFont(QFont(m_fontFamily, static_cast<int>(smallSize)), p.device());
         p.setFont(smallFont);
         p.setPen(QColor(0x80, 0x90, 0xa0));
 
@@ -329,7 +334,7 @@ void SignalTextItem::paint(QPainter& p, int widgetW, int widgetH)
     // Step 5: peak value in top-right, smaller font
     if (m_showPeakValue && m_peakHold) {
         const float peakSize = std::max(6.0f, clampedSize * 0.5f);
-        QFont peakFont(m_fontFamily, static_cast<int>(peakSize));
+        QFont peakFont = WorkspacePreview::readableFont(QFont(m_fontFamily, static_cast<int>(peakSize)), p.device());
         peakFont.setBold(true);
         p.setFont(peakFont);
         p.setPen(m_peakColour);

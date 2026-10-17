@@ -28,6 +28,8 @@
 #include <QUrl>
 #include <QWebSocket>
 #include <QEventLoop>
+#include <QPointer>
+#include <QScopeGuard>
 #include <QThread>
 #include <QTimer>
 
@@ -1012,6 +1014,15 @@ private slots:
             }
             gateCv.notify_all();
         };
+        const auto releaseAndDrain = qScopeGuard([&]() {
+            // Failed assertions must release a held lane before any state
+            // captured by its jobs (including the gate and log) is destroyed.
+            releaseLane();
+            lane.waitIdleForTest(kLaneIdleTimeoutMs);
+            g_recordTxLocks.store(false);
+            WDSPSetCallerCheckHook(nullptr);
+            g_log = nullptr;
+        });
         holdLane();
         tx->setStageRunning(TxChannel::Stage::Eqp, true);
         Clock::time_point armedAt = Clock::now();
@@ -1035,10 +1046,18 @@ private slots:
         cfg.bufferSize = kTxInSize;
         cfg.filterSize = WdspEngine::kTxDspBufferSize;
         cfg.sampleRate = kRateHz;
+        QPointer<TxChannel> oldLifetime(tx);
+        QSignalSpy oldVox(tx, &TxChannel::voxActiveChanged);
         QVERIFY(engine.rebuildTxChannel(kTxId, cfg) >= 0);
         TxChannel* rebuilt = engine.txChannel(kTxId);
         QVERIFY(rebuilt && rebuilt != tx);
         QVERIFY(tx->isRetired());
+        QSignalSpy rebuiltVox(rebuilt, &TxChannel::voxActiveChanged);
+        // Old is still retained for its pending close; new must not receive
+        // an old DEXP callback before that close has quiesced the worker.
+        TxChannel::invokePushVoxForTest(TxChannel::kDexpId, 1);
+        QCOMPARE(oldVox.count(), 0);
+        QCOMPARE(rebuiltVox.count(), 0);
         tx->setTxPostGenRun(true);   // through the stale pointer
         rebuilt->setStageRunning(TxChannel::Stage::Compressor, true);
         armedAt = Clock::now();
@@ -1059,6 +1078,16 @@ private slots:
         QVERIFY(!readOnLane(rebuilt, TxChannel::Stage::Gen1));
         QVERIFY(readOnLane(rebuilt, TxChannel::Stage::Compressor));
         QVERIFY(rebuilt->isWdspReady());
+
+        TxChannel::invokePushVoxForTest(TxChannel::kDexpId, 1);
+        QCOMPARE(rebuiltVox.count(), 1);
+        QVERIFY(oldLifetime);
+        QCoreApplication::sendPostedEvents(&engine, QEvent::MetaCall);
+        QVERIFY(oldLifetime.isNull());
+        // Reaping the old wrapper must preserve the replacement's callback.
+        TxChannel::invokePushVoxForTest(TxChannel::kDexpId, 0);
+        QCOMPARE(rebuiltVox.count(), 2);
+        QCOMPARE(rebuiltVox.at(1).at(0).toBool(), false);
 
         engine.shutdown();
         engine.setTransmitLane(nullptr);
@@ -1159,5 +1188,5 @@ private slots:
 #endif // HAVE_WDSP
 };
 
-QTEST_MAIN(TestDspControlTransmit)
+QTEST_GUILESS_MAIN(TestDspControlTransmit)
 #include "tst_dsp_control_transmit.moc"

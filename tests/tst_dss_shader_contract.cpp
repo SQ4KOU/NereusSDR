@@ -38,6 +38,18 @@ private slots:
         QVERIFY(!shaderSource(QStringLiteral("dss_mesh.frag")).isEmpty());
     }
 
+    void retainedQuietMetadataMatchesActualShaderRowPacking() {
+        for (const QString& name : {QStringLiteral("dss_mesh.vert"), QStringLiteral("dss_mesh.frag")}) {
+            const QString source = shaderSource(name);
+            const QRegularExpression declaration(QStringLiteral(R"(vec4\s+rowQuietLevels\s*\[\s*(\d+)\s*\])"));
+            const auto match = declaration.match(source);
+            QVERIFY2(match.hasMatch(), qPrintable(name + QStringLiteral(": no retained quiet metadata")));
+            QCOMPARE(match.captured(1).toInt(), kDssRows);
+        }
+        // Existing uboFloatCount_matchesStd140Layout parses the actual full
+        // blocks and must pass after host+shader packing is extended.
+    }
+
     // Fixed GLSL array sizes cannot consume a C++ constant. Upstream guards
     // this with a static_assert; we assert it in a test so a change to
     // kDssRows cannot silently overrun the UBO.

@@ -26,6 +26,9 @@
 //   2026-09-27 - Parity Task 23 control UI by J.J. Boyd (KG4VCF);
 //                AI-assisted implementation via OpenAI Codex. The Core's
 //                client stream has a labelled list and Disconnect control.
+//   2026-10-09 - A client row names its own style rule, so its bottom line
+//                no longer repeats under every label and badge in it.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #ifdef HAVE_WEBSOCKETS
@@ -307,8 +310,11 @@ QWidget* ClientChainApplet::buildClientRow(
     const std::shared_ptr<TciClientSession>& session)
 {
     auto* row = new QWidget(this);
+    // Named so the bottom line stays on the row: an unnamed QWidget rule
+    // reached every label and badge in it and drew the line under each.
+    row->setObjectName(QStringLiteral("tciClientRow"));
     row->setStyleSheet(QStringLiteral(
-        "QWidget { background: %1; border-bottom: 1px solid %2; }"
+        "QWidget#tciClientRow { background: %1; border-bottom: 1px solid %2; }"
     ).arg(Style::kPanelBg, Style::kBorderSubtle));
 
     auto* vbox = new QVBoxLayout(row);

@@ -25,6 +25,10 @@
 //                 per-band switch does (R-IOS-26, R-R3-49). J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-10-10 - Display pill plan Task 9: applyStationGridSetting
+//                 compares the changed slot with the slot the pan shows,
+//                 so a pan on 2 m takes a change to XVTR's keys. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -243,32 +247,78 @@ BandGridSettings PanadapterModel::perBandGrid(Band b) const
 
 void PanadapterModel::setPerBandDbMax(Band b, int dbMax)
 {
-    b = gridSlot(b);
-    BandGridSettings& slot = m_perBandGrid[b];  // constructor seeded all 14
-    if (slot.dbMax == dbMax) {
-        return;
-    }
-    slot.dbMax = dbMax;
-    saveBandGridToSettings(b);
-    if (b == gridSlot(m_band)) {
-        setdBmCeiling(dbMax);
-    }
-    shareWithOtherModels(this, [b, dbMax](PanadapterModel* pan) { pan->setPerBandDbMax(b, dbMax); });
+    storePerBandDb(gridSlot(b), dbMax, perBandGrid(b).dbMin);
 }
 
 void PanadapterModel::setPerBandDbMin(Band b, int dbMin)
 {
-    b = gridSlot(b);
-    BandGridSettings& slot = m_perBandGrid[b];
-    if (slot.dbMin == dbMin) {
+    storePerBandDb(gridSlot(b), perBandGrid(b).dbMax, dbMin);
+}
+
+void PanadapterModel::setPerBandDbRange(Band b, int dbMax, int dbMin)
+{
+    if (dbMax <= dbMin) {
         return;
     }
-    slot.dbMin = dbMin;
-    saveBandGridToSettings(b);
-    if (b == gridSlot(m_band)) {
-        setdBmFloor(dbMin);
+    storePerBandDb(gridSlot(b), dbMax, dbMin);
+}
+
+// One edit of a band's range, one-ended or two-ended. The keys are the
+// station's (in a remote window each write goes to the Core and comes back),
+// so an edit writes as little as it can:
+//   - the end that changed, once, by the model the edit came through. The
+//     other models take the pair into their slot and write nothing: it is
+//     one store. Each used to save too, so one edit was written once per
+//     pan.
+//   - never the end that did not change, when the band has it stored.
+//     Writing it again sent the old value after any newer one still on its
+//     way, and the newer one bounced back to the old.
+//   - nothing that equals what is stored.
+// The first edit of a band that has nothing stored for the other end still
+// writes that end as the value that is drawn (Display pill plan Task 9:
+// the band's pair is stored, not half of it beside another window's
+// default).
+void PanadapterModel::storePerBandDb(Band slotBand, int dbMax, int dbMin)
+{
+    const BandGridSettings old =
+        m_perBandGrid.value(slotBand, BandGridSettings{ kThetisDefaultDbMax, kThetisDefaultDbMin });
+    if (old.dbMax == dbMax && old.dbMin == dbMin) {
+        return;
     }
-    shareWithOtherModels(this, [b, dbMin](PanadapterModel* pan) { pan->setPerBandDbMin(b, dbMin); });
+    auto& s = AppSettings::instance();
+    const auto writeEnd = [&s](const QString& key, int value, bool changed) {
+        const bool stored = s.contains(key);
+        if (stored && (!changed || s.value(key).toInt() == value)) {
+            return;
+        }
+        s.setValue(key, value);
+    };
+    writeEnd(gridMaxKey(slotBand), dbMax, old.dbMax != dbMax);
+    writeEnd(gridMinKey(slotBand), dbMin, old.dbMin != dbMin);
+
+    takePerBandDb(slotBand, dbMax, dbMin);
+    shareWithOtherModels(this, [slotBand, dbMax, dbMin](PanadapterModel* pan) {
+        pan->takePerBandDb(slotBand, dbMax, dbMin);
+    });
+}
+
+void PanadapterModel::takePerBandDb(Band slotBand, int dbMax, int dbMin)
+{
+    BandGridSettings& slot = m_perBandGrid[slotBand];  // constructor seeded all 14
+    slot.dbMax = dbMax;
+    slot.dbMin = dbMin;
+    if (slotBand != gridSlot(m_band)) {
+        return;
+    }
+    // The ends in the order that never crosses them: each emits
+    // levelChanged, and a listener reads both.
+    if (dbMax > m_dBmFloor) {
+        setdBmCeiling(dbMax);
+        setdBmFloor(dbMin);
+    } else {
+        setdBmFloor(dbMin);
+        setdBmCeiling(dbMax);
+    }
 }
 
 float PanadapterModel::clarityFloor(Band b) const
@@ -335,6 +385,7 @@ void PanadapterModel::setDss3DFloorDepthForBand(Band b, int depth)
     }
     slot.dss3DFloorDepth = depth;
     AppSettings::instance().setValue(dss3DFloorDepthKey(b), depth);
+    emit dss3DFloorDepthStored(b, depth);
     shareWithOtherModels(this, [b, depth](PanadapterModel* pan) {
         pan->setDss3DFloorDepthForBand(b, depth);
     });
@@ -402,9 +453,11 @@ void PanadapterModel::applyStationGridSetting(const QString& key)
     auto& s = AppSettings::instance();
     const auto reload = [this, &s](Band b) {
         BandGridSettings& slot = m_perBandGrid[b];
-        slot.dbMax = s.value(gridMaxKey(b), kThetisDefaultDbMax).toInt();
-        slot.dbMin = s.value(gridMinKey(b), kThetisDefaultDbMin).toInt();
-        if (b == m_band && m_followsBandGrid) {
+        slot.dbMax = s.value(gridMaxKey(b), m_unsetDbMax).toInt();
+        slot.dbMin = s.value(gridMinKey(b), m_unsetDbMin).toInt();
+        // The slot this pan shows, not the band itself: 2 m shows XVTR's
+        // (gridSlot above), so a change to XVTR's keys reaches a pan on 2 m.
+        if (b == gridSlot(m_band) && m_followsBandGrid) {
             applyBandGrid(b);
         }
     };
@@ -413,6 +466,25 @@ void PanadapterModel::applyStationGridSetting(const QString& key)
         if (key.isEmpty() || key == gridMaxKey(b) || key == gridMinKey(b)) {
             reload(b);
         }
+    }
+}
+
+void PanadapterModel::setUnsetBandGridDefault(int dbMax, int dbMin)
+{
+    if (dbMax <= dbMin) {
+        return;
+    }
+    m_unsetDbMax = dbMax;
+    m_unsetDbMin = dbMin;
+    auto& s = AppSettings::instance();
+    for (int i = 0; i < static_cast<int>(Band::SwlFirst); ++i) {
+        const Band b = static_cast<Band>(i);
+        BandGridSettings& slot = m_perBandGrid[b];
+        if (!s.contains(gridMaxKey(b))) { slot.dbMax = dbMax; }
+        if (!s.contains(gridMinKey(b))) { slot.dbMin = dbMin; }
+    }
+    if (m_followsBandGrid) {
+        applyBandGrid(m_band);
     }
 }
 

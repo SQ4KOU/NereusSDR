@@ -92,6 +92,88 @@ commands, signature checks and startup troubleshooting. An ANAN-G2's built-in
 Pi also needs its Saturn-specific setup. The Ubuntu Core packages and the
 Trixie package are separate builds; choose the one matching your OS.
 
+#### Sound from the Core's own sound card
+
+Three things found on the maintainer's Rock 5C bench Core on 2026-10-10:
+
+- **Access comes from the `audio` group.** The service runs as an account
+  with no groups of its own, and Linux sound cards belong to the `audio`
+  group, so the Core can open one only when a small systemd drop-in,
+  `nereusd.service.d/audio.conf`, adds that group. The `.deb` packages ship
+  it, and the station images and the Pi 4 and Rock install scripts write it
+  as well. If an older install lacks it, create
+  `/etc/systemd/system/nereusd.service.d/audio.conf` containing the two lines
+  `[Service]` and `SupplementaryGroups=audio`, then run
+  `sudo systemctl daemon-reload` and `sudo systemctl restart nereusd`.
+- **A card can be open and playing while its own mixer has the output
+  switched off.** On the Rock 5C's on-board ES8316 codec (ALSA card
+  `rockchip-es8316`) the `Left DAC Switch` and `Right DAC Switch` controls
+  were off, so the headphone jack stayed silent. Turn them on with
+  `amixer -c <card> cset name='Left DAC Switch' on` and the same for
+  `Right DAC Switch`, then keep the setting with `alsactl store <card>`.
+  NereusSDR does not change a card's mixer.
+- **Real-time priority can be refused by the kernel.** The service is allowed
+  to ask for it (`LimitRTPRIO=99`), but a kernel built with
+  `CONFIG_RT_GROUP_SCHED=y` on cgroup v2 refuses real-time scheduling
+  (`SCHED_FIFO`) to every service while the cgroup CPU controller is on. The
+  Radxa vendor kernel `6.1.115-vendor-rk35xx` is one, and on Debian any login
+  switches the controller on, because each login manager (`user@.service`)
+  asks for it. The Core then logs "Raised thread priority was refused", and
+  each audio thread refused when it started runs at normal priority. Signal
+  processing never asks for real-time priority; it runs at nice -10 whether
+  or not the controller is on. The Rock install script writes a drop-in,
+  `/etc/systemd/system/user@.service.d/nereusd-realtime-priority.conf`, so
+  login managers no longer ask for the controller; see
+  `scripts/radxa/README.md`. To check a kernel:
+  `zcat /proc/config.gz | grep RT_GROUP_SCHED`. To see whether the controller
+  is on, look for `cpu` in `cat /sys/fs/cgroup/cgroup.subtree_control`.
+
+#### The system setting the Core's installer changes
+
+The `nereusd` packages and the Pi 4 scripts change one system-wide Linux
+setting and no other: `net.core.rmem_max`, the largest receive buffer a
+program may ask for on a network socket. The Rock script changes that setting
+too, and also writes the login-manager drop-in described above.
+
+- **What it is for.** The Core asks for a 4 MB receive buffer (4194304
+  bytes) on the socket its radio sends to, so the system holds the radio's
+  packets while the Core is briefly held up. Linux grants at most
+  `net.core.rmem_max`. On the maintainer's Rock 5C that limit was 212992
+  bytes as found, a twentieth of what the Core asks for: 6 to 9 ms of
+  packets with three or four wide receivers open. A longer hold-up lost
+  packets, and the receivers lost samples (measured 2026-10-10).
+- **What is installed.** The `nereusd` `.deb` packages ship
+  `/usr/lib/sysctl.d/10-nereusd.conf`, which sets the limit to 4194304 at
+  every system start, and they apply it when the package is installed. The
+  station images get it from the package, and the Pi 4 and Rock install
+  scripts install and apply the same file. The installer prints what it
+  changed. The setting is a ceiling, not a size any socket is given: a
+  program that does not ask keeps the system's default size.
+- **A limit is never lowered.** The install step leaves a limit already at
+  or above 4194304 as it is. An install, reinstall or upgrade also leaves
+  the limit as it is, whatever its value, when the Core's file is masked or
+  replaced in `/etc/sysctl.d` or `/run/sysctl.d`, or when a file read after
+  it sets this limit. At system start, a sysctl file whose name sorts after
+  the Core's and sets this limit wins over it, whether its value is higher
+  or lower; an administrator's own files (numbered 60 to 90 by systemd's
+  convention) do. `/etc/sysctl.conf` is read at system start only where a
+  file in `/etc/sysctl.d` links to it, as Debian's `99-sysctl.conf` did up
+  to bookworm.
+- **To undo it.** Remove the `nereusd` package, or delete the file; the
+  system then starts with its own limit again. To keep the system's own
+  limit with the package installed, link `/etc/sysctl.d/10-nereusd.conf` to
+  `/dev/null`. To put the Rock's old limit back at once:
+  `sudo sysctl -w net.core.rmem_max=212992`.
+- **To check it.** When the Core connects to a radio its log says
+  `radio socket receive buffer 4194304 bytes, all that was asked for`, or
+  how many bytes it was given of the 4194304 asked for.
+
+The desktop packages do not change this setting. A Core installed from
+source with `cmake --install build --component nereusd` gets the file too.
+It takes effect at the next system start, or at once with
+`sudo /usr/local/libexec/nereusd/raise-receive-buffer-limit /usr/lib/sysctl.d/10-nereusd.conf`
+(under the install prefix; `/usr/local` unless you chose another).
+
 ### Take the console with you
 
 The native **iPhone and iPad app** provides live spectrum and waterfall,
@@ -264,26 +346,34 @@ on-air checks are recorded in the [feature verification documents](docs/architec
 # Ubuntu 24.04+ / Debian
 sudo apt install qt6-base-dev qt6-base-private-dev \
   qt6-multimedia-dev qt6-shadertools-dev qt6-svg-dev qt6-websockets-dev \
+  qt6-serialport-dev \
   cmake ninja-build pkg-config \
   libfftw3-dev libgl1-mesa-dev \
   libasound2-dev libjack-jackd2-dev \
-  libpipewire-0.3-dev libssl-dev
+  libpipewire-0.3-dev libpulse-dev libssl-dev
 
 # Arch / CachyOS / Manjaro
-sudo pacman -S qt6-base qt6-multimedia qt6-svg qt6-websockets \
+sudo pacman -S qt6-base qt6-multimedia qt6-svg qt6-websockets qt6-serialport \
   cmake ninja pkgconf fftw \
-  alsa-lib jack2 pipewire openssl
+  alsa-lib jack2 pipewire libpulse openssl
 
 # macOS (Homebrew)
 brew install qt@6 ninja cmake pkgconf fftw openssl@3
 ```
 
-The bundled PortAudio is built with `PA_USE_ALSA=ON` and `PA_USE_JACK=ON` on Linux,
-so the ALSA and JACK development headers are required at compile time even if you
-don't use those audio backends at runtime. `libpipewire-0.3-dev` (≥ 0.3.50) is
-strongly recommended on PipeWire-default distributions (Ubuntu 24.04+, Fedora 39+,
-Arch) — without it the Linux audio path falls back from the native libpipewire-0.3
-bridge to the older pactl route.
+Each system plays and records through its own sound system: Core Audio on
+macOS; Windows audio (shared or exclusive) and ASIO on Windows; PipeWire or
+PulseAudio on a Linux desktop, and ALSA direct on the headless Linux Core.
+PortAudio stays for the older drivers (MME, DirectSound, WDM-KS, JACK and ALSA).
+On Linux the build needs `libpipewire-0.3-dev` (0.3.50 or later) for the
+PipeWire engine, `libpulse-dev` for the PulseAudio engine and
+`libasound2-dev` for the ALSA engine, and the bundled PortAudio is built with
+`PA_USE_ALSA=ON` and `PA_USE_JACK=ON`, so the ALSA and JACK development
+headers are required at compile time even if you don't use those older
+drivers. Without `libpipewire-0.3-dev` the Linux VAX path falls back from the
+native libpipewire-0.3 bridge to the older pactl route. On Windows, ASIO
+comes from the ASIO SDK vendored in `third_party/asiosdk/`, so nothing extra
+is installed to build it.
 
 OpenSSL 3.0 or later is required for Core certificates. Install `libssl-dev`
 on Debian/Ubuntu or `openssl@3` through Homebrew on macOS. Windows dependency
@@ -341,10 +431,10 @@ NereusSDR builds on these projects, with original station Core, remote-console
 and native mobile work alongside its upstream foundations. Contributor notices
 are preserved in source files and the [provenance record](docs/attribution/THETIS-PROVENANCE.md).
 
-- **[Thetis](https://github.com/ramdor/Thetis)** — The canonical Apache Labs / OpenHPSDR SDR console (C# / WinForms). NereusSDR's feature source.
-- **[AetherSDR](https://github.com/ten9876/AetherSDR)** — Native FlexRadio client (C++20 / Qt6). NereusSDR's architectural template.
-- **[WDSP](https://github.com/TAPR/OpenHPSDR-wdsp)** — Warren Pratt NR0V's DSP library. The signal processing engine.
-- **[OpenHPSDR](https://openhpsdr.org/)** — The open-source high-performance SDR project and protocol specifications.
+- **[Thetis](https://github.com/ramdor/Thetis)** - The canonical Apache Labs / OpenHPSDR SDR console (C# / WinForms). NereusSDR's feature source.
+- **[AetherSDR](https://github.com/ten9876/AetherSDR)** - Native FlexRadio client (C++20 / Qt6). NereusSDR's architectural template.
+- **[WDSP](https://github.com/TAPR/OpenHPSDR-wdsp)** - Warren Pratt NR0V's DSP library. The signal processing engine.
+- **[OpenHPSDR](https://openhpsdr.org/)** - The open-source high-performance SDR project and protocol specifications.
 
 ---
 

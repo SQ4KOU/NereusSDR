@@ -10,6 +10,15 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-10-10 — The level is kept through a key, a hold follows the un-key,
+//                 the smoothing clock restarts after it, the bins take the
+//                 calibration offset and the deadband is gone. J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code.
+//   2026-10-10 — CarriedState, so the Core's replacement controller for a
+//                 display carries on where the old one was. J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -76,16 +85,40 @@ public:
     bool isEnabled() const noexcept     { return m_enabled;     }
     bool isPaused() const noexcept      { return m_paused;      }
     bool isTransmitting() const noexcept{ return m_transmitting;}
+
+    // True from beginHold() until its length has run. `nowMs` as feedBins().
+    bool inHold(qint64 nowMs = -1) const;
     float smoothedFloor() const noexcept{ return m_smoothedFloor;}
 
     // Last emitted thresholds (qQNaN() before any emission).
     float lastLow() const noexcept  { return m_lastLow;  }
     float lastHigh() const noexcept { return m_lastHigh; }
 
+    // What a replacement controller needs to carry on where this one is:
+    // the smoothed floor, the last emitted thresholds, the smoothing clock
+    // and a hold that is still running. The Core hands it from a display's
+    // old controller to its new one when the display is asked for again on
+    // the same receiver. NereusSDR-original, no Thetis equivalent.
+    struct CarriedState {
+        float  smoothedFloor    = 0.0f;
+        bool   hasSmoothed      = false;
+        float  lastLow          = 0.0f;
+        float  lastHigh         = 0.0f;
+        float  lastEmittedFloor = 0.0f;
+        bool   hasEmitted       = false;
+        qint64 lastPollMs       = 0;
+        bool   holdActive       = false;
+        qint64 holdEndMs        = 0;
+    };
+    CarriedState carriedState() const;
+    // Takes the state as its own and emits nothing: the caller already has
+    // the thresholds. The tunables, enabled, paused and transmitting are
+    // not part of it.
+    void adoptCarriedState(const CarriedState& state);
+
     // Tunables — default to spec-locked values, exposed for tests.
     void setPollIntervalMs(int ms);
     void setSmoothingTauSec(float sec);
-    void setDeadbandDb(float db);
     void setLowMarginDb(float db);
     void setHighMarginDb(float db);
     void setMinGapDb(float db);
@@ -97,7 +130,23 @@ public slots:
     void setEnabled(bool on);
 
     // TX pause via MOX signal — per spec §6.2.4 failure mode mitigation.
+    // The smoothed floor and the last emitted thresholds are kept through the
+    // key: the un-key restores them, it does not re-anchor. Keying cancels a
+    // hold that is still running.
     void setTransmitting(bool tx);
+
+    // The hold after an un-key. Until `nowMs + lengthMs` the controller
+    // takes in no bins and no floors and emits nothing. When the hold ends
+    // the smoothing clock restarts: the first reading accepted after it is
+    // smoothed over the time since the hold's end, not since the last
+    // reading before the key. The caller gives the length.
+    void beginHold(qint64 lengthMs, qint64 nowMs = -1);
+    void cancelHold();
+
+    // Added to the estimate feedBins() makes, before smoothing, so the floor
+    // is in calibrated dB. feedNoiseFloor() values are calibrated already
+    // and get nothing added.
+    void setCalibrationOffsetDb(float db);
 
     // User dragged a threshold slider while Clarity was on. Pause until
     // the user clicks Re-tune or toggles Clarity off/on.
@@ -128,15 +177,14 @@ public slots:
     void feedNoiseFloor(float rawFloorDbm, qint64 nowMs = -1);
 
 signals:
-    // Thresholds should change. Deadband-gated so consumers (SpectrumWidget)
-    // receive a stable stream, not per-frame jitter.
+    // Thresholds should change. Emitted on every accepted reading whose
+    // smoothed floor differs from the last emitted one; the consumer slews
+    // between them.
     void waterfallThresholdsChanged(float lowDbm, float highDbm);
 
-    // Smoothed noise-floor estimate. Emitted on every cadence tick
-    // (after EWMA smoothing but before the deadband gate that suppresses
-    // waterfallThresholdsChanged). Used by NF-aware grid (Task 2.9) and
-    // per-band NF priming (Task 2.10) which need the running floor at
-    // full cadence rather than the deadband-throttled threshold stream.
+    // Smoothed noise-floor estimate. Emitted on every cadence tick, after
+    // EWMA smoothing. Not emitted while keyed or in a hold. Used by NF-aware
+    // grid (Task 2.9) and per-band NF priming (Task 2.10).
     // NereusSDR-original — no Thetis equivalent.
     void noiseFloorChanged(float nfDbm);
 
@@ -145,7 +193,7 @@ signals:
     void pausedChanged(bool paused);
 
 private:
-    bool acceptsInput(qint64 nowMs) const;
+    bool acceptsInput(qint64 nowMs);
     NoiseFloorEstimator m_estimator;
 
     bool   m_enabled       = false;
@@ -156,7 +204,7 @@ private:
     float  m_smoothedFloor = 0.0f;  // placeholder for RED stub
     bool   m_hasSmoothed   = false;
 
-    // Last emitted thresholds + floor — track for deadband.
+    // Last emitted thresholds + floor.
     float  m_lastLow           = 0.0f;
     float  m_lastHigh          = 0.0f;
     float  m_lastEmittedFloor  = 0.0f;
@@ -165,10 +213,16 @@ private:
     // Cadence — milliseconds since epoch of last poll.
     qint64 m_lastPollMs    = 0;
 
+    // The hold after an un-key (beginHold).
+    bool   m_holdActive    = false;
+    qint64 m_holdEndMs     = 0;
+
+    // Added to feedBins() estimates (setCalibrationOffsetDb).
+    float  m_calibrationOffsetDb = 0.0f;
+
     // Tunables (spec defaults).
     int    m_pollIntervalMs = 500;
     float  m_tauSec         = 3.0f;
-    float  m_deadbandDb     = 2.0f;
     float  m_lowMarginDb    = -5.0f;
     float  m_highMarginDb   = 55.0f;
     float  m_minGapDb       = 30.0f;

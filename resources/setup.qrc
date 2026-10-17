@@ -11,5 +11,7 @@
         <file alias="transmit.json">setup/transmit.json</file>
         <file alias="audio.json">setup/audio.json</file>
         <file alias="appearance.json">setup/appearance.json</file>
+        <file alias="legacy/display-v28.json">setup/legacy/display-v28.json</file>
+        <file alias="legacy/appearance-v27.json">setup/legacy/appearance-v27.json</file>
     </qresource>
 </RCC>

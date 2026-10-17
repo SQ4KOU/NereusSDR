@@ -1,6 +1,9 @@
 // no-port-check: NereusSDR-original radio-free container position regressions.
 // Modification history (NereusSDR):
 //   2026-10-04 — J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-11 - A simulated operator move is reported as one
+//                 (rememberOperatorGeometry); only those are saved. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest>
 #include <QApplication>
 #include <QFile>
@@ -125,6 +128,8 @@ private slots:
             QVERIFY2(available.contains(requested), "Target must avoid screen recovery policy");
             form->setGeometry(requested);
             QCOMPARE(form->geometry(), requested);
+            // The simulated move is the operator's.
+            manager.rememberOperatorGeometry(QStringLiteral("position"));
             // Both events are synchronous. No sleep or event-loop spin lets
             // the pending 200 ms geometry save run before reconciliation.
             if (projection == QLatin1String("attach")) {
@@ -254,6 +259,8 @@ private slots:
         QCOMPARE(container->geometry(), original);
         QSignalSpy errors(&manager, &ContainerManager::workspaceError);
         container->move(75, 80);
+        // The simulated move is the operator's.
+        manager.rememberOperatorGeometry(QStringLiteral("position"));
         // A directory cannot be atomically replaced by the settings XML file.
         // Only this test's explicitly temporary path is made unwritable.
         QVERIFY(QFile::remove(path));

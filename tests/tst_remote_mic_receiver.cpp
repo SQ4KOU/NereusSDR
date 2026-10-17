@@ -235,6 +235,7 @@ class TestRemoteMicReceiver : public QObject {
     Q_OBJECT
 
 private slots:
+    void waveformObservationValidity();
     void theLineKeepsTheTransmitNumbers();
     void desktopDefaultMicrophoneUsesHighRate();
     void micSsrcIsDistinctFromTheCoresStreams();
@@ -1556,6 +1557,28 @@ void TestRemoteMicReceiver::aMidKeyArrivalPauseIsPlacedInTheUnderrunFigures()
     feed.setInUse(true);
     feed.pullBlock(out.data(), kBlock, -1.0);
     QCOMPARE(feed.stats().underrunsPlacedCount, 0);
+}
+
+void TestRemoteMicReceiver::waveformObservationValidity()
+{
+    RemoteMicFeed feed;
+    std::vector<float> out(kBlock, 7.0f);
+    RemoteMicFeed::Observation observation{999, 999};
+    QCOMPARE(feed.pullBlock(out.data(), kBlock, -1.0, false, &observation), RemoteMicFeed::Pull::NotInUse);
+    QCOMPARE(observation.validFrames, 0);
+    feed.setInUse(true);
+    QCOMPARE(feed.pullBlock(out.data(), kBlock, -1.0, false, &observation), RemoteMicFeed::Pull::Audio);
+    QCOMPARE(observation.validFrames, 0); // Filling silence is not observed PCM.
+    std::vector<float> silence(RemoteMicConfig::kOpusFrameSamples, 0.0f);
+    for (int i = 0; i < 4; ++i) { QVERIFY(feed.write(silence.data(), int(silence.size()))); }
+    QCOMPARE(feed.pullBlock(out.data(), kBlock, -1.0, true, &observation), RemoteMicFeed::Pull::Audio);
+    QCOMPARE(observation.validFrames, kBlock); // Genuine numerical zero is valid.
+    QCOMPARE(observation.changeGeneration, feed.currentChangeGeneration());
+    for (int i = 0; i < 200; ++i) { feed.pullBlock(out.data(), kBlock, -1.0, true, &observation); }
+    QCOMPARE(observation.validFrames, 0); // Fade and subsequent fill are gaps.
+    feed.setInUse(false);
+    feed.pullBlock(out.data(), kBlock, -1.0, false, &observation);
+    QCOMPARE(observation.validFrames, 0);
 }
 
 QTEST_GUILESS_MAIN(TestRemoteMicReceiver)

@@ -176,7 +176,7 @@ import Testing
         #expect(before[0].widthHz == 1000)
         let task = Task { await rig.editor.edit(owner, field: field, value: field == "name" ? .text("  Kept  ") : .integer(-10000)) }
         for index in 0..<3 {
-            #expect(await rig.route.waitForCount(index + 1, unless: task))
+            try #require(await rig.route.waitForCount(index + 1, unless: task))
             #expect(rig.editor.rows == before)
             try rig.answer(index)
         }
@@ -202,7 +202,7 @@ import Testing
         #expect(rig.route.sent.isEmpty)
         let owner = try rig.admit()
         let task = Task { await rig.editor.edit(owner, field: "name", value: .text("  \n ")) }
-        #expect(await rig.route.waitForCount(1, unless: task))
+        try #require(await rig.route.waitForCount(1, unless: task))
         if case .settingsWrite(let w) = rig.route.sent[0].message { #expect(w.properties[0].value == .utf8("F1")) }
         try rig.answer(0, accepted: false)
         #expect(await task.value == .refused("Core test refusal"))
@@ -214,7 +214,7 @@ import Testing
         let owner = try rig.admit()
         let task = Task { await rig.editor.move(owner, direction: 1) }
         for index in 0...refusalIndex {
-            #expect(await rig.route.waitForCount(index + 1, unless: task))
+            try #require(await rig.route.waitForCount(index + 1, unless: task))
             try rig.answer(index, accepted: index != refusalIndex)
         }
         #expect(await task.value == .refused("Core test refusal"))
@@ -229,7 +229,7 @@ import Testing
         let owner = try rig.admit()
         let task = Task { await rig.editor.move(owner, direction: 1) }
         for index in 0..<6 {
-            #expect(await rig.route.waitForCount(index + 1, unless: task)); try rig.answer(index)
+            try #require(await rig.route.waitForCount(index + 1, unless: task)); try rig.answer(index)
         }
         #expect(await task.value == .applied)
         let sent = rig.route.sent.compactMap { if case .settingsWrite(let w) = $0.message, case .utf8(let value) = w.properties[0].value { return value }; return nil }
@@ -243,7 +243,7 @@ import Testing
         if action == "resetMode" { #expect(owner.question == "Reset all presets for USB to the defaults?") }
         let task = Task { await rig.editor.reset(owner, confirmed: owner.question) }
         let count = action == "resetRow" ? 3 : action == "resetMode" ? 30 : 360
-        for index in 0..<count { #expect(await rig.route.waitForCount(index + 1, unless: task)); try rig.answer(index) }
+        for index in 0..<count { try #require(await rig.route.waitForCount(index + 1, unless: task)); try rig.answer(index) }
         #expect(await task.value == .applied)
         let keys = rig.route.sent.compactMap { if case .settingsRemove(let r) = $0.message { return r.key }; return nil }
         #expect(keys.count == count && keys.allSatisfy { $0.hasPrefix("filters/") && !$0.contains("RADE") })
@@ -255,9 +255,9 @@ import Testing
         let rig = Rig(); try await rig.connect(); rig.editor.selectedSlot = 0
         let owner = try rig.admit("resetRow")
         let task = Task { await rig.editor.reset(owner) }
-        #expect(await rig.route.waitForCount(1, unless: task)); try rig.answer(0)
+        try #require(await rig.route.waitForCount(1, unless: task)); try rig.answer(0)
         try rig.push(name: "Observed Core default", low: -20, high: 800)
-        #expect(await rig.route.waitForCount(2, unless: task)); try rig.answer(1, accepted: false)
+        try #require(await rig.route.waitForCount(2, unless: task)); try rig.answer(1, accepted: false)
         #expect(await task.value == .refused("Core test refusal"))
         #expect(rig.route.sent.count == 2)
         #expect(rig.settings.confirmedValue("filters/USB/0/name") == nil)
@@ -268,7 +268,7 @@ import Testing
         let rig = Rig(); try await rig.connect()
         let owner = try rig.admit()
         let task = Task { await rig.editor.edit(owner, field: "lowHz", value: .integer(10)) }
-        #expect(await rig.route.waitForCount(1, unless: task))
+        try #require(await rig.route.waitForCount(1, unless: task))
         // Transport route changes without a new snapshot cannot cause the
         // second key to adopt the new route by recapturing a current sender.
         rig.route.use(2); try rig.answer(0)
@@ -311,7 +311,7 @@ import Testing
         let current = try rig.admit()
         let final = Task { await rig.editor.edit(current, field: "lowHz", value: .integer(20)) }
         for index in 0..<3 {
-            #expect(await rig.route.waitForCount(index + 1, unless: final)); try rig.answer(index)
+            try #require(await rig.route.waitForCount(index + 1, unless: final)); try rig.answer(index)
             if index == 2 { rig.store.handle(.stateChanged(.stopped)); rig.settings.handle(.stateChanged(.stopped)) }
         }
         #expect(await final.value == .notSent(SetupControlDispatcher.changedFirstReason))
@@ -324,7 +324,7 @@ import Testing
         let task = Task { await rig.editor.edit(owner, field: "lowHz", value: .integer(10), onLateOutcome: { late.append($0) }) }
         let target = finalKey ? 2 : 0
         for index in 0...target {
-            #expect(await rig.route.waitForCount(index + 1, unless: task))
+            try #require(await rig.route.waitForCount(index + 1, unless: task))
             if index < target { try rig.answer(index) }
         }
         await clock.advance(by: 5000)

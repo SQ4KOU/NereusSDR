@@ -4,6 +4,7 @@
 import Foundation
 import CoreGraphics
 import NereusBand
+import NereusModels
 import NereusKitTesting
 import NereusLink
 import NereusMedia
@@ -296,5 +297,54 @@ struct SMeterModelTests {
             try? await Task.sleep(for: .milliseconds(50))
         }
         return condition()
+    }
+}
+
+@MainActor
+extension SMeterModelTests {
+    @Test("Shared amplifier source and display readings")
+    func sharedAmplifierMeterRule() {
+        let main = TransmitMeterFixture.main()
+        #expect(main.sMeter.display.right == "1236 W")
+        #expect(main.sMeter.display.needle == 1236.0 / 2000)
+        #expect(main.sMeter.display.transmitScale?.redFrom == 0.75)
+        let absent = TransmitMeterFixture.main(present: false, radioWatts: 98)
+        #expect(absent.sMeter.display.right == "98 W")
+        let idle = TransmitMeterFixture.main(keyed: false)
+        #expect(!idle.sMeter.display.transmitting)
+    }
+}
+
+@MainActor
+extension SMeterModelTests {
+    @Test("A late catalog restarts a visible needle already settled without a power scale")
+    func lateCatalogRestartsNeedle() async throws {
+        let txMirror = MirrorStore(send: { _ in Issue.record("The meter sends no message") })
+        let main = TransmitMeterFixture.main(operate: false, radioWatts: 87, store: txMirror)
+        try #require(await ShotWait.until { main.catalogFeed.catalog != nil })
+        main.transmit.refresh()
+        let mirror = MirrorStore(send: { _ in Issue.record("The meter sends no message") })
+        let catalog = CatalogFeed(store: mirror)
+        let defaults = try #require(UserDefaults(suiteName: "LateMeterCatalog-\(UUID().uuidString)"))
+        let meter = SMeterModel(slices: main.slices, band: main.band, subscriber: main.subscriber,
+            transmit: main.transmit, catalogFeed: catalog, store: SMeterSettingsStore(defaults: defaults))
+        meter.appeared()
+        defer { meter.disappeared() }
+        // A distinct published reading drains constructor refresh work without a timed sleep.
+        txMirror.apply(.delta(.init(key: "txState", properties: [
+            .init(name: "forwardPowerWatts", value: .f64(98))])))
+        try #require(await ShotWait.until { meter.display.right == "98 W" })
+        meter.frame()
+        #expect(meter.display.right == "98 W")
+        #expect(meter.display.needle == 0 && meter.needle.settled(on: 0))
+        let json = try #require(MainScreenTests.catalogueJSON())
+        mirror.apply(.objectCreate(.init(key: "catalog", className: "StationCatalog", properties: [
+            .init(name: "json", value: .utf8(json)), .init(name: "revision", value: .i64(1))])))
+        mirror.apply(.snapshotComplete)
+        try #require(await ShotWait.until {
+            meter.meters != nil && meter.display.needle > 0 && meter.needle.settled(on: meter.display.needle)
+        }, "A current nonzero reading must move the needle when its scale arrives")
+        #expect(meter.display.right == "98 W")
+        #expect(meter.display.needle == 98 / (try #require(meter.meters)).rfPower.maxW)
     }
 }

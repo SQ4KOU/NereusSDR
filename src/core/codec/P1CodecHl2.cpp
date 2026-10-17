@@ -22,6 +22,10 @@
 //                attenuator range above 31 dB on Alex boards (value + 2,
 //                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-14 - tryComposeI2cFrame keeps its HL2 I2C OUT debug line for
+//                the caller to print once the frame lock is released
+//                (takeI2cOutLog, printI2cOutLine). J.J. Boyd (KG4VCF), with
+//                AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim mi0bot networkproto1.c header (lines 1-19) ===
@@ -507,10 +511,43 @@ bool P1CodecHl2::tryComposeI2cFrame(quint8 out[5], bool mox) const
     out[4] = txn.writeData;
 
     emit m_io->i2cTxComposed(out[0], out[1], out[2], out[3], out[4]);
-    qDebug("HL2 I2C OUT: C0=%02X C1=%02X C2=%02X C3=%02X C4=%02X (bus=%u addr=%02X reg=%02X read=%d req=%d)",
-           out[0], out[1], out[2], out[3], out[4],
-           txn.bus, txn.address, txn.control, int(txn.isRead), int(txn.needsResponse));
+    // The debug line is kept for the caller to print once the frame lock
+    // is released (I2cOutLine in the header).
+    I2cOutLine line;
+    for (int i = 0; i < 5; ++i) { line.cc[size_t(i)] = out[i]; }
+    line.bus = txn.bus;
+    line.address = txn.address;
+    line.control = txn.control;
+    line.isRead = txn.isRead;
+    line.needsResponse = txn.needsResponse;
+    if (m_i2cOutLogCount < kI2cOutLogLines) {
+        m_i2cOutLog[size_t(m_i2cOutLogCount++)] = line;
+    } else {
+        // Nobody took the kept lines: print them and this one now, in order.
+        for (int i = 0; i < m_i2cOutLogCount; ++i) {
+            printI2cOutLine(m_i2cOutLog[size_t(i)]);
+        }
+        m_i2cOutLogCount = 0;
+        printI2cOutLine(line);
+    }
     return true;
+}
+
+int P1CodecHl2::takeI2cOutLog(I2cOutLog& out) const
+{
+    const int n = m_i2cOutLogCount;
+    for (int i = 0; i < n; ++i) {
+        out[size_t(i)] = m_i2cOutLog[size_t(i)];
+    }
+    m_i2cOutLogCount = 0;
+    return n;
+}
+
+void P1CodecHl2::printI2cOutLine(const I2cOutLine& line)
+{
+    qDebug("HL2 I2C OUT: C0=%02X C1=%02X C2=%02X C3=%02X C4=%02X (bus=%u addr=%02X reg=%02X read=%d req=%d)",
+           line.cc[0], line.cc[1], line.cc[2], line.cc[3], line.cc[4],
+           line.bus, line.address, line.control, int(line.isRead), int(line.needsResponse));
 }
 
 // =================================================================

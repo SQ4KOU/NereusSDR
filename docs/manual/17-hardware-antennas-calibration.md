@@ -30,7 +30,7 @@ On iPhone/iPad, open **Radio > More > Antenna Setup**. This opens the connected 
 
 ### Review Alex-1 and Alex-2 filter banks
 
-The **Alex-1 Filters** and **Alex-2 Filters** subtabs configure hardware filter selection behavior by frequency range. Their band rows show start/end edges and, where offered, a bypass checkbox. The active LED/readout indicates which high-pass and low-pass the radio selected for the current receive frequency. Adjust an edge only to match known filter-board crossover points; neighboring ranges must remain ordered and non-overlapping. The edge editor maintains that boundary as values are changed. Per-row bypass selects the bypass path for that range. Alex-2 also has a master **ByPass/55 MHz BPF** control; its HPF and LPF selection indicators update from the current frequency.
+The **Alex-1 Filters** and **Alex-2 Filters** subtabs configure hardware filter selection behavior by frequency range. Their band rows show start/end edges and, where offered, a bypass checkbox. The active LED/readout indicates which high-pass and low-pass the radio selected for the current receive frequency. Adjust an edge only to match known filter-board crossover points; neighboring ranges must remain ordered and non-overlapping. The edge editor maintains that boundary as values are changed. Per-row bypass selects the bypass path for that range. Alex-2 also has a master **ByPass/55 MHz BPF** control; its HPF and LPF selection indicators update from the current frequency. On the Anvelina Pro 3, whose filter board passes no signal in bypass, a row's bypass and the Alex-2 master bypass select the five HF band filters together (160 m to 10 m) in place of the bypass.
 
 These subtabs are only shown for compatible ALEX hardware. Alex-1 may present the high-pass controls as the board's BPF1 preselector rows on supported Orion/Saturn/Hermes C10 boards. Alex-2 is hidden unless the board reports that capability. Some receive high-pass controls have separate hardware-version gates; low-pass controls may have another gate. A disabled row is not evidence that a manual value was accepted. After an edit, confirm that the row remains enabled and the active filter indicator changes at the expected frequency. If you do not know the board's filter edges, keep the existing settings and use the automatic band selection.
 
@@ -94,8 +94,23 @@ Read **Current state > Effective** and **Reason**, then choose **BPF mode**:
 | Choice | Routing policy |
 | --- | --- |
 | Auto - Filter when single-band, bypass when multi-band | Allows the controller to use a band filter for a single-band chain and bypass for a multi-band requirement. |
+| Auto - Filter every band in use | Shown in place of the row above on the Anvelina Pro 3, whose filter board passes no signal in bypass. Slices on different bands sharing the chain get all of their band filters at once, and the chain stays filtered. |
 | Force filter (TX-bound band) | Requests filtering for the transmit-bound band. Check the effective result for the chain's current receivers. |
-| Force bypass - Always wideband | Requests wideband bypass; it can expose the ADC to signals normally excluded by a BPF. |
+| Force bypass - Always wideband | Requests wideband bypass; it can expose the ADC to signals normally excluded by a BPF. On the Anvelina Pro 3, whose filter board passes no signal in bypass, it selects the five HF band filters together (160 m to 10 m) in place of the bypass, so the HF bands are heard; 6 m and anything below 1.5 MHz are not passed. Extended view, the Alex tab's HPF Bypass switch, a filter row's own bypass and the Alex-2 master bypass do the same on that radio. |
+
+On the Anvelina Pro 3 in Auto, a 6 m slice that shares a chain with other
+bands keeps its **6m BPF/LNA**. The other band filters stay in beside it, so
+every HF slice on the chain still hears, but its meter and panadapter read
+about 10 to 20 dB lower while the 6m BPF/LNA is in (measured 8 to 21 dB on
+80, 40 and 20 m). The **12/10m BPF** is left out while the 6m BPF/LNA is in,
+because the board is unstable with both selected, so a 10 m or 12 m slice
+sharing with a 6 m slice has no filter and may hear little or nothing. The
+chain indicator says so after its bands, for example **40m + 6m (6m LNA in:
+HF reads low)** or **10m + 6m (6m LNA in: 10m filter out)**. Its tooltip and
+this dialog's **Shared input** line name the slices. Slices on the other
+receive chain are not affected. With **Disable 6m LNA on RX** on, the 6m
+BPF/LNA is out, the 12/10m BPF stays in, and it is the 6 m slice that hears
+nothing while it shares the chain.
 
 Choose **Apply** to submit the choice, or **Cancel** to leave it unchanged.
 In a remote window, Apply sends the policy to the Core; a send refusal stays

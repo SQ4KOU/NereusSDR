@@ -8,6 +8,10 @@
 // Modification history (NereusSDR):
 //   2026-07-30 Created in C++20/Qt6 for NereusSDR by J.J. Boyd (KG4VCF),
 //              with AI-assisted transformation via Anthropic Claude Code.
+//   2026-10-09 The severity bar draws: the frame rule names the toast
+//              itself, which paints it (paintEvent), as a translucent
+//              window skips its style sheet background. J.J. Boyd
+//              (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // no-port-check: NereusSDR-original
@@ -19,6 +23,9 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QStyle>
+#include <QStyleOption>
 
 namespace NereusSDR {
 
@@ -55,8 +62,12 @@ StatusToast::StatusToast(const QString& message,
     setFocusPolicy(Qt::NoFocus);
     setToolTip(QStringLiteral("Click to dismiss"));
 
+    // The frame and its severity bar belong to the toast alone, and the
+    // toast draws them in paintEvent: a translucent window skips the style
+    // sheet background Qt would otherwise paint, so the bar never showed.
+    setObjectName(QStringLiteral("statusToast"));
     setStyleSheet(QStringLiteral(
-        "QWidget { background: %1; border: 1px solid %2;"
+        "QWidget#statusToast { background: %1; border: 1px solid %2;"
         " border-left: 3px solid %3; border-radius: 3px; }"
     ).arg(QString::fromLatin1(Style::kPanelBg),
           QString::fromLatin1(Style::kBorder),
@@ -84,6 +95,14 @@ StatusToast::StatusToast(const QString& message,
 }
 
 StatusToast::~StatusToast() = default;
+
+void StatusToast::paintEvent(QPaintEvent* /*event*/)
+{
+    QStyleOption opt;
+    opt.initFrom(this);
+    QPainter painter(this);
+    style()->drawPrimitive(QStyle::PE_Widget, &opt, &painter, this);
+}
 
 void StatusToast::refresh(int timeoutMs)
 {

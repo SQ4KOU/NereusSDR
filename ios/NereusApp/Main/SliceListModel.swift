@@ -1,5 +1,6 @@
 // NereusSDR for iOS: the slice list behind the toolbar's Slice button: every live slice on the Core, and what the phone may do with each
 // SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-NereusSDR-AppStore-permission
+// 2026-10-12: J.J. Boyd (KG4VCF), V2 opt-in/authority gate; AI-assisted via OpenAI Codex.
 
 import Combine
 import Foundation
@@ -119,7 +120,7 @@ final class SliceListModel: ObservableObject {
 
     /// The catalogue's label for the row's mode, `LSB`; empty for none.
     func modeText(_ row: SliceRoster.Row) -> String {
-        slices.catalog?.modes.first { $0.id == row.slice.mode }?.label ?? ""
+        slices.catalog?.modeDescription(row.slice.mode)?.label ?? ""
     }
 
     /// The band grid's label for the row's band, `40m`; empty for none.

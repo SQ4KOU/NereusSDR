@@ -19,8 +19,8 @@ public:
     // 2026-05-12 (PR #238): +4 px height for the kTopPad padding
     // shoved into paintEvent so the tick strip doesn't sit flush
     // against the frequency-display border above this widget.
-    QSize sizeHint() const override { return {230, 26}; }
-    QSize minimumSizeHint() const override { return {200, 26}; }
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
 protected:
     void paintEvent(QPaintEvent*) override;
 private:

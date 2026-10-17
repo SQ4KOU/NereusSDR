@@ -132,7 +132,7 @@ struct SetupTab: View {
         case .described(let category, let page):
             DescribedPage(pages: pages, dispatcher: controls, category: category, pageId: page,
                           specialized: specialized,
-                          levelCal: page == LevelCalSection.pageId ? app.levelCal : nil)
+                          levelCal: page == LevelCalSection.pageId ? app.levelCal : nil, main: main)
         case .cfcBands(let category, let control):
             CfcBandsEditor(pages: pages, dispatcher: controls, category: category, controlId: control)
         }
@@ -162,6 +162,8 @@ struct SetupTab: View {
             DisplayOnThisPhonePage(main: main)
         case .pttButtons:
             PttButtonsPage(timeOut: timeOut)
+        case .rotor:
+            RotorSetupPage(model: main.rotor)
         case .dataUse:
             DataUsePage(settings: app.phoneSettings, meter: app.longSession.meter)
         case .coreLogs:

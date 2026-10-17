@@ -1,5 +1,8 @@
 // no-port-check: NereusSDR-original read-only source routing; no DSP reads.
 // Modification history (NereusSDR):
+//   2026-10-08 - writeContainerSource: the container source write shared by
+//                 Container Settings and the workspace header's source menu.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-10-04 — Selected RX source identity and RX-only presentation reset by
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-02 — Mixed container ownership, persistence and source routing by
@@ -14,6 +17,11 @@ namespace NereusSDR {
 bool ContainerSourceAdapter::followsSelectedRx(const QJsonObject& context)
 {
     return context.value("rxSourceMode").toString() == QStringLiteral("followSelectedRx");
+}
+void ContainerSourceAdapter::writeContainerSource(QJsonObject& config, int rxSource)
+{
+    if (config.contains("sliceId")) { config["sliceId"] = rxSource - 1; }
+    else { config["rxSource"] = rxSource; }
 }
 SliceModel* ContainerSourceAdapter::slice(RadioModel* model, const QJsonObject& context, SliceModel* inherited, const QString& currentSessionId)
 {
@@ -60,5 +68,63 @@ double ContainerSourceAdapter::reading(RadioModel* model, const QJsonObject& con
     case MeterBinding::AgcAvg: return source->agcAverageDb();
     default: return kNoMeterReadingDbm;
     }
+}
+}
+
+namespace NereusSDR {
+std::optional<WaveformRequest>
+ContainerSourceAdapter::waveformRequest(RadioModel* model, const QJsonObject& context, SliceModel* inherited,
+                                        WaveformKind kind, const QString& session)
+{
+    if (!model || !model->isConnected()) {
+        return {};
+    }
+    SliceModel* resolved = slice(model, context, inherited, session);
+    if (!resolved || resolved->streamIndex() < 0 || !isRadeDspMode(resolved->dspMode())) {
+        return {};
+    }
+    if (kind != WaveformKind::DecodedSpeech && resolved != model->txBoundSlice()) {
+        return {};
+    }
+    return WaveformRequest{resolved->sliceIndex(), kind};
+}
+WaveformSnapshotPtr ContainerSourceAdapter::waveform(RadioModel* model, const QJsonObject& context,
+                                                     SliceModel* inherited, WaveformKind kind,
+                                                     const QString& session)
+{
+    auto unavailable = std::make_shared<WaveformSnapshot>();
+    unavailable->kind = kind;
+    unavailable->asOfNs = waveformNowNs();
+    unavailable->availability = WaveformAvailability::Unavailable;
+    if (context.contains("sessionId") && !context["sessionId"].toString().isEmpty() &&
+        context["sessionId"].toString() != session) {
+        unavailable->reason = "Foreign radio session";
+        return unavailable;
+    }
+    if (model && model->role() == RadioModel::Role::Remote) {
+        const WaveformSnapshotPtr support =
+            model->radeWaveformModel()->snapshot(-1, kind, unavailable->asOfNs);
+        if (support->availability == WaveformAvailability::Unsupported) {
+            return support;
+        }
+    }
+    if (!model || !model->isConnected()) {
+        unavailable->reason = "Radio source disconnected";
+        return unavailable;
+    }
+    SliceModel* resolved = slice(model, context, inherited, session);
+    if (!resolved || resolved->streamIndex() < 0) {
+        unavailable->reason = "Receive source unavailable";
+        return unavailable;
+    }
+    if (!isRadeDspMode(resolved->dspMode())) {
+        unavailable->reason = "Select a RADE slice for this waveform";
+        return unavailable;
+    }
+    if (kind != WaveformKind::DecodedSpeech && resolved != model->txBoundSlice()) {
+        unavailable->reason = "Microphone belongs to the current TX-bound slice";
+        return unavailable;
+    }
+    return model->radeWaveformModel()->snapshot(resolved->sliceIndex(), kind, unavailable->asOfNs);
 }
 }

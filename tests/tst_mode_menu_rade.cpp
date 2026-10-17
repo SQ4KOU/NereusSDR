@@ -19,16 +19,13 @@
 //    accent (#a78bfa) when m_currentMode is either RADE sideband
 //    (DSPMode::RADE_U or DSPMode::RADE_L).
 //
-// Mode menu (MainWindow) test is omitted — MainWindow construction
-// pulls in the full RadioModel + WdspEngine + connection stack, which
-// is heavier than a unit test should carry, and the existing
-// tst_dspmode_rade already pins modeName / modeFromName for the
-// enum values the menu dispatches.
-
 #include <QtTest>
 #include <QApplication>
 #include <QComboBox>
 #include <QPushButton>
+#include <QMenu>
+#include "gui/MainWindow.h"
+#include "fakes/MainWindowTestSettings.h"
 
 #include "gui/widgets/VfoWidget.h"
 #include "core/WdspTypes.h"
@@ -42,6 +39,8 @@ private slots:
     void initTestCase();
     // VFO flag mode combo includes both RADE sidebands.
     void vfoModeComboHasRadeUpperEntry();
+    void experimentalModesAreSelectable();
+    void mainWindowExperimentalTooltipsAreVisible();
     void vfoModeComboHasRadeLowerEntry();
     // Selecting either RADE sideband in the combo emits modeChanged.
     void vfoModeComboChangesToRadeUpper();
@@ -204,6 +203,41 @@ void TestModeMenuRade::vfoModeTabChipPurpleInRadeLower()
                                             Qt::CaseInsensitive),
              "Mode tab button must paint with the RADE purple accent "
              "(#a78bfa) when the active mode is RADE-L");
+}
+
+void TestModeMenuRade::experimentalModesAreSelectable()
+{
+    VfoWidget vfo;
+    QComboBox* combo = findModeCombo(&vfo);
+    QVERIFY(combo != nullptr);
+    for (const QString& name : {QStringLiteral("RADE2-U"), QStringLiteral("RADE2-L")}) {
+        const int index = combo->findText(name);
+        QVERIFY(index >= 0);
+        QVERIFY(combo->itemData(index, Qt::ToolTipRole).toString().contains(QStringLiteral("Experimental")));
+        QSignalSpy spy(&vfo, &VfoWidget::modeChanged);
+        combo->setCurrentIndex(index);
+        QVERIFY(!spy.isEmpty());
+        QCOMPARE(qvariant_cast<DSPMode>(spy.last().at(0)),
+                 static_cast<DSPMode>(name.endsWith(QLatin1Char('U')) ? 14 : 15));
+    }
+}
+
+void TestModeMenuRade::mainWindowExperimentalTooltipsAreVisible()
+{
+    Test::markAudioFirstRunDone();
+    MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+    int found = 0;
+    for (QMenu* menu : window.findChildren<QMenu*>()) {
+        for (QAction* action : menu->actions()) {
+            if (action->text() == QStringLiteral("RADE2-U")
+                || action->text() == QStringLiteral("RADE2-L")) {
+                QVERIFY(menu->toolTipsVisible());
+                QVERIFY(action->toolTip().contains(QStringLiteral("Experimental")));
+                ++found;
+            }
+        }
+    }
+    QCOMPARE(found, 2);
 }
 
 QTEST_MAIN(TestModeMenuRade)

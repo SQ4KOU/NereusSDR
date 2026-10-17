@@ -4,6 +4,8 @@
 // no-port-check: NereusSDR-original file.  See header.
 //
 // Modification history (NereusSDR):
+//   2026-10-12 - Workspace font B floor for scope scale labels, J.J. Boyd
+//                (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-27   R-IOS-13 / R-R3-49: the Core's readings in a remote
 //                window (txModMonitorVersion 1). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
@@ -14,6 +16,7 @@
 #include "gui/HGauge.h"
 #include "gui/VintageModMeterWidget.h"
 #include "gui/StyleConstants.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "models/RadioModel.h"
 
 #include <QGridLayout>
@@ -143,6 +146,7 @@ void ModScopeWidget::paintEvent(QPaintEvent* /*event*/)
 
     QFont f = font();
     f.setPointSizeF(std::max(6.0, f.pointSizeF() - 2.0));
+    f = WorkspacePreview::readableFont(f);
     p.setFont(f);
     p.setPen(QColor(Style::kTextTertiary));
     p.drawText(QPointF(r.left() + 3, yFor(100.0) - 2),  QStringLiteral("+100"));

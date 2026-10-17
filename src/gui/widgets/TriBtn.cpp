@@ -3,6 +3,7 @@
 
 #include "TriBtn.h"
 #include "gui/StyleConstants.h"
+#include "gui/styles/WorkspacePreview.h"
 
 #include <QPainter>
 #include <QPaintEvent>
@@ -31,7 +32,8 @@ void TriBtn::paintEvent(QPaintEvent* ev)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     // Black triangle when pressed (on accent bg), otherwise kTextPrimary.
-    p.setBrush(isDown() ? QColor(0, 0, 0) : QColor(0xc8, 0xd8, 0xe8));
+    p.setBrush(isDown() ? QColor(0, 0, 0)
+                        : WorkspacePreview::roleColour(QColor(0xc8, 0xd8, 0xe8), "text"));
     p.setPen(Qt::NoPen);
     const int cx = width() / 2;
     const int cy = height() / 2;

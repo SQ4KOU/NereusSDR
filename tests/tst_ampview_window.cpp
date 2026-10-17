@@ -7,6 +7,10 @@
 #include <QDir>
 #include <QGuiApplication>
 #include <QLabel>
+#include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QPainter>
 #include <QScreen>
 #include <QSignalSpy>
 
@@ -14,6 +18,7 @@
 #include "core/session/PureSignalSessionFacade.h"
 #include "gui/AmpViewChart.h"
 #include "gui/AmpViewWindow.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "models/RadioModel.h"
 
 using namespace NereusSDR;
@@ -40,6 +45,34 @@ Ps3Snapshot displaySnapshot(quint64 generation, quint64 sequence)
     return snapshot;
 }
 
+Ps3Snapshot denseDisplaySnapshot(quint64 generation, quint64 sequence)
+{
+    Ps3Snapshot snapshot = displaySnapshot(generation, sequence);
+    constexpr int kPoints = 65;
+    snapshot.sampleCount = kPoints;
+    snapshot.correctionCount = kPoints;
+    snapshot.x.clear();
+    snapshot.ym.clear();
+    snapshot.yc.clear();
+    snapshot.ys.clear();
+    snapshot.xmCorrection.clear();
+    snapshot.ymCorrection.clear();
+    snapshot.xaCorrection.clear();
+    snapshot.yaCorrection.clear();
+    for (int index = 0; index < kPoints; ++index) {
+        const double input = static_cast<double>(index) / (kPoints - 1);
+        snapshot.x.push_back(input);
+        snapshot.ym.push_back(0.9 + 0.1 * input);
+        snapshot.yc.push_back(1.0);
+        snapshot.ys.push_back((input - 0.5) * 0.35);
+        snapshot.xmCorrection.push_back(input);
+        snapshot.ymCorrection.push_back(1.05 - 0.08 * input);
+        snapshot.xaCorrection.push_back(input);
+        snapshot.yaCorrection.push_back(-9.0 + 18.0 * input);
+    }
+    return snapshot;
+}
+
 bool intersectsAvailableScreen(const QRect& geometry)
 {
     for (QScreen* screen : QGuiApplication::screens()) {
@@ -61,9 +94,16 @@ bool captureIfRequested(QWidget& widget, const QString& stem)
     }
     QString scale = qEnvironmentVariable("QT_SCALE_FACTOR", QStringLiteral("1"));
     scale.replace(QLatin1Char('.'), QLatin1Char('_'));
-    return widget.grab().save(
-        QDir(directory).filePath(stem + QStringLiteral("-scale-") + scale
-                                 + QStringLiteral(".png")), "PNG");
+    const qreal dpr = widget.devicePixelRatioF();
+    QImage image(QSize(qRound(widget.width() * dpr), qRound(widget.height() * dpr)),
+                 QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(dpr);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    widget.render(&painter);
+    painter.end();
+    return image.save(QDir(directory).filePath(stem + QStringLiteral("-scale-") + scale
+                                               + QStringLiteral(".png")), "PNG");
 }
 
 } // namespace
@@ -72,7 +112,7 @@ class TstAmpViewWindow : public QObject {
     Q_OBJECT
 
 private slots:
-    void init() { AppSettings::instance().clear(); }
+    void init() { AppSettings::instance().clear(); WorkspacePreview::setEnabledForTest(true); }
 
     void preservesLegacyWindowContract()
     {
@@ -97,7 +137,7 @@ private slots:
                               QStringLiteral("Correction phase")}));
     }
 
-    void legacyAndSeriesPreferencesRoundTrip()
+    void persistentModesAndSessionLocalSeries()
     {
         {
             AmpViewWindow window;
@@ -109,20 +149,30 @@ private slots:
             window.findChild<QCheckBox*>(QStringLiteral("chkAVCorrectionMagnitude"))->setChecked(false);
         }
 
+        // Old persisted series keys remain untouched but do not set a new
+        // window session's visibility in the linked-plots design.
+        AppSettings::instance().setValue(QStringLiteral("ampview/showMeasuredPhase"),
+                                         QStringLiteral("False"));
+        AppSettings::instance().setValue(QStringLiteral("ampview/showCorrectionMagnitude"),
+                                         QStringLiteral("False"));
         AmpViewWindow restored;
         QVERIFY(restored.findChild<QCheckBox*>(QStringLiteral("chkAVShowGain"))->isChecked());
         QVERIFY(restored.findChild<QCheckBox*>(QStringLiteral("chkAVPhaseZoom"))->isChecked());
         QVERIFY(!restored.findChild<QCheckBox*>(QStringLiteral("chkAVLowRes"))->isChecked());
         QVERIFY(restored.findChild<QCheckBox*>(QStringLiteral("chkStayOnTop"))->isChecked());
-        QVERIFY(!restored.findChild<QCheckBox*>(QStringLiteral("chkAVMeasuredPhase"))->isChecked());
-        QVERIFY(!restored.findChild<QCheckBox*>(QStringLiteral("chkAVCorrectionMagnitude"))->isChecked());
+        QVERIFY(restored.findChild<QCheckBox*>(QStringLiteral("chkAVMeasuredPhase"))->isChecked());
+        QVERIFY(restored.findChild<QCheckBox*>(QStringLiteral("chkAVCorrectionMagnitude"))->isChecked());
 
         auto* chart = restored.findChild<AmpViewChart*>(QStringLiteral("ampViewChart"));
         QVERIFY(chart->showGain());
+        QVERIFY(restored.findChild<QLabel*>(QStringLiteral("ampViewCursorReadout"))
+                    ->text().contains(QStringLiteral("AMP GAIN")));
         QVERIFY(chart->phaseZoom());
         QVERIFY(!chart->lowRes());
-        QVERIFY(!chart->seriesVisible(AmpViewChart::Series::MeasuredPhase));
-        QVERIFY(!chart->seriesVisible(AmpViewChart::Series::CorrectionMagnitude));
+        QVERIFY(chart->seriesVisible(AmpViewChart::Series::MeasuredPhase));
+        QVERIFY(chart->seriesVisible(AmpViewChart::Series::CorrectionMagnitude));
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("ampview/showMeasuredPhase"))
+                     .toString(), QStringLiteral("False"));
     }
 
     void visibilityControlsFacadeSubscription()
@@ -144,9 +194,15 @@ private slots:
         window.show();
         QCoreApplication::processEvents();
         QVERIFY(facade->ampViewSubscribed());
+        auto* phase = window.findChild<QCheckBox*>(QStringLiteral("chkAVMeasuredPhase"));
+        phase->setChecked(false);
         window.close();
         QCoreApplication::processEvents();
         QVERIFY(!facade->ampViewSubscribed());
+        window.show();
+        QCoreApplication::processEvents();
+        QVERIFY(!phase->isChecked());
+        window.close();
     }
 
     void snapshotUsesFacadeAndDoesNotActuate()
@@ -174,9 +230,59 @@ private slots:
         QCOMPARE(chart->plotData().measuredMagnitude.size(), std::size_t{2});
         QCOMPARE(chart->plotData().correctionMagnitude.at(0).x, 0.2);
         QCOMPARE(chart->plotData().correctionPhase.at(0).x, 0.3);
+        chart->setSelectedInput(0.5);
+        QVERIFY(window.findChild<QLabel*>(QStringLiteral("ampViewCursorReadout"))
+                    ->text().contains(QStringLiteral("INPUT 0.50")));
+        QVERIFY(window.findChild<QLabel*>(QStringLiteral("ampViewCursorReadout"))
+                    ->text().contains(QStringLiteral("AMP MAG")));
+        const std::size_t originalCount = chart->plotData().measuredMagnitude.size();
+        Ps3Snapshot duplicate = displaySnapshot(facade->displayGeneration(), 1);
+        duplicate.x[0] = 0.95;
+        facade->receiveDisplaySnapshot(duplicate);
+        QCoreApplication::processEvents();
+        QCOMPARE(chart->plotData().measuredMagnitude.size(), originalCount);
+        QCOMPARE(chart->plotData().measuredMagnitude.at(0).y, 0.25);
+        Ps3Snapshot retired = displaySnapshot(facade->displayGeneration() - 1, 77);
+        retired.x[0] = 0.95;
+        facade->receiveDisplaySnapshot(retired);
+        QCoreApplication::processEvents();
+        QCOMPARE(chart->plotData().measuredMagnitude.size(), originalCount);
+        QCOMPARE(chart->plotData().measuredMagnitude.at(0).y, 0.25);
         QCOMPARE(actions.count(), 0);
         QVERIFY(window.findChild<QLabel*>(QStringLiteral("ampViewDisplayStatus"))
-                    ->text().contains(QStringLiteral("Live")));
+                    ->text().contains(QStringLiteral("Retained")));
+        RadioModel source;
+        source.installPureSignalForTest(nullptr);
+        QJsonObject status = QJsonDocument::fromJson(
+            source.pureSignalFacade()->statusJson().toUtf8()).object();
+        status["mox"] = true;
+        QVERIFY(facade->applyRemoteProperty("statusJson",
+            QString::fromUtf8(QJsonDocument(status).toJson(QJsonDocument::Compact))));
+        QCoreApplication::processEvents();
+        QVERIFY(window.findChild<QLabel*>(QStringLiteral("ampViewDisplayStatus"))
+                    ->text().contains(QStringLiteral("Retained")));
+        facade->receiveDisplaySnapshot(displaySnapshot(facade->displayGeneration(), 2));
+        QCoreApplication::processEvents();
+        QVERIFY(window.findChild<QLabel*>(QStringLiteral("ampViewDisplayStatus"))
+                    ->text().contains(QStringLiteral("Current")));
+        QVERIFY(captureIfRequested(window, QStringLiteral("ampview-current")));
+        Ps3Snapshot oldCapture = displaySnapshot(facade->displayGeneration(), 3);
+        oldCapture.capturedAtUnixMilliseconds -= 5000;
+        facade->receiveDisplaySnapshot(oldCapture);
+        QCoreApplication::processEvents();
+        QVERIFY(window.findChild<QLabel*>(QStringLiteral("ampViewDisplayStatus"))
+                    ->text().contains(QStringLiteral("Retained")));
+        Ps3Snapshot malformed = displaySnapshot(facade->displayGeneration(), 4);
+        malformed.ys.clear();
+        facade->receiveDisplaySnapshot(malformed);
+        QCoreApplication::processEvents();
+        QCOMPARE(chart->plotData().measuredMagnitude.size(), originalCount);
+        QVERIFY(window.findChild<QLabel*>(QStringLiteral("ampViewDisplayStatus"))
+                    ->text().contains(QStringLiteral("Retained")));
+        status["mox"] = false;
+        QVERIFY(facade->applyRemoteProperty("statusJson",
+            QString::fromUtf8(QJsonDocument(status).toJson(QJsonDocument::Compact))));
+        QCoreApplication::processEvents();
         QVERIFY(captureIfRequested(window, QStringLiteral("ampview-populated")));
     }
 
@@ -199,6 +305,9 @@ private slots:
         QVERIFY(chart->plotData().measuredMagnitude.empty());
         QVERIFY(window.findChild<QLabel*>(QStringLiteral("ampViewDisplayStatus"))
                     ->text().contains(QStringLiteral("unavailable")));
+        QVERIFY(window.findChild<QLabel*>(QStringLiteral("ampViewCursorReadout"))
+                    ->text().contains(QStringLiteral("AMP MAG —")));
+        QVERIFY(captureIfRequested(window, QStringLiteral("ampview-unavailable")));
 
         // A queued frame from the retired identity cannot repopulate the plot.
         facade->receiveDisplaySnapshot(displaySnapshot(facade->displayGeneration() - 1, 99));
@@ -238,6 +347,66 @@ private slots:
         QVERIFY(intersectsAvailableScreen(restored.frameGeometry()));
         QVERIFY(restored.width() >= 440);
         QVERIFY(restored.height() >= 380);
+    }
+
+    void linkedPlotsRenderInBothLooksAndWidths()
+    {
+        RadioModel radio(RadioModel::Role::Remote);
+        auto* facade = radio.pureSignalFacade();
+        facade->setRemoteCapabilities(true, false);
+        QVERIFY(facade->applyRemoteProperty("available", true));
+        AmpViewWindow window(&radio);
+        quint64 nextSequence = 1;
+        for (bool themed : {true, false}) {
+            WorkspacePreview::setEnabledForTest(themed);
+            for (int width : {564, 440}) {
+                window.resize(width, 470);
+                window.show();
+                WorkspacePreview::themeSubtree(&window);
+                QCoreApplication::processEvents();
+                facade->receiveDisplaySnapshot(displaySnapshot(facade->displayGeneration(),
+                                                               nextSequence++));
+                QCoreApplication::processEvents();
+                auto* chart = window.findChild<AmpViewChart*>(QStringLiteral("ampViewChart"));
+                auto* readout = window.findChild<QLabel*>(QStringLiteral("ampViewCursorReadout"));
+                auto* status = window.findChild<QLabel*>(QStringLiteral("ampViewDisplayStatus"));
+                QVERIFY(chart && readout && status);
+                QVERIFY(chart->geometry().bottom() < readout->geometry().top());
+                QVERIFY(readout->geometry().bottom() < status->geometry().top());
+                QVERIFY(readout->fontMetrics().height() >= 11);
+                const auto checkBoxes = window.findChildren<QCheckBox*>();
+                for (int i = 0; i < checkBoxes.size(); ++i) {
+                    for (int j = i + 1; j < checkBoxes.size(); ++j) {
+                        QVERIFY2(!checkBoxes[i]->geometry().intersects(checkBoxes[j]->geometry()),
+                                 "AmpView controls overlap");
+                    }
+                }
+                QVERIFY(captureIfRequested(window,
+                    QStringLiteral("ampview-%1-%2")
+                        .arg(themed ? QStringLiteral("new") : QStringLiteral("classic"))
+                        .arg(width)));
+                if (themed) {
+                    facade->receiveDisplaySnapshot(denseDisplaySnapshot(
+                        facade->displayGeneration(), nextSequence++));
+                    QCoreApplication::processEvents();
+                    QVERIFY(captureIfRequested(window,
+                        QStringLiteral("ampview-synthetic-dense-new-%1").arg(width)));
+                }
+                if (themed && width == 564) {
+                    window.findChild<QCheckBox*>(QStringLiteral("chkAVShowGain"))->setChecked(true);
+                    window.findChild<QCheckBox*>(QStringLiteral("chkAVPhaseZoom"))->setChecked(true);
+                    chart->setSelectedInput(0.0);
+                    QCoreApplication::processEvents();
+                    QVERIFY(!chart->readoutAt(0.0).magnitudeAmp.has_value());
+                    QVERIFY(readout->text().contains(QStringLiteral("AMP GAIN —")));
+                    QVERIFY(captureIfRequested(window, QStringLiteral("ampview-gain-zero")));
+                    window.findChild<QCheckBox*>(QStringLiteral("chkAVShowGain"))->setChecked(false);
+                    window.findChild<QCheckBox*>(QStringLiteral("chkAVPhaseZoom"))->setChecked(false);
+                    chart->setSelectedInput(0.5);
+                }
+                window.hide();
+            }
+        }
     }
 };
 

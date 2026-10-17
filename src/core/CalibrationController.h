@@ -37,6 +37,10 @@
 //   2026-09-29 - Level Cal: the unused level offset (cal/levelOffset) is
 //                 removed; the meter and display offsets live on RadioModel.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-14 - The frequency correction factors and the 10 MHz choice are
+//                 atomics: the P1 EP2 sender and the P2 connection thread
+//                 read them while the main thread sets them. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -147,6 +151,8 @@
 
 #include <QObject>
 #include <QString>
+
+#include <atomic>
 
 namespace NereusSDR {
 
@@ -299,12 +305,17 @@ signals:
 private:
     void readLogVoltsAmps();
     bool m_logVoltsAmps{false};
+    // These three are read off the main thread (effectiveFreqCorrectionFactor
+    // from the P1 EP2 sender as it composes and from the P2 connection
+    // thread) while the main thread sets them, so they are atomics. Each
+    // read sees a whole value that was set; a reader racing a 10 MHz
+    // toggle gets the old or the new factor, as the next frame would.
     // Source: setup.cs:5137 udHPSDRFreqCorrectFactor default 1.0 [@501e3f5]
-    double m_freqCorrectionFactor{1.0};
+    std::atomic<double> m_freqCorrectionFactor{1.0};
     // Source: setup.cs:22701 btnHPSDRFreqCalReset10MHz → value = 1.0 [@501e3f5]
-    double m_freqCorrectionFactor10M{1.0};
+    std::atomic<double> m_freqCorrectionFactor10M{1.0};
     // Source: setup.cs:22690 chkUsing10MHzRef default unchecked [@501e3f5]
-    bool   m_using10MHzRef{false};
+    std::atomic<bool>   m_using10MHzRef{false};
     // From Thetis setup.designer.cs:12112-12116 [v2.10.3.15]:
     //   this.ud6mLNAGainOffset.Value = new decimal(new int[] { 13, 0, 0, 0});
     // (console.cs:11812 _rx_6m_gain_offset_rx1 = 13 agrees.) An earlier

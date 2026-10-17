@@ -1,3 +1,4 @@
+# 2026-10-12: omit unavailable modes instead of malformed modulation:rx,; frames.
 # SYNTHETIC GOLDEN -- regenerated 2026-05-22 after the Phase 3J-1 closeout
 # init-burst live-state wiring.  Loose-prefix lines reflect TestMockRadioModel
 # defaults (vfoHz=0, mode="" empty, filter=200/2900 SSB baseline, NR off,
@@ -44,8 +45,6 @@ vfo:1,0,0;
 vfo:1,1,0;
 tx_frequency:0;
 tx_frequency_thetis:0,GEN,false,false;
-modulation:0,;
-modulation:1,;
 rx_filter_band:0,200,2900;
 rx_filter_band:1,200,2900;
 rx_enable:0,true;

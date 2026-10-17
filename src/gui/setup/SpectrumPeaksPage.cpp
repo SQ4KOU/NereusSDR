@@ -13,6 +13,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//                 Align native Display labels with the approved version29 resource.
+//   2026-10-12 - Bind picture rows to selected-pan and explicit-master scope.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-05-01 — Skeleton created in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -91,6 +95,7 @@
 #include <QSpinBox>
 #include <QPushButton>
 #include <QLabel>
+#include <QSignalBlocker>
 
 namespace NereusSDR {
 
@@ -186,92 +191,48 @@ SpectrumPeaksPage::SpectrumPeaksPage(RadioModel* model, QWidget* parent)
     // AppSettings and then every SpectrumWidget re-reads them: every pan
     // follows the change now, not only the one Setup is pointed at, and not
     // only after a restart.
-    connect(m_aphEnable, &QCheckBox::toggled, this, [](bool v) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DisplayActivePeakHoldEnabled"),
-            v ? QStringLiteral("True") : QStringLiteral("False"));
-        SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans();
-    });
-    connect(m_aphDurationMs, qOverload<int>(&QSpinBox::valueChanged), this, [](int v) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DisplayActivePeakHoldDurationMs"), QString::number(v));
-        SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans();
-    });
-    connect(m_aphDropDbPerSec, qOverload<int>(&QSpinBox::valueChanged), this, [](int v) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DisplayActivePeakHoldDropDbPerSec"), QString::number(v));
-        SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans();
-    });
-    connect(m_aphFill, &QCheckBox::toggled, this, [](bool v) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DisplayActivePeakHoldFill"),
-            v ? QStringLiteral("True") : QStringLiteral("False"));
-        SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans();
-    });
-    connect(m_aphOnTx, &QCheckBox::toggled, this, [](bool v) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DisplayActivePeakHoldOnTx"),
-            v ? QStringLiteral("True") : QStringLiteral("False"));
-        SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans();
-    });
-    connect(m_aphColor, &ColorSwatchButton::colorChanged, this, [](const QColor& c) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DisplayActivePeakHoldColor"),
-            ColorSwatchButton::colorToHex(c));
-        SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans();
-    });
-
-    connect(m_blobEnable, &QCheckBox::toggled, this, [](bool v) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DisplayPeakBlobsEnabled"),
-            v ? QStringLiteral("True") : QStringLiteral("False"));
-        SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans();
-    });
-    connect(m_blobCount, qOverload<int>(&QSpinBox::valueChanged), this, [](int v) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DisplayPeakBlobsCount"), QString::number(v));
-        SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans();
-    });
-    connect(m_blobInsideFilter, &QCheckBox::toggled, this, [](bool v) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DisplayPeakBlobsInsideFilterOnly"),
-            v ? QStringLiteral("True") : QStringLiteral("False"));
-        SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans();
-    });
-    connect(m_blobHoldEnable, &QCheckBox::toggled, this, [](bool v) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DisplayPeakBlobsHoldEnabled"),
-            v ? QStringLiteral("True") : QStringLiteral("False"));
-        SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans();
-    });
-    connect(m_blobHoldMs, qOverload<int>(&QSpinBox::valueChanged), this, [](int v) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DisplayPeakBlobsHoldMs"), QString::number(v));
-        SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans();
-    });
-    connect(m_blobHoldDrop, &QCheckBox::toggled, this, [](bool v) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DisplayPeakBlobsHoldDrop"),
-            v ? QStringLiteral("True") : QStringLiteral("False"));
-        SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans();
-    });
-    connect(m_blobFallDbPerSec, qOverload<int>(&QSpinBox::valueChanged), this, [](int v) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DisplayPeakBlobsFallDbPerSec"), QString::number(v));
-        SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans();
-    });
-    connect(m_blobColor, &ColorSwatchButton::colorChanged, this, [](const QColor& c) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DisplayPeakBlobColor"),
-            ColorSwatchButton::colorToHex(c));
-        SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans();
-    });
-    connect(m_blobTextColor, &ColorSwatchButton::colorChanged, this, [](const QColor& c) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DisplayPeakBlobTextColor"),
-            ColorSwatchButton::colorToHex(c));
-        SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans();
-    });
+    // Approved rebuild: these rows edit the selected pan or the explicit
+    // master through the same sparse-default path as the other picture pages.
+    bindDefaultToggle(m_aphEnable, QStringLiteral("DisplayActivePeakHoldEnabled"),
+        [](SpectrumWidget* pan, bool value) { pan->setActivePeakHoldEnabled(value); });
+    bindDefaultSpin(m_aphDurationMs, QStringLiteral("DisplayActivePeakHoldDurationMs"),
+        [](SpectrumWidget* pan, int value) { pan->setActivePeakHoldDurationMs(value); });
+    bindDefaultSpin(m_aphDropDbPerSec, QStringLiteral("DisplayActivePeakHoldDropDbPerSec"),
+        [](SpectrumWidget* pan, int value) { pan->setActivePeakHoldDropDbPerSec(value); });
+    bindDefaultToggle(m_aphFill, QStringLiteral("DisplayActivePeakHoldFill"),
+        [](SpectrumWidget* pan, bool value) { pan->setActivePeakHoldFill(value); });
+    bindDefaultToggle(m_aphOnTx, QStringLiteral("DisplayActivePeakHoldOnTx"),
+        [](SpectrumWidget* pan, bool value) { pan->setActivePeakHoldOnTx(value); });
+    bindDefaultToggle(m_blobEnable, QStringLiteral("DisplayPeakBlobsEnabled"),
+        [](SpectrumWidget* pan, bool value) { pan->setPeakBlobsEnabled(value); });
+    bindDefaultSpin(m_blobCount, QStringLiteral("DisplayPeakBlobsCount"),
+        [](SpectrumWidget* pan, int value) { pan->setPeakBlobsCount(value); });
+    bindDefaultToggle(m_blobInsideFilter, QStringLiteral("DisplayPeakBlobsInsideFilterOnly"),
+        [](SpectrumWidget* pan, bool value) { pan->setPeakBlobsInsideFilterOnly(value); });
+    bindDefaultToggle(m_blobHoldEnable, QStringLiteral("DisplayPeakBlobsHoldEnabled"),
+        [](SpectrumWidget* pan, bool value) { pan->setPeakBlobsHoldEnabled(value); });
+    bindDefaultSpin(m_blobHoldMs, QStringLiteral("DisplayPeakBlobsHoldMs"),
+        [](SpectrumWidget* pan, int value) { pan->setPeakBlobsHoldMs(value); });
+    bindDefaultToggle(m_blobHoldDrop, QStringLiteral("DisplayPeakBlobsHoldDrop"),
+        [](SpectrumWidget* pan, bool value) { pan->setPeakBlobsHoldDrop(value); });
+    bindDefaultSpin(m_blobFallDbPerSec, QStringLiteral("DisplayPeakBlobsFallDbPerSec"),
+        [](SpectrumWidget* pan, int value) { pan->setPeakBlobsFallDbPerSec(value); });
+    const auto bindColour = [this](ColorSwatchButton* button, const QString& key,
+                                   void (SpectrumWidget::*setter)(const QColor&)) {
+        connect(button, &ColorSwatchButton::colorChanged, this,
+            [this, key, setter](const QColor& colour) {
+                applyDisplayDefault(key, ColorSwatchButton::colorToHex(colour),
+                    [setter, colour](SpectrumWidget* pan) { (pan->*setter)(colour); });
+            });
+        followDisplayDefault(key, [this, button, key]() {
+            const QSignalBlocker blocker(button);
+            button->setColor(ColorSwatchButton::colorFromHex(displayDefaultText(key)));
+        });
+    };
+    bindColour(m_aphColor, QStringLiteral("DisplayActivePeakHoldColor"), &SpectrumWidget::setActivePeakHoldColor);
+    bindColour(m_blobColor, QStringLiteral("DisplayPeakBlobColor"), &SpectrumWidget::setPeakBlobColor);
+    bindColour(m_blobTextColor, QStringLiteral("DisplayPeakBlobTextColor"), &SpectrumWidget::setPeakBlobTextColor);
+    showDisplayDefaults();
 }
 
 void SpectrumPeaksPage::buildUI()
@@ -284,7 +245,7 @@ void SpectrumPeaksPage::buildUI()
     aphForm->setSpacing(6);
 
     m_aphEnable = new QCheckBox(
-        QStringLiteral("Enable per-bin peak trace with decay"), m_aphGroup);
+        QStringLiteral("Peak trace with decay"), m_aphGroup);
     m_aphEnable->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHold");
     m_aphEnable->setToolTip(QStringLiteral(
         "Display a secondary trace of the highest recent level at each "
@@ -312,7 +273,7 @@ void SpectrumPeaksPage::buildUI()
     aphForm->addRow(QStringLiteral("Drop rate:"), m_aphDropDbPerSec);
 
     m_aphFill = new QCheckBox(
-        QStringLiteral("Fill area between peak trace and current trace"), m_aphGroup);
+        QStringLiteral("Fill to trace"), m_aphGroup);
     m_aphFill->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHoldFill");
     m_aphFill->setToolTip(QStringLiteral(
         "Shade the region between the live spectrum and the peak-hold trace."));
@@ -339,7 +300,7 @@ void SpectrumPeaksPage::buildUI()
         "trace white)."));
     aphForm->addRow(QStringLiteral("Trace color:"), m_aphColor);
 
-    contentLayout()->addWidget(m_aphGroup);
+    addContent(m_aphGroup);
 
     // ── Peak Blobs ────────────────────────────────────────────────────────────
     // From Thetis Display.cs:4395-4714 [v2.10.3.13] — ShowPeakBlobs / NumberOfPeakBlobs /
@@ -350,7 +311,7 @@ void SpectrumPeaksPage::buildUI()
     blobForm->setSpacing(6);
 
     m_blobEnable = new QCheckBox(
-        QStringLiteral("Show top-N peak markers"), m_blobGroup);
+        QStringLiteral("Peak markers"), m_blobGroup);
     // From Thetis setup.cs chkShowPeakBlobMaximums [v2.10.3.13]
     m_blobEnable->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobs");
     m_blobEnable->setToolTip(QStringLiteral(
@@ -367,7 +328,7 @@ void SpectrumPeaksPage::buildUI()
     blobForm->addRow(QStringLiteral("Number of peaks:"), m_blobCount);
 
     m_blobInsideFilter = new QCheckBox(
-        QStringLiteral("Only show peaks inside the RX filter passband"), m_blobGroup);
+        QStringLiteral("Inside RX filter only"), m_blobGroup);
     // From Thetis Display.cs:4401 [v2.10.3.13] ShowPeakBlobsInsideFilterOnly
     m_blobInsideFilter->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobInsideFilter");
     m_blobInsideFilter->setToolTip(QStringLiteral(
@@ -375,7 +336,7 @@ void SpectrumPeaksPage::buildUI()
     blobForm->addRow(QString(), m_blobInsideFilter);
 
     m_blobHoldEnable = new QCheckBox(
-        QStringLiteral("Hold peaks before decay"), m_blobGroup);
+        QStringLiteral("Hold before decay"), m_blobGroup);
     // From Thetis Display.cs:4593 [v2.10.3.13] BlobPeakHold
     m_blobHoldEnable->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobHold");
     m_blobHoldEnable->setToolTip(QStringLiteral(
@@ -394,7 +355,7 @@ void SpectrumPeaksPage::buildUI()
     blobForm->addRow(QStringLiteral("Hold duration:"), m_blobHoldMs);
 
     m_blobHoldDrop = new QCheckBox(
-        QStringLiteral("Decay after hold (off = hard cut)"), m_blobGroup);
+        QStringLiteral("Decay after hold"), m_blobGroup);
     // From Thetis Display.cs:4605 [v2.10.3.13] BlobPeakHoldDrop
     m_blobHoldDrop->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobHoldDrop");
     m_blobHoldDrop->setToolTip(QStringLiteral(
@@ -432,7 +393,7 @@ void SpectrumPeaksPage::buildUI()
         "Color of the dBm readout text on each peak blob."));
     blobForm->addRow(QStringLiteral("Text color:"), m_blobTextColor);
 
-    contentLayout()->addWidget(m_blobGroup);
+    addContent(m_blobGroup);
 
     // ── Cross-link ────────────────────────────────────────────────────────────
     m_backBtn = new QPushButton(QStringLiteral("← Spectrum defaults"), this);
@@ -444,9 +405,8 @@ void SpectrumPeaksPage::buildUI()
         "QPushButton:hover { background: #203040; color: #c8d8e8; }"));
     connect(m_backBtn, &QPushButton::clicked,
             this, &SpectrumPeaksPage::backToSpectrumDefaultsRequested);
-    contentLayout()->addWidget(m_backBtn, 0, Qt::AlignLeft);
-
-    contentLayout()->addStretch();
+    addContent(m_backBtn);
+    contentLayout()->setAlignment(m_backBtn, Qt::AlignLeft);
 }
 
 }  // namespace NereusSDR

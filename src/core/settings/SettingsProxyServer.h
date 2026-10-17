@@ -205,6 +205,7 @@
 #include <functional>
 #include <QString>
 #include <QVariant>
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
@@ -230,7 +231,7 @@ struct SettingsApplyResult {
     QVariant restoredValue;
 };
 
-class SettingsProxyServer : public QObject {
+class NEREUS_CORE_EXPORT SettingsProxyServer : public QObject {
     Q_OBJECT
 
 public:

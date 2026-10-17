@@ -23,6 +23,10 @@
 //                 load graph's 100 % "Cannot keep up") by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-10-08 -- The background reads WorkspacePreview::dataBackground()
+//                 (the data colour choice; navy until a choice is made)
+//                 by J.J. Boyd (KG4VCF), with AI-assisted implementation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -58,6 +62,8 @@
 #include <QString>
 #include <QVector>
 #include <QWidget>
+
+#include "gui/styles/WorkspacePreview.h"
 
 namespace NereusSDR {
 
@@ -238,7 +244,7 @@ protected:
     {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        painter.fillRect(rect(), QColor("#050b13"));
+        painter.fillRect(rect(), WorkspacePreview::dataBackground(QColor("#050b13"), "app-bg"));
 
         // The legend wraps onto further rows instead of dropping entries, and
         // the plot gives up one row's height per extra row (#2554: a five-line

@@ -18,6 +18,11 @@
 // fakes and the run is in test mode; before this it opened this
 // computer's real default output and VAX devices.
 //
+// Native audio plan Task 7 fix (2026-10-09, J.J. Boyd KG4VCF, AI-assisted
+// via Anthropic Claude Code): the outputs open through the device layer
+// the app runs (setAudioBackendsForTest with a fake engine of matcher
+// buses); the direct path ships in no build.
+//
 // Cross-platform. No radioModel required (AudioEngine standalone
 // construction with a dedicated AppSettings instance).
 // =================================================================
@@ -32,6 +37,7 @@
 #include "models/RadioModel.h"
 
 #include "fakes/FakeAudioBus.h"
+#include "fakes/FakeDeviceLayer.h"
 
 #include <memory>
 
@@ -43,11 +49,14 @@ namespace {
 // fake, and test mode (initTestCase) stops anything else from reaching this
 // computer's real speakers, microphone or VAX devices. `opened` counts the
 // fake devices made.
+//
+// Native audio plan Task 7 fix: the outputs open through the device layer
+// the app runs (engine backends, catalogue, stream supervisor), on a fake
+// older-drivers engine with matcher buses (FakeDeviceLayer.h).
 void useFakeDevices(AudioEngine* engine, int* opened)
 {
-    engine->setDeviceBusFactoryForTest([opened](const AudioDeviceConfig&, bool) {
+    Test::useFakeDeviceLayer(engine, [opened](const QString&) {
         if (opened) { ++*opened; }
-        return std::make_unique<FakeAudioBus>(QStringLiteral("FakeDevice"));
     });
     engine->setVaxBusFactoryForTest([opened](int channel) -> std::unique_ptr<IAudioBus> {
         if (opened) { ++*opened; }
@@ -60,6 +69,15 @@ void useFakeDevices(AudioEngine* engine, int* opened)
         return bus;
     });
 }
+
+// Fake devices a reset opens: the speakers and, on macOS and Linux, the
+// four VAX buses. Windows leaves the VAX outputs closed after a reset,
+// since no saved device is left to open there.
+#ifdef Q_OS_WIN
+constexpr int kMinOpenedByReset = 1;
+#else
+constexpr int kMinOpenedByReset = 5;
+#endif
 
 } // namespace
 
@@ -110,6 +128,8 @@ void TstAudioEngineResetAudioSettings::init()
     // Wipe the singleton's in-memory store before each test so previous
     // test runs don't bleed into each other.
     AppSettings::instance().clear();
+    // Each case counts only the fake devices its own engine opens.
+    m_opened = 0;
 }
 
 void TstAudioEngineResetAudioSettings::seedSettings(AppSettings& s)
@@ -280,7 +300,6 @@ void TstAudioEngineResetAudioSettings::emitsSpeakersConfigChanged()
 
     RadioModel radio;
     AudioEngine* engine = radio.audioEngine();
-    m_opened = 0;
     useFakeDevices(engine, &m_opened);
 
     QSignalSpy spy(engine, &AudioEngine::speakersConfigChanged);
@@ -289,8 +308,8 @@ void TstAudioEngineResetAudioSettings::emitsSpeakersConfigChanged()
     // ensureSpeakersOpen() emits speakersConfigChanged after rebuilding the
     // default bus (or on the fake path if no PortAudio backend is available).
     QVERIFY(spy.count() >= 1);
-    // Rebuilt on fakes: the speakers and the four VAX devices.
-    QVERIFY(m_opened >= 5);
+    // Rebuilt on fakes: the speakers and, off Windows, the four VAX devices.
+    QVERIFY(m_opened >= kMinOpenedByReset);
 }
 
 void TstAudioEngineResetAudioSettings::emitsVaxConfigChangedForAllChannels()
@@ -368,7 +387,7 @@ void TstAudioEngineResetAudioSettings::operatorLocalResetPreservesCoreAudioSetti
     QVERIFY(!s.contains(QStringLiteral("audio/Speakers/DeviceName")));
     QCOMPARE(engine->txMonitorOutput(), TxMonitorOutput::Speakers);
     QCOMPARE(vax.count(), 4);
-    QVERIFY(m_opened >= 5);
+    QVERIFY(m_opened >= kMinOpenedByReset);
 }
 
 QTEST_MAIN(TstAudioEngineResetAudioSettings)

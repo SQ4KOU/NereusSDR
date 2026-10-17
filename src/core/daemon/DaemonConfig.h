@@ -66,6 +66,9 @@
 //   2026-09-27: R-R3-49 (remote-window parity Task 22): sourcePath, for the
 //               Core's support bundle. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-10-12: resolveDaemonFolderArgument(), the rule behind --security-dir
+//               and --dsp-cache-dir. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QHostAddress>
@@ -356,5 +359,31 @@ struct DaemonConfig {
 // QApplication argv scan).
 QString resolveDaemonProfileArgument(const QString& requested, bool wasSet,
                                      QString* errorOut);
+
+// --security-dir and --dsp-cache-dir (src/server_main.cpp): a folder the
+// desktop app names in the entry that starts this Core in the background,
+// so the background Core is the app's own Core carried on.
+//
+//   --security-dir   where the Core keeps its certificate, its identity key
+//                    and its paired devices. The app's own Core keeps them
+//                    beside its settings. A Core started with an empty
+//                    --profile reads those same settings but keeps its
+//                    security files in the reserved daemon profile
+//                    (CertificateStore::defaultDirectory), so without this
+//                    a paired device met a Core it did not know and hung up.
+//   --dsp-cache-dir  where the saved FFT plans are (DspCacheLocation).
+//
+// `option` is the option's own spelling, for the error text. `requested`
+// and `wasSet` are the parser's value() and isSet(), as for --profile.
+//
+//   wasSet == false -> empty, no error: the Core keeps to its own folder,
+//     exactly as before either option existed.
+//   wasSet == true  -> the value must be an absolute path. It is returned
+//     clean and with forward slashes (the Windows task file holds
+//     backslashes). Anything else returns empty and sets *errorOut, which
+//     the caller treats as fatal, as it does a mistyped --profile: an
+//     entry that names the wrong folder should not start a Core quietly.
+QString resolveDaemonFolderArgument(const QString& option, const QString& requested,
+                                    bool wasSet, QString* errorOut);
 
 } // namespace NereusSDR

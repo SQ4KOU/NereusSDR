@@ -174,6 +174,47 @@ private slots:
         QCOMPARE(io.pendingReadDepth(), 0);
     }
 
+    // The push runs under P1RadioConnection's frame lock, so it prints
+    // nothing: the read given up is kept for the connection to print once
+    // the lock is released (2026-10-15). A fifth read given up with four
+    // still kept prints them all, in order, so none is lost.
+    void givenUpRead_isKeptForTheLog_notPrintedByThePush() {
+        static QStringList printed;
+        printed.clear();
+        const QtMessageHandler previous = qInstallMessageHandler(
+            [](QtMsgType, const QMessageLogContext&, const QString& msg) {
+                printed << msg;
+            });
+        IoBoardHl2 io;
+        qint64 now = 1000;
+        io.setClockForTest([&now]() { return now; });
+        QVERIFY(io.pushPendingRead({IoBoardHl2::kI2cAddrGeneral, 6}));
+        now += IoBoardHl2::kReadAnswerMs;
+        QVERIFY(io.pushPendingRead({IoBoardHl2::kI2cAddrGeneral, 169}));
+        const QStringList duringPush = printed;
+        IoBoardHl2::GivenUpLog log{};
+        const int kept = io.takeGivenUpReads(log);
+        const int keptAgain = io.takeGivenUpReads(log);
+
+        // Five more given up without a take: the fifth prints all five.
+        for (int i = 0; i < IoBoardHl2::kGivenUpLogLines + 1; ++i) {
+            now += IoBoardHl2::kReadAnswerMs;
+            QVERIFY(io.pushPendingRead({IoBoardHl2::kI2cAddrGeneral, quint8(10 + i)}));
+        }
+        const QStringList onOverflow = printed;
+        qInstallMessageHandler(previous);
+
+        QVERIFY2(duringPush.isEmpty(), qPrintable(duringPush.join(QLatin1Char('|'))));
+        QCOMPARE(kept, 1);
+        QCOMPARE(log[0].deviceAddress, quint8(IoBoardHl2::kI2cAddrGeneral));
+        QCOMPARE(log[0].subAddress, quint8(6));
+        QCOMPARE(keptAgain, 0);
+        // 169 and 10..13 given up: five lines, in order.
+        QCOMPARE(onOverflow.size(), 5);
+        QVERIFY(onOverflow.at(0).contains(QLatin1String("/A9 unanswered, given up")));
+        QVERIFY(onOverflow.at(4).contains(QLatin1String("/0D unanswered, given up")));
+    }
+
     // Reads still inside their answer time keep their order.
     void readsInsideTheirAnswerTime_keepTheirOrder() {
         IoBoardHl2 io;

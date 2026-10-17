@@ -34,6 +34,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12  J.J. Boyd / KG4VCF  Export signal addresses for Windows
+//                                    DLL consumers. AI-assisted via
+//                                    OpenAI Codex.
 //   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: session
 //                                    transport seam and its QWebSocket
 //                                    implementation. AI-assisted
@@ -57,6 +60,7 @@
 #include <QPointer>
 #include <QString>
 #include <optional>
+#include "core/NereusCoreExport.h"
 #include "core/session/NetworkPathSnapshot.h"
 
 QT_BEGIN_NAMESPACE
@@ -100,7 +104,7 @@ struct SessionLinkDiagnostics {
     std::optional<quint32> tcpNotSentBytes;
 };
 
-class SessionTransport : public QObject {
+class NEREUS_CORE_EXPORT SessionTransport : public QObject {
     Q_OBJECT
 
 public:

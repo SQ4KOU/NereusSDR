@@ -33,15 +33,26 @@
 //   follow the amp's report, never the click, and never reach this
 //   computer's own connection. coreDiagnosticsText for Copy diagnostics.
 //   J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10  Workspace look, JJ's D30: OPERATE carries
+//   kLitWhenOnProperty, so its on sheet draws the lit green.
+//   J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-12  Forward power is one large bar and reflected power, SWR
+//   and temperature are slim rows, each with its number on the face
+//   (BarInstrument through AccessoryReadouts), in place of the three
+//   HGauge bars; the line under them keeps volts and amps only. Forward,
+//   reflected and SWR show dashes at 0 W forward.
+//   J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "Rf2ksApplet.h"
 #include "AmpApplet.h"
-#include "gui/HGauge.h"
+#include "gui/applets/AccessoryReadouts.h"
+#include "gui/instruments/BarInstrument.h"
 #include "core/session/IStationLink.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/StyleConstants.h"
 #include "gui/UnbuiltFeatures.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "models/AccessoryDataModel.h"
 #include "models/RadioModel.h"
 #include "models/RfKitModel.h"
@@ -86,6 +97,9 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
     header->addWidget(m_statusDot);
 
     m_operateBtn = new QPushButton(QStringLiteral("STANDBY"), headerWrap);
+    // Workspace look (JJ's D30, 2026-10-10): OPERATE on is the lit green.
+    // The property is read only by the workspace look's sheet pass.
+    m_operateBtn->setProperty(WorkspacePreview::kLitWhenOnProperty, true);
     m_operateMode = QStringLiteral("STANDBY");
     connect(m_operateBtn, &QPushButton::clicked, this, [this]() {
         const bool wantOperate = m_operateMode != QStringLiteral("OPERATE");
@@ -114,56 +128,31 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
     auto* gaugesLay  = new QVBoxLayout(gaugesWrap);
     gaugesLay->setContentsMargins(8, 6, 8, 6);
 
-    // Gauge thresholds and tick labels mirror src/gui/applets/AmpApplet.cpp
-    // exactly so RF-Kit operators have the same visual language PGXL
-    // operators already know.  Bench feedback 2026-05-25 KG4VCF: without
-    // tick labels the bar reads as "about 1/4 scale" with no power context.
-    m_fwdGauge  = new HGauge(gaugesWrap);
-    m_fwdGauge->setRange(0.0, 2000.0);
-    m_fwdGauge->setYellowStart(1000.0);
-    m_fwdGauge->setRedStart(1500.0);
-    m_fwdGauge->setTitle(QStringLiteral("Fwd Pwr"));
-    m_fwdGauge->setUnit(QStringLiteral("W"));
-    m_fwdGauge->setTickLabels({
-        QStringLiteral("0"),
-        QStringLiteral("500"),
-        QStringLiteral("1000"),
-        QStringLiteral("1.5k"),
-        QStringLiteral("2k")
-    });
-    gaugesLay->addWidget(m_fwdGauge);
+    // The rows mirror src/gui/applets/AmpApplet.cpp exactly (the same
+    // scales, limits and text through AccessoryReadouts) so RF-Kit
+    // operators have the same visual language PGXL operators already
+    // know: forward power as one large bar, then reflected power, SWR and
+    // temperature as slim rows, each with its number on the face.
+    m_fwdBar = AccessoryReadouts::makeLargeBar(
+        AccessoryReadouts::forwardPower(), AccessoryReadouts::forwardName(), gaugesWrap);
+    m_fwdBar->setAccessibleName(QStringLiteral("Forward power"));
+    gaugesLay->addWidget(m_fwdBar);
 
-    // SWR stored as x100 fixed-point (1.0 -> 100, 3.0 -> 300) so we can
-    // use the integer-friendly gauge range while still resolving to 2 d.p.
-    m_swrGauge  = new HGauge(gaugesWrap);
-    m_swrGauge->setRange(100.0, 300.0);
-    m_swrGauge->setYellowStart(200.0);
-    m_swrGauge->setRedStart(250.0);
-    m_swrGauge->setTitle(QStringLiteral("SWR"));
-    m_swrGauge->setValue(100.0);   // start at 1.0:1
-    m_swrGauge->setTickLabels({
-        QStringLiteral("1"),
-        QStringLiteral("1.5"),
-        QStringLiteral("2"),
-        QStringLiteral("2.5"),
-        QStringLiteral("3")
-    });
-    gaugesLay->addWidget(m_swrGauge);
+    // The RF2K-S reports reflected power itself.
+    m_refBar = AccessoryReadouts::makeSlimBar(
+        AccessoryReadouts::reflectedPower(), AccessoryReadouts::reflectedName(), gaugesWrap);
+    m_refBar->setAccessibleName(QStringLiteral("Reflected power"));
+    gaugesLay->addWidget(m_refBar);
 
-    m_tempGauge = new HGauge(gaugesWrap);
-    m_tempGauge->setRange(0.0, 100.0);
-    m_tempGauge->setYellowStart(55.0);
-    m_tempGauge->setRedStart(80.0);
-    m_tempGauge->setTitle(QStringLiteral("Temp"));
-    m_tempGauge->setUnit(QStringLiteral("°C"));
-    m_tempGauge->setTickLabels({
-        QStringLiteral("0"),
-        QStringLiteral("30"),
-        QStringLiteral("55"),
-        QStringLiteral("80"),
-        QStringLiteral("100")
-    });
-    gaugesLay->addWidget(m_tempGauge);
+    m_swrBar = AccessoryReadouts::makeSlimBar(
+        AccessoryReadouts::swr(), AccessoryReadouts::swrName(), gaugesWrap);
+    m_swrBar->setAccessibleName(QStringLiteral("SWR"));
+    gaugesLay->addWidget(m_swrBar);
+
+    m_tempBar = AccessoryReadouts::makeSlimBar(
+        AccessoryReadouts::temperature(), AccessoryReadouts::temperatureName(), gaugesWrap);
+    m_tempBar->setAccessibleName(QStringLiteral("Temperature"));
+    gaugesLay->addWidget(m_tempBar);
 
     m_telemetryLabel = new QLabel(gaugesWrap);
     m_telemetryLabel->setStyleSheet(QStringLiteral("color:#9aa5b1; font-size:10px;"));
@@ -459,6 +448,8 @@ void Rf2ksApplet::syncFromRfKit()
         m_bandFollowLabel->setText(m_rfKit->bandFollowText());
     }
     if (!m_rfKit->present()) {
+        // No reading yet, or the amplifier is gone: every row shows dashes.
+        clearReadouts();
         return;
     }
     // R-R3-47: the tuner and antenna rows, as the amp last reported them.
@@ -634,18 +625,36 @@ void Rf2ksApplet::setConnectedState(bool connected)
 
 void Rf2ksApplet::setPower(const RfKitPowerSnapshot& snap)
 {
-    m_fwdGauge->setValue(static_cast<double>(snap.forwardW));
-    // SWR stored x100 so the gauge range (100..300) maps to 1.0..3.0.
-    m_swrGauge->setValue(static_cast<double>(snap.swr) * 100.0);
-    m_tempGauge->setValue(static_cast<double>(snap.temperatureC));
-    // Bench feedback 2026-05-25 KG4VCF: include numeric forward power +
-    // SWR in the telemetry strip so the operator has a concrete reading
-    // alongside the bar graph (the bar alone reads as "about 1/4 scale").
-    m_telemetryLabel->setText(QStringLiteral("Fwd %1 W  SWR %2  %3 V  %4 A")
-        .arg(snap.forwardW)
-        .arg(static_cast<double>(snap.swr), 0, 'f', 2)
+    // Forward, reflected and SWR are shown only while the amplifier is
+    // passing power, which for the RF2K-S is forward power above 0 W;
+    // otherwise the rows show the instrument's dashes
+    // (BarInstrument::clearValue(), which also drops the held peak so it
+    // cannot linger over them). Temperature is always live.
+    if (snap.forwardW > 0) {
+        m_fwdBar->setValue(static_cast<double>(snap.forwardW));
+        m_refBar->setValue(static_cast<double>(snap.reflectedW));
+        m_swrBar->setValue(static_cast<double>(snap.swr));
+    } else {
+        for (BarInstrument* bar : {m_fwdBar, m_refBar, m_swrBar}) {
+            if (bar->hasValue()) { bar->clearValue(); }
+        }
+    }
+    m_tempBar->setValue(static_cast<double>(snap.temperatureC));
+    // Forward power and SWR are on the face now (bench feedback 2026-05-25
+    // KG4VCF asked for the numbers beside the bars; the bars carry them);
+    // the strip keeps what the face does not show.
+    m_telemetryLabel->setText(QStringLiteral("%1 V  %2 A")
         .arg(snap.voltageV, 0, 'f', 0)
         .arg(snap.currentA, 0, 'f', 1));
+}
+
+// Every row to dashes: before the amplifier's first reading and after it
+// is gone.
+void Rf2ksApplet::clearReadouts()
+{
+    for (BarInstrument* bar : {m_fwdBar, m_refBar, m_swrBar, m_tempBar}) {
+        if (bar->hasValue()) { bar->clearValue(); }
+    }
 }
 
 // ---------- Section C slots ----------
@@ -759,9 +768,14 @@ void    Rf2ksApplet::clickOperateButtonForTesting() { m_operateBtn->click(); }
 
 // ---------- Section B+C test seams ----------
 
-int     Rf2ksApplet::fwdGaugeValueForTesting()      const { return static_cast<int>(m_fwdGauge->value()); }
-float   Rf2ksApplet::swrGaugeValueForTesting()      const { return static_cast<float>(m_swrGauge->value() / 100.0); }
-float   Rf2ksApplet::tempGaugeValueForTesting()     const { return static_cast<float>(m_tempGauge->value()); }
+int     Rf2ksApplet::fwdGaugeValueForTesting()      const { return static_cast<int>(m_fwdBar->value()); }
+float   Rf2ksApplet::swrGaugeValueForTesting()      const { return static_cast<float>(m_swrBar->value()); }
+float   Rf2ksApplet::tempGaugeValueForTesting()     const { return static_cast<float>(m_tempBar->value()); }
+int     Rf2ksApplet::reflectedValueForTesting()     const { return static_cast<int>(m_refBar->value()); }
+bool    Rf2ksApplet::fwdHasValueForTesting()        const { return m_fwdBar->hasValue(); }
+bool    Rf2ksApplet::reflectedHasValueForTesting()  const { return m_refBar->hasValue(); }
+bool    Rf2ksApplet::swrHasValueForTesting()        const { return m_swrBar->hasValue(); }
+bool    Rf2ksApplet::tempHasValueForTesting()       const { return m_tempBar->hasValue(); }
 QString Rf2ksApplet::telemetryStripTextForTesting() const { return m_telemetryLabel->text(); }
 
 QString Rf2ksApplet::antennaButtonTextForTesting(int number) const

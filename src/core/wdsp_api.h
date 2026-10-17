@@ -1000,7 +1000,7 @@ void SetRXAAMSQMaxTail(int channel, double tail);
 // Squelch — FM (fmsq.c / fmsq.h)
 //
 // From Thetis Project Files/Source/Console/radio.cs:1274-1329
-// WDSP: third_party/wdsp/src/fmsq.c:236,244
+// WDSP: third_party/wdsp/src/fmsq.c:239,247
 // SetRXAFMSQRun is NOT declared in fmsq.h but is exported from fmsq.c.
 // threshold: linear 0..1 scale (Thetis fm_squelch_threshold = 1.0f, not dB)
 // ---------------------------------------------------------------------------

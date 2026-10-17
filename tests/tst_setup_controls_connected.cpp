@@ -16,6 +16,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R3 controls that work, Task 2.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-10-15  J.J. Boyd / KG4VCF  DSP > FM squelch readout shows the
+//                                    0-100 number, AM keeps dB.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -246,6 +249,45 @@ private slots:
             QVERIFY2(fm->isEnabledTo(&page), "FM squelch is greyed");
             fm->setValue(-70);
             QCOMPARE(slice->fmsqThresh(), -70.0);
+        }
+    }
+
+    // DSP > FM shows the squelch as Thetis's 0-100 number, with no unit
+    // (console.cs:47296-47318 [v2.10.3.15]); DSP > AM/SAM still shows dB.
+    void fmSquelchReadoutIsTheZeroToHundredNumber()
+    {
+        RadioModel model;
+        SliceModel* slice = ensureSlice(model);
+        {
+            FmSetupPage page(&model);
+            auto* fm = page.findChild<QSlider*>(QStringLiteral("fmSquelchThresholdSlider"));
+            auto* value = page.findChild<QLabel*>(QStringLiteral("fmSquelchThresholdValue"));
+            QVERIFY2(fm != nullptr && value != nullptr, "no FM squelch readout");
+            const QList<QPair<double, QString>> cases{
+                {-150.0, QStringLiteral("6")},
+                {-80.0, QStringLiteral("50")},
+                {0.0, QStringLiteral("100")},
+                {-160.0, QStringLiteral("0")},
+            };
+            for (const auto& [slider, shown] : cases) {
+                slice->setFmsqThresh(slider);
+                QCOMPARE(value->text(), shown);
+            }
+            fm->setValue(-150);
+            QCOMPARE(value->text(), QStringLiteral("6"));
+            fm->setValue(0);
+            QCOMPARE(value->text(), QStringLiteral("100"));
+            QCOMPARE(slice->fmsqThresh(), 0.0);
+        }
+        {
+            AmSamSetupPage page(&model);
+            auto* am = page.findChild<QSlider*>(QStringLiteral("amSquelchThresholdSlider"));
+            auto* value = page.findChild<QLabel*>(QStringLiteral("amSquelchThresholdValue"));
+            QVERIFY2(am != nullptr && value != nullptr, "no AM squelch readout");
+            slice->setAmsqThresh(-80.0);
+            QCOMPARE(value->text(), QStringLiteral("-80 dB"));
+            am->setValue(-100);
+            QCOMPARE(value->text(), QStringLiteral("-100 dB"));
         }
     }
 

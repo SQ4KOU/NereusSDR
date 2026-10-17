@@ -222,11 +222,16 @@ struct ConnectionFlowTests {
     final class FailingStationItem: SecretItem, @unchecked Sendable {
         let backing = InMemorySecretItem()
         var failRemoval = false
+        private let lock = NSLock()
+        private var written = 0
+        /// How many writes reached the Keychain stand-in.
+        var writes: Int { lock.withLock { written } }
         func read() throws -> Data? { try backing.read() }
         func add(_ data: Data) throws -> Bool { try backing.add(data) }
         func write(_ data: Data) throws {
             if failRemoval { throw Failure.denied }
             try backing.write(data)
+            lock.withLock { written += 1 }
         }
         func delete() throws {
             if failRemoval { throw Failure.denied }
@@ -1361,6 +1366,21 @@ struct ConnectionFlowTests {
                 == [.address(Self.rockLan), .address(Self.rockEnd1), .address(Self.rockWlan0), .throughService])
     }
 
+    /// JJ, 2026-10-16: an address the Core stops naming is not dialed
+    /// again, not even when the phone reached the Core there last.
+    @Test("the ways leave out an address the Core stopped naming, even the one that worked last")
+    func reachPlanLeavesOutAnAddressTheCoreStoppedNaming() throws {
+        let key = P256.Signing.PrivateKey().publicKey.derRepresentation
+        var station = PairedStation(identityKey: key, label: "Rock", endpoints: [Self.rockLan])
+        station.keepCoreAddresses([Self.rockEnd1])
+        station.reached(Self.rockEnd1, by: .direct)
+        #expect(ConnectionFlow.reachPlan(station, first: nil, found: [], throughService: true)
+                == [.address(Self.rockEnd1), .address(Self.rockLan), .throughService])
+        station.keepCoreAddresses([], inUse: Self.rockLan)
+        #expect(ConnectionFlow.reachPlan(station, first: nil, found: [], throughService: true)
+                == [.address(Self.rockLan), .throughService])
+    }
+
     /// Paired from its LAN address, found on its network with a global IPv6,
     /// a unique local, a link-local and its private IPv4: the race dials the
     /// global first, it wins, and it is kept both as where the Core was
@@ -1437,15 +1457,21 @@ struct ConnectionFlowTests {
     }
 
     /// The Core's own list arrives at sign-in and is kept; a renumbering
-    /// replaces it; an empty list changes nothing; the next race off the
-    /// Core's network dials its global IPv6 and never its private address.
-    @Test("the Core's own addresses are kept at sign-in, replaced by each new list, and dialled from cellular")
-    func theCoresOwnAddressesAreKeptAndDialled() async throws {
+    /// replaces it; a list with nothing dialable changes nothing; the next
+    /// race off the Core's network dials its global IPv6 and never its
+    /// private address; the Core's own empty list clears them.
+    @Test("the Core's own addresses are kept at sign-in, replaced by each new list, dialed from cellular, and cleared by an empty list")
+    func theCoresOwnAddressesAreKeptAndDialed() async throws {
         let station = try FakeStation(fixture: "session-device-sign-in", additions: [.coreAddresses])
         station.setCoreAddresses("{\"addresses\":[\"[\(Self.rockEnd1.host)]:50055\",\"[\(Self.rockWlan0.host)]:50055\"]}")
         let dialled = Dialled()
+        // Set once IPv6 is turned off on the Core: no IPv6 address answers.
+        let ipv6Off = Reachable()
         let harness = try Self.harness(factory: { endpoint, trust in
                                            dialled.add(endpoint, trust)
+                                           if ipv6Off.open && endpoint.host.contains(":") {
+                                               return DeadTransport(error: .failed("no route"))
+                                           }
                                            return station.transportFactory(endpoint, trust)
                                        }, paired: [Self.paired(station, at: [Self.rockLan])],
                                        networks: { Self.cellular })
@@ -1466,7 +1492,9 @@ struct ConnectionFlowTests {
         #expect(await settle {
             (try? harness.stations.station(identityKey: station.identity.publicKey))?.directAddresses == [renumbered]
         })
-        await station.deliverCoreAddresses(FakeStation.noCoreAddresses)
+        // A list with entries, none of which the phone can dial, is not the
+        // Core's empty answer: the kept ones stay.
+        await station.deliverCoreAddresses("{\"addresses\":[\"[fe80::1]:50055\"]}")
         try await LinkBarrier.roundTrip(harness.app.commands)
         #expect(try harness.stations.station(identityKey: station.identity.publicKey)?.directAddresses == [renumbered])
         await flow.leaveBand()
@@ -1478,6 +1506,63 @@ struct ConnectionFlowTests {
         #expect(Array(dialled.hosts.dropFirst(before)) == [renumbered.host])
         #expect(flow.attempt.tries.map(\.address) == [ConnectionFlow.addressText(renumbered)])
         #expect(flow.attempt.tries.first?.path == .direct)
+
+        // The Core's own empty list (JJ, 2026-10-16: IPv6 turned off on the
+        // Core) arrives while this session is on the address it named: that
+        // one is not taken from under the session.
+        await station.deliverCoreAddresses(FakeStation.noCoreAddresses)
+        try await LinkBarrier.roundTrip(harness.app.commands)
+        await Self.flowSettled(harness)
+        var kept = try #require(try harness.stations.station(identityKey: station.identity.publicKey))
+        #expect(kept.directAddresses == [renumbered])
+        #expect(kept.endpoints.contains(renumbered))
+        await flow.leaveBand()
+        ipv6Off.open = true
+
+        // The next session, on the LAN address, gets the same empty list and
+        // clears it, from the reached addresses and the one that worked last too.
+        await flow.connect(to: try #require(flow.cores.first), first: Self.rockLan)
+        #expect(await settle { flow.screen == .band })
+        #expect(await settle {
+            guard let station = try? harness.stations.station(identityKey: station.identity.publicKey) else {
+                return false
+            }
+            return station.directAddresses.isEmpty && !station.endpoints.contains(renumbered)
+        })
+        kept = try #require(try harness.stations.station(identityKey: station.identity.publicKey))
+        #expect(!kept.isLastGood(renumbered))
+        await flow.leaveBand()
+
+        // From cellular a reconnect no longer dials it.
+        let afterClear = dialled.hosts.count
+        await flow.connect(to: try #require(flow.cores.first))
+        #expect(!dialled.hosts.dropFirst(afterClear).contains(renumbered.host))
+        await harness.app.disconnect()
+    }
+
+    /// The no-op guard: an empty list when the Core's last list named
+    /// nothing, and the only direct addresses are ones the phone proved,
+    /// writes nothing to the Keychain.
+    @Test("an empty list when the Core named nothing kept writes nothing")
+    func anEmptyListWithNothingNamedWritesNothing() async throws {
+        let station = try FakeStation(fixture: "session-device-sign-in", additions: [.coreAddresses])
+        station.setCoreAddresses("{\"addresses\":[\"[fe80::1]:50055\"]}")
+        var paired = Self.paired(station)
+        paired.addProvenAddresses([Self.rockEnd1])
+        #expect(paired.coreListed.isEmpty)
+        let item = FailingStationItem()
+        let harness = try Self.harness(factory: station.transportFactory, paired: [paired],
+                                       failingStationItem: item)
+        await harness.flow.connect(to: try #require(harness.flow.cores.first))
+        #expect(await settle { harness.flow.screen == .band })
+        try await LinkBarrier.roundTrip(harness.app.commands)
+        await Self.flowSettled(harness)
+        let writes = item.writes
+        await station.deliverCoreAddresses(FakeStation.noCoreAddresses)
+        try await LinkBarrier.roundTrip(harness.app.commands)
+        await Self.flowSettled(harness)
+        #expect(item.writes == writes)
+        #expect(try harness.stations.station(identityKey: station.identity.publicKey)?.directAddresses == [Self.rockEnd1])
         await harness.app.disconnect()
     }
 

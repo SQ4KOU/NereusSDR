@@ -57,6 +57,9 @@
 //               spaces is offered with underscores, so the one-word box
 //               takes edits. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-10-09: "Identity && Status" and "Save && Reboot Tuner" double their
+//               ampersand so Qt draws it. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "TgxlAdvancedPage.h"
@@ -457,7 +460,7 @@ TgxlAdvancedPage::~TgxlAdvancedPage() = default;
 
 void TgxlAdvancedPage::buildIdentitySection(QVBoxLayout* topLay)
 {
-    auto* box = new QGroupBox(QStringLiteral("Identity & Status"));
+    auto* box = new QGroupBox(QStringLiteral("Identity && Status"));
     auto* form = new QFormLayout(box);
     form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
@@ -1000,7 +1003,7 @@ void TgxlAdvancedPage::buildFooter(QVBoxLayout* topLay)
     row->addStretch();
 
     m_revertBtn = new QPushButton(QStringLiteral("Revert"));
-    m_saveAndRebootBtn = new QPushButton(QStringLiteral("Save & Reboot Tuner"));
+    m_saveAndRebootBtn = new QPushButton(QStringLiteral("Save && Reboot Tuner"));
     m_saveAndRebootBtn->setEnabled(false);
 
     row->addWidget(m_revertBtn);

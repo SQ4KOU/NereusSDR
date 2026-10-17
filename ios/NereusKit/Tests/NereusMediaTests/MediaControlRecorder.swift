@@ -108,4 +108,26 @@ final class MediaControlRecorder: @unchecked Sendable {
         }
         return condition()
     }
+
+    /// Waits for `condition` with no deadline of its own, looking again
+    /// every 20 ms. A count of turns measures the computer: on the hosted
+    /// simulator the 20,000 of ``settle(until:)`` were spent in 50 ms, and
+    /// the client's restart they waited for came 45 ms after its cause
+    /// (2026-10-09 and 2026-10-11). Here a slow computer only makes the
+    /// test slower, and the wait keeps no processor busy meanwhile.
+    ///
+    /// Give the test a `.timeLimit`, which ends one that never gets there:
+    /// it cancels the test, and the wait returns what the condition says
+    /// then.
+    func holds(_ condition: () -> Bool) async -> Bool {
+        while !condition() {
+            do {
+                try await Task.sleep(for: .milliseconds(20))
+            } catch {
+                // The test's time limit canceled it.
+                return condition()
+            }
+        }
+        return true
+    }
 }

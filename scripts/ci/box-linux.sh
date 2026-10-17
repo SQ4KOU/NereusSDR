@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# The steps of a Linux CI job on the self-hosted runners, run inside the CI
+# image by scripts/ci/box-run.sh (the checkout is /src, the runner's own
+# folder /box). CI speed round, 2026-10-16; moved into this script,
+# 2026-10-17.
+#
+#   scripts/ci/box-linux.sh configure   fetch the dependencies and configure
+#   scripts/ci/box-linux.sh build       build the app and $TARGET
+#   scripts/ci/box-linux.sh test        run this job's tests (not the
+#                                       realtime tests: linux-realtime in
+#                                       ci.yml runs those on an idle runner)
+#   scripts/ci/box-linux.sh stats       this job's compiler cache hits
+#
+# From the environment: SHARDS and SHARD (the name-hash test shards, as on
+# the hosted legs; SHARDS=0 for none) and TARGET (the test target to build,
+# all_tests).
+set -euo pipefail
+
+: "${SHARDS:?}" "${SHARD:?}" "${TARGET:?}"
+# ctest's measured test times for this job's tests, kept between runs.
+cost_data="/box/CTestCostData-$SHARDS-$SHARD-$TARGET.txt"
+
+case "${1:-}" in
+    configure)
+        # The dependency downloads stay in /box/deps between runs, so only
+        # a changed pin downloads anything.
+        mirrors="$HOME/nereus-git-mirrors.gitconfig"
+        cmake -DNEREUS_DEPENDENCY_ARCHIVE_DIR="$NEREUS_DEPENDENCY_ARCHIVE_DIR" \
+              -DNEREUS_GIT_MIRROR_CONFIG="$mirrors" \
+              -P cmake/FetchDependencyArchives.cmake
+        git config --global --add include.path "$mirrors"
+        # The hosted Linux legs' configure (Configure (Linux) in ci.yml),
+        # with this job's shards.
+        cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
+            "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
+            -DCMAKE_BUILD_RPATH_USE_ORIGIN=ON \
+            -DNEREUS_TEST_PYTHON=/usr/bin/python3 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_EXE_LINKER_FLAGS_INIT=-fuse-ld=mold \
+            -DCMAKE_SHARED_LINKER_FLAGS_INIT=-fuse-ld=mold \
+            -DCMAKE_MODULE_LINKER_FLAGS_INIT=-fuse-ld=mold \
+            -DNEREUS_BUILD_TESTS=ON \
+            -DNEREUS_TEST_SHARDS="$SHARDS" \
+            -DNEREUS_TEST_SHARD="$SHARD"
+        # ctest starts the longest tests first from these times.
+        mkdir -p build/Testing/Temporary
+        cp "$cost_data" build/Testing/Temporary/CTestCostData.txt 2>/dev/null || true
+        ;;
+
+    build)
+        # `all` as well: the tests run nereusd, nereus_pairing_peer and
+        # nereus_rendezvous_peer (see Build in ci.yml's build job).
+        cmake --build build -j10 --target all "$TARGET"
+        ;;
+
+    test)
+        # The hosted legs' Test step, first pass: the tests not labeled
+        # realtime, 8 at a time.
+        export QT_QPA_PLATFORM=xcb
+        export QTEST_FUNCTION_TIMEOUT=240000
+        export NEREUS_HAMLIB_RIGCTL=/usr/bin/rigctl
+        cd build
+        status=0
+        xvfb-run -a ctest -LE realtime -j8 --output-on-failure --no-tests=error || status=1
+        cp Testing/Temporary/CTestCostData.txt "$cost_data" 2>/dev/null || true
+        exit "$status"
+        ;;
+
+    stats)
+        # This job's hits and misses (the cache is shared, so its own
+        # counters cover every job on the machine).
+        ccache --show-log-stats -v
+        echo
+        ccache --show-stats
+        ;;
+
+    *)
+        echo "usage: $0 configure | build | test | stats" >&2
+        exit 2
+        ;;
+esac

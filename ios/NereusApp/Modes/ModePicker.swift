@@ -9,6 +9,20 @@ import SwiftUI
 struct ModePicker: View {
     @ObservedObject var model: ModesTabModel
 
+    static func displayLabel(_ label: String) -> String {
+        if label == "RADE2-U" || label == "RADE2-L" {
+            return "\(label)*"
+        }
+        return label
+    }
+
+    static func spokenLabel(_ label: String) -> String {
+        if label == "RADE2-U" || label == "RADE2-L" {
+            return "\(label) (Experimental)"
+        }
+        return label
+    }
+
     var body: some View {
         ModesChrome.section("Mode") {
             if model.modes.isEmpty {
@@ -16,11 +30,15 @@ struct ModePicker: View {
             } else {
                 ModesChrome.grid(columns: 5) {
                     ForEach(model.modes) { mode in
-                        PanelButton(label: mode.label, lit: mode.lit, style: .blue) {
+                        PanelButton(label: Self.displayLabel(mode.label), lit: mode.lit, style: .blue) {
                             model.selectMode(mode.id)
                         }
+                        .accessibilityLabel(Self.spokenLabel(mode.label))
                         .accessibilityIdentifier("modesMode\(mode.label)")
                     }
+                }
+                if model.modes.contains(where: { $0.label == "RADE2-U" || $0.label == "RADE2-L" }) {
+                    ModesChrome.note("* RADE2 modes are experimental.")
                 }
             }
         }

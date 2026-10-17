@@ -62,7 +62,10 @@
 // reaches A's controller only; each device hears only its own slices
 // (distinct tones per slice, read back from each device's lossless audio);
 // displays and receiver streams only for its own slices; two devices
-// watching one receiver share one FFT; B leaving ends only B's media; the
+// watching one receiver share one FFT, and with one sending from the
+// display thread its displays go on through a held station thread, while
+// a retune at the end of the hold sends the other no context for the
+// center left; B leaving ends only B's media; the
 // Core's local output plays only the station device's slices; telemetry
 // reaches every session that negotiated it.
 //
@@ -177,18 +180,29 @@
 //               another device; the Core only for nobody or the station)
 //               on every refusal path. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-15: Display send thread: a transport that sends displays from
+//               any thread, and two devices on one receiver, one sending
+//               from the display thread and one from the station thread,
+//               through a held station thread and a retune. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+#include "fakes/RecordingRtpSink.h"
 #include "MultiDeviceHarness.h"
 
 #include <QtEndian>
 
+#include <chrono>
 #include <cmath>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 #include "core/daemon/DaemonTelemetryController.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/media/DaemonMediaController.h"
+#include "core/session/media/DaemonSpectrumSource.h"
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayLoadGovernor.h"
 #include "core/session/media/IMediaTransport.h"
@@ -245,6 +259,48 @@ bool receiveCommand(LoopbackTransport* app, const QByteArray& verb, quint32 id,
 
 // ── Task 76: media per device ───────────────────────────────────────────
 
+// Display send thread: the display messages a transport took from any
+// thread, each with when and on which thread. Ready while its transport
+// is.
+class ThreadDisplaySink final : public MediaDisplaySink {
+public:
+    struct Send {
+        std::thread::id thread;
+        std::chrono::steady_clock::time_point at;
+    };
+
+    explicit ThreadDisplaySink(std::shared_ptr<Test::RecordingRtpSink> readiness)
+        : m_readiness(std::move(readiness))
+    {
+    }
+    bool ready() const override { return m_readiness->ready.load(std::memory_order_acquire); }
+    IMediaTransport::DisplaySendResult submitDisplay(const QByteArray& message) override
+    {
+        if (!ready() || message.isEmpty()) {
+            return IMediaTransport::DisplaySendResult::Refused;
+        }
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        m_sends.push_back({std::this_thread::get_id(), std::chrono::steady_clock::now()});
+        return IMediaTransport::DisplaySendResult::Sent;
+    }
+    bool displayBusy() const override { return false; }
+    IMediaTransport::DisplaySendResult submitIq(const QByteArray&) override
+    {
+        return IMediaTransport::DisplaySendResult::Refused;
+    }
+    bool iqBusy() const override { return false; }
+    std::vector<Send> sends() const
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        return m_sends;
+    }
+
+private:
+    std::shared_ptr<Test::RecordingRtpSink> m_readiness;
+    mutable std::mutex m_mutex;
+    std::vector<Send> m_sends;
+};
+
 // A media transport that records what it is given; ready on demand.
 class MediaFake final : public IMediaTransport {
 public:
@@ -263,20 +319,25 @@ public:
         if (readyState) { displays.append(bytes); }
         return readyState;
     }
-    bool sendRtp(const QByteArray& packet) override
-    {
-        if (readyState) { rtpPackets.append(packet); }
-        return readyState;
-    }
+    bool sendRtp(const QByteArray& packet) override { return rtpSink->sendRtpAccepted(packet); }
+    std::shared_ptr<MediaRtpSink> audioRtpSink() override { return rtpSink; }
+    // Display send thread: none unless the test gives one, so the Core
+    // sends this transport's displays from its station thread.
+    std::shared_ptr<MediaDisplaySink> displaySink() override { return threadDisplays; }
     bool isReady() const override { return readyState; }
     bool losslessAudioNegotiated() const override { return true; }
     void becomeReady() { readyState = true; emit ready(); }
 
     bool started{false};
-    bool readyState{false};
+    // R-AUD-SEND: the Core sends audio from its sender thread, through the
+    // sink; what the sink took is read under its lock.
+    const std::shared_ptr<Test::RecordingRtpSink> rtpSink{
+        std::make_shared<Test::RecordingRtpSink>()};
+    std::atomic<bool>& readyState{rtpSink->ready};
+    Test::SharedPacketList& rtpPackets{rtpSink->packets};
     StartOptions startOptions{Role::Answerer, 0};
     QList<QByteArray> displays;
-    QList<QByteArray> rtpPackets;
+    std::shared_ptr<ThreadDisplaySink> threadDisplays;
 };
 
 constexpr char kMediaConnection[] = "11111111-2222-4333-8444-555555555555";
@@ -388,6 +449,9 @@ struct MediaCore {
     Device a{QStringLiteral("iPhone"), QStringLiteral("phone")};
     Device b{QStringLiteral("iPad"), QStringLiteral("tablet")};
     QList<QPointer<MediaFake>> transports;
+    /// Display send thread: the next transport made sends displays from
+    /// any thread.
+    bool nextSendsDisplaysFromAnyThread{false};
     std::unique_ptr<DaemonMediaHub> hub;
     LoopbackTransport* appA = nullptr;
     LoopbackTransport* appB = nullptr;
@@ -406,6 +470,10 @@ struct MediaCore {
             core.server.get(), core.model.get(), nullptr,
             [this](QObject* parent) -> IMediaTransport* {
                 auto* transport = new MediaFake(parent);
+                if (nextSendsDisplaysFromAnyThread) {
+                    transport->threadDisplays =
+                        std::make_shared<ThreadDisplaySink>(transport->rtpSink);
+                }
                 transports.append(transport);
                 return transport;
             });
@@ -4549,6 +4617,119 @@ private slots:
         QTRY_COMPARE(m.hub->controllerCount(), 1);
         QCOMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 1);
         QCOMPARE(m.hub->sharedSpectrum()->source().activeSources().size(), 1);
+    }
+
+    // Display send thread: two devices watching one receiver, A's displays
+    // sent from the display thread and B's from the station thread. The
+    // station thread is held for 500 ms, as Direct3D can hold the hosted
+    // window's on a locked Windows session, and the receiver is retuned at
+    // the end of the hold, before the station thread gets to the frames
+    // taken in for it meanwhile. A's displays are all sent from the display
+    // thread, and B is sent no context for the center the receiver has left.
+    // How A's sends were spaced through the hold is logged, not checked:
+    // this suite runs beside others, so the gap is checked in
+    // tst_daemon_display_send_thread, which runs alone (REALTIME).
+    void twoDevicesThroughAHeldStationThreadAndARetune()
+    {
+        MediaCore m(DisplayBudgetLimits{10'000'000, 1'000'000, 1});
+        m.signInBoth();
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        SliceModel* const a = m.core.model->sliceById(sliceA);
+        SliceModel* const b = m.core.model->sliceById(sliceB);
+        QVERIFY(a && b);
+        QCOMPARE(a->streamIndex(), b->streamIndex());
+        const double center = m.core.model->streamCentreHz(a->streamIndex());
+        m.nextSendsDisplaysFromAnyThread = true;
+        MediaFake* const transportA = m.startMedia(m.appA);
+        m.nextSendsDisplaysFromAnyThread = false;
+        MediaFake* const transportB = m.startMedia(m.appB);
+        QVERIFY(transportA && transportA->threadDisplays);
+        QVERIFY(transportB && !transportB->threadDisplays);
+        sendMedia(m.appA, displayRequestAt(1, sliceA, center, 60));
+        sendMedia(m.appB, displayRequestAt(1, sliceB, center, 60));
+        DaemonMediaController* const controllerA = m.hub->controllerFor(m.epochOf(0));
+        DaemonMediaController* const controllerB = m.hub->controllerFor(m.epochOf(1));
+        QTRY_COMPARE(controllerA->activeEndpointCount(), 1);
+        QTRY_COMPARE(controllerB->activeEndpointCount(), 1);
+        QVERIFY(controllerA->displaysSentFromThread());
+        QVERIFY(!controllerB->displaysSentFromThread());
+        DaemonSpectrumSource* const source = &m.hub->sharedSpectrum()->source();
+        QTRY_COMPARE(source->activeSources().size(), 1);
+        const MediaSourceKey key = source->activeSources().constFirst();
+        QTRY_VERIFY_WITH_TIMEOUT(
+            source->publishFrameForTest(key, DaemonSpectrumSource::monotonicNowNs()), 10'000);
+
+        // The engine's frames at 60 a second from a thread of their own, as
+        // its FFT thread publishes them, all through the test.
+        std::atomic<bool> stopPublishing{false};
+        std::thread publisher([&] {
+            while (!stopPublishing.load(std::memory_order_acquire)) {
+                source->publishFrameForTest(key, DaemonSpectrumSource::monotonicNowNs());
+                std::this_thread::sleep_for(std::chrono::microseconds(16'667));
+            }
+        });
+        const auto stopPublisher = qScopeGuard([&] {
+            stopPublishing.store(true, std::memory_order_release);
+            publisher.join();
+        });
+        QVERIFY(QTest::qWaitFor([&] {
+            return transportA->threadDisplays->sends().size() >= 10
+                && transportB->displays.size() >= 10;
+        }, 10'000));
+
+        const auto contextCenters = [](const LoopbackTransport* app) {
+            QList<double> centers;
+            for (const QJsonObject& context : mediaOps(app, QStringLiteral("context"))) {
+                centers.append(context.value(QStringLiteral("sourceCentreHz")).toDouble());
+            }
+            return centers;
+        };
+        const qsizetype contextsBeforeB = contextCenters(m.appB).size();
+        const double newCenter = std::round(center) + 2000.0;
+        const auto holdStart = std::chrono::steady_clock::now();
+        QThread::msleep(500);
+        const auto holdEnd = std::chrono::steady_clock::now();
+        // Still before any event: the frames taken in during the hold are
+        // of the old center now.
+        QVERIFY(m.core.model->requestStreamCentre(sliceA, newCenter));
+        QVERIFY(QTest::qWaitFor([&] {
+            return contextCenters(m.appB).mid(contextsBeforeB).contains(newCenter);
+        }, 10'000));
+
+        const std::thread::id mainThread = std::this_thread::get_id();
+        const std::vector<ThreadDisplaySink::Send> sends = transportA->threadDisplays->sends();
+        qsizetype onMain = 0;
+        int duringHold = 0;
+        auto previous = holdStart;
+        std::chrono::steady_clock::duration maxGap{};
+        for (const ThreadDisplaySink::Send& send : sends) {
+            onMain += send.thread == mainThread ? 1 : 0;
+            if (send.at < holdStart || send.at > holdEnd) { continue; }
+            maxGap = std::max(maxGap, send.at - previous);
+            previous = send.at;
+            ++duringHold;
+        }
+        maxGap = std::max(maxGap, holdEnd - previous);
+        const double maxGapMs =
+            std::chrono::duration<double, std::milli>(maxGap).count();
+        QStringList sentB;
+        const QList<double> centersB = contextCenters(m.appB).mid(contextsBeforeB);
+        for (double sentCenter : centersB) {
+            sentB.append(QString::number(sentCenter, 'f', 0));
+        }
+        const QString detail =
+            QStringLiteral("A: %1 of %2 displays on the station thread, %3 during the hold, "
+                           "the longest gap %4 ms; B's contexts after the hold: %5")
+                .arg(onMain)
+                .arg(sends.size())
+                .arg(duringHold)
+                .arg(maxGapMs, 0, 'f', 1)
+                .arg(sentB.join(QStringLiteral(", ")));
+        qInfo().noquote() << detail;
+        QVERIFY2(onMain == 0, qPrintable(detail));
+        QVERIFY2(!centersB.contains(center), qPrintable(detail));
+        QCOMPARE(centersB.constFirst(), newCenter);
     }
 
     // Fix wave (ruling 9.1): a display on a slice its device can no longer

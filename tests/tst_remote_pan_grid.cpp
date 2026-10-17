@@ -284,6 +284,11 @@ private slots:
         remote.addPanadapter();
         remote.panadapters().first()->setCenterFrequency(14200000.0);
         GridScalesPage page(&remote);
+        // Display pill plan Task 21: the page is handed the pan whose band
+        // store it edits (it took the model's first pan itself before).
+        SetupDisplayProviders providers;
+        providers.bandGridModel = [&remote]() { return remote.panadapters().first(); };
+        page.setDisplayProviders(providers);
         QSpinBox* dbMax = nullptr;
         for (QSpinBox* spin : page.findChildren<QSpinBox*>()) {
             if (spin->toolTip().startsWith(QStringLiteral("Signal level at the top"))) {

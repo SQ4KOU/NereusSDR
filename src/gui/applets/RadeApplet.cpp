@@ -24,6 +24,7 @@
 
 #include "RadeApplet.h"
 
+#include "gui/QtCocoaAccessibleTableCache.h"
 #include "core/MicProfileManager.h"
 #include "core/RadeChannel.h"
 #include "core/WdspEngine.h"

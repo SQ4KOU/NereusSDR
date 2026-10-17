@@ -33,6 +33,10 @@ public struct GridFloorTracker: Equatable, Sendable {
     /// When the rule last ran.
     private var ranAt: Double?
 
+    /// The existing full-source Clarity smoothing result, nil before its
+    /// first finite reading. Distinct from the display trace floor/shift.
+    public var clarityFloorDbm: Double? { smoothed }
+
     public init() {}
 
     public static func == (lhs: GridFloorTracker, rhs: GridFloorTracker) -> Bool {
@@ -58,6 +62,13 @@ public struct GridFloorTracker: Equatable, Sendable {
             smoothed = dbm
         }
         smoothedAt = time
+    }
+
+    /// Retires a full-source Clarity picture; ordinary grid-range reset keeps
+    /// its smoothing, but an endpoint/mode/band replacement must await new data.
+    public mutating func retireClarityFloor() {
+        smoothed = nil
+        smoothedAt = nil
     }
 
     /// Forgets what the tracking set (it was turned off, or the band changed).
@@ -98,7 +109,10 @@ public struct GridFloorTracker: Equatable, Sendable {
             return false
         }
         let top = settings.gridKeepsRange ? proposed + (current.upperBound - current.lowerBound) : current.upperBound
-        range = min(proposed, top - 1)...top
+        // The final endpoint separation is the kept dB Step, distinct
+        // from the existing2dB movement threshold above (approved Levels).
+        let pairGap = settings.gridStepDb.isFinite ? max(1, settings.gridStepDb) : 1
+        range = min(proposed, top - pairGap)...top
         return true
     }
 

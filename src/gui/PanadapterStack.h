@@ -80,6 +80,8 @@
 // =================================================================
 #pragma once
 
+#include "gui/NereusGuiExport.h"
+
 #include <QWidget>
 #include <QString>
 #include <QList>
@@ -100,7 +102,7 @@ class SpectrumWidget;
 /// from the original 5).
 /// Ported structurally from AetherSDR PanadapterStack (12 templates; we use 9 of them).
 /// See docs/architecture/2026-05-26-phase3f-multi-pan-multi-slice-design.md §11.
-class PanadapterStack : public QWidget {
+class NEREUS_GUI_EXPORT PanadapterStack : public QWidget {
     Q_OBJECT
 public:
     explicit PanadapterStack(QWidget* parent = nullptr);

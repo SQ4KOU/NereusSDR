@@ -35,8 +35,19 @@
 // API: opaque token returned by elevate(); must be passed back to
 // leave() before the thread exits to release any OS resources.
 // Pass nullptr to leave() is a no-op (safe to call unconditionally).
+//
+// Modification history (NereusSDR):
+//   2026-10-09: native audio plan Task 8 (R-AUD-18): rejoinAudioWorkgroup()
+//               and audioPriorityTokenInWorkgroup(). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-15: setAudioWorkgroupLookupHookForTest(), a test seam at the
+//               start of the Mac's default output workgroup lookup. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 #pragma once
+
+#include <cstdint>
 
 namespace NereusSDR {
 
@@ -60,6 +71,19 @@ AudioPriorityToken* elevateAudioThreadPriority();
 // on macOS, characteristic handle on Windows).  Safe to call with
 // nullptr.  Must be called on the same thread that called elevate().
 void leaveAudioThreadPriority(AudioPriorityToken* token);
+
+// R-AUD-18: leave the token's current audio workgroup and join
+// kAudioDevicePropertyIOThreadOSWorkgroup of the device audioObjectId
+// (an AudioObjectID) on the calling thread, which must be the thread the
+// token was made on.  On the Mac returns false, and the thread stays out
+// of any workgroup, when the token is nullptr, the device is 0 or has no
+// workgroup, or the join fails.  Returns true and does nothing on other
+// systems.  Never call it from a device callback.
+bool rejoinAudioWorkgroup(AudioPriorityToken* token, std::uint32_t audioObjectId);
+
+// Whether the token's thread is in an audio workgroup now (always false
+// off the Mac and for nullptr).
+bool audioPriorityTokenInWorkgroup(const AudioPriorityToken* token);
 
 // Elevate the calling thread to USER_INTERACTIVE QoS for GUI work.
 // Intended for the main GUI / UI thread so heavy user-initiated
@@ -117,5 +141,13 @@ bool claimThreadPriorityRefusedWarning();
 
 // Test seam: forget that the warning was logged.
 void resetThreadPriorityRefusedForTest();
+
+// Test seam: on the Mac, elevateAudioThreadPriority() calls the hook on the
+// elevating thread just before it asks Core Audio for the default output
+// device's workgroup, so a test can stand in for a slow first query (the
+// one that starts the audio server connection). nullptr, the default,
+// removes it; with no hook nothing changes. Never called off the Mac.
+using AudioWorkgroupLookupHookForTest = void (*)();
+void setAudioWorkgroupLookupHookForTest(AudioWorkgroupLookupHookForTest hook);
 
 } // namespace NereusSDR

@@ -318,7 +318,7 @@ def _rade(root: Path, _args: argparse.Namespace) -> SourceSet:
         elif word.endswith(".c"):
             names.append(word)
     files = resolve_includes([src / n for n in names], [src])
-    return SourceSet("RADE", src, "third_party/rade/src", "radae_nopy b2891023",
+    return SourceSet("RADE", src, "third_party/rade/src", "rade_c c8a3dc15",
                      files, ["rade.txt"])
 
 

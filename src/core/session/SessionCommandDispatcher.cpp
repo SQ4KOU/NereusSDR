@@ -301,6 +301,32 @@
 //                                    slice.setListenLevel, a listener's own
 //                                    level and mute for a slice it hears.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-07  J.J. Boyd / KG4VCF  CAT setup from a connected desktop:
+//                                    setStationCatChannel,
+//                                    setStationCatGlobal,
+//                                    testStationCatCommand and
+//                                    refreshStationCatDevices
+//                                    (stationCatVersion 1); the tester's
+//                                    reply in its result. AI tooling:
+//                                    Claude Code.
+//   2026-10-08  J.J. Boyd / KG4VCF  Rotor control plan Task 4b: the seven
+//                                    rotor verbs on the Core's
+//                                    StationRotorController, the setup
+//                                    checked against the contract's tables
+//                                    first (enum and integer widths, baud,
+//                                    range, Hamlib model, offset), and a
+//                                    session's end ends its rotor hold.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-08  J.J. Boyd / KG4VCF  Final review I3: refreshRotorPorts, a
+//                                    setup view's ask for the Core's serial
+//                                    ports. AI-assisted via Anthropic Claude
+//                                    Code.
+//   2026-10-09  J.J. Boyd / KG4VCF  Two-tone plan fix wave: a taken
+//                                    txProfile.*, paProfile.*,
+//                                    setTunePowerForTxBand or
+//                                    tx.twoTonePreset asks for the Core's
+//                                    coalesced settings save. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -321,9 +347,15 @@
 #include "PureSignalSessionFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/session/StationDevicesFacade.h"
+#include "core/session/IStationLink.h"
+#include "core/session/StationServer.h"
+#include "core/StationRotorController.h"
 #include "models/BandGrid.h"
 #include "models/RadioModel.h"
+#include "models/RotorModel.h"
 #include "models/StationTciModel.h"
+#include "models/StationCatModel.h"
+#include "core/cat/StationCatController.h"
 #include "models/SliceModel.h"
 
 #include <QHash>
@@ -334,6 +366,7 @@
 #include <QVariant>
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <initializer_list>
 #include <cmath>
@@ -487,6 +520,93 @@ QString notRepresentableReason()
     return QStringLiteral("The Core could not use one of the values in this request.");
 }
 
+// ── The rotor (rotor control plan Task 4b) ───────────────────────────
+
+// A rotor request whose arguments are missing, extra or of the wrong kind.
+QString rotorUnreadableReason()
+{
+    return QStringLiteral("The Core could not read this request.");
+}
+
+// A configureRotor of the right wire kinds whose values cannot be used
+// (contract, "Refusals"): a driver, axes or end stop outside its table, a
+// port outside 1 to 65535, a baud of 0 or below, an integer that does not
+// fit an int, a range other than 360 or 450, a Hamlib model of 0 or below
+// with driver 4, or an offset that is NaN or infinite.
+QString rotorSetupInvalidReason()
+{
+    return StationRotorController::setupInvalidReason();
+}
+
+// A Core without a rotor controller (the server refuses these verbs first;
+// this answers a dispatch that reaches here anyway). The one wording is
+// IStationLink's.
+QString rotorUnavailableReason()
+{
+    return IStationLink::rotorUnavailableReason();
+}
+
+// A double argument of wire kind f64, finite or not: the controller says
+// "That heading is not a number." for NaN or infinity, word for word.
+bool findRotorDoubleArgument(const QList<MirrorUpdate>& arguments, const QByteArray& name,
+                             double* out)
+{
+    QVariant raw;
+    if (!hasWireKind(arguments, name, MirrorWireKind::Float64)
+        || !findArgument(arguments, name, &raw) || raw.typeId() != QMetaType::Double) {
+        return false;
+    }
+    *out = raw.toDouble();
+    return true;
+}
+
+// An enum argument (wire kind enum, carried as an integer). Any integer
+// reads; whether it is in the table is the caller's to say.
+bool findRotorEnumArgument(const QList<MirrorUpdate>& arguments, const QByteArray& name,
+                           int* out)
+{
+    return hasWireKind(arguments, name, MirrorWireKind::Enum)
+        && findIntArgument(arguments, name, out) == ArgumentStatus::Ok;
+}
+
+// A configureRotor integer of wire kind `kind` (i64 or enum). Missing when
+// it is absent or not an integer of that kind (the request cannot be
+// read); NotRepresentable when it is an integer that does not fit an int
+// (a setup that is not valid, contract "Refusals").
+ArgumentStatus findRotorSetupInt(const QList<MirrorUpdate>& arguments, const QByteArray& name,
+                                 MirrorWireKind kind, int* out)
+{
+    QVariant raw;
+    if (!hasWireKind(arguments, name, kind) || !findArgument(arguments, name, &raw)) {
+        return ArgumentStatus::Missing;
+    }
+    switch (raw.typeId()) {
+    case QMetaType::Short:
+    case QMetaType::UShort:
+    case QMetaType::Int:
+    case QMetaType::UInt:
+    case QMetaType::Long:
+    case QMetaType::ULong:
+    case QMetaType::LongLong:
+    case QMetaType::ULongLong:
+        break;
+    default:
+        return ArgumentStatus::Missing;
+    }
+    return findIntArgument(arguments, name, out);
+}
+
+bool findBoolArgument(const QList<MirrorUpdate>& arguments, const QByteArray& name, bool* out)
+{
+    QVariant raw;
+    if (!hasWireKind(arguments, name, MirrorWireKind::Bool)
+        || !findArgument(arguments, name, &raw) || raw.typeId() != QMetaType::Bool) {
+        return false;
+    }
+    *out = raw.toBool();
+    return true;
+}
+
 } // namespace
 
 // ── The declared verb table (R-IOS-01) ───────────────────────────────────
@@ -515,8 +635,18 @@ QString notRepresentableReason()
 //                          requestDisconnectStationTciClient)
 //   setStationTciSettings  stationTciSettingsVersion 1
 //                          (requestStationTciSetting)
+//   setStationCatChannel, setStationCatGlobal, testStationCatCommand,
+//   refreshStationCatDevices
+//                          stationCatVersion 1, to a peer whose hello
+//                          declared stationCat (requestStationCatChannel,
+//                          requestStationCatGlobal, requestStationCatTest,
+//                          requestStationCatRefreshDevices)
 //   setTxInterlockPolicy, setPgxlPowerCap, clearAccessoryFaults
 //                          accessoryDataAvailable() (version 1)
+//   setRotorTarget, turnRotorToCall, stopRotor, nudgeRotor, configureRotor,
+//   disconnectRotor, setRotorPresets, refreshRotorPorts
+//                          rotorControlAvailable() (remoteRotorControlVersion
+//                          1)
 //   requestIoBoardProbe    remoteHardwareConfigAvailable() (version 2)
 //   setAlexRxAntenna       radioHardwareVersion 3 (requestAlexRxAntenna)
 //   setAlexTxAntenna       radioHardwareVersion 6 (requestAlexTxAntenna)
@@ -577,6 +707,7 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
     constexpr MirrorWireKind kUtf8 = MirrorWireKind::Utf8;
     constexpr MirrorWireKind kBool = MirrorWireKind::Bool;
     constexpr MirrorWireKind kDouble = MirrorWireKind::Float64;
+    constexpr MirrorWireKind kEnum = MirrorWireKind::Enum;
     const auto arg = [](const char* name, MirrorWireKind kind) {
         return CommandArgumentSpec{QByteArray(name), kind, false};
     };
@@ -755,6 +886,17 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
           optionalArg("forgetRx2VfoBOnDisconnect", kBool),
           optionalArg("useRx1VfoaForRx2Vfoa", kBool), optionalArg("copyRx2VfobToVfoa", kBool)},
          "stationTciSettingsVersion", 1, kRadioIdentitySessionProtocolMinor},
+        // CAT setup from a connected desktop: the Core's CAT channels, its
+        // global settings, its tester and its serial ports (CatService).
+        {"setStationCatChannel", {arg("channel", kInt), arg("config", kUtf8)},
+         "stationCatVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"setStationCatGlobal", {arg("config", kUtf8)}, "stationCatVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"testStationCatCommand",
+         {arg("requestId", kInt), arg("channel", kInt), arg("command", kUtf8)},
+         "stationCatVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"refreshStationCatDevices", {}, "stationCatVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
         // The Core's accessory records and settings (R-R3-47, R-R3-22).
         {"setTxInterlockPolicy",
          {arg("mode", kInt), arg("graceMs", kInt), arg("swrGateEnabled", kBool),
@@ -763,6 +905,25 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"setPgxlPowerCap", {arg("enabled", kBool), arg("watts", kInt)},
          "accessoryDataVersion", 1, kRadioIdentitySessionProtocolMinor},
         {"clearAccessoryFaults", {arg("device", kUtf8)}, "accessoryDataVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        // The Core's antenna rotor (rotor control plan Task 4b).
+        {"setRotorTarget", {arg("azimuthDeg", kDouble), arg("elevationDeg", kDouble)},
+         "remoteRotorControlVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"turnRotorToCall", {arg("call", kUtf8), arg("longPath", kBool)},
+         "remoteRotorControlVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"stopRotor", {}, "remoteRotorControlVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"nudgeRotor", {arg("direction", kEnum), arg("active", kBool)},
+         "remoteRotorControlVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"configureRotor",
+         {arg("driver", kEnum), arg("serialPort", kUtf8), arg("baud", kInt), arg("host", kUtf8),
+          arg("port", kInt), arg("hamlibModel", kInt), arg("axes", kEnum), arg("endStop", kEnum),
+          arg("rangeDeg", kInt), arg("offsetDeg", kDouble)},
+         "remoteRotorControlVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"disconnectRotor", {}, "remoteRotorControlVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"setRotorPresets", {arg("presets", kUtf8)}, "remoteRotorControlVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"refreshRotorPorts", {}, "remoteRotorControlVersion", 1,
          kRadioIdentitySessionProtocolMinor},
         // The Core's radio hardware (R-R3-46).
         {"requestIoBoardProbe", {}, "radioHardwareVersion", 2,
@@ -1115,6 +1276,15 @@ void SessionCommandDispatcher::endSessionOwner(const QString& owner)
 {
     if (m_radioModel && !owner.isEmpty()) {
         m_radioModel->dspAssets()->cancelOwner(owner);
+        // Rotor control plan Task 4b (contract, "The hold dead man"): a
+        // turn button this session was holding lets go, and the rotor
+        // stops.
+        if (StationRotorController* rotor = m_radioModel->stationRotorController()) {
+            const quint64 sessionId = StationServer::sessionIdOfOwner(owner);
+            if (sessionId != 0) {
+                rotor->sessionEnded(sessionId);
+            }
+        }
     }
 }
 
@@ -1301,6 +1471,10 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         auto& transmit = m_radioModel->transmitModel();
         transmit.setTwoToneFrequencies(name == QLatin1String("defaults") ? 700 : 70,
                                        name == QLatin1String("defaults") ? 1900 : 190);
+        // Two-tone plan fix wave: the frequencies are kept in the in-memory
+        // settings only (TransmitModel::persistOne); the Core's coalesced
+        // save writes them to its file.
+        m_radioModel->requestSettingsSave();
         emitResult(invoke.commandVerb, invoke.commandId, true, {}, {"transmit"});
         return;
     }
@@ -1391,12 +1565,33 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleStationTciServer(invoke);
     } else if (invoke.commandVerb == "setStationTciSettings") {
         handleSetStationTciSettings(invoke);
+    } else if (invoke.commandVerb == "setStationCatChannel"
+               || invoke.commandVerb == "setStationCatGlobal"
+               || invoke.commandVerb == "testStationCatCommand"
+               || invoke.commandVerb == "refreshStationCatDevices") {
+        handleStationCat(invoke);
     } else if (invoke.commandVerb == "setTxInterlockPolicy") {
         handleSetTxInterlockPolicy(invoke);
     } else if (invoke.commandVerb == "setPgxlPowerCap") {
         handleSetPgxlPowerCap(invoke);
     } else if (invoke.commandVerb == "clearAccessoryFaults") {
         handleClearAccessoryFaults(invoke);
+    } else if (invoke.commandVerb == "setRotorTarget") {
+        handleSetRotorTarget(invoke);
+    } else if (invoke.commandVerb == "turnRotorToCall") {
+        handleTurnRotorToCall(invoke);
+    } else if (invoke.commandVerb == "stopRotor") {
+        handleStopRotor(invoke);
+    } else if (invoke.commandVerb == "nudgeRotor") {
+        handleNudgeRotor(invoke);
+    } else if (invoke.commandVerb == "configureRotor") {
+        handleConfigureRotor(invoke);
+    } else if (invoke.commandVerb == "disconnectRotor") {
+        handleDisconnectRotor(invoke);
+    } else if (invoke.commandVerb == "setRotorPresets") {
+        handleSetRotorPresets(invoke);
+    } else if (invoke.commandVerb == "refreshRotorPorts") {
+        handleRefreshRotorPorts(invoke);
     } else if (invoke.commandVerb == "setPgxlName" || invoke.commandVerb == "setPgxlHardware"
                || invoke.commandVerb == "setPgxlNetwork"
                || invoke.commandVerb == "savePgxlSettings"
@@ -3272,6 +3467,90 @@ void SessionCommandDispatcher::handlePairingWindow(const SessionMessage& invoke)
                       QVariant(m_deviceAdmin->pairingCode())}}));
 }
 
+// CAT setup from a connected desktop (stationCatVersion 1): the Core's CAT
+// through StationCatController, as the local CAT pages change it through
+// CatService. No on-air refusal: the local pages apply while transmitting,
+// and CatService releases a reconfigured session's transmit itself.
+void SessionCommandDispatcher::handleStationCat(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    StationCatController* cat = m_radioModel->stationCatController();
+    if (cat == nullptr) {
+        emitResult(verb, invoke.commandId, false, QStringLiteral("This Core does not run CAT."),
+                   {});
+        return;
+    }
+    const auto notUnderstood = [this, &invoke]() {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to set up the Core's CAT was not understood."),
+                   {});
+    };
+    const auto readText = [&invoke](const char* name, QString* out) {
+        QVariant value;
+        if (!hasWireKind(invoke.arguments, name, MirrorWireKind::Utf8)
+            || !findArgument(invoke.arguments, name, &value)
+            || value.typeId() != QMetaType::QString) {
+            return false;
+        }
+        *out = value.toString();
+        return true;
+    };
+    const auto readInt = [&invoke](const char* name, int* out) {
+        return hasWireKind(invoke.arguments, name, MirrorWireKind::Int64)
+            && findIntArgument(invoke.arguments, name, out) == ArgumentStatus::Ok;
+    };
+    QString reason;
+    bool accepted = false;
+    if (verb == "setStationCatChannel") {
+        int channel = 0;
+        QString config;
+        if (!hasExactlyArguments(invoke.arguments, { "channel", "config" })
+            || !readInt("channel", &channel) || !readText("config", &config)
+            || channel < 1 || channel > StationCatModel::kChannels) {
+            notUnderstood();
+            return;
+        }
+        accepted = cat->setChannel(channel, config, &reason);
+    } else if (verb == "setStationCatGlobal") {
+        QString config;
+        if (!hasExactlyArguments(invoke.arguments, { "config" }) || !readText("config", &config)) {
+            notUnderstood();
+            return;
+        }
+        accepted = cat->setGlobal(config, &reason);
+    } else if (verb == "testStationCatCommand") {
+        QVariant requestId;
+        int channel = 0;
+        QString command;
+        if (!hasExactlyArguments(invoke.arguments, { "requestId", "channel", "command" })
+            || !hasWireKind(invoke.arguments, "requestId", MirrorWireKind::Int64)
+            || !findArgument(invoke.arguments, "requestId", &requestId)
+            || !readInt("channel", &channel) || !readText("command", &command)
+            || channel < 1 || channel > StationCatModel::kChannels) {
+            notUnderstood();
+            return;
+        }
+        // The reply goes back in the result, to the window that sent it.
+        QString reply;
+        accepted = cat->testCommand(requestId.toLongLong(), channel, command, &reply, &reason);
+        if (accepted) {
+            emit commandResultReady(SessionMessages::commandResult(
+                verb, invoke.commandId, true, QString(), {},
+                {MirrorUpdate{0, QByteArrayLiteral("reply"), MirrorWireKind::Utf8,
+                              QVariant(reply)}}));
+            return;
+        }
+    } else {
+        if (!invoke.arguments.isEmpty()) {
+            notUnderstood();
+            return;
+        }
+        cat->refreshDevices();
+        accepted = true;
+    }
+    emitResult(verb, invoke.commandId, accepted, accepted ? QString() : reason, {});
+}
+
 void SessionCommandDispatcher::handleSetStationTci(const SessionMessage& invoke)
 {
     QVariant enabled;
@@ -3463,6 +3742,204 @@ void SessionCommandDispatcher::handleClearAccessoryFaults(const SessionMessage& 
         return;
     }
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// ── The rotor (rotor control plan Task 4b, remoteRotorControlVersion 1) ──
+//
+// Each verb goes to the Core's StationRotorController, which answers with
+// the contract's refusal word for word, or takes it. A refusal changes
+// nothing. The server admits these verbs as it admits the accessory
+// settings verbs (minor 11 and the capability), Stop included.
+
+void SessionCommandDispatcher::handleSetRotorTarget(const SessionMessage& invoke)
+{
+    double azimuth = 0.0;
+    double elevation = 0.0;
+    if (!hasExactlyArguments(invoke.arguments, { "azimuthDeg", "elevationDeg" })
+        || !findRotorDoubleArgument(invoke.arguments, "azimuthDeg", &azimuth)
+        || !findRotorDoubleArgument(invoke.arguments, "elevationDeg", &elevation)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnreadableReason(), {});
+        return;
+    }
+    StationRotorController* rotor = m_radioModel->stationRotorController();
+    if (rotor == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnavailableReason(), {});
+        return;
+    }
+    QString reason;
+    const bool accepted = rotor->setRotorTarget(azimuth, elevation, &reason);
+    emitResult(invoke.commandVerb, invoke.commandId, accepted, accepted ? QString() : reason, {});
+}
+
+void SessionCommandDispatcher::handleTurnRotorToCall(const SessionMessage& invoke)
+{
+    QString call;
+    bool longPath = false;
+    if (!hasExactlyArguments(invoke.arguments, { "call", "longPath" })
+        || !findUtf8Argument(invoke.arguments, "call", &call)
+        || !findBoolArgument(invoke.arguments, "longPath", &longPath)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnreadableReason(), {});
+        return;
+    }
+    StationRotorController* rotor = m_radioModel->stationRotorController();
+    if (rotor == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnavailableReason(), {});
+        return;
+    }
+    QString reason;
+    const bool accepted = rotor->turnRotorToCall(call, longPath, &reason);
+    emitResult(invoke.commandVerb, invoke.commandId, accepted, accepted ? QString() : reason, {});
+}
+
+void SessionCommandDispatcher::handleStopRotor(const SessionMessage& invoke)
+{
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnreadableReason(), {});
+        return;
+    }
+    StationRotorController* rotor = m_radioModel->stationRotorController();
+    if (rotor == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnavailableReason(), {});
+        return;
+    }
+    QString reason;
+    const bool accepted = rotor->stopRotor(&reason);
+    emitResult(invoke.commandVerb, invoke.commandId, accepted, accepted ? QString() : reason, {});
+}
+
+void SessionCommandDispatcher::handleNudgeRotor(const SessionMessage& invoke)
+{
+    int direction = -1;
+    bool active = false;
+    if (!hasExactlyArguments(invoke.arguments, { "direction", "active" })
+        || !findRotorEnumArgument(invoke.arguments, "direction", &direction)
+        || direction < static_cast<int>(RotorDirection::Ccw)
+        || direction > static_cast<int>(RotorDirection::Up)
+        || !findBoolArgument(invoke.arguments, "active", &active)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnreadableReason(), {});
+        return;
+    }
+    StationRotorController* rotor = m_radioModel->stationRotorController();
+    if (rotor == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnavailableReason(), {});
+        return;
+    }
+    // The hold is this window session's: its end lets go
+    // (endSessionOwner).
+    QString reason;
+    const bool accepted = rotor->nudgeRotor(static_cast<RotorDirection>(direction), active,
+                                            StationServer::sessionIdOfOwner(m_sessionOwner),
+                                            &reason);
+    emitResult(invoke.commandVerb, invoke.commandId, accepted, accepted ? QString() : reason, {});
+}
+
+void SessionCommandDispatcher::handleConfigureRotor(const SessionMessage& invoke)
+{
+    int driver = -1;
+    QString serialPort;
+    int baud = 0;
+    QString host;
+    int port = 0;
+    int hamlibModel = 0;
+    int axes = -1;
+    int endStop = -1;
+    int rangeDeg = 0;
+    double offsetDeg = 0.0;
+    const std::array<ArgumentStatus, 7> integers = {
+        findRotorSetupInt(invoke.arguments, "driver", MirrorWireKind::Enum, &driver),
+        findRotorSetupInt(invoke.arguments, "baud", MirrorWireKind::Int64, &baud),
+        findRotorSetupInt(invoke.arguments, "port", MirrorWireKind::Int64, &port),
+        findRotorSetupInt(invoke.arguments, "hamlibModel", MirrorWireKind::Int64, &hamlibModel),
+        findRotorSetupInt(invoke.arguments, "axes", MirrorWireKind::Enum, &axes),
+        findRotorSetupInt(invoke.arguments, "endStop", MirrorWireKind::Enum, &endStop),
+        findRotorSetupInt(invoke.arguments, "rangeDeg", MirrorWireKind::Int64, &rangeDeg),
+    };
+    const auto anyIs = [&integers](ArgumentStatus status) {
+        return std::find(integers.begin(), integers.end(), status) != integers.end();
+    };
+    if (!hasExactlyArguments(invoke.arguments,
+                             { "driver", "serialPort", "baud", "host", "port", "hamlibModel",
+                               "axes", "endStop", "rangeDeg", "offsetDeg" })
+        || anyIs(ArgumentStatus::Missing)
+        || !findUtf8Argument(invoke.arguments, "serialPort", &serialPort)
+        || !findUtf8Argument(invoke.arguments, "host", &host)
+        || !findRotorDoubleArgument(invoke.arguments, "offsetDeg", &offsetDeg)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnreadableReason(), {});
+        return;
+    }
+    // The wire's values against the contract's tables before anything
+    // reaches the controller (contract, "Refusals"): an integer that does
+    // not fit an int here, the rest in the one check RadioModel shares.
+    const std::optional<RotorConfig> config =
+        anyIs(ArgumentStatus::NotRepresentable)
+            ? std::nullopt
+            : StationRotorController::configFromSetup(driver, serialPort, baud, host, port,
+                                                      hamlibModel, axes, endStop, rangeDeg,
+                                                      offsetDeg);
+    if (!config) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorSetupInvalidReason(), {});
+        return;
+    }
+    StationRotorController* rotor = m_radioModel->stationRotorController();
+    if (rotor == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnavailableReason(), {});
+        return;
+    }
+    QString reason;
+    const bool accepted = rotor->configureRotor(*config, &reason);
+    emitResult(invoke.commandVerb, invoke.commandId, accepted, accepted ? QString() : reason, {});
+}
+
+void SessionCommandDispatcher::handleDisconnectRotor(const SessionMessage& invoke)
+{
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnreadableReason(), {});
+        return;
+    }
+    StationRotorController* rotor = m_radioModel->stationRotorController();
+    if (rotor == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnavailableReason(), {});
+        return;
+    }
+    QString reason;
+    const bool accepted = rotor->disconnectRotor(&reason);
+    emitResult(invoke.commandVerb, invoke.commandId, accepted, accepted ? QString() : reason, {});
+}
+
+// Final review I3: a window's rotor setup view is open. The Core reads its
+// serial ports and looks for rotctld now, off the main thread, and keeps
+// doing so for RotorModel::kRemoteSetupLeaseMs; the answer arrives on the
+// `rotor` object's serialPorts and rotctldAvailable.
+void SessionCommandDispatcher::handleRefreshRotorPorts(const SessionMessage& invoke)
+{
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnreadableReason(), {});
+        return;
+    }
+    if (m_radioModel->stationRotorController() == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnavailableReason(), {});
+        return;
+    }
+    m_radioModel->rotorModel()->remoteSetupViewAsked();
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+void SessionCommandDispatcher::handleSetRotorPresets(const SessionMessage& invoke)
+{
+    QString presets;
+    if (!hasExactlyArguments(invoke.arguments, { "presets" })
+        || !findUtf8Argument(invoke.arguments, "presets", &presets)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnreadableReason(), {});
+        return;
+    }
+    StationRotorController* rotor = m_radioModel->stationRotorController();
+    if (rotor == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, rotorUnavailableReason(), {});
+        return;
+    }
+    QString reason;
+    const bool accepted = rotor->setRotorPresets(presets, &reason);
+    emitResult(invoke.commandVerb, invoke.commandId, accepted, accepted ? QString() : reason, {});
 }
 
 // R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
@@ -3807,6 +4284,10 @@ void SessionCommandDispatcher::handleTunePowerForTxBand(const SessionMessage& in
                                     : reason, {});
         return;
     }
+    // Two-tone plan fix wave: the per-band tune power reaches the file
+    // through the Core's coalesced save (TransmitModel::save from
+    // saveSliceState), which nothing else asks for here.
+    m_radioModel->requestSettingsSave();
     emitResult(verb, invoke.commandId, true, QString(), {});
 }
 
@@ -3846,6 +4327,10 @@ void SessionCommandDispatcher::handleTxProfile(const SessionMessage& invoke)
                                     : reason, {});
         return;
     }
+    // Two-tone plan fix wave: MicProfileManager and TransmitModel keep the
+    // profile bank, the active profile and its values in the in-memory
+    // settings only; the Core's coalesced save writes them to its file.
+    m_radioModel->requestSettingsSave();
     emitResult(verb, invoke.commandId, true, QString(), {});
 }
 
@@ -3943,6 +4428,9 @@ void SessionCommandDispatcher::handlePaProfile(const SessionMessage& invoke)
                                     : reason, {});
         return;
     }
+    // Two-tone plan fix wave: PaProfileManager keeps the bank in the
+    // in-memory settings only; the Core's coalesced save writes it.
+    m_radioModel->requestSettingsSave();
     emitResult(verb, invoke.commandId, true, QString(), {});
 }
 

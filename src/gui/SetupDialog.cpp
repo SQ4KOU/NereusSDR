@@ -8,6 +8,9 @@
 // behaviour rules consulted while implementing visibility wiring.
 //
 // Modification history (NereusSDR):
+//   2026-10-12 — J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//                 Assemble the eight approved Display pages from retained
+//                 bound controls and provide scoped values and Clarity status.
 //   2026-05-03 — PA calibration safety hotfix Phase 8 (#167): rewired
 //                 the Setup → PA category to be always-built, with
 //                 per-SKU visibility driven by BoardCapabilities and
@@ -184,9 +187,35 @@
 //                shows or hides the PA Values page, as Thetis's chkPAValues
 //                does; nothing read the setting before. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-06 - R-SPK-21, R-SPK-24 (radio speaker plan Task 9): Audio
+//                opens with Outputs (Mixed), and no Audio page carries the
+//                backend strip any more; the Sound system line on Outputs
+//                replaces it. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-10-06 - R-SPK-21, R-SPK-22 (radio speaker plan Task 10): TX Input
+//                is now "Microphone" and holds the one PC microphone
+//                section; the Devices page, whose microphone card moved
+//                there, is gone. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-06 - R-SPK-21, R-SPK-22, R-SPK-24 (radio speaker plan Task
+//                11): VAX and TCI are one "Digital modes" page, and Audio
+//                reads Outputs, Microphone, Digital modes, TX Profile,
+//                Advanced. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-10-08 - Rotor control plan Task 7: CAT & Network > Rotor, the
+//                antenna rotor's setup and presets (RotorSetupPage). J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-14 - Serial Ports, TCP/IP CAT, CAT Options and CAT PTT are
+//                Core pages: a remote window sets up the Core's CAT, as
+//                it does the Core's RF-Kit and Rotor. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-10-15 - CAT & Network > rigctld in a remote window: this computer's
+//                rigctld, which acts as the window (RemoteRigctldPage).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "SetupPage.h"
 #include "UnbuiltFeatures.h"
 #include "core/AppSettings.h"
@@ -219,6 +248,7 @@
 #include "setup/AudioTxInputPage.h"
 #include "setup/AudioVaxPage.h"
 #include "setup/AudioTciPage.h"
+#include "setup/AudioDigitalModesPage.h"
 #include "setup/AudioAdvancedPage.h"
 // DSP
 #include "setup/DspSetupPages.h"
@@ -246,6 +276,9 @@
 #include <QHash>
 // RF-Kit RF2K-S integration page (Settings -> CAT & Network -> RF-Kit).
 #include "setup/RfKitPage.h"
+// Rotor control plan Task 7: the antenna rotor (Settings -> CAT & Network
+// -> Rotor).
+#include "setup/RotorSetupPage.h"
 // Keyboard
 #include "setup/KeyboardSetupPages.h"
 // Diagnostics
@@ -256,10 +289,14 @@
 #include "setup/TestTwoTonePage.h"
 // TX Profile editor (Phase 3M-1c J.3 — under Audio)
 #include "setup/TxProfileSetupPage.h"
+#include "setup/RemoteRigctldPage.h"
+#include "gui/RemoteRigctlServer.h"
 
 #include <QApplication>
 #include <QDialog>
 #include <QVBoxLayout>
+#include <QFormLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QShowEvent>
 #include <QElapsedTimer>
@@ -267,6 +304,7 @@
 #include <QScopeGuard>
 
 #include <utility>
+#include <algorithm>
 
 namespace NereusSDR {
 
@@ -480,6 +518,10 @@ SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
 
     // R-R3-21: leaf tooltips for remote-unavailable pages from the start.
     refreshTransmitPresentation();
+
+    // Workspace preview: the scoped stylesheet pass runs each time the
+    // dialog is shown (preview scaffolding; nothing with the switch off).
+    WorkspacePreview::themeOnShow(this);
 }
 
 // ── showEvent ─────────────────────────────────────────────────────────────────
@@ -502,12 +544,20 @@ void SetupDialog::showEvent(QShowEvent* event)
 
 void SetupDialog::selectPage(const QString& label)
 {
+    static const QHash<QString, QString> aliases = {
+        {QStringLiteral("Spectrum Defaults"), QStringLiteral("Spectrum")},
+        {QStringLiteral("Grid & Scales"), QStringLiteral("Levels")},
+        {QStringLiteral("Waterfall Defaults"), QStringLiteral("Waterfall")},
+        {QStringLiteral("3D View"), QStringLiteral("View")},
+        {QStringLiteral("Spectrum Peaks"), QStringLiteral("Peaks & Markers")},
+        {QStringLiteral("TX Display"), QStringLiteral("Transmit Display")}};
+    const QString destination = aliases.value(label, label);
     // Search all tree items (top-level categories + children) for matching text
     for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
         QTreeWidgetItem* cat = m_tree->topLevelItem(i);
         for (int j = 0; j < cat->childCount(); ++j) {
             QTreeWidgetItem* child = cat->child(j);
-            if (child->text(0) == label) {
+            if (child->text(0) == destination) {
                 m_tree->setCurrentItem(child);
                 return;
             }
@@ -575,6 +625,14 @@ void SetupDialog::setTciServer(NereusSDR::TciServer* server)
     m_pendingTciServer = server;
     if (m_tciServerPage) {
         m_tciServerPage->setTciServer(server);
+    }
+}
+
+void SetupDialog::setRemoteRigctlServer(NereusSDR::RemoteRigctlServer* server)
+{
+    m_remoteRigctlServer = server;
+    if (m_remoteRigctldPage) {
+        m_remoteRigctldPage->setServer(server);
     }
 }
 
@@ -679,6 +737,310 @@ void SetupDialog::setCoresPageBinder(std::function<void(CoresSetupPage*)> binder
     if (!m_coresPageBinder) { return; }
     for (const PageEntry& entry : m_pages) {
         if (auto* page = qobject_cast<CoresSetupPage*>(entry.widget)) { m_coresPageBinder(page); }
+    }
+}
+
+// ── Display pill plan Task 20: the window's FFT handlers ────────────────────
+
+void SetupDialog::setFftBaselineHandler(std::function<void(int)> handler)
+{
+    m_fftHandlers.applyBaseline = std::move(handler);
+    pushFftHandlers();
+}
+
+void SetupDialog::setDisplayFpsHandler(std::function<void(int)> handler)
+{
+    m_fftHandlers.applyFps = std::move(handler);
+    pushFftHandlers();
+}
+
+void SetupDialog::setFftWindowHandler(std::function<void(int)> handler)
+{
+    m_fftHandlers.applyWindowType = std::move(handler);
+    pushFftHandlers();
+}
+
+void SetupDialog::setHzPerBinTargetHandler(std::function<void(double)> handler)
+{
+    m_fftHandlers.applyHzPerBinTarget = std::move(handler);
+    pushFftHandlers();
+}
+
+void SetupDialog::setDisplayDecimationHandler(std::function<void(int)> handler)
+{
+    m_fftHandlers.applyDecimation = std::move(handler);
+    pushFftHandlers();
+}
+
+void SetupDialog::setFftReadoutSource(std::function<DisplayFftReadoutFacts()> source)
+{
+    m_fftHandlers.readoutFacts = std::move(source);
+    pushFftHandlers();
+}
+
+void SetupDialog::setFftSizingModeHandler(
+    std::function<void(ControlRanges::DisplayFftSizingMode, double)> handler)
+{
+    m_fftHandlers.applySizingMode = std::move(handler);
+    pushFftHandlers();
+}
+
+void SetupDialog::pushFftHandlers()
+{
+    // Every realized page, wherever it sits (a page may be inside a
+    // wrapper, as refreshTransmitPresentation finds them). A page built
+    // later takes them there.
+    for (const PageEntry& entry : m_pages) {
+        if (!entry.widget) { continue; }
+        QList<SetupPage*> setupPages = entry.widget->findChildren<SetupPage*>();
+        if (auto* self = qobject_cast<SetupPage*>(entry.widget)) {
+            setupPages.prepend(self);
+        }
+        for (SetupPage* setupPage : setupPages) {
+            setupPage->setFftHandlers(m_fftHandlers);
+        }
+    }
+}
+
+void SetupDialog::notifyStationFftSettingsChanged()
+{
+    // Every realized page, found as pushFftHandlers finds them.
+    for (const PageEntry& entry : m_pages) {
+        if (!entry.widget) { continue; }
+        QList<SetupPage*> setupPages = entry.widget->findChildren<SetupPage*>();
+        if (auto* self = qobject_cast<SetupPage*>(entry.widget)) {
+            setupPages.prepend(self);
+        }
+        for (SetupPage* setupPage : setupPages) {
+            setupPage->stationFftSettingsChanged();
+        }
+    }
+}
+
+// ── Display pill plan Task 21: the window's pans and band store ─────────────
+
+void SetupDialog::setPanWidgetsProvider(std::function<QList<SpectrumWidget*>()> provider)
+{
+    m_displayProviders.panWidgets = std::move(provider);
+    pushDisplayProviders();
+}
+
+void SetupDialog::setBandGridModelProvider(std::function<PanadapterModel*()> provider)
+{
+    m_displayProviders.bandGridModel = std::move(provider);
+    pushDisplayProviders();
+}
+
+void SetupDialog::ensureDisplaySourceSet(QWidget* hostParent)
+{
+    if (m_displaySourceHost) {
+        if (hostParent && m_displaySourceHost->parentWidget() == this) {
+            m_displaySourceHost->setParent(hostParent);
+            m_displaySourceHost->hide();
+        }
+        return;
+    }
+    m_displaySourceHost = new QWidget(hostParent ? hostParent : this);
+    m_displaySourceHost->setObjectName(QStringLiteral("displayBoundSourceOwners"));
+    m_displaySourceHost->hide();
+    m_displaySourcePages.insert(QStringLiteral("spectrum"), new SpectrumDefaultsPage(m_model, m_displaySourceHost));
+    m_displaySourcePages.insert(QStringLiteral("waterfall"), new WaterfallDefaultsPage(m_model, m_displaySourceHost));
+    m_displaySourcePages.insert(QStringLiteral("grid"), new GridScalesPage(m_model, m_displaySourceHost));
+    m_displaySourcePages.insert(QStringLiteral("view"), new Display3DSetupPage(m_model ? m_model->spectrumWidget() : nullptr, m_displaySourceHost));
+    m_displaySourcePages.insert(QStringLiteral("peaks"), new SpectrumPeaksPage(m_model, m_displaySourceHost));
+    m_displaySourcePages.insert(QStringLiteral("tx"), new TxDisplayPage(m_model, m_displaySourceHost));
+    m_displaySourcePages.insert(QStringLiteral("colors"), new ColorsThemePage(m_model, m_displaySourceHost));
+    for (SetupPage* source : std::as_const(m_displaySourcePages)) {
+        source->setProperty("displayAssemblyOwner", true);
+        source->setDisplayProviders(m_displayProviders);
+        source->setDisplayPanIndex(m_displayPanIndex);
+        source->setFftHandlers(m_fftHandlers);
+        connect(source, &SetupPage::displayPanIndexChanged, this, &SetupDialog::setDisplayPanIndex, Qt::UniqueConnection);
+    }
+    connect(qobject_cast<SpectrumDefaultsPage*>(m_displaySourcePages.value(QStringLiteral("spectrum"))),
+        &SpectrumDefaultsPage::navigateToSpectrumPeaksRequested, this, [this]() { selectPage(QStringLiteral("Peaks & Markers")); });
+    connect(qobject_cast<SpectrumDefaultsPage*>(m_displaySourcePages.value(QStringLiteral("spectrum"))),
+        &SpectrumDefaultsPage::navigateToMultimeterRequested, this, [this]() { selectPage(QStringLiteral("Multimeter")); });
+}
+
+QWidget* SetupDialog::buildDisplayAssembly(const QString& name)
+{
+    if (name == QStringLiteral("Multimeter")) {
+        auto* page = new MultimeterPage(m_model);
+        DisplayAssemblyPage::pairNumberRows(page);
+        connect(page, &MultimeterPage::backToSpectrumDefaultsRequested, this, [this]() { selectPage(QStringLiteral("Spectrum")); });
+        return page;
+    }
+    static const QHash<QString, QString> pageKeys = {
+        {QStringLiteral("Spectrum"), QStringLiteral("DisplaySpectrumDetector DisplayDispNormalize DisplaySpectrumAveraging DisplaySpectrumAverageTimeMs DisplayLineWidth DisplayTraceColor DisplayPanFill DisplayFftFillAlpha DisplayFillColor DisplayGradientEnabled DisplayPeakHoldEnabled DisplayPeakHoldResetMs DisplayGridEnabled DisplayFreqGridSpacing DisplayGridStep DisplayFreqScaleFontPx DisplayFreqLabelAlign DisplayDbmScaleVisible DisplayShowZeroLine DisplayCalOffset DisplayShowCursorFreq DisplayShowFps")},
+        {QStringLiteral("Levels"), QStringLiteral("DisplayAdjustGridMinToNoiseFloor DisplayNFOffsetGridFollow DisplayMaintainNFAdjustDelta ClarityEnabled DisplayWfAgc WaterfallNFAGCEnabled DisplayWfUseSpectrumMinMax DisplayWfBlackLevel DisplayWfColorGain WaterfallAGCOffsetDb DisplayWfLowLevel DisplayWfHighLevel")},
+        {QStringLiteral("Waterfall"), QStringLiteral("DisplayWfColorScheme DisplayWfUpdatePeriodMs DisplayWfOpacity WaterfallBlankingEnabled WaterfallBlankingThresholdDb DisplayWaterfallDetector DisplayWaterfallAveraging DisplayWaterfallAverageTimeMs WaterfallStopOnTx DisplayShowRxFilterOnWaterfall DisplayShowTxFilterOnRxWaterfall DisplayShowRxZeroLine DisplayShowTxZeroLine DisplayWfTimestampPos DisplayWfTimestampMode DisplayWaterfallHistoryMs")},
+        {QStringLiteral("View"), QStringLiteral("DisplaySpectrumRenderMode Display3DGain Display3DSpan Display3DAngle Display3DSpeed Display3DSliceShadow DisplayBackgroundEnabled DisplayBackgroundColor DisplayBackgroundImage DisplayBackgroundOpacity")},
+        {QStringLiteral("Peaks & Markers"), QStringLiteral("DisplayActivePeakHoldEnabled DisplayActivePeakHoldDurationMs DisplayActivePeakHoldDropDbPerSec DisplayActivePeakHoldFill DisplayActivePeakHoldOnTx DisplayActivePeakHoldColor DisplayPeakBlobsEnabled DisplayPeakBlobsCount DisplayPeakBlobsInsideFilterOnly DisplayPeakBlobsHoldEnabled DisplayPeakBlobsHoldMs DisplayPeakBlobsHoldDrop DisplayPeakBlobsFallDbPerSec DisplayPeakBlobColor DisplayPeakBlobTextColor DisplayShowPeakValueOverlay DisplayPeakValuePosition DisplayPeakTextDelayMs DisplayShowNoiseFloor DisplayShowNoiseFloorPosition DisplayNoiseFloorShiftDb DisplayNoiseFloorLineWidth DisplayNoiseFloorColor DisplayNoiseFloorTextColor DisplayNoiseFloorFastColor DisplayShowBinWidth")}};
+    auto* page = new DisplayAssemblyPage(name, m_model,
+        pageKeys.value(name).split(QLatin1Char(' '), Qt::SkipEmptyParts), pageKeys.contains(name));
+    connect(page, &DisplayAssemblyPage::clarityRetuneRequested, this, &SetupDialog::clarityRetuneRequested);
+    connect(page, &DisplayAssemblyPage::pageRequested, this, &SetupDialog::selectPage);
+    connect(page, &DisplayAssemblyPage::ownRowReset, this, [this]() { pushDisplayProviders(); });
+    page->setDisplayProviders(m_displayProviders);
+    page->setDisplayPanIndex(m_displayPanIndex);
+    ensureDisplaySourceSet(page);
+    QWidget* spec = m_displaySourcePages.value(QStringLiteral("spectrum"));
+    QWidget* grid = m_displaySourcePages.value(QStringLiteral("grid"));
+    QWidget* wf = m_displaySourcePages.value(QStringLiteral("waterfall"));
+    const auto rows = [page](QWidget* source, const QString& title, const QString& ids) {
+        page->takeRows(source, title, ids.split(QLatin1Char(' '), Qt::SkipEmptyParts));
+    };
+    if (name == QStringLiteral("Spectrum")) {
+        rows(spec, QStringLiteral("Trace"), QStringLiteral("display.spectrumDefaults.detector display.spectrumDefaults.normalize display.spectrumDefaults.averaging display.spectrumDefaults.averageTime display.spectrumDefaults.lineWidth"));
+        QWidget* colors = qobject_cast<ColorsThemePage*>(m_displaySourcePages.value(QStringLiteral("colors")))->takePictureColourRows(page);
+        rows(colors, QStringLiteral("Trace"), QStringLiteral("display.spectrum.traceColor"));
+        rows(spec, QStringLiteral("Fill"), QStringLiteral("display.spectrumDefaults.panFill display.spectrumDefaults.fillAlpha"));
+        rows(colors, QStringLiteral("Fill"), QStringLiteral("display.spectrum.fillColor"));
+        rows(spec, QStringLiteral("Fill"), QStringLiteral("display.spectrumDefaults.gradient"));
+        colors->hide();
+        rows(spec, QStringLiteral("Peak hold"), QStringLiteral("display.spectrumDefaults.peakHold display.spectrumDefaults.peakDelay"));
+        rows(grid, QStringLiteral("Grid"), QStringLiteral("display.gridScales.showGrid display.gridScales.dbStep"));
+        rows(grid, QStringLiteral("Scales and labels"), QStringLiteral("display.gridScales.freqLabelAlign display.gridScales.dbmScale display.gridScales.zeroLine"));
+        rows(spec, QStringLiteral("Calibration"), QStringLiteral("display.spectrumDefaults.calOffset"));
+        rows(spec, QStringLiteral("Readouts"), QStringLiteral("display.spectrumDefaults.showCursorFreq"));
+        rows(grid, QStringLiteral("Readouts"), QStringLiteral("display.gridScales.showFps"));
+        rows(spec, QStringLiteral("Reset"), QStringLiteral("display.spectrumDefaults.smoothDefaults"));
+        rows(spec, QString(), QStringLiteral("display.spectrum.crossLinks"));
+    } else if (name == QStringLiteral("Levels")) {
+        page->addSpectrumScaleChooser();
+        rows(grid, QStringLiteral("Spectrum scale"), QStringLiteral("display.gridScales.dbMax display.gridScales.dbMin display.gridScales.noiseFloorOffset display.gridScales.maintainGridRange display.gridScales.copyWaterfallThresholds"));
+        page->addWaterfallLevelsChooser();
+        rows(wf, QStringLiteral("Waterfall levels"), QStringLiteral("display.waterfallDefaults.nfAgcOffset display.waterfallDefaults.lowThreshold display.waterfallDefaults.highThreshold display.waterfallDefaults.copySpectrumMinMax"));
+    } else if (name == QStringLiteral("Waterfall")) {
+        rows(wf, QStringLiteral("Drawing"), QStringLiteral("display.waterfallDefaults.colorScheme display.waterfallDefaults.updatePeriod display.waterfallDefaults.opacity"));
+        rows(wf, QStringLiteral("Smoothing"), QStringLiteral("display.waterfallDefaults.detector display.waterfallDefaults.averaging display.waterfallDefaults.averageTime"));
+        rows(wf, QStringLiteral("Overlays"), QStringLiteral("display.waterfallDefaults.stopOnTx display.waterfallDefaults.showRxFilter display.waterfallDefaults.showTxFilter display.waterfallDefaults.showRxZeroLine display.waterfallDefaults.showTxZeroLine"));
+        rows(wf, QStringLiteral("Time"), QStringLiteral("display.waterfallDefaults.timestampPosition display.waterfallDefaults.timestampMode display.waterfallDefaults.historyDepth"));
+    } else if (name == QStringLiteral("View")) {
+        page->addViewChooser();
+        rows(m_displaySourcePages.value(QStringLiteral("view")), QStringLiteral("3D"), QStringLiteral("display.threeD.gain display.threeD.span display.threeD.angle display.threeD.speed display.threeD.sliceShadow display.threeD.reset"));
+        rows(m_displaySourcePages.value(QStringLiteral("view")), QStringLiteral("3D floor"), QStringLiteral("display.threeD.floor"));
+    } else if (name == QStringLiteral("Peaks & Markers")) {
+        page->takeGroups(m_displaySourcePages.value(QStringLiteral("peaks")));
+        rows(spec, QStringLiteral("Peak value"), QStringLiteral("display.spectrumDefaults.showPeakValue display.spectrumDefaults.peakValuePosition display.spectrumDefaults.peakTextDelay"));
+        rows(spec, QStringLiteral("Noise floor line"), QStringLiteral("display.spectrumDefaults.showNoiseFloor display.spectrumDefaults.noiseFloorShift display.spectrumDefaults.noiseFloorLineWidth display.spectrumDefaults.noiseFloorColor display.spectrumDefaults.noiseFloorTextColor display.spectrumDefaults.noiseFloorFastColor display.spectrumDefaults.noiseFloorPosition"));
+        rows(spec, QStringLiteral("Bin width"), QStringLiteral("display.spectrumDefaults.showBinWidth"));
+    } else if (name == QStringLiteral("FFT & Engine")) {
+        page->addFftSizingChooser(spec);
+        rows(spec, QStringLiteral("FFT size"), QStringLiteral("display.spectrumDefaults.fftSize display.spectrumDefaults.hzPerBinTarget display.spectrumDefaults.fftReadout display.spectrumDefaults.window display.spectrumDefaults.decimation"));
+        rows(spec, QStringLiteral("Frame rate"), QStringLiteral("display.spectrumDefaults.fps display.spectrumDefaults.getMonitorHz"));
+        rows(spec, QStringLiteral("This computer"), QStringLiteral("display.spectrumDefaults.threadPriority"));
+    } else if (name == QStringLiteral("Transmit Display")) {
+        page->takeGroups(m_displaySourcePages.value(QStringLiteral("tx")));
+    }
+    page->addMissingPictureRows();
+    if (name == QStringLiteral("View")) { page->addDisplayBackgroundSection(); }
+    const auto placeEditorAfter = [page](QWidget* editor, const QString& anchorId) {
+        QWidget* anchor = nullptr;
+        for (QWidget* control : page->findChildren<QWidget*>()) {
+            if (control->property("nereusSetupId").toString() == anchorId) { anchor = control; break; }
+        }
+        if (!editor || !anchor) { return; }
+        QGroupBox* group = nullptr;
+        QWidget* row = anchor;
+        while (row->parentWidget()) {
+            group = qobject_cast<QGroupBox*>(row->parentWidget());
+            if (group) { break; }
+            row = row->parentWidget();
+        }
+        if (!group) { return; }
+        if (editor->parentWidget() && editor->parentWidget()->layout()) {
+            editor->parentWidget()->layout()->removeWidget(editor);
+        }
+        if (auto* column = qobject_cast<QBoxLayout*>(group->layout())) {
+            const int index = column->indexOf(row);
+            if (index < 0) { return; }
+            column->insertWidget(index + 1, editor);
+        } else if (auto* form = qobject_cast<QFormLayout*>(group->layout())) {
+            int index = -1;
+            QFormLayout::ItemRole role;
+            form->getWidgetPosition(row, &index, &role);
+            if (index < 0) { return; }
+            form->insertRow(index + 1, editor);
+        } else { return; }
+        editor->show();
+    };
+    if (name == QStringLiteral("Waterfall")) {
+        page->addDisplayGradientEditor(false);
+        placeEditorAfter(page->findChild<QWidget*>(QStringLiteral("display.waterfall.customGradient")),
+                         QStringLiteral("display.waterfallDefaults.colorScheme"));
+    } else if (name == QStringLiteral("Transmit Display")) {
+        auto* owner = qobject_cast<TxDisplayPage*>(m_displaySourcePages.value(QStringLiteral("tx")));
+        owner->retireInlineGradientEditor();
+        page->addDisplayGradientEditor(true);
+        placeEditorAfter(page->findChild<QWidget*>(QStringLiteral("display.txDisplay.customGradient")),
+                         QStringLiteral("display.txDisplay.wfLowColor"));
+    }
+    if (name == QStringLiteral("Levels") || name == QStringLiteral("View")) {
+        page->enableDisplayBandPicker();
+        QWidget* bandRow = page->findChild<QWidget*>(QStringLiteral("setupDisplayBandRow"));
+        bandRow->setProperty("nereusSetupId", "display.selectedBand");
+        page->takeRows(page, name == QStringLiteral("Levels") ? QStringLiteral("Spectrum scale") : QStringLiteral("3D floor"),
+                       {QStringLiteral("display.selectedBand")});
+        if (auto* rows = qobject_cast<QVBoxLayout*>(bandRow->parentWidget()->layout())) {
+            rows->insertWidget(name == QStringLiteral("Levels") ? 2 : 0, bandRow);
+        }
+    }
+    page->setDisplayProviders(m_displayProviders);
+    page->refreshOwnRows();
+    return page;
+}
+
+void SetupDialog::setDisplayClarityStatusProvider(std::function<std::optional<SetupDisplayClarityStatus>(int)> provider)
+{
+    m_displayProviders.clarityStatusForPan = std::move(provider);
+    pushDisplayProviders();
+}
+
+void SetupDialog::setDisplayPanIndex(int panIndex)
+{
+    const int selected = std::max(-1, panIndex);
+    if (m_displayPanIndex == selected) { return; }
+    m_displayPanIndex = selected;
+    for (SetupPage* page : findChildren<SetupPage*>()) {
+        page->setDisplayPanIndex(selected);
+    }
+}
+
+void SetupDialog::setDisplayPanIndicesProvider(std::function<QList<int>()> provider)
+{
+    m_displayProviders.panIndices = std::move(provider);
+    pushDisplayProviders();
+}
+
+void SetupDialog::setBandGridModelForPanProvider(std::function<PanadapterModel*(int)> provider)
+{
+    m_displayProviders.bandGridModelForPan = std::move(provider);
+    pushDisplayProviders();
+}
+
+void SetupDialog::pushDisplayProviders()
+{
+    // Every realized page, as pushFftHandlers does. A page built later takes
+    // them in refreshTransmitPresentation.
+    for (const PageEntry& entry : m_pages) {
+        if (!entry.widget) { continue; }
+        QList<SetupPage*> setupPages = entry.widget->findChildren<SetupPage*>();
+        if (auto* self = qobject_cast<SetupPage*>(entry.widget)) {
+            setupPages.prepend(self);
+        }
+        for (SetupPage* setupPage : setupPages) {
+            setupPage->setDisplayProviders(m_displayProviders);
+            setupPage->setDisplayPanIndex(m_displayPanIndex);
+            connect(setupPage, &SetupPage::displayPanIndexChanged,
+                    this, &SetupDialog::setDisplayPanIndex, Qt::UniqueConnection);
+        }
+    }
+    for (const PageEntry& entry : m_pages) {
+        if (auto* page = qobject_cast<DisplayAssemblyPage*>(entry.widget)) {
+            page->refreshAssemblyPresentation();
+        }
     }
 }
 
@@ -949,7 +1311,7 @@ void SetupDialog::rebuildStalePages()
 
     for (std::size_t i = 0; i < m_pages.size(); ++i) {
         PageEntry& entry = m_pages[i];
-        if (entry.widget == nullptr || entry.scope == SetupScope::ThisComputer) {
+        if (entry.widget == nullptr || entry.scope == SetupScope::ThisComputer || entry.retainsDisplaySources) {
             continue;
         }
         if (!entry.placeholder && entry.builtGeneration == m_snapshotGeneration) {
@@ -1154,6 +1516,15 @@ void SetupDialog::refreshTransmitPresentation()
             setupPages.prepend(self);
         }
         for (SetupPage* setupPage : setupPages) {
+            // Display pill plan Task 20: a page built since the handlers
+            // were set takes them here, before its gates.
+            setupPage->setFftHandlers(m_fftHandlers);
+            // Display pill plan Task 21: and the window's pans and band
+            // store.
+            setupPage->setDisplayProviders(m_displayProviders);
+            setupPage->setDisplayPanIndex(m_displayPanIndex);
+            connect(setupPage, &SetupPage::displayPanIndexChanged,
+                    this, &SetupDialog::setDisplayPanIndex, Qt::UniqueConnection);
             setupPage->setTransmitPermitted(m_transmitPermitted, m_transmitReason);
             // Fix wave 2 (M8): VOX needs this computer's microphone line.
             setupPage->setVoxPermitted(m_voxPermitted, m_voxReason);
@@ -1230,6 +1601,11 @@ void SetupDialog::refreshTransmitPresentation()
                 showLocalNotice = true;
                 localNoticeText = unavailableReason(entry);
             }
+        }
+    }
+    for (const PageEntry& entry : m_pages) {
+        if (auto* page = qobject_cast<DisplayAssemblyPage*>(entry.widget)) {
+            page->refreshAssemblyPresentation();
         }
     }
     QTreeWidgetItemIterator it(m_tree);
@@ -1332,21 +1708,6 @@ int SetupDialog::pageEntryIndex(const QString& label) const
     return -1;
 }
 
-QWidget* SetupDialog::wrapWithAudioBackendStrip(SetupPage* page)
-{
-    // Returns a margin-less container QWidget that owns both the strip and the
-    // page. Qt parent-ownership keeps memory clean — the container is
-    // reparented into the QStackedWidget by realizePage().
-    auto* container = new QWidget;
-    auto* lay = new QVBoxLayout(container);
-    lay->setContentsMargins(0, 0, 0, 0);
-    lay->setSpacing(0);
-    lay->addWidget(new AudioBackendStrip(
-        m_model ? m_model->localAudioDevices() : nullptr, container));
-    lay->addWidget(page);
-    return container;
-}
-
 // ── Tree builder ──────────────────────────────────────────────────────────────
 
 void SetupDialog::buildTree()
@@ -1374,7 +1735,7 @@ void SetupDialog::buildTree()
         QFont f = item->font(0);
         f.setBold(true);
         item->setFont(0, f);
-        item->setForeground(0, QColor("#8aa8c0"));
+        item->setForeground(0, WorkspacePreview::roleColour(QColor("#8aa8c0"), "title-text"));
         return item;
     };
 
@@ -1619,34 +1980,27 @@ void SetupDialog::buildTree()
     // (setup.designer.cs:46443 [v2.10.3.15]). It is not a transmit page, so a
     // remote window without transmit keeps it live (R-R3-36).
     markReceiveOnlyGated(
-        registerPage(audio, "TX Input", SetupScope::Mixed,  // I.1
-                     [this] { return wrapWithAudioBackendStrip(new AudioTxInputPage(m_model)); }),
+        registerPage(audio, "Microphone", SetupScope::Mixed,  // I.1
+                     [this] { return new AudioTxInputPage(m_model); }),
         /*nonTransmitPage=*/true);
+    // R-SPK-21 (Digital modes): VAX then TCI on one page.
     // R-R3-44: the VAX channels are this computer's in a remote window as in
     // a local one (a remote window feeds them from the Core's receiver
     // streams), and the page writes only this computer's audio/Vax* keys,
     // so it works in every window, connected or not.
-    registerPage(audio, "VAX", SetupScope::ThisComputer,
+    // R-R3-42: TCI configures the TCI server that runs on this computer, in
+    // a remote window as in a local one, and its keys are this computer's
+    // (SettingsScope "Tci"). It reaches no local DSP, so it works in a
+    // remote window, connected or not.
+    registerPage(audio, "Digital modes", SetupScope::ThisComputer,
                  [this] {
                      auto* vaxPage = new AudioVaxPage(m_model);
                      // R-R3-43 / R-R3-44: the compressed-audio note's state.
                      m_vaxPage = vaxPage;
                      vaxPage->setReceiverAudioNote(m_receiverAudioNote);
-                     return wrapWithAudioBackendStrip(vaxPage);
+                     return new AudioDigitalModesPage(m_model, vaxPage,
+                                                      new AudioTciPage(m_model));
                  });
-    // R-R3-42: Audio > TCI configures the TCI server that runs on this
-    // computer, in a remote window as in a local one, and its keys are this
-    // computer's (SettingsScope "Tci"). It reaches no local DSP (the backend
-    // strip goes through localAudioDevices()), so it works in a remote
-    // window, connected or not.
-    registerPage(audio, "TCI", SetupScope::ThisComputer,
-                 [this] { return wrapWithAudioBackendStrip(new AudioTciPage(m_model)); });
-    // R-R3-44: Mixed. Its VAX groups (VAX feedback tuning, the VAX flags,
-    // detected cables, Reset) are this computer's and work in a remote
-    // window; the DSP group writes the Core's audio/DspRate and
-    // audio/DspBlockSize and follows the Core's settings availability.
-    registerPage(audio, "Advanced", SetupScope::Mixed,
-                 [this] { return wrapWithAudioBackendStrip(new AudioAdvancedPage(m_model)); });
     // Phase 3M-1c J.3: TX Profile editor.
     //
     // R-R3-49 (parity Task 3): no longer held for remote transmit. In a
@@ -1674,6 +2028,13 @@ void SetupDialog::buildTree()
             m_model ? m_model->micProfileManager() : nullptr,
             m_model ? &m_model->transmitModel() : nullptr);
     }), /*nonTransmitPage=*/true);
+    // R-R3-44: Mixed. Its groups (Logs, the VAX flags, Reset) are this
+    // computer's and work in a remote window; the hidden DSP group writes
+    // the Core's audio/DspRate and audio/DspBlockSize and follows the
+    // Core's settings availability. R-SPK-21: last in Audio; the detected
+    // cables are on Digital modes.
+    registerPage(audio, "Advanced", SetupScope::Mixed,
+                 [this] { return new AudioAdvancedPage(m_model); });
 
     tick("Audio");
 
@@ -1749,48 +2110,18 @@ void SetupDialog::buildTree()
     // #272 / #301: the cross-links go through selectPage(), which drives the
     // nav tree, so the destination page is realized by the tree-selection
     // handler. No sibling-page pointer is needed here.
-    registerPage(display, "Spectrum Defaults", SetupScope::Mixed, [this]() -> QWidget* {
-        auto* specDefaultsPage = new SpectrumDefaultsPage(m_model);
-        connect(specDefaultsPage, &SpectrumDefaultsPage::navigateToSpectrumPeaksRequested,
-                this, [this]() { selectPage(QStringLiteral("Spectrum Peaks")); });
-        // Task 3.1: Multimeter page now exists — wire the cross-link.
-        connect(specDefaultsPage, &SpectrumDefaultsPage::navigateToMultimeterRequested,
-                this, [this]() { selectPage(QStringLiteral("Multimeter")); });
-        return specDefaultsPage;
-    });
-
-    // Task 2.4: Spectrum Peaks page — skeleton with APH + Blob controls + back cross-link.
-    registerPage(display, "Spectrum Peaks", SetupScope::ThisComputer, [this]() -> QWidget* {
-        auto* specPeaksPage = new SpectrumPeaksPage(m_model);
-        connect(specPeaksPage, &SpectrumPeaksPage::backToSpectrumDefaultsRequested,
-                this, [this]() { selectPage(QStringLiteral("Spectrum Defaults")); });
-        return specPeaksPage;
-    });
-
-    registerPage(display, "Waterfall Defaults", SetupScope::ThisComputer,
-                 [this] { return new WaterfallDefaultsPage(m_model); });
-    registerPage(display, "Grid & Scales", SetupScope::Mixed,
-                 [this] { return new GridScalesPage(m_model); });
-
-    // Task 3.1: Display → Multimeter — 8 multimeter globals + unit-mode + signal history.
-    // Folded from Thetis Display→General Multimeter group per design Section 3A.
-    // Cross-link: ← Spectrum Defaults / SpectrumDefaultsPage → Multimeter.
-    registerPage(display, "Multimeter", SetupScope::Mixed, [this]() -> QWidget* {
-        auto* multimeterPage = new MultimeterPage(m_model);
-        connect(multimeterPage, &MultimeterPage::backToSpectrumDefaultsRequested,
-                this, [this]() { selectPage(QStringLiteral("Spectrum Defaults")); });
-        return multimeterPage;
-    });
-
-    registerPage(display, "TX Display", SetupScope::Mixed,  [this] { return new TxDisplayPage(m_model);  });
-
-    // 3D Stacked-Trace Spectrum Plan Task 15: mirrors the Task 13 overlay
-    // menu's six 3D controls into Setup -> Display. Constructed against
-    // the SpectrumWidget directly (not RadioModel, unlike every page
-    // above) per Display3DSetupPage's own class-header comment.
-    registerPage(display, "3D View", SetupScope::ThisComputer, [this]() -> QWidget* {
-        return new Display3DSetupPage(m_model ? m_model->spectrumWidget() : nullptr);
-    });
+    for (const QString& page : {QStringLiteral("Spectrum"), QStringLiteral("Levels"),
+        QStringLiteral("Waterfall"), QStringLiteral("View"), QStringLiteral("Peaks & Markers"),
+        QStringLiteral("FFT & Engine"), QStringLiteral("Transmit Display"), QStringLiteral("Multimeter")}) {
+        registerPage(display, page, SetupScope::Mixed,
+                     [this, page]() { return buildDisplayAssembly(page); });
+        // The seven assembled pages retain one set of callback owners.
+        // Snapshot changes refresh their providers/readouts/gates instead
+        // of reconstructing owners whose bound rows now live on different
+        // pages. Multimeter owns an ordinary page, so it follows the normal
+        // snapshot rebuild and reads the Core's latest values.
+        m_pages.back().retainsDisplaySources = page != QStringLiteral("Multimeter");
+    }
 
     tick("Display");
 
@@ -1855,7 +2186,10 @@ void SetupDialog::buildTree()
     // ── Appearance ────────────────────────────────────────────────────────────
     QTreeWidgetItem* appearance = addCategory("Appearance");
     registerPage(appearance, "Colors & Theme", SetupScope::ThisComputer,
-                 [this] { return new ColorsThemePage(m_model); });
+                 [this]() -> QWidget* {
+                     ensureDisplaySourceSet();
+                     return m_displaySourcePages.value(QStringLiteral("colors"));
+                 });
     registerPage(appearance, "Meter Styles", SetupScope::ThisComputer, [this]() -> QWidget* {
         auto* page = new MeterStylesPage(m_model);
         connect(page, &MeterStylesPage::sMeterFaceChanged,
@@ -1879,9 +2213,13 @@ void SetupDialog::buildTree()
 
     // ── CAT & Network ─────────────────────────────────────────────────────────
     QTreeWidgetItem* cat = addCategory("CAT & Network");
+    // The CAT pages (Serial Ports, TCP/IP CAT, CAT Options, CAT PTT) set up
+    // the CAT of the Core this window runs on: in a remote window they read
+    // the Core's stationCat object and send the stationCat commands
+    // (RemoteCatControl), so they are Core pages, as RF-Kit and Rotor are.
     if (UnbuiltFeatures::isBuilt(UnbuiltFeature::Cat)) {
-        registerPage(cat, "Serial Ports", SetupScope::ThisComputer,
-                     [] { return new CatSerialPortsPage; });
+        registerPage(cat, "Serial Ports", SetupScope::Core,
+                     [this] { return new CatSerialPortsPage(m_model); });
     }
     // R-R3-42: this computer's TCI server and its own settings.
     registerPage(cat, "TCI Server", SetupScope::ThisComputer, [this]() -> QWidget* {
@@ -1934,6 +2272,19 @@ void SetupDialog::buildTree()
         }
         return fourO3A;
     });
+    // 2026-10-15: a remote window's own rigctld, which acts as the window
+    // (WSJT-X CAT through this computer). A local window has the TCP/IP
+    // CAT page for its own CAT.
+    if (remoteSession()) {
+        registerPage(cat, "rigctld", SetupScope::ThisComputer, [this]() -> QWidget* {
+            auto* page = new RemoteRigctldPage;
+            m_remoteRigctldPage = page;
+            connect(page, &RemoteRigctldPage::settingsChanged,
+                    this, &SetupDialog::remoteRigctldSettingsChanged);
+            page->setServer(m_remoteRigctlServer);
+            return page;
+        });
+    }
     registerPage(cat, "Remote Access", SetupScope::ThisComputer, [this] {
         auto* page = new RemoteStationPage;
         connect(page, &RemoteStationPage::connectionsRequested,
@@ -1945,8 +2296,18 @@ void SetupDialog::buildTree()
     // connect and disconnect its amplifier (it never dials the amp from
     // this computer); a Core that does not offer that says so on the page.
     registerPage(cat, "RF-Kit", SetupScope::Core, [this] { return new RfKitPage(m_model); });
+    // Rotor control plan Task 7: the Core's antenna rotor, set up through
+    // the rotor commands (configureRotor, setRotorPresets); in a remote
+    // window it lists the Core's serial ports.
+    registerPage(cat, "Rotor", SetupScope::Core, [this] { return new RotorSetupPage(m_model); });
     if (UnbuiltFeatures::isBuilt(UnbuiltFeature::Cat)) {
-        registerPage(cat, "TCP/IP CAT", SetupScope::ThisComputer, [] { return new CatTcpIpPage; });
+        registerPage(cat, "TCP/IP CAT", SetupScope::Core, [this] { return new CatTcpIpPage(m_model); });
+        registerPage(cat, "CAT Options", SetupScope::Core, [this] {
+            auto* page = new CatOptionsSetupPage(m_model);
+            connect(page,&CatOptionsSetupPage::showLogRequested,this,&SetupDialog::catLogRequested);
+            return page;
+        });
+        registerPage(cat, "CAT PTT", SetupScope::Core, [this] { return new CatPttSetupPage(m_model); });
     }
     if (UnbuiltFeatures::isBuilt(UnbuiltFeature::Midi)) {
         registerPage(cat, "MIDI Control", SetupScope::ThisComputer,

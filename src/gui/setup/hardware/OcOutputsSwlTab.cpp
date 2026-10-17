@@ -22,6 +22,14 @@
 //   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 13): the TX
 //                 pins, pin actions and resets follow their own gates.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - The pin matrices are one grid with the P1-P7 headers, each
+//                box as wide as its indicator, so every header sits over its
+//                column. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
+//   2026-10-09 - D25: the matrix row stacks when narrow (SetupFit::FitRow);
+//                the matrices keep their own height, the rest of the tab
+//                going below the reset button.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -63,13 +71,16 @@
 //============================================================================================//
 
 #include "OcOutputsSwlTab.h"
+#include "IndicatorColumn.h"
 #include "HardwareTransmitGate.h"
+#include "gui/setup/SetupFit.h"
 
 #include "core/OcMatrix.h"
 #include "models/RadioModel.h"
 
 #include <QCheckBox>
 #include <QGroupBox>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
@@ -94,7 +105,9 @@ OcOutputsSwlTab::OcOutputsSwlTab(RadioModel* model, OcMatrix* ocMatrix,
     // From mi0bot grpExtCtrlSWL contents — split conceptually into RX
     // (chkOCrcv*) + TX (chkOCxmit*) for clarity vs the upstream single
     // group with both prefixes interleaved (setup.designer.cs:20968+).
-    auto* matrixRow = new QHBoxLayout();
+    // D25: the matrices stack, RX first, when they do not fit side by side.
+    auto* matrixRow = new SetupFit::FitRow();
+    matrixRow->setObjectName(QStringLiteral("swlMatrixRow"));
     matrixRow->setSpacing(10);
 
     auto* rxGroup = new QGroupBox(tr("SWL — RX OC matrix"), this);
@@ -106,7 +119,9 @@ OcOutputsSwlTab::OcOutputsSwlTab(RadioModel* model, OcMatrix* ocMatrix,
     matrixRow->addWidget(txGroup, /*stretch=*/1);
     m_txGroup = txGroup;
 
-    outer->addLayout(matrixRow, /*stretch=*/1);
+    // D25: the matrices keep their own height; what is left of the tab
+    // goes below the reset button (stretch added after it).
+    outer->addLayout(matrixRow);
 
     // Bottom row: SWL-only reset button.
     // From mi0bot setup.designer.cs:btnCtrlSWLReset [v2.10.3.13-beta2]
@@ -120,6 +135,7 @@ OcOutputsSwlTab::OcOutputsSwlTab(RadioModel* model, OcMatrix* ocMatrix,
             this, &OcOutputsSwlTab::onResetClicked);
     btnRow->addWidget(m_resetButton);
     outer->addLayout(btnRow);
+    outer->addStretch(1);
 
     // Wire OcMatrix change notifications.  OcMatrix::changed() fires
     // whenever any band/pin entry mutates (HF or SWL or pin-action),
@@ -149,24 +165,28 @@ Band OcOutputsSwlTab::swlBandForRow(int row)
 
 void OcOutputsSwlTab::buildMatrixGrid(QGroupBox* group, bool tx)
 {
-    auto* grid = new QVBoxLayout(group);
-    grid->setSpacing(1);
+    // One grid for the header and the band rows, so each P1-P7 header sits
+    // centred over its column of check boxes (as OcOutputsHfTab).
+    auto* grid = new QGridLayout(group);
+    grid->setHorizontalSpacing(0);
+    grid->setVerticalSpacing(1);
     grid->setContentsMargins(4, 4, 4, 4);
+    grid->setColumnMinimumWidth(0, 52);
+    for (int pin = 0; pin < kSwlMatrixPinCount; ++pin) {
+        grid->setColumnMinimumWidth(pin + 1, 28);
+    }
+    grid->setColumnStretch(kSwlMatrixPinCount + 1, 1);
 
     // Column header row: "Band" | P1..P7
     {
-        auto* hdrRow = new QHBoxLayout();
         auto* bandHdr = new QLabel(tr("Band"), group);
         bandHdr->setFixedWidth(52);
-        hdrRow->addWidget(bandHdr);
+        grid->addWidget(bandHdr, 0, 0);
         for (int pin = 0; pin < kSwlMatrixPinCount; ++pin) {
             auto* lbl = new QLabel(tr("P%1").arg(pin + 1), group);
             lbl->setAlignment(Qt::AlignCenter);
-            lbl->setFixedWidth(28);
-            hdrRow->addWidget(lbl);
+            grid->addWidget(lbl, 0, pin + 1, Qt::AlignHCenter);
         }
-        hdrRow->addStretch();
-        grid->addLayout(hdrRow);
     }
 
     auto& dest = tx ? m_txPins : m_rxPins;
@@ -174,16 +194,12 @@ void OcOutputsSwlTab::buildMatrixGrid(QGroupBox* group, bool tx)
     for (int row = 0; row < kSwlMatrixBandCount; ++row) {
         const Band band = swlBandForRow(row);
 
-        auto* bandRow = new QHBoxLayout();
-        bandRow->setSpacing(0);
-
         auto* bandLbl = new QLabel(bandLabel(band), group);
         bandLbl->setFixedWidth(52);
-        bandRow->addWidget(bandLbl);
+        grid->addWidget(bandLbl, row + 1, 0);
 
         for (int pin = 0; pin < kSwlMatrixPinCount; ++pin) {
             auto* cb = new QCheckBox(group);
-            cb->setFixedWidth(28);
             cb->setToolTip(tr("%1 OC pin %2, SWL band %3")
                                .arg(tx ? tr("TX") : tr("RX"))
                                .arg(pin + 1)
@@ -200,13 +216,12 @@ void OcOutputsSwlTab::buildMatrixGrid(QGroupBox* group, bool tx)
                         }
                     });
 
-            bandRow->addWidget(cb);
+            IndicatorColumn::fitToIndicator(cb);
+            grid->addWidget(cb, row + 1, pin + 1, Qt::AlignHCenter);
         }
-        bandRow->addStretch();
-        grid->addLayout(bandRow);
     }
 
-    grid->addStretch();
+    grid->setRowStretch(kSwlMatrixBandCount + 1, 1);
 }
 
 // ── syncFromMatrix ───────────────────────────────────────────────────────────

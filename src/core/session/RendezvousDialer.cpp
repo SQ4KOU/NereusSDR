@@ -27,6 +27,14 @@
 //               web relay's leg (RelayLeg) and its per-connection candidate
 //               sources; the computer's own proxy settings (SystemProxy).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: the connection to the service is kept past this end's open
+//               until the Core speaks on the new connection (or it closes),
+//               so the Core's introduction does not end before the Core's
+//               own end opens. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-10-15: setLeavesServiceAtOpenForTest(), the older window's way,
+//               for the Core's own fix. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousDialer.h"
@@ -51,7 +59,18 @@ namespace {
 constexpr const char* kNotReached = "The Core could not be reached from here.";
 constexpr const char* kNoDeviceKey = "This computer has no key to connect with.";
 
+bool& leavesServiceAtOpen()
+{
+    static bool leaves = false;
+    return leaves;
+}
+
 } // namespace
+
+void RendezvousDialer::setLeavesServiceAtOpenForTest(bool leaves)
+{
+    leavesServiceAtOpen() = leaves;
+}
 
 RendezvousDialer::RendezvousDialer(QObject* parent)
     : QObject(parent)
@@ -271,10 +290,42 @@ void RendezvousDialer::startOffer()
         transport->disconnect(this);
         transport->setParent(nullptr);
         m_transport = nullptr;
-        // The session runs over the connection from here; the service has
-        // nothing more to do in it.
-        m_client->stop();
+        // The session runs over the connection from here, but the service
+        // connection stays until the Core speaks on it: leaving the service
+        // ends the introduction (clientLeft), and a Core that has not yet
+        // seen its own end open closes the connection it was about to
+        // accept. Relayed or direct, its open can come after this end's.
+        // The client goes with the connection.
+        if (leavesServiceAtOpen()) {
+            m_client->stop();
+            emit ready(transport);
+            return;
+        }
+        RendezvousClient* client = m_client;
+        m_client = nullptr;
+        client->disconnect(this);
+        client->setParent(transport);
+        const QPointer<DataChannelTransport> opened(transport);
         emit ready(transport);
+        if (!opened) {
+            return; // the client went with it
+        }
+        // After ready(): whoever took the connection listens first, so the
+        // Core's hello still reaches it.
+        const QPointer<RendezvousClient> kept(client);
+        const auto leave = [kept](const char* why) {
+            if (!kept) {
+                return;
+            }
+            qCInfo(lcRendezvousDialer) << "Leaving the remote access service:" << why;
+            kept->stop();
+            kept->deleteLater();
+        };
+        connect(opened, &SessionTransport::textReceived, client,
+                [leave] { leave("the Core answered on the new connection"); },
+                Qt::SingleShotConnection);
+        connect(opened, &SessionTransport::closed, client,
+                [leave] { leave("the new connection closed"); }, Qt::SingleShotConnection);
     });
     DataChannelTransport::Options options;
     options.role = DataChannelTransport::Role::Offerer;

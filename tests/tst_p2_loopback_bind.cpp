@@ -177,6 +177,38 @@ private slots:
         QCOMPARE(connection.socketReceiveBufferForTest(), expectedReceiveBuffer());
         connection.disconnect();
     }
+
+    // The connect log gives the receive buffer in the terms it was asked,
+    // and says so when the system cut the request short. Linux reports a
+    // granted buffer doubled (socket(7), SO_RCVBUF): at its stock limit of
+    // 212,992 a socket reports 425,984.
+    void theReceiveBufferIsLoggedInTheTermsItWasAsked()
+    {
+        constexpr int asked = RadioConnection::kRadioSocketReceiveBufferBytes;
+        QCOMPARE(asked, 0x400000);
+#ifdef Q_OS_LINUX
+        QCOMPARE(RadioConnection::grantedReceiveBufferBytes(425984), 212992);
+        QCOMPARE(RadioConnection::grantedReceiveBufferBytes(2 * asked), asked);
+#else
+        QCOMPARE(RadioConnection::grantedReceiveBufferBytes(425984), 425984);
+        QCOMPARE(RadioConnection::grantedReceiveBufferBytes(asked), asked);
+#endif
+        // Whatever this system grants: never more than was asked, and the
+        // log line says which of the two it was.
+        const int granted =
+            RadioConnection::grantedReceiveBufferBytes(expectedReceiveBuffer());
+        QVERIFY2(granted > 0 && granted <= asked, qPrintable(QString::number(granted)));
+        const QString line = granted >= asked
+            ? QStringLiteral("^P2: radio socket receive buffer %1 bytes, all that was asked for$")
+                  .arg(granted)
+            : QStringLiteral("^P2: radio socket receive buffer %1 bytes of the %2 asked for")
+                  .arg(granted).arg(asked);
+        QTest::ignoreMessage(QtInfoMsg, QRegularExpression(line));
+        P2RadioConnection connection;
+        connection.init();
+        QCOMPARE(RadioConnection::grantedReceiveBufferBytes(
+                     connection.socketReceiveBufferForTest()), granted);
+    }
 };
 
 QTEST_MAIN(TestP2LoopbackBind)

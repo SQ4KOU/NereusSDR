@@ -11,6 +11,7 @@
 #include "gui/setup/AppearanceSetupPages.h"
 #include "gui/SMeterWidget.h"
 #include "gui/ColorSwatchButton.h"
+#include "gui/DisplayFftReadout.h"
 #include "gui/setup/GeneralSetupPages.h"
 #include "gui/setup/CatNetworkSetupPages.h"
 #include "gui/setup/FourO3APage.h"
@@ -26,6 +27,7 @@
 #include "gui/setup/hardware/AntennaAlexAlex1Tab.h"
 #include "gui/setup/hardware/AntennaAlexAlex2Tab.h"
 #include "gui/setup/AudioTxInputPage.h"
+#include "gui/setup/AudioOutputsPage.h"
 #include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
 #include "gui/setup/hardware/CalibrationTab.h"
 #include "gui/setup/hardware/Hl2IoBoardTab.h"
@@ -39,6 +41,8 @@
 #include "gui/setup/TestTwoTonePage.h"
 #include "gui/diagnostics/DiagnosticsPhaseHPages.h"
 #include "gui/diagnostics/RadioStatusPage.h"
+#include "core/ConnectionState.h"
+#include "core/session/IStationLink.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/NotchModel.h"
@@ -52,6 +56,8 @@
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCryptographicHash>
+#include <QFile>
 #include <QDoubleSpinBox>
 #include <QLineEdit>
 #include <QGroupBox>
@@ -62,6 +68,7 @@
 #include <QLabel>
 #include <QRadioButton>
 #include <QSpinBox>
+#include <QScopeGuard>
 #include <QSlider>
 #include <QTableWidget>
 
@@ -70,6 +77,25 @@
 using namespace NereusSDR;
 
 namespace {
+
+// The text Qt shows for a mnemonic-parsed widget text (a buddy label or a
+// button): "&&" draws one ampersand. The descriptions hold the shown text.
+QString shownText(QString text)
+{
+    return text.replace(QStringLiteral("&&"), QStringLiteral("&"));
+}
+// A Core link that offers the radio speaker (radioSpeakerVersion 1).
+class SpeakerLink : public IStationLink {
+public:
+    bool offers{false};
+    bool radioSpeakerAvailable() const override { return offers; }
+    CommandOutcome requestAddSlice(const QString&) override { return {}; }
+    CommandOutcome requestAddSliceOnPan(const QString&) override { return {}; }
+    CommandOutcome requestRemoveSlice(int) override { return {}; }
+    CommandOutcome requestActiveSlice(int) override { return {}; }
+    CommandOutcome requestSliceSampleRate(int, int) override { return {}; }
+};
+
 QJsonArray controls(const QJsonObject& category)
 {
     QJsonArray result;
@@ -143,8 +169,8 @@ void compareControl(QWidget& page, const QJsonObject& control)
         auto* spin = qobject_cast<QSpinBox*>(object);
         QVERIFY2(spin != nullptr, qPrintable(id));
         QCOMPARE(spin->minimum(), control.value("min").toInt());
-        QCOMPARE(spin->maximum(), control.value("max").toInt());
         QCOMPARE(spin->singleStep(), control.value("step").toInt());
+        QCOMPARE(spin->maximum(), control.value("max").toInt());
     } else if (kind == "decimal" || kind == "slider") {
         if (kind == "slider" && control.contains("options")) {
             auto* slider = qobject_cast<QSlider*>(object);
@@ -187,6 +213,11 @@ void compareControl(QWidget& page, const QJsonObject& control)
             }
         } else {
             auto* group = qobject_cast<QButtonGroup*>(object);
+            // Version 25: Outputs' amplifier choice is a row widget holding
+            // its button group.
+            if (group == nullptr) {
+                group = object->findChild<QButtonGroup*>();
+            }
             QVERIFY2(group != nullptr, qPrintable(id));
             const QJsonArray choices = control.value("choices").toArray();
             const QJsonArray options = control.value("options").toArray();
@@ -264,7 +295,28 @@ void compareControl(QWidget& page, const QJsonObject& control)
                  control.value("default").toString());
     }
     if (auto* widget = qobject_cast<QWidget*>(object)) {
-        QCOMPARE(widget->toolTip(), control.value("tooltip").toString());
+        // The described tooltip is the control's own: the one it shows
+        // while it is live. A page that grays a control puts the reason in
+        // its tooltip and keeps the control's own beside it, so the kept
+        // one is what is compared whenever there is one. (A row the
+        // description gates with enabledWhen opens grayed: FFT Size and the
+        // Hz/bin target are held by the Sizing choice a page opens in.)
+        // Two gates gray described rows, and each keeps the control's own
+        // tooltip in its own property: the Station gate (what the Core
+        // offers) and the Owned gate (something else sets the value:
+        // Waterfall Defaults' Low opens gray while waterfall AGC sets it).
+        // A control held by both keeps its own tooltip in whichever gate
+        // grayed it first, which the properties do not say, so that is a
+        // failure here rather than a guess.
+        const QVariant keptStation = widget->property("SetupPageSavedStationTooltip");
+        const QVariant keptOwned = widget->property("SetupPageSavedOwnedTooltip");
+        QVERIFY2(!(keptStation.isValid() && keptOwned.isValid()),
+                 qPrintable(id + QStringLiteral(" is gray through both the Station gate and the"
+                                                " Owned gate, so its own tooltip cannot be told"
+                                                " from the first gate's reason")));
+        const QVariant kept = keptStation.isValid() ? keptStation : keptOwned;
+        QCOMPARE(kept.isValid() ? kept.toString() : widget->toolTip(),
+                 control.value("tooltip").toString());
         if (control.value("availability").toObject().value("enabled") == QJsonValue(false)) {
             QVERIFY(!widget->isEnabled());
         }
@@ -291,6 +343,15 @@ private slots:
         const QJsonObject display = projectedCategory(service.display(), 11);
         const QJsonArray pages = display.value("pages").toArray();
         QCOMPARE(pages.size(), 5);
+        // The rows are listed as a version 11 peer is sent them (ids, order
+        // and defaults below). The desktop page is held to what the Core
+        // describes now, so each row is compared in its latest form: from
+        // version 28 that is where Size, the Hz/bin target and the two
+        // averaging times differ from what the older peer is sent.
+        QHash<QString, QJsonObject> latestById;
+        for (const QJsonValue& raw : controls(service.category(QStringLiteral("display")))) {
+            latestById.insert(raw.toObject().value("id").toString(), raw.toObject());
+        }
         const QStringList expectedIds{
             "display.spectrumDefaults.fftSize", "display.spectrumDefaults.window",
             "display.spectrumDefaults.hzPerBinTarget", "display.spectrumDefaults.fps",
@@ -382,7 +443,12 @@ private slots:
                     actualIds << control.value("id").toString();
                     QVERIFY(SetupDescriptionService::validateDisplaySettingBinding(control)
                             || SetupDescriptionService::validateDisplayPhoneBinding(control));
-                    compareControl(*native, control);
+                    const QJsonObject latestRow =
+                        latestById.value(control.value("id").toString());
+                    QVERIFY2(!latestRow.isEmpty(), qPrintable(control.value("id").toString()));
+                    QVERIFY(SetupDescriptionService::validateDisplaySettingBinding(latestRow)
+                            || SetupDescriptionService::validateDisplayPhoneBinding(latestRow));
+                    compareControl(*native, latestRow);
                     if (control.value("binding").toObject().contains("phone")
                         && control.value("kind") != QJsonValue("toggle")) {
                         auto* const widget = qobject_cast<QWidget*>(
@@ -411,10 +477,20 @@ private slots:
     }
     void describedV12DisplayRowsMatchNativePages()
     {
+        // V29 deliberately rebuilds the native groups, labels and Smooth
+        // question. Older peers still receive the exact frozen V28 contract;
+        // its rows must not be selected from the rebuilt live V29 document.
         RadioModel model;
+        SpectrumWidget panWidget;
+        model.setSpectrumWidget(&panWidget);
+        const auto detachPan = qScopeGuard([&model] { model.setSpectrumWidget(nullptr); });
+        PanadapterModel gridPan;
         SpectrumDefaultsPage spectrum(&model);
         WaterfallDefaultsPage waterfall(&model);
         GridScalesPage grid(&model);
+        SetupDisplayProviders gridProviders;
+        gridProviders.bandGridModel = [&gridPan]() { return &gridPan; };
+        grid.setDisplayProviders(gridProviders);
         MultimeterPage multimeter(&model);
         TxDisplayPage tx(&model);
         Display3DSetupPage threeD(nullptr);
@@ -425,78 +501,172 @@ private slots:
             {"display.gridScales", &grid}, {"display.multimeter", &multimeter},
             {"display.txDisplay", &tx}, {"display.threeD", &threeD},
             {"appearance.colorsTheme", &colours}};
+        const QHash<QString, int> expectedCounts{
+            {"display.spectrumDefaults", 19}, {"display.waterfallDefaults", 12},
+            {"display.gridScales", 12}, {"display.multimeter", 3},
+            {"display.txDisplay", 4}, {"display.threeD", 7},
+            {"appearance.colorsTheme", 1}};
+        // Independent hashes captured before the rebuild. These protect all
+        // legacy IDs/order, sections, labels, gates, ranges, tokens, defaults
+        // and reset prose, including the old Smooth question and tooltip.
+        struct FrozenContract {
+            QString category;
+            QString resource;
+            QByteArray rawHash;
+            QByteArray projectedHash;
+        };
+        const FrozenContract contracts[]{
+            {QStringLiteral("display"), QStringLiteral(":/setup/legacy/display-v28.json"),
+             QByteArray("9a292f1a97ad73d86ab905f71cc13c9c9388c95f65a59f700f6443e07310b00e"),
+             QByteArray("08b9d5a8c8b63ae860b2b358fdfdef1e8f526cee0f1b9533d1b83d017cc4deba")},
+            {QStringLiteral("appearance"), QStringLiteral(":/setup/legacy/appearance-v27.json"),
+             QByteArray("9b0e9c6ca81307a61539600728c866e8013967b891e16c70c999d4fa76c4fbff"),
+             QByteArray("9529f6bdcf4f6f4ce77169b890a527ad846cb3b84abdc100318ca7eb700b0e56")}};
+        // Appearance reset is a local client action (Mirror V12's exact
+        // appearance.colorsTheme.resetColors spec), not a Display Core
+        // binding. Admit only this complete frozen action form.
+        const QJsonObject legacyAppearanceReset = QJsonDocument::fromJson(QByteArray(
+            R"json({"id":"appearance.colorsTheme.resetColors","label":"Reset all colors to defaults","tooltip":"Reset all spectrum and waterfall colors to factory defaults. Other display settings (FPS, averaging, thresholds, etc.) are not affected.","kind":"button","binding":{"phone":"resetColors"},"applies":"live","requiresDescriptionVersion":12,"confirm":"Reset all spectrum and waterfall colors to factory defaults?\n\nCustom colors set here will be discarded. Other display settings are not affected."})json")).object();
         int described = 0;
-        QHash<QWidget*, int> taggedV12;
-        for (const QJsonObject& category : {service.category(QStringLiteral("display")),
-                                            service.category(QStringLiteral("appearance"))}) {
+        int numericDomains = 0;
+        int fftPositions = 0;
+        QHash<QString, int> actualCounts;
+        for (const FrozenContract& contract : contracts) {
+            QFile file(contract.resource);
+            QVERIFY(file.open(QIODevice::ReadOnly));
+            const QByteArray frozen = file.readAll();
+            QCOMPARE(QCryptographicHash::hash(frozen, QCryptographicHash::Sha256).toHex(),
+                     contract.rawHash);
+            const QString live = contract.category == QLatin1String("display")
+                ? service.display() : service.appearance();
+            const QByteArray payload = SetupDescriptionService::fitCategoryForVersion(live, 28).toUtf8();
+            QCOMPARE(QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex(),
+                     contract.projectedHash);
+            QCOMPARE(payload, SetupDescriptionService::fitCategoryForVersion(
+                                  QString::fromUtf8(frozen), 28).toUtf8());
+            const QJsonObject category = QJsonDocument::fromJson(payload).object();
+            const QJsonArray currentRows = controls(service.category(contract.category));
             for (const QJsonValue& rawPage : category.value("pages").toArray()) {
                 const QJsonObject page = rawPage.toObject();
                 for (const QJsonValue& rawSection : page.value("sections").toArray()) {
-                    const QJsonObject section = rawSection.toObject();
-                    for (const QJsonValue& raw : section.value("controls").toArray()) {
+                    for (const QJsonValue& raw : rawSection.toObject().value("controls").toArray()) {
                         const QJsonObject control = raw.toObject();
-                        if (control.value("requiresDescriptionVersion") != QJsonValue(12)) {
+                        const int version = control.value("requiresDescriptionVersion").toInt();
+                        // Version26 superseded the six gated level rows and
+                        // Smooth sentence; Version28 superseded FFT sizing
+                        // and the two averaging times. All58 remain checked.
+                        if (version != 12 && version != 26 && version != 28) { continue; }
+                        ++described;
+                        ++actualCounts[page.value("id").toString()];
+                        const QString id = control.value("id").toString();
+                        const bool setting = control.value("binding").toObject().contains("setting");
+                        const auto admitted = [setting, legacyAppearanceReset](const QJsonObject& row) {
+                            if (row.value("id") == QJsonValue("appearance.colorsTheme.resetColors")) {
+                                return row == legacyAppearanceReset;
+                            }
+                            return setting ? SetupDescriptionService::validateDisplaySettingBinding(row)
+                                           : SetupDescriptionService::validateDisplayPhoneBinding(row);
+                        };
+                        QVERIFY2(admitted(control), qPrintable(id));
+                        QJsonObject changed = control;
+                        changed.insert("binding", QJsonObject{{setting ? "setting" : "phone", "unknownLegacyKey"}});
+                        QVERIFY2(!admitted(changed), qPrintable(id));
+
+                        // Current native numeric semantics are still comparable
+                        // even where V29 relocates a row or changes its caption.
+                        // Require an exact current binding/kind/domain match;
+                        // no missing-row or changed-domain conditional skip.
+                        if (!control.contains("min") && id != QLatin1String("display.spectrumDefaults.fftSize")) {
                             continue;
                         }
-                        const QString id = control.value("id").toString();
-                        QWidget* native = nativeByPage.value(page.value("id").toString());
-                        QVERIFY2(native != nullptr, qPrintable(id));
-                        ++described;
-                        ++taggedV12[native];
-                        compareControl(*native, control);
-                        auto* widget = qobject_cast<QWidget*>(bySetupId(*native, id));
-                        QVERIFY2(widget != nullptr, qPrintable(id));
-                        // A row inside a native group sits in the section of
-                        // that title.
-                        for (QWidget* parent = widget->parentWidget(); parent;
-                             parent = parent->parentWidget()) {
-                            if (auto* group = qobject_cast<QGroupBox*>(parent)) {
-                                QCOMPARE(group->title(), section.value("title").toString());
-                                break;
+                        QJsonObject current;
+                        for (const QJsonValue& candidate : currentRows) {
+                            if (candidate.toObject().value("binding") == control.value("binding")) {
+                                QVERIFY2(current.isEmpty(), qPrintable(id + " has duplicate binding"));
+                                current = candidate.toObject();
                             }
                         }
-                        const QString kind = control.value("kind").toString();
-                        if (kind == QLatin1String("toggle") || kind == QLatin1String("button")) {
-                            continue;
+                        QVERIFY2(!current.isEmpty(), qPrintable(id));
+                        for (const QString& field : {QStringLiteral("kind"), QStringLiteral("min"),
+                             QStringLiteral("max"), QStringLiteral("step"), QStringLiteral("options")}) {
+                            QCOMPARE(current.value(field), control.value(field));
                         }
-                        const QString label = nativeRowLabel(*native, widget);
-                        if (control.contains("perBand")) {
-                            // The desktop names the band being edited.
-                            PanadapterModel* pan = model.panadapters().isEmpty()
-                                ? nullptr : model.panadapters().first();
-                            const QString perBand = control.value("perBand").toObject()
-                                .value("label").toString();
-                            QVERIFY2(label == control.value("label").toString()
-                                         || (pan && label == perBand.arg(bandLabel(pan->band()))),
-                                     qPrintable(id + QStringLiteral(": ") + label));
+                        QWidget* native = nativeByPage.value(page.value("id").toString());
+                        QVERIFY2(native != nullptr, qPrintable(id));
+                        QObject* object = bySetupId(*native, id);
+                        QVERIFY2(object != nullptr, qPrintable(id));
+                        if (id == QLatin1String("display.spectrumDefaults.fftSize")) {
+                            auto* slider = qobject_cast<QSlider*>(object);
+                            QVERIFY(slider != nullptr);
+                            const QJsonArray options = control.value("options").toArray();
+                            QCOMPARE(slider->minimum(), 0);
+                            QCOMPARE(slider->maximum(), options.size() - 1);
+                            QCOMPARE(slider->singleStep(), 1);
+                            for (int i = 0; i < options.size(); ++i) {
+                                QCOMPARE(options.at(i).toObject().value("value"), QJsonValue(4096 << i));
+                            }
+                            ++fftPositions;
                         } else {
-                            QCOMPARE(label, control.value("label").toString());
+                            double minimum = 0;
+                            double maximum = 0;
+                            double step = 0;
+                            if (auto* spin = qobject_cast<QDoubleSpinBox*>(object)) {
+                                minimum = spin->minimum(); maximum = spin->maximum(); step = spin->singleStep();
+                            } else if (auto* spin = qobject_cast<QSpinBox*>(object)) {
+                                minimum = spin->minimum(); maximum = spin->maximum(); step = spin->singleStep();
+                            } else {
+                                auto* slider = qobject_cast<QSlider*>(object);
+                                QVERIFY2(slider != nullptr, qPrintable(id));
+                                const double scale = slider->property("nereusSetupScale").isValid()
+                                    ? slider->property("nereusSetupScale").toDouble() : 1.0;
+                                minimum = slider->minimum() / scale;
+                                maximum = slider->maximum() / scale;
+                                step = slider->singleStep() / scale;
+                            }
+                            QCOMPARE(minimum, control.value("min").toDouble());
+                            QCOMPARE(maximum, control.value("max").toDouble());
+                            QCOMPARE(step, control.value("step").toDouble());
+                            ++numericDomains;
                         }
                     }
                 }
             }
         }
-        QCOMPARE(described, 53);
-        // The Spectrum Defaults section of the two top actions and the
-        // Appearance reset carry no native group; the rest match groups.
-        QCOMPARE(taggedV12.value(&grid), 12);
-        QCOMPARE(taggedV12.value(&threeD), 7);
-        // Every tagged widget on the two new pages is described.
-        for (QWidget* page : {static_cast<QWidget*>(&grid), static_cast<QWidget*>(&threeD)}) {
-            int tagged = 0;
-            for (QObject* object : page->findChildren<QObject*>()) {
-                tagged += object->property("nereusSetupId").isValid() ? 1 : 0;
-            }
-            QCOMPARE(tagged, taggedV12.value(page));
+        QCOMPARE(described, 58);
+        QCOMPARE(actualCounts, expectedCounts);
+        QCOMPARE(numericDomains, 20);
+        QCOMPARE(fftPositions, 1);
+    }
+
+    // Waterfall AGC ships on, so Waterfall Defaults opens with Low gray: the
+    // AGC sentence is its tooltip, and its own tooltip, the described one,
+    // is the one the Owned gate keeps.
+    void waterfallLowGrayUnderAgcKeepsItsDescribedTooltip()
+    {
+        RadioModel model;
+        SpectrumWidget panWidget;
+        model.setSpectrumWidget(&panWidget);
+        const auto detachPan = qScopeGuard([&model] { model.setSpectrumWidget(nullptr); });
+        WaterfallDefaultsPage waterfall(&model);
+        SetupDescriptionService service;
+        const QString id = QStringLiteral("display.waterfallDefaults.lowThreshold");
+        auto* low = qobject_cast<QWidget*>(bySetupId(waterfall, id));
+        QVERIFY(low != nullptr);
+        QVERIFY(!low->isEnabled());
+        QCOMPARE(low->toolTip(),
+                 QStringLiteral("AGC is setting Low. Turn AGC off to set it yourself."));
+        QVERIFY(!low->property("SetupPageSavedStationTooltip").isValid());
+        const QVariant kept = low->property("SetupPageSavedOwnedTooltip");
+        QVERIFY(kept.isValid());
+        int rows = 0;
+        for (const QJsonValue& raw : controls(service.category(QStringLiteral("display")))) {
+            const QJsonObject control = raw.toObject();
+            if (control.value("id").toString() != id) { continue; }
+            ++rows;
+            QVERIFY(!control.value("tooltip").toString().isEmpty());
+            QCOMPARE(kept.toString(), control.value("tooltip").toString());
         }
-        // Rows built but not described carry no id.
-        for (QObject* object : spectrum.findChildren<QObject*>()) {
-            const QString id = object->property("nereusSetupId").toString();
-            QVERIFY(!id.contains(QLatin1String("lineWidth"), Qt::CaseSensitive)
-                    || id == QLatin1String("display.spectrumDefaults.noiseFloorLineWidth"));
-            QVERIFY(!id.contains(QLatin1String("calOffset")));
-            QVERIFY(!id.contains(QLatin1String("threadPriority")));
-        }
+        QVERIFY(rows > 0);
     }
 
     // Normalize applies to the Average, Sample and RMS detectors only
@@ -547,7 +717,9 @@ private slots:
         RadioModel model;
         ColorsThemePage page(&model);
         SetupDescriptionService service;
-        const QJsonObject appearance = projectedCategory(service.appearance(), 11);
+        // Version 27: Trace Color and Fill Color, as the page has two
+        // pickers (rulings wave R3).
+        const QJsonObject appearance = projectedCategory(service.appearance(), 27);
         QCOMPARE(appearance.value("category").toObject().value("where"), QJsonValue("phone"));
         QCOMPARE(appearance.value("category").toObject().value("coverage"), QJsonValue("partial"));
         const QJsonArray pages = appearance.value("pages").toArray();
@@ -556,12 +728,12 @@ private slots:
         QCOMPARE(pages.first().toObject().value("where"), QJsonValue("phone"));
         QCOMPARE(pages.first().toObject().value("coverage"), QJsonValue("partial"));
         const QJsonArray sections = pages.first().toObject().value("sections").toArray();
-        QCOMPARE(sections.size(), 1);
+        QCOMPARE(sections.size(), 2);
         QCOMPARE(sections.first().toObject().value("title"), QJsonValue("Spectrum"));
         const QJsonArray described = sections.first().toObject().value("controls").toArray();
-        QCOMPARE(described.size(), 10);
+        QCOMPARE(described.size(), 11);
         const QStringList expectedKeys{
-            "DisplayFillColor", "DisplayGridColor", "DisplayGridFineColor",
+            "DisplayTraceColor", "DisplayFillColor", "DisplayGridColor", "DisplayGridFineColor",
             "DisplayHGridColor", "DisplayGridTextColor", "DisplayBandEdgeColor",
             "DisplayRxZeroLineColor", "DisplayTxZeroLineColor", "DisplayRxFilterColor",
             "DisplayTxFilterColor"};
@@ -578,13 +750,19 @@ private slots:
             QVERIFY(form != nullptr);
             auto* label = qobject_cast<QLabel*>(form->labelForField(swatch));
             QVERIFY(label != nullptr);
-            QCOMPARE(label->text(), control.value("label").toString());
+            QCOMPARE(shownText(label->text()), control.value("label").toString());
+            // The two rows version 27 describes carry the page's sentences.
+            if (actualKeys.size() <= 2) {
+                QCOMPARE(swatch->toolTip(), control.value("tooltip").toString());
+            }
         }
+        QCOMPARE(described.at(0).toObject().value("label"), QJsonValue("Trace Color:"));
+        QCOMPARE(described.at(1).toObject().value("label"), QJsonValue("Fill Color:"));
         QCOMPARE(actualKeys, expectedKeys);
         QVERIFY(bySetupId(page, QStringLiteral("appearance.colorsTheme.waterfallLowColor")) == nullptr);
         model.setBoardForTest(HPSDRHW::HermesLite);
         service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model);
-        QCOMPARE(projectedCategory(service.appearance(), 11), appearance);
+        QCOMPARE(projectedCategory(service.appearance(), 27), appearance);
     }
     void describedMeterStylesMatchNativePage()
     {
@@ -689,7 +867,7 @@ private slots:
                 && object->property("nereusSetupId").toString() == id) {
                 auto* button = qobject_cast<QAbstractButton*>(object);
                 QVERIFY2(button != nullptr, qPrintable(id));
-                QCOMPARE(button->text(), control.value("label").toString());
+                QCOMPARE(shownText(button->text()), control.value("label").toString());
             }
             if (kind == "integer") {
                 auto* spin = qobject_cast<QSpinBox*>(object);
@@ -1656,7 +1834,8 @@ private slots:
         QTest::addColumn<int>("board");
         QTest::addColumn<int>("radioMicRows");
         // Radio codec lane: the G2's Mic Tip-Ring (version 24), and the
-        // HL2's Hermes rows through its audio add-on board.
+        // HL2's Hermes rows through its audio add-on board. Version 25 adds
+        // Outputs' three radio speaker rows on every board.
         QTest::newRow("ANAN-G2") << int(HPSDRHW::Saturn) << 5;
         QTest::newRow("HL2") << int(HPSDRHW::HermesLite) << 3;
         QTest::newRow("Hermes") << int(HPSDRHW::Hermes) << 3;
@@ -1671,23 +1850,74 @@ private slots:
         model.setBoardForTest(static_cast<HPSDRHW>(board));
         TxProfileSetupPage page(&model, nullptr, &model.transmitModel());
         AudioTxInputPage input(&model);
+        AudioOutputsPage outputs(&model);
         SetupDescriptionService service;
         service.setBoardCapabilities(model.boardCapabilities());
         const QJsonObject audio = service.category(QStringLiteral("audio"));
         QVERIFY(!audio.isEmpty());
         const QJsonArray pages = audio.value(QStringLiteral("pages")).toArray();
-        QCOMPARE(pages.size(), 2);
-        QCOMPARE(pages.first().toObject().value(QStringLiteral("id")),
+        QCOMPARE(pages.size(), 3);
+        QCOMPARE(pages.at(0).toObject().value(QStringLiteral("id")),
                  QJsonValue(QStringLiteral("audio.txInput")));
-        QCOMPARE(pages.last().toObject().value(QStringLiteral("id")),
+        QCOMPARE(pages.at(1).toObject().value(QStringLiteral("id")),
+                 QJsonValue(QStringLiteral("audio.outputs")));
+        QCOMPARE(pages.at(2).toObject().value(QStringLiteral("id")),
                  QJsonValue(QStringLiteral("audio.txProfile")));
+        // Version 25: the described titles are the desktop pages' own.
+        QCOMPARE(pages.at(0).toObject().value(QStringLiteral("title")),
+                 QJsonValue(QStringLiteral("Microphone")));
+        QCOMPARE(pages.at(1).toObject().value(QStringLiteral("title")),
+                 QJsonValue(QStringLiteral("Outputs")));
         const QJsonArray described = controls(audio);
-        QCOMPARE(described.size(), 7 + radioMicRows);
+        QCOMPARE(described.size(), 7 + radioMicRows + 3);
+        int outputRows = 0;
         for (const QJsonValue& raw : described) {
             const QJsonObject control = raw.toObject();
-            compareControl(control.value("id").toString().startsWith("audio.txInput.")
-                               ? static_cast<QWidget&>(input) : static_cast<QWidget&>(page),
+            const QString id = control.value("id").toString();
+            if (id.startsWith("audio.outputs.")) {
+                // The described rows are the radio speaker at the Core:
+                // describedAudioOutputsRowsMatchTheRemoteWindow compares
+                // them with a remote window's Outputs page.
+                QVERIFY2(bySetupId(outputs, id) != nullptr, qPrintable(id));
+                ++outputRows;
+                continue;
+            }
+            compareControl(id.startsWith("audio.txInput.") ? static_cast<QWidget&>(input)
+                                                           : static_cast<QWidget&>(page),
                            control);
+        }
+        QCOMPARE(outputRows, 3);
+    }
+
+    // Version 25 (R-SPK-23): Outputs' radio speaker rows are the speaker
+    // at the Core, as a remote window's Outputs page shows it once the Core
+    // offers the speaker (radioSpeakerVersion 1) and its amplifier.
+    void describedAudioOutputsRowsMatchTheRemoteWindow()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        SpeakerLink link;
+        remote.attachStation(&link);
+        const auto detach = qScopeGuard([&remote]() { remote.attachStation(nullptr); });
+        remote.setStationConnectionState(ConnectionState::Connected);
+        link.offers = true;
+        QVERIFY(remote.applyStationRadioSpeakerValue("radioSpeakerAvailability",
+                                                     RadioModel::kRadioSpeakerAvailable));
+        QVERIFY(remote.applyStationRadioSpeakerValue("speakerAmplifierAvailable", true));
+        AudioOutputsPage outputs(&remote);
+        SetupDescriptionService service;
+        const QJsonObject audio = service.category(QStringLiteral("audio"));
+        QJsonArray described;
+        for (const QJsonValue& page : audio.value(QStringLiteral("pages")).toArray()) {
+            if (page.toObject().value(QStringLiteral("id"))
+                == QJsonValue(QStringLiteral("audio.outputs"))) {
+                QCOMPARE(page.toObject().value(QStringLiteral("where")),
+                         QJsonValue(QStringLiteral("station")));
+                described = controls(QJsonObject{{QStringLiteral("pages"), QJsonArray{page}}});
+            }
+        }
+        QCOMPARE(described.size(), 3);
+        for (const QJsonValue& raw : described) {
+            compareControl(outputs, raw.toObject());
         }
     }
 

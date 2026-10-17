@@ -23,6 +23,9 @@
 // =================================================================
 //
 // Modification history (NereusSDR):
+//   2026-10-14: Check shared copy ownership, acknowledged ordinary
+//                 handoff and completed overwrite semantics. J.J. Boyd
+//                 (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-04-29 — New test for Phase 3M-1c TX pump architecture redesign v3
 //                 by J.J. Boyd (KG4VCF), with AI-assisted implementation
 //                 via Anthropic Claude Code.
@@ -46,13 +49,17 @@
 #include <QtTest/QtTest>
 #include <QObject>
 #include <QThread>
+#include <QMutex>
+#include <QSemaphore>
 
 #include <atomic>
 #include <chrono>
 #include <thread>
 #include <vector>
 
+#define private public
 #include "core/audio/TxMicSource.h"
+#undef private
 
 using namespace NereusSDR;
 
@@ -263,30 +270,48 @@ private slots:
         QCOMPARE(consumerSawRunning.load(), false);
     }
 
+    // A consumer must respect producer ownership even when the ring is
+    // stable. No writer changes samples during this exclusion check.
+    void drainBlock_waitsForProducerOwnership()
+    {
+        TxMicSource src;
+        src.start();
+        const std::vector<float> input(TxMicSource::kBlockFrames, 42.0f);
+        src.inbound(input.data(), static_cast<int>(input.size()));
+        QVERIFY(src.waitForBlock(0));
+        std::vector<double> output(2 * TxMicSource::kBlockFrames, -1.0);
+        QSemaphore consumerStarted;
+        QSemaphore consumerFinished;
+
+        src.m_csIn.lock();
+        std::thread consumer([&]() {
+            consumerStarted.release();
+            src.drainBlock(output.data());
+            consumerFinished.release();
+        });
+        consumerStarted.acquire();
+        const bool copiedWhileProducerOwned = consumerFinished.tryAcquire(1, 250);
+        src.m_csIn.unlock();
+        consumer.join();
+
+        QVERIFY2(!copiedWhileProducerOwned,
+                 "drainBlock copied samples while producer ownership was held");
+        for (int i = 0; i < TxMicSource::kBlockFrames; ++i) {
+            QCOMPARE(output[2 * i], 42.0);
+            QCOMPARE(output[2 * i + 1], 0.0);
+        }
+        src.stop();
+    }
+
     // ── 8. Concurrent producer + consumer with known sequence ──────────────
     //
     // Producer pushes N blocks of monotonically-increasing sample values.
     // Consumer drains all N blocks.  Verify the drained sequence equals
     // the produced sequence in order.  Mirrors the SPSC discipline of
     // Thetis Inbound() + cm_main + cmdata().
-    // The ring overwrites on overrun by design (TxMicSource.h:112-118,
-    // porting Thetis Inbound() at cmbuffs.c:108-109 [v2.10.3.13], whose own
-    // comment records the same absent overwrite check).  The semaphore
-    // counts blocks *produced*, so a consumer that falls behind still
-    // completes every drain; it simply reads data the producer has since
-    // replaced.  32 blocks are pushed 50 us apart through an 8-block ring,
-    // so under load the producer can and does lap the consumer.
-    //
-    // "No data corruption" therefore cannot mean "every sample survives" —
-    // that was never the contract.  What IS guaranteed follows from both
-    // indices advancing in aligned kBlockFrames steps: drain n reads the
-    // slot the producer wrote block n into, so it yields a whole, intact
-    // produced block, either block n or whichever block later lapped it at
-    // n + k*kRingBlockMultiple.
-    //
-    // Deliberately NOT asserted: that observed block indices increase.
-    // Drain n can observe n+8 while drain n+1 observes n+1, so that
-    // assertion would itself be load-sensitive.
+    // Bound the ordinary handoff with an acknowledgment after each drain,
+    // so correctness does not depend on relative thread scheduling. Overflow
+    // policy is checked separately after all producer writes have completed.
     void concurrent_producerConsumer_noDataCorruption()
     {
         TxMicSource src;
@@ -311,12 +336,16 @@ private slots:
         std::vector<bool>   qChannelZero(static_cast<size_t>(kBlocks), false);
         std::vector<bool>   acquired(static_cast<size_t>(kBlocks), false);
 
+        QSemaphore drained;
+        std::atomic<bool> producerAcknowledgedAll{true};
         std::thread prod([&] {
-            // Push in chunks of 1 block at a time with a short yield
-            // between, simulating the 1.33-ms-per-block radio cadence.
+            // Do not reuse storage until the consumer acknowledges its copy.
             for (int blk = 0; blk < kBlocks; ++blk) {
                 src.inbound(produced.data() + blk * kBlk, kBlk);
-                std::this_thread::sleep_for(std::chrono::microseconds(50));
+                if (!drained.tryAcquire(1, 2000)) {
+                    producerAcknowledgedAll.store(false);
+                    break;
+                }
             }
         });
 
@@ -344,12 +373,14 @@ private slots:
                 }
                 contiguous[u]   = runContiguous;
                 qChannelZero[u] = runQZero;
+                drained.release();
             }
         });
 
         prod.join();
         cons.join();
 
+        QVERIFY(producerAcknowledgedAll.load());
         int lapped = 0;
         for (int blk = 0; blk < kBlocks; ++blk) {
             const size_t u = static_cast<size_t>(blk);
@@ -375,6 +406,7 @@ private slots:
                                     .arg(blk).arg(first)));
 
             const int observed = static_cast<int>(firstInt / kBlk);
+            QCOMPARE(observed, blk);
             QVERIFY2(observed >= blk && observed < kBlocks,
                      qPrintable(QStringLiteral("drain %1 returned out-of-range block %2")
                                     .arg(blk).arg(observed)));
@@ -394,6 +426,35 @@ private slots:
                   "(documented overrun, not a failure)", lapped, kBlocks);
         }
 
+        src.stop();
+    }
+
+    // Completed overwrites retain the existing selected-slot and token
+    // policy. All writes finish before any consumer copy starts.
+    void completedOverwrite_preservesSelectedSlotsAndNotifications()
+    {
+        TxMicSource src;
+        src.start();
+        constexpr int kBlocks = 12;
+        constexpr int kBlk = TxMicSource::kBlockFrames;
+        const int expectedBlocks[kBlocks] = {8, 9, 10, 11, 4, 5, 6, 7, 8, 9, 10, 11};
+        std::vector<float> input(kBlk);
+        for (int block = 0; block < kBlocks; ++block) {
+            for (int i = 0; i < kBlk; ++i) {
+                input[i] = static_cast<float>(block * kBlk + i);
+            }
+            src.inbound(input.data(), kBlk);
+        }
+        std::vector<double> output(2 * kBlk);
+        for (int block = 0; block < kBlocks; ++block) {
+            QVERIFY(src.waitForBlock(0));
+            src.drainBlock(output.data());
+            for (int i = 0; i < kBlk; ++i) {
+                QCOMPARE(output[2 * i], static_cast<double>(expectedBlocks[block] * kBlk + i));
+                QCOMPARE(output[2 * i + 1], 0.0);
+            }
+        }
+        QVERIFY(!src.waitForBlock(0));
         src.stop();
     }
 

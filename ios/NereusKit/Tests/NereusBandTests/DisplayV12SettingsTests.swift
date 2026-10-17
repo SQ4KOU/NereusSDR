@@ -21,7 +21,8 @@ import Testing
         settings.waterfallNfAgc = true
         #expect(settings.waterfallLevelMode == .noiseFloorAgc)
         settings.waterfallAgc = false
-        #expect(settings.waterfallLevelMode == .noiseFloorAgc)
+        // NF is an option under AGC; its retained inactive bit does not choose Floor.
+        #expect(settings.waterfallLevelMode == .manual)
         settings.waterfallNfAgc = false
         #expect(settings.waterfallLevelMode == .manual)
         // Choosing a mode sets the switches that give it.

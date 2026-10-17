@@ -48,6 +48,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12  J.J. Boyd / KG4VCF  Release exported FFTW 3 wisdom strings
+//                                    with C free, as its API requires.
+//                                    AI-assisted via OpenAI Codex.
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 parity mini-round: created
 //                                    from the harness's cache.
 //                                    AI-assisted via Anthropic Claude Code.
@@ -97,7 +100,9 @@ std::string exportedWisdom()
         return {};
     }
     std::string out(wisdom);
-    fftw_free(wisdom);
+    // FFTW 3 requires C free for fftw_export_wisdom_to_string().
+    // https://www.fftw.org/fftw3_doc/Wisdom-Export.html
+    std::free(wisdom);
     return out;
 }
 

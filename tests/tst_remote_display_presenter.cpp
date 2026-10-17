@@ -15,8 +15,10 @@
 // =================================================================
 
 #include "gui/RemoteDisplayPresenter.h"
+#include "gui/SpectrumWidget.h"
 #include "core/session/media/SpectrumEndpoint.h"
 
+#include <QSignalSpy>
 #include <QtTest>
 
 #include <cmath>
@@ -99,6 +101,71 @@ class TstRemoteDisplayPresenter : public QObject {
     Q_OBJECT
 
 private slots:
+    void queuedFrameAfterLossKeepsPictureButNotCurrentImd()
+    {
+        SpectrumWidget widget;
+        widget.resize(420, 240);
+        widget.setDisplayDuplex(true);
+        widget.setMoxOverlay(true);
+        widget.setTestingIMD(true);
+        widget.setShowIMDMeasurements(true);
+        SpectrumEndpointContext context;
+        context.codec = {43, 1, -180.0f, 0.0f, 400, 400, 0};
+        context.exactCentreHz = 14200000.0;
+        context.exactSpanHz = 48000.0;
+        widget.setRemoteSpectrumContext(context, 14200000.0, 192000.0);
+        const RemoteSpectrumCapture capture{context, 14200000.0, 192000.0};
+        const auto frame = [&](quint32 sequence, qint64 producerNs, float level) {
+            DisplayCodecFrame result;
+            result.context = context.codec;
+            result.encoderSequence = sequence;
+            result.producerTimestamp = quint64(producerNs);
+            result.waterfallAdvance = true;
+            result.traceDbm = QVector<float>(400, level);
+            result.waterfallDbm = QVector<float>(400, level);
+            return result;
+        };
+        RemoteDisplayPresenter presenter;
+        presenter.setRowPeriodNs(kPeriodNs);
+        presenter.push(frame(1, kPeriodNs, -90.0f), capture);
+        auto due = presenter.takeDue(kPeriodNs, qint64(0));
+        QCOMPARE(due.size(), size_t(1));
+        QVERIFY(widget.updateRemoteSpectrum(due.front().frame, due.front().capture,
+                                            due.front().measurementCurrent));
+        QVERIFY(widget.imdMeasurementFrame().context.sourceEligible);
+        QSignalSpy measurementChanges(&widget, &SpectrumWidget::imdMeasurementChanged);
+
+        presenter.push(frame(2, 2 * kPeriodNs, -95.0f), capture);
+        QVERIFY(presenter.takeDue(kPeriodNs, qint64(0)).empty());
+        presenter.noteLoss();
+        widget.noteImdReceiverInputLost();
+        QCOMPARE(widget.imdMeasurementFrame().status, ImdStatus::WaitingForSpectrum);
+        QCOMPARE(measurementChanges.count(), 1);
+        const int rowsBefore = widget.remoteRowQueueDepthForTest();
+        due = presenter.takeDue(2 * kPeriodNs, qint64(0));
+        QCOMPARE(due.size(), size_t(1));
+        QCOMPARE(due.front().kind, RemoteDisplayPresenter::Kind::Frame);
+        QVERIFY(!due.front().measurementCurrent);
+        QVERIFY(presenter.waitingForKeyframe());
+        QVERIFY(widget.updateRemoteSpectrum(due.front().frame, due.front().capture,
+                                            due.front().measurementCurrent));
+        QCOMPARE(widget.renderedPixels().at(0), -95.0f);
+        QCOMPARE(widget.remoteRowQueueDepthForTest(), rowsBefore + 1);
+        QCOMPARE(widget.imdMeasurementFrame().status, ImdStatus::WaitingForSpectrum);
+        QVERIFY(!widget.imdMeasurementFrame().context.sourceEligible);
+        QCOMPARE(measurementChanges.count(), 1);
+
+        presenter.push(frame(3, 3 * kPeriodNs, -85.0f), capture); // recovery keyframe
+        due = presenter.takeDue(3 * kPeriodNs, qint64(0));
+        QCOMPARE(due.size(), size_t(1));
+        QVERIFY(!presenter.waitingForKeyframe());
+        QVERIFY(due.front().measurementCurrent);
+        QVERIFY(widget.updateRemoteSpectrum(due.front().frame, due.front().capture,
+                                            due.front().measurementCurrent));
+        QVERIFY(widget.imdMeasurementFrame().context.sourceEligible);
+        QCOMPARE(measurementChanges.count(), 2);
+    }
+
     void captureSnapshot_survivesDelayBlendRepeatAndRenewal()
     {
         RemoteDisplayPresenter presenter;
@@ -549,5 +616,5 @@ private slots:
     }
 };
 
-QTEST_GUILESS_MAIN(TstRemoteDisplayPresenter)
+QTEST_MAIN(TstRemoteDisplayPresenter)
 #include "tst_remote_display_presenter.moc"

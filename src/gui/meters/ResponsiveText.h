@@ -1,5 +1,10 @@
 // no-port-check: NereusSDR logical-object typography; upstream studied, no port.
+// Modification history (NereusSDR):
+//   2026-10-12 - Apply the approved workspace-only 11 px text minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
 #pragma once
+#include "gui/styles/WorkspacePreview.h"
 #include <QFont>
 #include <QFontMetricsF>
 #include <QPainter>
@@ -14,11 +19,19 @@ inline double objectTextScale(const QRectF& object, const QSizeF& reference) {
 inline QFont fitObjectText(QFont font, double requested, const QString& text,
                            const QRectF& box, bool points=false, int flags=Qt::TextSingleLine, QPaintDevice* device=nullptr) {
     const auto size=[&](double value) {
-        if(points) { font.setPointSizeF(qMax(.1,value)); }
-        else { font.setPixelSize(qMax(1,int(std::floor(value)))); }
+        if(points) {
+            font.setPointSizeF(qMax(.1,value));
+            // Point fonts resolve against the actual paint device. Preserve
+            // their unit and exact size whenever they already meet the floor.
+            font = WorkspacePreview::readableFont(font,device);
+        }
+        else { font.setPixelSize(WorkspacePreview::readableTextPixelSize(qMax(1,int(std::floor(value))))); }
     };
     size(requested);
     // Binary search final metrics, including bearings and wrapped lines.
+    // Every candidate respects the workspace floor. Keep the original search
+    // interval and pass count so already-readable fitted point sizes remain
+    // bit-for-bit unchanged; an undersized box returns the minimum font.
     double low=0,high=qMax(.1,requested);
     const auto fits=[&]() {
         const QFontMetricsF metrics(font,device);

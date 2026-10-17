@@ -8,10 +8,14 @@ set -euo pipefail
 # productbuild .pkg. The HAL component's postinstall script restarts
 # coreaudiod with a macOS 14.4+ killall fallback (see hal-postinstall.sh).
 # Ported from AetherSDR's packaging/macos/build-installer.sh.
+# 2026-10-12: J.J. Boyd / OpenAI Codex: reject stale VAX factory metadata
+# in source, reused bundles, staging and the extracted component payload.
 
 BUILD_DIR="${1:-build}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PKG_DIR="${BUILD_DIR}/pkg-staging"
+VAX_VALIDATOR="${SCRIPT_DIR}/../../scripts/verify_vax_factory.py"
+python3 "$VAX_VALIDATOR" --plist "${SCRIPT_DIR}/../../hal-plugin/Info.plist"
 # Prefer caller-supplied VERSION (release.yml exports the full tag version,
 # including any -rcN / -alpha / -beta suffix). Fall back to parsing
 # CMakeLists.txt for local invocations. The CMake regex matches only the
@@ -53,6 +57,13 @@ if [ -f "hal-plugin/CMakeLists.txt" ]; then
     fi
 fi
 
+# Check the selected existing bundle before staging; reuse must fail closed.
+if [ -d "${HAL_BUILD}/NereusSDRVAX.driver" ]; then
+    python3 "$VAX_VALIDATOR" --plist "${HAL_BUILD}/NereusSDRVAX.driver/Contents/Info.plist"
+elif [ -d "${BUILD_DIR}/NereusSDRVAX.driver" ]; then
+    python3 "$VAX_VALIDATOR" --plist "${BUILD_DIR}/NereusSDRVAX.driver/Contents/Info.plist"
+fi
+
 # 2. Prepare staging
 rm -rf "${PKG_DIR}"
 mkdir -p "${PKG_DIR}/app" "${PKG_DIR}/hal" "${PKG_DIR}/scripts"
@@ -70,6 +81,8 @@ else
     echo "The HAL plugin must be built before packaging. Check that hal-plugin/ exists and builds cleanly." >&2
     exit 1
 fi
+
+python3 "$VAX_VALIDATOR" --plist "${PKG_DIR}/hal/NereusSDRVAX.driver/Contents/Info.plist"
 
 # 3. Install postinstall script (standalone file; see hal-postinstall.sh)
 cp "${SCRIPT_DIR}/hal-postinstall.sh" "${PKG_DIR}/scripts/postinstall"
@@ -92,6 +105,8 @@ if [ -d "${PKG_DIR}/hal/NereusSDRVAX.driver" ]; then
         --scripts "${PKG_DIR}/scripts" \
         "${PKG_DIR}/NereusSDR-vax.pkg"
 fi
+
+python3 "$VAX_VALIDATOR" --package "${PKG_DIR}/NereusSDR-vax.pkg"
 
 # 5. Create distribution XML
 cat > "${PKG_DIR}/Distribution.xml" << DISTXML
@@ -170,6 +185,7 @@ else
 fi
 PRODUCTBUILD_ARGS+=("${BUILD_DIR}/NereusSDR-${VERSION}-${PKG_SUFFIX}.pkg")
 productbuild "${PRODUCTBUILD_ARGS[@]}"
+python3 "$VAX_VALIDATOR" --product-package "${BUILD_DIR}/NereusSDR-${VERSION}-${PKG_SUFFIX}.pkg"
 
 echo ""
 echo "=== Installer created: ${BUILD_DIR}/NereusSDR-${VERSION}-${PKG_SUFFIX}.pkg ==="

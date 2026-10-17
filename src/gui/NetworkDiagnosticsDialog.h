@@ -22,6 +22,8 @@
 //  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-13 — Opt-in ASIO buffer logging; no visible diagnostics change.
+//                J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-04-30 — Created for Phase 3Q sub-PR-3 (shell-chrome redesign).
 //                NereusSDR-original code (no Thetis port; no upstream
 //                attribution required). J.J. Boyd (KG4VCF), with
@@ -31,6 +33,9 @@
 #include <QDialog>
 #include <QPointer>
 #include <QTimer>
+
+#include <array>
+#include <cstdint>
 
 class QGridLayout;
 class QLabel;
@@ -69,6 +74,7 @@ private slots:
 
 private:
     void buildUi();
+    void logAsioBufferDiagnostics();
     void buildConnectionSection(QGridLayout* grid, int& row);
     void buildNetworkSection(QGridLayout* grid, int& row);
     void buildAudioSection(QGridLayout* grid, int& row);
@@ -79,6 +85,20 @@ private:
     QPointer<RadioModel>  m_model;
     QPointer<AudioEngine> m_audio;
     QTimer                m_refreshTimer;
+    // Observation baselines only; independent speakers/headphones. The
+    // generation labels baseline changes, not a driver-reset event count.
+    struct AsioBaseline {
+        bool valid = false;
+        std::uint64_t instanceId = 0;
+        quint64 roleGeneration = 0;
+        std::uint64_t dryRuns = 0;
+        std::uint64_t overruns = 0;
+        std::int64_t capturedNs = 0;
+        bool moxObserved = false;
+        quint64 generation = 0;
+    };
+    std::array<AsioBaseline, 2> m_asioBaselines{};
+    std::int64_t m_asioLastLogNs = 0;
 
     // Connection section labels
     QLabel* m_statusLabel{nullptr};

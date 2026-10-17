@@ -67,6 +67,9 @@ private:
     void refresh();
     void scan();
     void queueConnect(const QString& key);
+    void cancelSelectorDismissal();
+    void armSelectorDismissal(const QString& localRadioMac = {});
+    void reconnectFromSelector();
     void connectTarget(const QString& key);
     void disconnectCurrent();
     void editCore(const QString& id = {});
@@ -102,6 +105,9 @@ private:
     QMap<QString, qint64> m_seenAt;
     QList<QMetaObject::Connection> m_windowConnections;
     quint64 m_request = 0;
+    quint64 m_selectorConnectRequest = 0;
+    quint64 m_executingConnectRequest = 0;
+    QMetaObject::Connection m_selectorDismissal;
     bool m_storeLoaded = false;
     bool m_shuttingDown = false;
     QTimer m_negativeExpiryTimer;

@@ -41,6 +41,15 @@
 
 using namespace NereusSDR;
 
+// MinGW imports a static constexpr member of an exported class by address
+// when it is bound to a reference (QCOMPARE does), and the Core DLL never
+// exports one, so this test did not link on Windows. It reads these
+// copies by value instead.
+namespace {
+constexpr double kTwoToneLevelDbMax = NereusSDR::TransmitModel::kTwoToneLevelDbMax;
+constexpr double kTwoToneLevelDbMin = NereusSDR::TransmitModel::kTwoToneLevelDbMin;
+} // namespace
+
 class TstTransmitModelTwoToneProperties : public QObject {
     Q_OBJECT
 private slots:
@@ -266,14 +275,14 @@ private slots:
         // Thetis udTwoToneLevel Min = -96 (setup.Designer.cs:61999-62003).
         TransmitModel t;
         t.setTwoToneLevel(-200.0);
-        QCOMPARE(t.twoToneLevel(), TransmitModel::kTwoToneLevelDbMin);
+        QCOMPARE(t.twoToneLevel(), kTwoToneLevelDbMin);
     }
 
     void twoToneLevel_clampAboveMax() {
         // Thetis udTwoToneLevel Max = 0 (setup.Designer.cs:61994-61998).
         TransmitModel t;
         t.setTwoToneLevel(50.0);
-        QCOMPARE(t.twoToneLevel(), TransmitModel::kTwoToneLevelDbMax);
+        QCOMPARE(t.twoToneLevel(), kTwoToneLevelDbMax);
     }
 
     void twoTonePower_clampBelowMin() {
@@ -334,8 +343,8 @@ private slots:
         // setup.Designer.cs:61994-62003 [v2.10.3.13]:
         //   Maximum = decimal{0,0,0,65536}            =   0.0  (scale=1)
         //   Minimum = decimal{96,0,0,-2147483648}     = -96.0
-        QCOMPARE(TransmitModel::kTwoToneLevelDbMin, -96.0);
-        QCOMPARE(TransmitModel::kTwoToneLevelDbMax,   0.0);
+        QCOMPARE(kTwoToneLevelDbMin, -96.0);
+        QCOMPARE(kTwoToneLevelDbMax,   0.0);
     }
 
     void constants_twoTonePower_expectedValues() {

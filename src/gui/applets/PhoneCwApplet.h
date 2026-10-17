@@ -100,6 +100,7 @@
 #pragma once
 
 #include "AppletWidget.h"
+#include "gui/NereusGuiExport.h"
 
 class QStackedWidget;
 class QButtonGroup;
@@ -122,7 +123,7 @@ class DexpPeakMeter;
 // Phase 3M-1b (relocated from TxApplet J.1):
 //   #5 Mic level slider is now wired to TransmitModel::micGainDb (bidirectional).
 //   #1 Mic level gauge is now wired to AudioEngine::pcMicInputLevel() via 50ms timer.
-class PhoneCwApplet : public AppletWidget {
+class NEREUS_GUI_EXPORT PhoneCwApplet : public AppletWidget {
     Q_OBJECT
 
 public:

@@ -121,6 +121,9 @@ QString remoteAudioProblemText(RemoteAudioReceiver::Fault fault)
         return QStringLiteral("Audio could not be sent to the speaker device.");
     case Fault::DecoderUnavailable:
         return QStringLiteral("The audio decoder could not start on this computer.");
+    case Fault::SpeakerFormatUnsupported:
+        return QStringLiteral("The speaker device is set to a format remote playback cannot "
+                              "play. Choose another sample rate, channel setting or device.");
     case Fault::NoPackets:
     case Fault::DecodeFailed:
     case Fault::ClockBuffer:

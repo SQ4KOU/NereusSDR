@@ -15,6 +15,18 @@ import NereusMedia
 /// pan's subscription through ``extrasRequest(gates:)``; the renderer
 /// draws the rest (palette, grid, trace, band plan) itself.
 public struct BandDisplaySettings: Equatable, Sendable, Codable {
+    /// Local store read identity, omitted from persisted pan/master dictionaries.
+    /// A full-settings save edits only fields changed since this read snapshot.
+    public struct StoreReadSnapshot: Equatable, Sendable, Codable {
+        public var revision: UInt64 = 0
+        public var token: UInt64 = 0
+        public init(revision: UInt64 = 0, token: UInt64 = 0) { self.revision = revision; self.token = token }
+        // Read identity is not a display value: replacing a snapshot alone
+        // must not redraw, resubscribe or make settings compare different.
+        public static func == (lhs: Self, rhs: Self) -> Bool { true }
+    }
+    public var storeSnapshotVersion = StoreReadSnapshot()
+
     /// How the waterfall's levels are set.
     public enum WaterfallLevelMode: String, Equatable, Sendable, Codable, CaseIterable {
         /// The Core's Clarity sets them (the desktop's default).
@@ -25,6 +37,9 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
         case noiseFloorAgc
         /// The manual low and high levels.
         case manual
+        /// The phone colours against the spectrum's live minimum/maximum;
+        /// the Core request still uses its existing manual wire mode.
+        case scale
     }
 
     // MARK: Computed by the Core
@@ -46,26 +61,35 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
             if clarityEnabled {
                 return .clarity
             }
-            if waterfallNfAgc {
-                return .noiseFloorAgc
-            }
+            if useSpectrumMinMax { return .scale }
+            if waterfallAgc && waterfallNfAgc { return .noiseFloorAgc }
             return waterfallAgc ? .agc : .manual
         }
         set {
+            guard newValue != waterfallLevelMode else { return }
             switch newValue {
             case .clarity:
                 clarityEnabled = true
             case .noiseFloorAgc:
                 clarityEnabled = false
                 waterfallNfAgc = true
+                waterfallAgc = true
+                useSpectrumMinMax = false
             case .agc:
                 clarityEnabled = false
                 waterfallNfAgc = false
                 waterfallAgc = true
+                useSpectrumMinMax = false
             case .manual:
                 clarityEnabled = false
                 waterfallNfAgc = false
                 waterfallAgc = false
+                useSpectrumMinMax = false
+            case .scale:
+                clarityEnabled = false
+                waterfallNfAgc = false
+                waterfallAgc = false
+                useSpectrumMinMax = true
             }
         }
     }
@@ -75,13 +99,15 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
     public var waterfallHighDbm: Double = -62
     /// The noise-floor AGC's offset, whole decibels.
     public var waterfallOffsetDb: Int = 0
+    /// V29 supersedes the historical model described below: both positions
+    /// are now0..100 with57/60 defaults; the store converts old positions once.
     /// The waterfall's Color Gain, 0 to 100, and Black Level, 0 to 125,
     /// the desktop's defaults (`SpectrumWidget.cpp` `DisplayWfColorGain`,
     /// `DisplayWfBlackLevel`). The phone applies them to whatever levels
     /// colour a line, the Core's or the manual ones, as the desktop does;
     /// the Core's levels carry neither. See ``WaterfallHistory/Levels/adjusted(colorGain:blackLevel:)``.
-    public var waterfallColorGain: Int = 45
-    public var waterfallBlackLevel: Int = 104
+    public var waterfallColorGain: Int = ClarityLevels.kColorGainDefault
+    public var waterfallBlackLevel: Int = ClarityLevels.kBlackLevelDefault
 
     public var noiseFloorLine: Bool = false
     public var noiseFloorShiftDb: Double = 0
@@ -130,6 +156,19 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
     /// Core's catalogue (0, the desktop's default).
     public var waterfallPaletteId: Int = 0
     public var grid: Bool = true
+    /// Existing desktop grid options; zero keeps adaptive spacing.
+    public var frequencyGridSpacingHz: Int = 0
+    /// The phone's existing ten-point frequency label default (BandLayout).
+    public var frequencyScaleFontPoints: Int = 10
+    public var noiseFloorPosition: OverlayCorner = .bottomLeft
+    public var waterfallBlanking: Bool = false
+    public var waterfallBlankingThresholdDb: Int = 6
+    public var threeDSpeed: Int = 0
+    public var backgroundEnabled: Bool = false
+    public var backgroundColour: String = "#0A0A14FF"
+    public var backgroundImagePath: String = ""
+    public var backgroundOpacityPercent: Int = 80
+
     /// The dB between horizontal grid lines.
     public var gridStepDb: Double = 10
     /// The dBm scale's top and bottom. Each band keeps its own (the
@@ -158,13 +197,25 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
     /// the Spectrum height slider use the sideways share. Set by the main
     /// screen from its size; never read back from what the store keeps.
     public var sideways: Bool = false
-    /// `#RRGGBB`: the desktop's cyan `#00E5FF` for the trace and its fill
-    /// (D83; value from `src/gui/SpectrumWidget.h:2390`).
+    /// `#RRGGBB`: the desktop's cyan `#00E5FF` for the trace's fill (its
+    /// Fill Color, `DisplayFillColor`), and for the trace line until
+    /// ``traceLineColour`` is chosen (D83; value from
+    /// `src/gui/SpectrumWidget.h:2390`). This is the fill's colour, whatever
+    /// its name says: the name is the key the setting is kept under on the
+    /// phone, so it stays. The phone's "Fill color" picker sets it.
     public var traceColour: String = "#00E5FF"
-    /// The trace's line width in points (D75): from one screen pixel to
-    /// ``traceWidthMaximumPoints``, starting at half a point, which reads
-    /// lighter on a phone than the desktop's line. Settings kept before it
-    /// existed read as the default.
+    /// `#RRGGBB`: the trace line's own colour (the desktop's Trace Color,
+    /// `DisplayTraceColor`). None until one is chosen: the line then
+    /// follows ``traceColour``, as the desktop's follows its fill
+    /// (`SpectrumWidget::traceColor()`). Settings kept before it existed
+    /// read as none. The phone's "Trace color" picker sets it.
+    public var traceLineColour: String? = nil
+    /// The colour the trace line is drawn in: its own, else the fill's.
+    public var traceLineColourDrawn: String { traceLineColour ?? traceColour }
+    /// The trace's stored line width in points, starting at half a point.
+    /// V29 converts to its approved0.1...5pixel domain when drawing; existing
+    /// saved point widths keep their representation and initial default.
+    /// Settings kept before the field existed read as the default.
     public var traceWidthPoints: Double = BandDisplaySettings.traceWidthDefaultPoints
     public var traceFill: Bool = true
     /// The fill's strength, 0 to 1, read as the desktop reads its Fill
@@ -199,6 +250,8 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
     public var gridFineColour: String = "#FFFFFF14"
     public var hGridColour: String = "#FFFFFF28"
     public var gridTextColour: String = "#FFFF00FF"
+    /// Existing shared Appearance seed; painter/handler next observed-RED seam.
+    public var bandEdgeColour: String = "#FF0000FF"
     /// The frequency labels' alignment on their ticks.
     public var frequencyLabelAlignment: FrequencyLabelAlignment = .centre
     /// The dBm scale along the spectrum's right edge, with its arrows.
@@ -281,7 +334,9 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
     public var timestampUtc: Bool = true
     /// This phone's own waterfall gradient, used when
     /// ``waterfallPaletteId`` is ``BandPalette/customPaletteId``.
-    public var customPalette: [PaletteStop] = PaletteStop.customDefault
+    public var customPalette: [PaletteStop] = PaletteStop.receiveDefault
+    /// The transmit Custom definition, drawn independently of receive Custom.
+    public var txCustomPalette: [PaletteStop] = PaletteStop.customDefault
     /// CTUN, the desktop's independent pan (on, its default): the band
     /// stays where it is put while the slice tunes. Off, the band follows
     /// the active slice, keeping it in the middle.
@@ -340,6 +395,8 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
     /// Settings kept before then lack it, and their colours still at the
     /// phone's earlier defaults read as the desktop's (``BandDisplaySettingsStore``).
     public var desktopValuesVersion: Int = BandDisplaySettings.desktopValuesCurrent
+    /// One-time Black/Gain model conversion, independent of colour migration.
+    public var waterfallLevelsVersion: Int = 1
 
     public init() {}
 
@@ -389,7 +446,7 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
 
     /// The limits of Color Gain and Black Level.
     public static let colorGainRange: ClosedRange<Int> = 0...100
-    public static let blackLevelRange: ClosedRange<Int> = 0...125
+    public static let blackLevelRange: ClosedRange<Int> = 0...100
 
     /// Why Calibration offset is greyed on the phone, the desktop remote
     /// window's words (`DisplaySetupPages.cpp`, Cal Offset).
@@ -458,7 +515,8 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
     /// The waterfall's Color Gain and Black Level, as the history applies
     /// them to a line's levels.
     public var waterfallAdjustment: WaterfallHistory.Adjustment {
-        WaterfallHistory.Adjustment(colorGain: waterfallColorGain, blackLevel: waterfallBlackLevel)
+        WaterfallHistory.Adjustment(colorGain: waterfallColorGain, blackLevel: waterfallBlackLevel,
+                                    mode: waterfallLevelMode, storedHighDbm: Float(waterfallHighDbm))
     }
 
     /// Whether the band-plan strip shows: any size but Off.
@@ -467,22 +525,23 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
     /// The desktop's defaults.
     public static let desktopDefaults = BandDisplaySettings()
 
-    /// The trace's width limits and default, in points (D75).
+    /// The established point default remains unchanged. The historical
+    /// point maximum remains API-compatible; V29 drawing uses pixel bounds.
     public static let traceWidthDefaultPoints = 0.5
     public static let traceWidthMaximumPoints = 3.0
 
-    /// The trace widths a screen of `scale` pixels per point can show:
-    /// from one pixel to ``traceWidthMaximumPoints``.
+    /// Approved V29 native width is0.1...5 pixels. Persistence remains
+    /// points, so an existing0.5-point default keeps its screen-scale meaning.
     public static func traceWidthRange(scale: CGFloat) -> ClosedRange<Double> {
-        let pixel = scale > 0 ? 1 / Double(scale) : 1
-        return min(pixel, traceWidthMaximumPoints)...traceWidthMaximumPoints
+        let pixelsPerPoint = scale.isFinite && scale > 0 ? Double(scale) : 1
+        return (0.1 / pixelsPerPoint)...(5 / pixelsPerPoint)
     }
 
-    /// The trace's width in pixels on a screen of `scale` pixels per
-    /// point, never thinner than one pixel.
+    /// The stored point width converted once to the approved pixel domain.
     public func traceWidthPixels(scale: CGFloat) -> CGFloat {
-        let points = traceWidthPoints.isFinite ? min(traceWidthPoints, Self.traceWidthMaximumPoints) : Self.traceWidthDefaultPoints
-        return max(1, CGFloat(points) * scale)
+        let pixelsPerPoint = scale.isFinite && scale > 0 ? Double(scale) : 1
+        let points = traceWidthPoints.isFinite ? traceWidthPoints : Self.traceWidthDefaultPoints
+        return CGFloat(min(max(points * pixelsPerPoint, 0.1), 5))
     }
 
     /// The manual levels as the waterfall uses them.
@@ -505,11 +564,18 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
 
     /// What the pan's subscription asks the Core to compute: nil while the
     /// Core offers no display extras, and nothing for a feature that is off.
-    public func extrasRequest(gates: MediaFeatureGates) -> DisplayExtrasRequest? {
+    /// `averageTimeFloorMs` is the least averaging time the Core offered (10
+    /// ms unless its own controls start lower): a kept time below it is sent
+    /// as the floor, so the phone never asks a Core for less than it offered.
+    public func extrasRequest(gates: MediaFeatureGates,
+                              averageTimeFloorMs: Int = DisplayExtrasRequest.averageTimeRange.lowerBound)
+        -> DisplayExtrasRequest? {
         guard gates.displayExtras else {
             return nil
         }
         var request = DisplayExtrasRequest()
+        request.averageTimeFloorMs = averageTimeFloorMs
+        let times = request.admittedAverageTimeRange
         let mode: DisplayExtrasRequest.WaterfallLevels.Mode
         switch waterfallLevelMode {
         case .clarity:
@@ -518,10 +584,10 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
             mode = .agc
         case .noiseFloorAgc:
             mode = .noiseFloorAgc
-        case .manual:
+        case .manual, .scale:
             mode = .manual
         }
-        if useSpectrumMinMax {
+        if waterfallLevelMode == .scale {
             // The phone colours against the scale; the Core computes no levels.
             request.waterfallLevels = .init(mode: .manual, lowDbm: scaleRange.lowerBound,
                                             highDbm: scaleRange.upperBound, offsetDb: waterfallOffsetDb)
@@ -541,8 +607,8 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
             request.normalize = true
         }
         // Never calibrationOffsetDb: the Core calibrates (calibrationReason).
-        request.averageTimeMs = spectrumAverageTimeMs
-        request.waterfallAverageTimeMs = waterfallAverageTimeMs
+        request.averageTimeMs = max(spectrumAverageTimeMs, times.lowerBound)
+        request.waterfallAverageTimeMs = max(waterfallAverageTimeMs, times.lowerBound)
         if peakBlobs {
             // The desktop's switches as the Core rebuilds them: with the
             // hold off, drop and fall rate are ignored; with the hold on and
@@ -592,6 +658,7 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
         keyed.waterfallLowDbm = min(txWaterfallLowDbm, txWaterfallHighDbm - 1)
         keyed.waterfallHighDbm = txWaterfallHighDbm
         keyed.waterfallPaletteId = txWaterfallPaletteId
+        keyed.customPalette = txCustomPalette
         keyed.waterfallLowColour = txWaterfallLowColour
         keyed.noiseFloorLine = false
         keyed.peakBlobs = false
@@ -600,9 +667,11 @@ public struct BandDisplaySettings: Equatable, Sendable, Codable {
     }
 
     /// `subscription` with this pan's extras request in place.
-    public func applied(to subscription: DisplaySubscription, gates: MediaFeatureGates) -> DisplaySubscription {
+    public func applied(to subscription: DisplaySubscription, gates: MediaFeatureGates,
+                        averageTimeFloorMs: Int = DisplayExtrasRequest.averageTimeRange.lowerBound)
+        -> DisplaySubscription {
         var subscription = subscription
-        subscription.extras = extrasRequest(gates: gates)
+        subscription.extras = extrasRequest(gates: gates, averageTimeFloorMs: averageTimeFloorMs)
         return subscription
     }
 }

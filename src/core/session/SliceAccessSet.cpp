@@ -12,6 +12,10 @@
 //   2026-09-28: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), slice control and shared listening plan Task 4,
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-12: receiverHolderDeviceId, read again whenever a receiver's
+//               holder may have changed (SliceOwnership::
+//               receiverHoldersChanged). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SliceAccessSet.h"
@@ -54,6 +58,9 @@ void SliceAccess::setFields(const Fields& fields)
     if (before.onAir != fields.onAir) {
         emit onAirChanged();
     }
+    if (before.receiverHolderDeviceId != fields.receiverHolderDeviceId) {
+        emit receiverHolderDeviceIdChanged();
+    }
 }
 
 // ── SliceAccessSet ───────────────────────────────────────────────────────
@@ -87,6 +94,9 @@ SliceAccessSet::SliceAccessSet(RadioModel* radio, StateMirror* mirror, Resolver 
     // A device's receive choice may move to or from any of its slices.
     connect(ownership, &SliceOwnership::activeRxChanged, this,
             [this](const QByteArray&) { refresh(); });
+    // A receiver's holder is named on every slice that is on it.
+    connect(ownership, &SliceOwnership::receiverHoldersChanged, this,
+            [this]() { refresh(); });
 }
 
 SliceAccessSet::~SliceAccessSet()

@@ -15,6 +15,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Fill only uncovered extended overhang with retained row
+//                 quiet levels; preserve captured data. J.J. Boyd (KG4VCF),
+//                 AI-assisted via OpenAI Codex.
 //   2026-08-08 — Ported byte-for-byte for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code. No NereusSDR deviations.
@@ -67,6 +70,8 @@ layout(std140, binding = 0) uniform U {
     // Must match DssRenderer::kRows; SpectrumWidget enforces 104 with a
     // static_assert so a C++ row-count change cannot silently overrun this UBO.
     vec4  rowFrames[104];
+    // Native call 56 metadata: measured retained-row quiet dBm / known.
+    vec4 rowQuietLevels[104];
 };
 
 layout(binding = 2) uniform sampler2D paletteLut;  // 256x1 RGBA8, floor(0)->peak(1)

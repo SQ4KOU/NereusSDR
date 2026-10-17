@@ -10,6 +10,17 @@
 // 2026-09-30: Frames can carry their bins in dBm, converted on the engine
 // thread, so DaemonAgcSource does no per-bin log10 on the main thread.
 // J.J. Boyd (KG4VCF), AI-assisted implementation via Anthropic Claude Code.
+// 2026-10-10: resetInputHistoryAll, the FFT input purge on a MOX edge.
+// J.J. Boyd (KG4VCF), AI-assisted implementation via Anthropic Claude Code.
+// 2026-10-11: R-DISP-RETUNE: a caller can ask that a change of the center
+// alone relabels the running source and keeps its input history. Without
+// that the source restarts as before.
+// J.J. Boyd (KG4VCF), AI-assisted implementation via Anthropic Claude Code.
+// 2026-10-15: Display send thread: setFrameWake(), a published frame wakes
+// the display thread instead of queueing frameAvailable to the main thread;
+// currentGeneration(), so a frame held for the main thread is dropped after
+// a retune.
+// J.J. Boyd (KG4VCF), AI-assisted implementation via Anthropic Claude Code.
 
 #include "core/ControlRanges.h"
 #include "core/session/media/DaemonSpectrumSource.h"
@@ -53,6 +64,10 @@ struct DaemonSpectrumSource::FrameState {
     quint64 inputFramesDropped{0};
     quint64 completedInputHandoffs{0};
     quint64 publishedFrames{0};
+    quint64 inputHistoryResets{0};
+    /// Frames replaced in `latest` since the last one taken, with nobody
+    /// having taken them (DaemonSpectrumFrame::replacedBefore).
+    quint32 replacedSinceTaken{0};
 };
 
 struct DaemonSpectrumSource::SourceEntry {
@@ -81,6 +96,7 @@ DaemonSpectrumSource::~DaemonSpectrumSource()
         entry.state->retired = true;
         entry.state->configurationPending = true;
         entry.state->hasLatest = false;
+        entry.state->replacedSinceTaken = 0;
         entry.state->notificationQueued = false;
         entry.state->pendingIq.clear();
     }
@@ -153,8 +169,13 @@ bool DaemonSpectrumSource::activate(const MediaSourceKey& key,
 }
 
 bool DaemonSpectrumSource::update(const MediaSourceKey& key,
-                                  const DaemonSpectrumSourceConfig& config)
+                                  const DaemonSpectrumSourceConfig& config,
+                                  DaemonSpectrumCenterMove centerMove,
+                                  DaemonSpectrumSourceUpdate* result)
 {
+    if (result) {
+        *result = {};
+    }
     if (!isValidConfig(key, config)) {
         return false;
     }
@@ -167,10 +188,52 @@ bool DaemonSpectrumSource::update(const MediaSourceKey& key,
     bool resetInputHistory = false;
     {
         QMutexLocker lock(&it->state->mutex);
+        const quint64 previous = it->state->generation;
+        if (centerMove == DaemonSpectrumCenterMove::Relabel
+            && it->state->active && !it->state->configurationPending
+            && onlyCenterDiffers(it->state->config, config)) {
+            // R-DISP-RETUNE: the receiver was retuned, nothing else changed
+            // and the caller is the display, which asked for the picture to
+            // carry on. A retune changes which RF frequency the stored
+            // samples came from, so one transform after it can mix samples
+            // from before and after the step. That is JJ's choice for the
+            // display (2026-10-11): it carries on through a retune as
+            // NereusSDR's own local display does (its FFT path never calls
+            // FFTEngine::resetInputHistory) and as Thetis, piHPSDR,
+            // deskHPSDR and AetherSDR do. Dropping the history instead
+            // would be clean, and would freeze the picture for as long as a
+            // tuning wheel turns faster than one transform fills (up to
+            // 0.7 s at deep zoom). A caller that measures does not ask for
+            // this and takes the restart below.
+            //
+            // The engine does not use the center: it is a label put
+            // on each frame as it is published (publishFrame reads it under
+            // this mutex). So the running source takes the new label and a
+            // new generation here and carries on: no activation hop, queued
+            // I/Q and the engine's overlap history kept, nothing dropped.
+            // The one frame it may still hold was labeled before the move;
+            // it is discarded, so takeLatest() never hands a consumer the
+            // old center after this call. A frame the engine is producing
+            // now takes the lock after this and gets the new label.
+            it->state->config.centreHz = config.centreHz;
+            generation = ++m_nextGeneration;
+            it->state->generation = generation;
+            it->state->hasLatest = false;
+            it->state->replacedSinceTaken = 0;
+            it->state->notificationQueued = false;
+            if (result) {
+                *result = {true, previous, generation};
+            }
+            return true;
+        }
+        if (result) {
+            *result = {false, previous, m_nextGeneration + 1};
+        }
         resetInputHistory = !inputHistoryIsCompatible(it->state->config, config);
         it->state->active = false;
         it->state->configurationPending = true;
         it->state->hasLatest = false;
+        it->state->replacedSinceTaken = 0;
         it->state->notificationQueued = false;
         it->state->config = config;
         it->state->maxPendingIqFloats = config.maxPendingIqFloats;
@@ -232,6 +295,7 @@ void DaemonSpectrumSource::deactivate(const MediaSourceKey& key)
         it->state->retired = true;
         it->state->configurationPending = true;
         it->state->hasLatest = false;
+        it->state->replacedSinceTaken = 0;
         it->state->notificationQueued = false;
         it->state->pendingIq.clear();
     }
@@ -297,6 +361,22 @@ DaemonSpectrumSource::inputQueueDiagnostics(const MediaSourceKey& key) const
             static_cast<int>(it->state->pendingIq.size()), it->state->maxPendingIqFloats};
 }
 
+quint64 DaemonSpectrumSource::currentGeneration(const MediaSourceKey& key) const
+{
+    const auto it = m_sources.constFind(key);
+    if (it == m_sources.cend()) { return 0; }
+    QMutexLocker lock(&it->state->mutex);
+    return it->state->generation;
+}
+
+bool DaemonSpectrumSource::frameWaitingForTest(const MediaSourceKey& key) const
+{
+    const auto it = m_sources.constFind(key);
+    if (it == m_sources.cend()) { return false; }
+    QMutexLocker lock(&it->state->mutex);
+    return it->state->hasLatest;
+}
+
 int DaemonSpectrumSource::engineDecimation(const MediaSourceKey& key) const
 {
     const auto it = m_sources.constFind(key);
@@ -330,7 +410,25 @@ DaemonSpectrumSource::takeLatest(const MediaSourceKey& key)
     }
     it->state->hasLatest = false;
     it->state->notificationQueued = false;
-    return it->state->latest;
+    DaemonSpectrumFrame frame = it->state->latest;
+    frame.replacedBefore = std::exchange(it->state->replacedSinceTaken, 0);
+    return frame;
+}
+
+void DaemonSpectrumSource::setFrameWake(std::function<void()> wake)
+{
+    const std::lock_guard<std::mutex> lock(m_frameWakeMutex);
+    m_frameWake = std::move(wake);
+}
+
+bool DaemonSpectrumSource::callFrameWake()
+{
+    const std::lock_guard<std::mutex> lock(m_frameWakeMutex);
+    if (!m_frameWake) {
+        return false;
+    }
+    m_frameWake();
+    return true;
 }
 
 void DaemonSpectrumSource::submitIq(int streamIndex,
@@ -391,10 +489,29 @@ bool DaemonSpectrumSource::inputHistoryIsCompatible(
     // RF sample a stored I/Q pair represents. The RF tuning, sample rate,
     // FFT size and window do; retaining overlap across any of those would
     // make a new generation describe old-context samples.
+    //
+    // R-DISP-RETUNE: the center is in this list. The display's relabel of a
+    // center-only move never reaches this function (see update()).
     return before.centreHz == after.centreHz
         && before.sampleRateHz == after.sampleRateHz
         && before.fft.fftSize == after.fft.fftSize
         && before.fft.windowType == after.fft.windowType
+        && before.decimation == after.decimation;
+}
+
+bool DaemonSpectrumSource::onlyCenterDiffers(
+    const DaemonSpectrumSourceConfig& before,
+    const DaemonSpectrumSourceConfig& after)
+{
+    return before.centreHz != after.centreHz
+        && before.sampleRateHz == after.sampleRateHz
+        && before.fft.fps == after.fft.fps
+        && before.fft.fftSize == after.fft.fftSize
+        && before.fft.windowType == after.fft.windowType
+        && before.fft.hzPerBinTarget == after.fft.hzPerBinTarget
+        && before.fft.threadCount == after.fft.threadCount
+        && before.maxPendingIqFloats == after.maxPendingIqFloats
+        && before.transformsFollowFrameRate == after.transformsFollowFrameRate
         && before.decimation == after.decimation;
 }
 
@@ -458,32 +575,89 @@ void DaemonSpectrumSource::enqueueIq(
             // Thus a raw-I/Q callback can either post to a live engine or see
             // retired, never post through a deleted raw pointer.
             QMetaObject::invokeMethod(engine, [engine, state]() {
-            QVector<float> iq;
-            bool resetInputHistory = false;
-            {
-                QMutexLocker lock(&state->mutex);
-                if (state->retired || !state->active
-                    || state->configurationPending) {
-                    state->pendingIq.clear();
-                    state->iqDrainQueued = false;
-                    return;
-                }
-                resetInputHistory = state->inputDiscontinuity;
-                state->inputDiscontinuity = false;
-                iq.swap(state->pendingIq);
-                state->iqDrainQueued = false;
-            }
-            if (resetInputHistory) {
-                engine->resetInputHistory();
-            }
-            if (!iq.isEmpty()) {
-                engine->feedIQ(iq);
-                QMutexLocker lock(&state->mutex);
-                ++state->completedInputHandoffs;
-            }
+                drainInput(engine, state);
             }, Qt::QueuedConnection);
         }
     }
+}
+
+void DaemonSpectrumSource::drainInput(FFTEngine* engine,
+                                      const QSharedPointer<FrameState>& state)
+{
+    // On the engine's worker thread.
+    QVector<float> iq;
+    bool resetInputHistory = false;
+    {
+        QMutexLocker lock(&state->mutex);
+        if (state->retired || !state->active
+            || state->configurationPending) {
+            state->pendingIq.clear();
+            state->iqDrainQueued = false;
+            return;
+        }
+        resetInputHistory = state->inputDiscontinuity;
+        state->inputDiscontinuity = false;
+        iq.swap(state->pendingIq);
+        state->iqDrainQueued = false;
+        if (resetInputHistory) {
+            ++state->inputHistoryResets;
+        }
+    }
+    if (resetInputHistory) {
+        engine->resetInputHistory();
+    }
+    if (!iq.isEmpty()) {
+        engine->feedIQ(iq);
+        QMutexLocker lock(&state->mutex);
+        ++state->completedInputHandoffs;
+    }
+}
+
+void DaemonSpectrumSource::resetInputHistoryAll()
+{
+    // NereusSDR, based on Thetis console.cs:24243-24254 and 24132
+    // [v2.10.3.15]: Thetis purges the display buffers on a MOX edge only
+    // when "Purge WDSP buffers on MOX" is set (off by default). NereusSDR
+    // always clears the FFT input, because a transform that spans the edge
+    // mixes receive and transmit samples on every display.
+    //
+    // The engine is not touched from this thread. Each source is marked
+    // through the path a dropped packet uses (inputDiscontinuity): the
+    // samples queued before the edge are discarded here, and the drain on
+    // the engine's own worker thread calls FFTEngine::resetInputHistory
+    // before it feeds the first samples after the edge.
+    for (SourceEntry& entry : m_sources) {
+        if (!entry.engine) {
+            continue;
+        }
+        const QSharedPointer<FrameState> state = entry.state;
+        QMutexLocker lock(&state->mutex);
+        if (state->retired) {
+            continue;
+        }
+        state->pendingIq.clear();
+        state->inputDiscontinuity = true;
+        if (!state->iqDrainQueued) {
+            // No drain is waiting: post one, so the reset does not wait for
+            // the next I/Q packet. Posted under the state lock, as enqueueIq
+            // does, so it never reaches a retired engine.
+            state->iqDrainQueued = true;
+            QMetaObject::invokeMethod(entry.engine,
+                                      [engine = entry.engine.data(), state]() {
+                drainInput(engine, state);
+            }, Qt::QueuedConnection);
+        }
+    }
+}
+
+quint64 DaemonSpectrumSource::inputHistoryResets(const MediaSourceKey& key) const
+{
+    const auto it = m_sources.constFind(key);
+    if (it == m_sources.cend()) {
+        return 0;
+    }
+    QMutexLocker lock(&it->state->mutex);
+    return it->state->inputHistoryResets;
 }
 
 void DaemonSpectrumSource::attachRadioIq(SourceEntry& entry)
@@ -549,11 +723,15 @@ bool DaemonSpectrumSource::publishFrameForTest(const MediaSourceKey& key,
         state->latest.binsDbm.clear();
         state->latest.binsDbmValid = computesBinsDbm()
             && binsLinearToDbm(state->latest.binsLinear, 0.0, state->latest.binsDbm);
+        if (state->hasLatest) { ++state->replacedSinceTaken; }
         state->hasLatest = true;
         state->notificationQueued = true;
         ++state->publishedFrames;
     }
-    emit frameAvailable(key);
+    // Display send thread: the display thread takes it when it is woken.
+    if (!callFrameWake()) {
+        emit frameAvailable(key);
+    }
     return true;
 }
 
@@ -583,11 +761,15 @@ bool DaemonSpectrumSource::publishFrameForTest(const MediaSourceKey& key,
         state->latest.binsDbm.clear();
         state->latest.binsDbmValid = computesBinsDbm()
             && binsLinearToDbm(binsLinear, 0.0, state->latest.binsDbm);
+        if (state->hasLatest) { ++state->replacedSinceTaken; }
         state->hasLatest = true;
         state->notificationQueued = true;
         ++state->publishedFrames;
     }
-    emit frameAvailable(key);
+    // Display send thread: the display thread takes it when it is woken.
+    if (!callFrameWake()) {
+        emit frameAvailable(key);
+    }
     return true;
 }
 
@@ -600,6 +782,15 @@ void DaemonSpectrumSource::publishFrame(
     bool binsDbmValid = false;
     if (computesBinsDbm()) {
         binsDbmValid = binsLinearToDbm(binsLinear, dbmOffset, binsDbm);
+    }
+    // Display send thread: with a wake set the display thread is told, not
+    // the main thread, and the frame is not announced on the main thread;
+    // whoever clears the wake takes it (setFrameWake). Held from here to
+    // the call, so a wake replaced meanwhile is never called.
+    std::unique_lock<std::mutex> wakeLock(m_frameWakeMutex);
+    const bool waking = static_cast<bool>(m_frameWake);
+    if (!waking) {
+        wakeLock.unlock();
     }
     bool queueNotification = false;
     {
@@ -617,12 +808,17 @@ void DaemonSpectrumSource::publishFrame(
         state->latest.dbmOffset = dbmOffset;
         state->latest.binsDbm = std::move(binsDbm);
         state->latest.binsDbmValid = binsDbmValid;
+        if (state->hasLatest) { ++state->replacedSinceTaken; }
         state->hasLatest = true;
         ++state->publishedFrames;
-        if (!state->notificationQueued) {
+        if (!waking && !state->notificationQueued) {
             state->notificationQueued = true;
             queueNotification = true;
         }
+    }
+    if (waking) {
+        m_frameWake();
+        return;
     }
     if (queueNotification) {
         QMetaObject::invokeMethod(this, [this, key, state]() {

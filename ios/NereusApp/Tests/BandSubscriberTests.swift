@@ -7,6 +7,7 @@ import NereusBand
 import NereusLink
 import NereusMedia
 import NereusMirror
+import NereusModels
 @testable import NereusSDR
 import Testing
 
@@ -166,6 +167,85 @@ struct BandSubscriberTests {
         #expect(await settle { rig.sent.subscriptions.count == 1 })
         #expect(rig.sent.subscriptions.first?.fftSize == rig.subscriber.plannedFftSize)
         #expect(rig.sent.subscriptions.first?.spanHz == 6_000)
+    }
+
+    @Test("a Core that describes Sizing plans by the choice: Auto by the zoom, Fixed the Size, Hz/bin the target")
+    func plansBySizing() async throws {
+        let rig = rig(budget: false)
+        let catalog: StationCatalog = try #require(BandFlagShotTests.catalogue())
+        rig.band.catalog = catalog
+        #expect(rig.band.catalog?.display?.sizingControl != nil)
+        func stored(_ values: [String: String]) {
+            rig.settings.apply(.settingsSnapshot(LinkMessage.SettingsSnapshot(
+                properties: values.sorted { $0.key < $1.key }.map { .init(name: $0.key, value: .utf8($0.value)) })))
+        }
+        typealias Sizing = StationCatalog.Display.FftSizing
+        // Auto: the stored size plays no part; the zoom picks, never below 4096.
+        stored(["DisplayFftSize": "8192", Sizing.settingsKey: "Auto"])
+        rig.band.requestView(TuneGestures.View(centerHz: Self.frequency, spanHz: 12_000))
+        #expect(await settle { rig.subscriber.plannedFftSize == 32_768 })
+        rig.band.requestView(TuneGestures.View(centerHz: Self.frequency, spanHz: 6_000))
+        // 192 kHz across 1206 pixels of 6 kHz: 38 592 bins, so 65 536.
+        #expect(await settle { rig.subscriber.plannedFftSize == 65_536 })
+        rig.band.requestView(TuneGestures.View(centerHz: Self.frequency, spanHz: 192_000))
+        #expect(await settle { rig.subscriber.plannedFftSize == 4096 })
+        // The choice never written and no target: Auto, as that Core runs.
+        stored(["DisplayFftSize": "32768", "DisplayHzPerBinTarget": "0"])
+        await quiet()
+        #expect(rig.subscriber.plannedFftSize == 4096)
+        // Fixed: exactly the stored size, whatever the zoom or a stray target.
+        stored(["DisplayFftSize": "8192", "DisplayHzPerBinTarget": "5", Sizing.settingsKey: "Fixed"])
+        #expect(await settle { rig.subscriber.plannedFftSize == 8192 })
+        rig.band.requestView(TuneGestures.View(centerHz: Self.frequency, spanHz: 6_000))
+        await quiet()
+        #expect(rig.subscriber.plannedFftSize == 8192)
+        // A stored size the Size control does not offer runs the built-in size.
+        stored(["DisplayFftSize": "2048", Sizing.settingsKey: "Fixed"])
+        #expect(await settle { rig.subscriber.plannedFftSize == 4096 })
+        // Hz/bin: the smallest size at or below the target, whatever the zoom.
+        stored(["DisplayFftSize": "8192", "DisplayHzPerBinTarget": "5", Sizing.settingsKey: "HzPerBin"])
+        #expect(await settle { rig.subscriber.plannedFftSize == 65_536 })
+        rig.band.requestView(TuneGestures.View(centerHz: Self.frequency, spanHz: 192_000))
+        await quiet()
+        #expect(rig.subscriber.plannedFftSize == 65_536)
+        // Never a transform longer than 0.7 s: 131072 at 192 kHz.
+        stored(["DisplayHzPerBinTarget": "0.5", Sizing.settingsKey: "HzPerBin"])
+        #expect(await settle { rig.subscriber.plannedFftSize == 131_072 })
+        // The choice never written, a target above 0: Hz/bin.
+        stored(["DisplayHzPerBinTarget": "12.5"])
+        #expect(await settle { rig.subscriber.plannedFftSize == 16_384 })
+        // What is sent is the plan.
+        rig.subscriber.receive(.mediaState(.connected))
+        #expect(await settle { rig.sent.subscriptions.count == 1 })
+        #expect(rig.sent.subscriptions.first?.fftSize == 16_384 && rig.sent.subscriptions.first?.tier == .fine)
+    }
+
+    @Test("the least averaging time is the Core's own: 1 ms where its controls start there, 10 ms otherwise")
+    func averagingFloor() async throws {
+        #expect(BandSubscriber.averageTimeFloorMs(nil) == 10)
+        let display = try #require(BandFlagShotTests.catalogue()?.display)
+        #expect(display.control(subscribe: CoreDisplayModel.Field.traceAverageTime)?.min == 1)
+        #expect(BandSubscriber.averageTimeFloorMs(display) == 1)
+        // A Core with the extras and the description takes this phone's 1 ms.
+        let rig = rig(budget: false, extras: true)
+        let catalog: StationCatalog = try #require(BandFlagShotTests.catalogue())
+        rig.band.catalog = catalog
+        rig.band.settings.spectrumAverageTimeMs = 1
+        rig.band.settings.waterfallAverageTimeMs = 3
+        rig.subscriber.receive(.mediaState(.connected))
+        #expect(await settle { rig.sent.subscriptions.count == 1 })
+        let first = try #require(rig.sent.subscriptions.first)
+        #expect(first.extras?.averageTimeMs == 1 && first.extras?.waterfallAverageTimeMs == 3)
+        #expect(throws: Never.self) { try DisplayEndpointRequest.validate(first, gates: rig.subscriber.gates) }
+        // A Core that describes no display gets 10 ms for the same settings.
+        let older = self.rig(budget: false, extras: true)
+        older.band.settings.spectrumAverageTimeMs = 1
+        older.band.settings.waterfallAverageTimeMs = 3
+        older.subscriber.receive(.mediaState(.connected))
+        #expect(await settle { older.sent.subscriptions.count == 1 })
+        let asked = try #require(older.sent.subscriptions.first)
+        #expect(asked.extras?.averageTimeMs == 10 && asked.extras?.waterfallAverageTimeMs == 10)
+        #expect(throws: Never.self) { try DisplayEndpointRequest.validate(asked, gates: older.subscriber.gates) }
     }
 
     @Test("a missing current rate or slice clears the plan before media")

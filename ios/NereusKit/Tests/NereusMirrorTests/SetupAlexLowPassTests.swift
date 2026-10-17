@@ -158,7 +158,7 @@ import Testing
         try await rig.connect()
         let start = try rig.control(Self.edge("80m", "start"))
         let writing = Task { await rig.dispatcher.edit(start, in: "hardware", to: .decimal(1.8)) }
-        #expect(await rig.route.waitForCount(1, unless: writing))
+        try #require(await rig.route.waitForCount(1, unless: writing))
         guard case .settingsWrite(let write) = rig.route.sent[0].message else { Issue.record("no write"); return }
         #expect(write.key == Self.key("80m", "start"))
         #expect(write.properties.first?.value == .utf8("1.8"))
@@ -183,7 +183,7 @@ import Testing
         #expect(rig.route.sent.isEmpty)
         let refusal = "Choose the 160m low-pass end from 1.5 to 2.5 MHz."
         let writing = Task { await rig.dispatcher.edit(end, in: "hardware", to: .decimal(2.4)) }
-        #expect(await rig.route.waitForCount(1, unless: writing))
+        try #require(await rig.route.waitForCount(1, unless: writing))
         guard case .settingsWrite(let write) = rig.route.sent[0].message else { Issue.record("no write"); return }
         #expect(write.key == Self.key("160m", "end"))
         rig.settings.apply(.settingsReject(.init(key: write.key, properties: [], reason: refusal)))

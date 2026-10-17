@@ -45,6 +45,7 @@
 // =================================================================
 
 #include "core/session/SessionMessages.h"
+#include "gui/NereusGuiExport.h"
 
 #include <QByteArray>
 #include <QHash>
@@ -58,7 +59,7 @@ namespace NereusSDR {
 class RadioModel;
 class StationServer;
 
-class HostingSliceActions : public QObject {
+class NEREUS_GUI_EXPORT HostingSliceActions : public QObject {
     Q_OBJECT
 
 public:

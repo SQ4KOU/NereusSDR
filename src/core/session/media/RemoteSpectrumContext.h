@@ -7,6 +7,8 @@
 // session identity or subscription policy.
 //
 // Modification history (NereusSDR):
+//   2026-10-11 : R-DISP-RETUNE (third wave): `pictureGeneration`. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-26 : Parity Task 28 (R-R3-49, A11): `transmit`. J.J. Boyd
 //                 (KG4VCF), AI-assisted implementation via Anthropic Claude
 //                 Code.
@@ -74,6 +76,14 @@ struct SpectrumContextMessage {
     /// Parity Task 28: set only for a peer that declared txDisplayVersion in
     /// its media start: true while the endpoint shows the transmit display.
     std::optional<bool> transmit;
+    /// R-DISP-RETUNE: set only for a peer that declared spectrumPictureVersion
+    /// in its media start: which picture this context's frames continue,
+    /// named by the context generation at which the Core started the planes
+    /// now running (SpectrumEndpoint::pictureGeneration()). Equal to the
+    /// value of the context before it: the Core carried its planes on, the
+    /// same picture or that picture moved in frequency. Any other value: the
+    /// Core started them again.
+    std::optional<quint32> pictureGeneration;
 };
 
 // grantNegotiated=false: exactly today's 19 keys (op, connectionId,
@@ -83,7 +93,8 @@ struct SpectrumContextMessage {
 // "wideband" when message.wideband is set, with today's JSON number types.
 // The grant is not written.
 // grantNegotiated=true: those keys plus grantedFftSize, grantedTier ("wide"
-// or "fine"), requestedPixels, grantedPixels and limit. A message with no
+// or "fine"), requestedPixels, grantedPixels and limit. `transmit` and
+// `pictureGeneration` follow when the message carries them. A message with no
 // grant is written in the minor-8 shape, which a minor-9 decoder refuses:
 // the caller always supplies the grant Core recorded.
 QJsonObject encodeRemoteSpectrumContext(const SpectrumContextMessage& message,
@@ -97,8 +108,13 @@ QJsonObject encodeRemoteSpectrumContext(const SpectrumContextMessage& message,
 // transmitNegotiated=true (parity Task 28, a GUI that declared
 // txDisplayVersion): the grant shape plus exactly one more key, `transmit`, a
 // boolean; refused without the grant shape.
+// pictureNegotiated=true (R-DISP-RETUNE, a GUI that declared
+// spectrumPictureVersion): the grant shape plus exactly one more key,
+// `pictureGeneration`, a whole number from 1 to 2^32 - 1; refused without the
+// grant shape. It is independent of `transmit`.
 std::optional<SpectrumContextMessage> decodeRemoteSpectrumContext(const QJsonObject& payload,
                                                                   bool grantNegotiated,
-                                                                  bool transmitNegotiated = false);
+                                                                  bool transmitNegotiated = false,
+                                                                  bool pictureNegotiated = false);
 
 } // namespace NereusSDR

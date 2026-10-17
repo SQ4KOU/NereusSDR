@@ -41,7 +41,7 @@ private slots:
         log.sample(2002, 302, 13.8, 1.0);        // a second on: written
 
         QFile file(path);
-        QVERIFY(file.open(QIODevice::ReadOnly));
+        QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
         const QStringList lines = QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'),
                                                                           Qt::SkipEmptyParts);
         QCOMPARE(lines.size(), 5);
@@ -61,7 +61,7 @@ private slots:
         QVERIFY(!log.enabled());
         now = now.addSecs(2);
         log.sample(2004, 304, 13.8, 1.0);
-        QVERIFY(file.open(QIODevice::ReadOnly));
+        QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
         QCOMPARE(QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'), Qt::SkipEmptyParts)
                      .size(), 6);
     }
@@ -82,7 +82,7 @@ private slots:
         model.calibrationControllerMutable().setLogVoltsAmps(true);
         model.handlePaTelemetryForTest(100, 10, 0, 2000, 300, 0);
         QFile file(path);
-        QVERIFY(file.open(QIODevice::ReadOnly));
+        QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
         const QStringList lines = QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'),
                                                                           Qt::SkipEmptyParts);
         // The header (the test program has no version, so its first line is

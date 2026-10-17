@@ -10,6 +10,8 @@
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // 2026-09-30: RADE reason: the remote window declares radeReason.
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-12: a remote window's stored radio holds no second firmware
+// number. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // tests/tst_station_session.cpp  (NereusSDR)
 // =================================================================
@@ -89,6 +91,7 @@
 #include "core/HardwareProfile.h"
 #include "core/MoxController.h"
 #include "core/P1RadioConnection.h"
+#include "core/SettingsFileWriter.h"
 #include "core/security/CertificateStore.h"
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/security/DeviceAuthenticator.h"
@@ -1390,7 +1393,9 @@ void TstStationSession::featureGatesNameRealProperties()
 // window declares only radeStatus, txInhibitReason, alexLpf,
 // paTransmitBand and levelCalibration of them, so its schema comparison must not count the other
 // absences as skew: after the whole snapshot it logs no schema skew and both
-// skew sets are empty.
+// skew sets are empty. It also declares coreSpeaker, which only a Core with
+// its own speaker answers; this desktop host leaves those properties out,
+// and that is not skew either.
 void TstStationSession::remoteWindowSeesNoSchemaSkewFromTheCurrentCore()
 {
     QTemporaryDir settingsDir;
@@ -1422,14 +1427,16 @@ void TstStationSession::remoteWindowSeesNoSchemaSkewFromTheCurrentCore()
     // the Core's transmit is held; alexLpf: the Alex-1 tab's low-pass
     // lamps; paTransmitBand: the PA row the Core holds on the air;
     // levelCalibration: Setup's calibration run; rxFilterLowPass: why the
-    // receive low-pass is set for another slice) arrive.
+    // receive low-pass is set for another slice; radioSpeaker: the
+    // header's RADIO group and Setup's radio speaker) arrive.
     const QSet<QByteArray> declaredGatedFeatures{QByteArrayLiteral("radeStatus"),
                                                  QByteArrayLiteral("txInhibitReason"),
                                                  QByteArrayLiteral("alexLpf"),
                                                  QByteArrayLiteral("paTransmitBand"),
                                                  QByteArrayLiteral("levelCalibration"),
                                                  QByteArrayLiteral("rxFilterLowPass"),
-                                                 QByteArrayLiteral("radeReason")};
+                                                 QByteArrayLiteral("radeReason"),
+                                                 QByteArrayLiteral("radioSpeaker")};
     QSet<QByteArray> arrivedGatedFeatures;
     bool sawTransmitSchema = false;
     for (const QByteArray& wire : peer->received()) {
@@ -2123,6 +2130,7 @@ void TstStationSession::remoteTgxlConfigureAcceptanceStartsIdentityOnly()
              QStringLiteral("127.0.0.1"));
     QCOMPARE(stationModel->peripheralValue(QStringLiteral("TGXL_ManualPort")),
              QString::number(tgxl.serverPort()));
+    AppSettings::instance().backgroundSaveNotifier()->waitUntilIdle();
     AppSettings persisted(AppSettings::instance().filePath());
     persisted.load();
     QCOMPARE(persisted.hardwareValue(stationModel->currentRadioMac(),
@@ -5512,9 +5520,9 @@ void TstStationSession::clientCapsWhatAStationCanMakeItAllocate()
     QVERIFY2(transport != nullptr, "the dial did not produce a WebSocketTransport");
     QVERIFY(transport->socket() != nullptr);
     QCOMPARE(transport->socket()->maxAllowedIncomingMessageSize(),
-             StationClient::kMaxIncomingMessageBytes);
+             static_cast<quint64>(StationClient::kMaxIncomingMessageBytes));
     QCOMPARE(transport->socket()->maxAllowedIncomingFrameSize(),
-             StationClient::kMaxIncomingMessageBytes);
+             static_cast<quint64>(StationClient::kMaxIncomingMessageBytes));
 
     // And the daemon's own accepted socket carries the smaller cap, so the
     // two constants are not accidentally the same number.
@@ -6248,6 +6256,12 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
 void TstStationSession::remoteModelResolvesTheCoresRadio()
 {
     RadioModel remote(RadioModel::Role::Remote);
+    // A radio this window ran itself, with a second firmware number.
+    RadioInfo own;
+    own.boardType = HPSDRHW::OrionMKII;
+    own.firmwareVersion = 22;
+    own.firmwareBetaVersion = 14;
+    remote.setLastRadioInfoForTest(own);
 
     // The Core's model wins when it matches the board.
     remote.applyStationCapabilities(g21kCaps());
@@ -6256,6 +6270,10 @@ void TstStationSession::remoteModelResolvesTheCoresRadio()
     QCOMPARE(remote.currentRadioInfo().protocol, ProtocolVersion::Protocol2);
     QCOMPARE(remote.currentRadioInfo().address, QHostAddress(QStringLiteral("192.168.1.50")));
     QCOMPARE(remote.currentRadioInfo().firmwareVersion, 27);
+    // These capabilities carry the first firmware number alone, as an older
+    // Core's do: the window's own radio's second number is not left beside
+    // the Core's first.
+    QCOMPARE(remote.currentRadioInfo().firmwareBetaVersion, 0);
     QCOMPARE(remote.currentRadioInfo().macAddress, QStringLiteral("AA:BB:CC:DD:EE:46"));
     QCOMPARE(remote.currentRadioInfo().boardType, HPSDRHW::Saturn);
     QCOMPARE(remote.transmitModel().hpsdrModel(), HPSDRModel::ANAN_G2_1K);
@@ -7588,7 +7606,7 @@ void TstStationSession::windowShowsTheCoresIoBoard()
     coreBoard.setDetected(true);
 
     NEREUS_TRY_VERIFY(windowBoard.isDetected());
-    QCOMPARE(windowBoard.hardwareVersion(), IoBoardHl2::kHardwareVersion1);
+    QCOMPARE(windowBoard.hardwareVersion(), static_cast<quint8>(IoBoardHl2::kHardwareVersion1));
     QCOMPARE(windowBoard.registerValue(IoBoardHl2::Register::REG_FIRMWARE_MAJOR), quint8(0x02));
     QCOMPARE(windowBoard.registerValue(IoBoardHl2::Register::REG_FIRMWARE_MINOR), quint8(0x07));
     QCOMPARE(windowBoard.registerValue(IoBoardHl2::Register::REG_ANTENNA), quint8(0x03));

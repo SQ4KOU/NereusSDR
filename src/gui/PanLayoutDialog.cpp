@@ -45,6 +45,7 @@
 // =================================================================
 
 #include "gui/PanLayoutDialog.h"
+#include "gui/styles/WorkspacePreview.h"
 
 #include "gui/StyleConstants.h"
 #include "gui/widgets/LayoutThumbnail.h"
@@ -70,6 +71,10 @@ PanLayoutDialog::PanLayoutDialog(int maxPanCount, const QString& currentLayoutId
     setStyleSheet(QStringLiteral("background: %1; color: %2;")
                       .arg(Style::kAppBg, Style::kTextPrimary));
     buildUi(maxPanCount, currentLayoutId, boardName);
+
+    // Workspace preview: the scoped stylesheet pass runs each time the
+    // dialog is shown (preview scaffolding; nothing with the switch off).
+    WorkspacePreview::themeOnShow(this);
 }
 
 PanLayoutDialog::~PanLayoutDialog() = default;

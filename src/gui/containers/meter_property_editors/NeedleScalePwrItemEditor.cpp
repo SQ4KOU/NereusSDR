@@ -10,6 +10,12 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-10-08  J.J. Boyd (KG4VCF): Qt 6.11.0 Cocoa accessibility cache
+//               repair on a live item view (QtCocoaAccessibleTableCache).
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-15  J.J. Boyd (KG4VCF): rows change after a real model reset
+//               (resetItemsBeforeRowChange), so accessibility cannot read a
+//               deleted cell. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -53,6 +59,7 @@ mw0lge@grange-lane.co.uk
 //============================================================================================//
 
 #include "NeedleScalePwrItemEditor.h"
+#include "gui/QtCocoaAccessibleTableCache.h"
 #include "../../meters/MeterItem.h"
 #include "../../meters/NeedleScalePwrItem.h"
 
@@ -163,6 +170,7 @@ void NeedleScalePwrItemEditor::refreshCalTable(NeedleScalePwrItem* nspi)
     if (!nspi) { return; }
     const QMap<float, QPointF>& cal = nspi->scaleCalibration();
 
+    resetItemsBeforeRowChange(m_calTable);
     m_calTable->setRowCount(0);
     m_calTable->setRowCount(cal.size());
     int row = 0;
@@ -406,6 +414,7 @@ void NeedleScalePwrItemEditor::buildTypeSpecific()
         if (!nspi) { return; }
         const int row = m_calTable->rowCount();
         beginProgrammaticUpdate();
+        resetItemsBeforeRowChange(m_calTable);
         m_calTable->insertRow(row);
         m_calTable->setItem(row, 0, new QTableWidgetItem(QStringLiteral("0.000")));
         m_calTable->setItem(row, 1, new QTableWidgetItem(QStringLiteral("0.5000")));
@@ -424,6 +433,7 @@ void NeedleScalePwrItemEditor::buildTypeSpecific()
         const int row = m_calTable->currentRow();
         if (row < 0) { return; }
         beginProgrammaticUpdate();
+        resetItemsBeforeRowChange(m_calTable);
         m_calTable->removeRow(row);
         endProgrammaticUpdate();
         commitCalTable(nspi);

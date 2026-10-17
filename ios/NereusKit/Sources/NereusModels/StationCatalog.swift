@@ -1,5 +1,6 @@
 // NereusSDR for iOS: the Core's catalogue, the lists and ranges the app's controls draw from
 // SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-NereusSDR-AppStore-permission
+// 2026-10-12: J.J. Boyd (KG4VCF), V2 opt-in/authority gate; AI-assisted via OpenAI Codex.
 
 import Foundation
 import os
@@ -687,6 +688,24 @@ public struct StationCatalog: Equatable, Sendable {
     public let agc: Agc
     public let receive: Receive
     public let meters: Meters
+    /// Explicit Core process opt-in. Missing or unreadable means disabled.
+    public let radeV2Enabled: Bool
+    public var offeredModes: [Mode] {
+        modes.filter { radeV2Enabled || ($0.id != 14 && $0.id != 15) }
+    }
+    public func offeredFilterPresets(forMode id: Int) -> [FilterPreset] {
+        guard (id != 14 && id != 15) || radeV2Enabled,
+              let label = modeDescription(id)?.label else { return [] }
+        return filterPresets[label] ?? []
+    }
+    /// Current mirrored state remains readable even when its mode is not offered.
+    public func modeDescription(_ id: Int) -> Mode? {
+        if let mode = modes.first(where: { $0.id == id }) { return mode }
+        // Stable native IDs/labels: src/core/WdspTypes.h and SliceModel::modeName.
+        if id == 14 { return Mode(id: 14, label: "RADE2-U", sideband: .upper) }
+        if id == 15 { return Mode(id: 15, label: "RADE2-L", sideband: .lower) }
+        return nil
+    }
     public let board: Board
     public let bandPlans: [BandPlan]
     public let palettes: [Palette]
@@ -737,6 +756,7 @@ public struct StationCatalog: Equatable, Sendable {
 
     /// The thirteen keys as they travel, and the later ones a Core may add.
     private struct Wire: Decodable {
+        let radeV2Enabled: Lenient<Bool>?
         let modes: [Mode]
         let filterPresets: [String: [FilterPreset]]
         let tuneSteps: [TuneStep]
@@ -839,6 +859,7 @@ public struct StationCatalog: Equatable, Sendable {
     }
 
     private init(_ wire: Wire) throws {
+        radeV2Enabled = wire.radeV2Enabled?.value == true
         modes = wire.modes
         filterPresets = wire.filterPresets
         tuneSteps = wire.tuneSteps

@@ -1568,9 +1568,267 @@ import Testing
                 == [.contextMismatch: 2, .unknownSections: 1, .truncated: 1])
         #expect(frames() == [1, 2])
 
-        // A new context: the extras of the old one are gone.
-        await rig.deliver(Self.context(id, generation: 2, grant: true))
+        // R-DISP-HOLD: a context for the same picture (the Core renewed it
+        // for a new dBm range and frame rate, and kept what it had measured)
+        // keeps the last extras. (This test held that every context empties
+        // them; that made each new dBm range blank the band's peak hold,
+        // blobs and noise floor.)
+        let last = try #require(extras().last)
+        var renewed = Self.context(id, generation: 2, grant: true)
+        renewed["minDbm"] = -150
+        renewed["maxDbm"] = -30
+        renewed["fps"] = 20
+        renewed["framesPerLine"] = 2
+        await rig.deliver(renewed)
+        #expect(await rig.client.displayExtras(endpointId: 1) == last)
+        // The decoder is renewed all the same: a keyframe is asked for.
+        #expect(rig.recorder.sent("keyframe").last?["contextGeneration"] == .number(2))
+
+        // A new picture (another span): the extras of the old one are gone.
+        var zoomed = Self.context(id, generation: 3, grant: true)
+        zoomed["spanHz"] = 48_000
+        await rig.deliver(zoomed)
         #expect(await rig.client.displayExtras(endpointId: 1) == nil)
+    }
+
+    /// Every capability with the display extras and the picture a context
+    /// continues (R-DISP-RETUNE).
+    static let withPicture: [String: Int64] = withExtras.merging(["spectrumPictureVersion": 1]) { $1 }
+
+    // R-DISP-RETUNE: the picture rides the minor-11 block on the context's
+    // grant shape, and only a Core that sends its version states it.
+    @Test func thePictureGateNeedsMinor11TheGrantAndTheCoresVersion() {
+        let cases: [(UInt16, [String: Int64], Bool)] = [
+            (11, Self.withPicture, true),
+            (10, Self.withPicture, false),
+            (11, Self.withExtras, false),
+            (11, ["remoteMediaVersion": 1, "spectrumPictureVersion": 1], false),
+            (11, ["remoteMediaVersion": 1, "spectrumGrantVersion": 1, "spectrumPictureVersion": 0], false),
+        ]
+        for (minor, capabilities, open) in cases {
+            let gates = MediaFeatureGates(agreedMinor: minor) { capabilities[$0] ?? 0 }
+            #expect(gates.spectrumPicture == open, "minor \(minor), \(capabilities)")
+        }
+    }
+
+    @Test func theStartDeclaresThePictureOnlyToACoreThatOffersIt() async throws {
+        let rig = try Rig()
+        await rig.open(minor: 11, capabilities: Self.withPicture)
+        _ = try await rig.connectionId
+        #expect(rig.recorder.sent("start").first?["spectrumPictureVersion"] == .number(1))
+        let older = try Rig()
+        await older.open(minor: 11, capabilities: Self.withExtras)
+        _ = try await older.connectionId
+        #expect(older.recorder.sent("start").count == 1)
+        #expect(older.recorder.sent("start").first?["spectrumPictureVersion"] == nil)
+    }
+
+    // R-DISP-RETUNE: a context states its picture exactly when the start
+    // declared it. One that leaves it out, or carries it undeclared, is not
+    // a context of this connection.
+    @Test func aContextStatesItsPictureExactlyWhenTheStartDeclaredIt() throws {
+        func decode(_ payload: [String: LinkJSON], picture: Bool) -> MediaControlEvent.DisplayContext? {
+            MediaControlDecoder.context(payload, wideband: false, grant: true, transmit: false, picture: picture)
+        }
+        var payload = Self.context("c", generation: 5, grant: true)
+        let plain = try #require(decode(payload, picture: false))
+        #expect(plain.pictureGeneration == nil)
+        #expect(decode(payload, picture: true) == nil)
+        payload["pictureGeneration"] = 3
+        #expect(decode(payload, picture: true)?.pictureGeneration == 3)
+        #expect(decode(payload, picture: false) == nil)
+        let refused: [LinkJSON] = [.number(0), .number(-1), .number(1.5), .string("3"), .bool(true),
+                                   .number(4_294_967_296)]
+        for value in refused {
+            payload["pictureGeneration"] = value
+            #expect(decode(payload, picture: true) == nil, "\(value)")
+        }
+    }
+
+    // R-DISP-RETUNE: the Core states the picture a context continues and
+    // that value alone decides what the endpoint keeps. A context of the
+    // picture held, moved (and here three bins narrower as well, which no
+    // rule of the app's own would call a move), keeps the noise floor and
+    // the waterfall levels and drops the peak hold and the blobs, held per
+    // trace sample. One of the picture held with nothing moved keeps all it
+    // holds. One of another picture drops everything, though every number
+    // in it is the one before.
+    @Test func theCoresPictureDecidesWhatAContextKeeps() async throws {
+        let vectors = try LinkFixtureLoader.mediaVectors()
+        func bytes(_ name: String) throws -> Data {
+            try #require(vectors["media-\(name)"]).bytes
+        }
+        let rig = try Rig()
+        await rig.open(minor: 11, capabilities: Self.withPicture)
+        let id = try await rig.connectionId
+        let peer = try rig.peer
+        var subscription = Self.subscription(endpointId: 1)
+        subscription.extras = Self.extrasForEverySection
+        try await rig.client.subscribe(subscription)
+        func context(generation: UInt32, picture: UInt32) -> [String: LinkJSON] {
+            var payload = Self.context(id, generation: generation, grant: true)
+            payload["pictureGeneration"] = .number(Double(picture))
+            return payload
+        }
+        func contexts() -> [MediaControlEvent.DisplayContext] {
+            rig.recorder.events.compactMap { event -> MediaControlEvent.DisplayContext? in
+                if case .context(let context) = event { return context } else { return nil }
+            }
+        }
+        // A context that leaves its picture out is not this connection's.
+        await rig.deliver(Self.context(id, generation: 1, grant: true))
+        await rig.recorder.settle { false }
+        #expect(contexts().isEmpty)
+
+        await rig.deliver(context(generation: 1, picture: 1))
+        peer.receiveDisplay(try bytes("nsdc1-full"))
+        peer.receiveDisplay(try bytes("nsdx1-full"))
+        await rig.recorder.settle {
+            rig.recorder.events.contains { if case .displayExtras = $0 { return true } else { return false } }
+        }
+        let full = try #require(await rig.client.displayExtras(endpointId: 1))
+        #expect(full.peakBlobs != nil)
+        #expect(full.peakHoldDbm != nil)
+        #expect(full.noiseFloorDbm != nil)
+        #expect(full.waterfallLevels != nil)
+
+        var moved = context(generation: 2, picture: 1)
+        moved["centreHz"] = 14_101_000
+        moved["sourceCentreHz"] = 14_101_000
+        moved["spanHz"] = .number(96_000 - 3 * 46.875)
+        await rig.deliver(moved)
+        await rig.recorder.settle { contexts().count == 2 }
+        #expect(contexts().last?.pictureGeneration == 1)
+        let carried = try #require(await rig.client.displayExtras(endpointId: 1))
+        #expect(carried.noiseFloorDbm == full.noiseFloorDbm)
+        #expect(carried.waterfallLevels == full.waterfallLevels)
+        #expect(carried.noiseFloorFastAttack == full.noiseFloorFastAttack)
+        #expect(carried.peakBlobs == nil)
+        #expect(carried.peakHoldDbm == nil)
+        // The decoder is renewed: a keyframe of the new context is asked for.
+        #expect(rig.recorder.sent("keyframe").last?["contextGeneration"] == .number(2))
+
+        var ranged = moved
+        ranged["contextGeneration"] = 3
+        ranged["minDbm"] = -150
+        await rig.deliver(ranged)
+        await rig.recorder.settle { contexts().count == 3 }
+        #expect(contexts().last?.contextGeneration == 3)
+        #expect(await rig.client.displayExtras(endpointId: 1) == carried)
+
+        var restarted = ranged
+        restarted["contextGeneration"] = 4
+        restarted["pictureGeneration"] = 4
+        await rig.deliver(restarted)
+        await rig.recorder.settle { contexts().count == 4 }
+        #expect(contexts().last?.contextGeneration == 4)
+        #expect(await rig.client.displayExtras(endpointId: 1) == nil)
+    }
+
+    // R-DISP-RETUNE: a Core that states no picture is read by the rule
+    // before the moved picture. A context that differs only in its dBm
+    // range keeps the extras (the test above this section); a move, which
+    // that Core may well have carried on, drops them. The app does not
+    // guess.
+    @Test func aCoreThatStatesNoPictureKeepsNothingThroughAMove() async throws {
+        let vectors = try LinkFixtureLoader.mediaVectors()
+        func bytes(_ name: String) throws -> Data {
+            try #require(vectors["media-\(name)"]).bytes
+        }
+        let rig = try Rig()
+        await rig.open(minor: 11, capabilities: Self.withExtras)
+        let id = try await rig.connectionId
+        let peer = try rig.peer
+        #expect(rig.recorder.sent("start").first?["spectrumPictureVersion"] == nil)
+        var subscription = Self.subscription(endpointId: 1)
+        subscription.extras = Self.extrasForEverySection
+        try await rig.client.subscribe(subscription)
+        await rig.deliver(Self.context(id, generation: 1, grant: true))
+        peer.receiveDisplay(try bytes("nsdc1-full"))
+        peer.receiveDisplay(try bytes("nsdx1-full"))
+        await rig.recorder.settle {
+            rig.recorder.events.contains { if case .displayExtras = $0 { return true } else { return false } }
+        }
+        let full = try #require(await rig.client.displayExtras(endpointId: 1))
+        #expect(full.noiseFloorDbm != nil)
+
+        // The same picture still keeps what it holds.
+        var ranged = Self.context(id, generation: 2, grant: true)
+        ranged["minDbm"] = -150
+        await rig.deliver(ranged)
+        #expect(await rig.client.displayExtras(endpointId: 1) == full)
+
+        // The pan tuned: the stream center and the view center moved together.
+        var tuned = Self.context(id, generation: 3, grant: true)
+        tuned["centreHz"] = 14_101_000
+        tuned["sourceCentreHz"] = 14_101_000
+        await rig.deliver(tuned)
+        #expect(rig.recorder.sent("keyframe").last?["contextGeneration"] == .number(3))
+        #expect(await rig.client.displayExtras(endpointId: 1) == nil)
+    }
+
+    // R-DISP-RETUNE: with the picture stated, a context for a revision sent
+    // before the newest is still taken and its frames play, as without it
+    // (aContextForARevisionSentBeforeTheNewestStillPlays).
+    @Test func aContextForAnEarlierRevisionIsTakenWithItsPicture() async throws {
+        let vectors = try LinkFixtureLoader.mediaVectors()
+        let full = try #require(vectors["media-nsdc1-full"]).bytes
+        let rig = try Rig()
+        await rig.open(minor: 11, capabilities: Self.withPicture)
+        let id = try await rig.connectionId
+        let peer = try rig.peer
+        func contexts() -> [MediaControlEvent.DisplayContext] {
+            rig.recorder.events.compactMap { event -> MediaControlEvent.DisplayContext? in
+                if case .context(let context) = event { return context } else { return nil }
+            }
+        }
+        func frames() -> [DisplayFrame] {
+            rig.recorder.events.compactMap { event -> DisplayFrame? in
+                if case .displayFrame(let frame) = event { return frame } else { return nil }
+            }
+        }
+        for revision: UInt32 in 1...3 {
+            try await rig.client.subscribe(Self.subscription(endpointId: 1, revision: revision))
+        }
+        var second = Self.context(id, revision: 2, generation: 1, grant: true)
+        second["pictureGeneration"] = 1
+        await rig.deliver(second)
+        await rig.recorder.settle { contexts().count == 1 }
+        #expect(contexts().map(\.revision) == [2])
+        peer.receiveDisplay(full)
+        await rig.recorder.settle { frames().count == 1 }
+        #expect(frames().map(\.contextGeneration) == [1])
+        var third = Self.context(id, revision: 3, generation: 2, grant: true)
+        third["pictureGeneration"] = 1
+        await rig.deliver(third)
+        await rig.recorder.settle { contexts().count == 2 }
+        #expect(contexts().map(\.revision) == [2, 3])
+        #expect(contexts().map(\.pictureGeneration) == [1, 1])
+    }
+
+    @Test func onlyADbmRangeFrameRateOrLinePeriodChangeIsTheSamePicture() throws {
+        func context(_ change: (inout [String: LinkJSON]) -> Void) throws -> MediaControlEvent.DisplayContext {
+            var payload = Self.context("c", generation: 2, wideband: true, grant: true)
+            change(&payload)
+            return try #require(MediaControlDecoder.context(payload, wideband: true, grant: true, transmit: false))
+        }
+        let held = try context { $0["contextGeneration"] = 1 }
+        #expect(MediaControlClient.samePicture(held, try context { _ in }))
+        #expect(MediaControlClient.samePicture(held, try context {
+            $0["minDbm"] = -161
+            $0["maxDbm"] = -20
+            $0["fps"] = 15
+            $0["framesPerLine"] = 3
+        }))
+        // Anything that says where a sample lies makes a new picture.
+        let changes: [(String, LinkJSON)] = [
+            ("centreHz", 14_100_010), ("spanHz", 95_000), ("sourceCentreHz", 14_101_000),
+            ("sourceStream", 1), ("traceSamples", 31), ("waterfallSamples", 31), ("grantedFftSize", 8192),
+        ]
+        for (key, value) in changes {
+            let changed = try context { $0[key] = value }
+            #expect(!MediaControlClient.samePicture(held, changed), "\(key)")
+        }
     }
 
     static let extrasForEverySection = DisplayExtrasRequest(
@@ -1627,7 +1885,10 @@ import Testing
         #expect(rig.recorder.mediaConnectedCalls == 2)
     }
 
-    @Test func onASessionTheRedialScheduleWaitsForTheMediaConnection() async throws {
+    // The wait for the client to have told the session has no deadline of
+    // its own; the time limit only ends a test whose client never does.
+    @Test(.timeLimit(.minutes(1)))
+    func onASessionTheRedialScheduleWaitsForTheMediaConnection() async throws {
         let station = ScriptedStation()
         let clock = ManualLinkClock()
         let session = StationSession(endpoint: StationEndpoint(host: "shack.example.net"), trust: station.trust,
@@ -1655,11 +1916,26 @@ import Testing
         await recorder.settle { transport.pending.contains { $0.contains("\"op\":\"start\"") } }
         #expect(transport.pending.contains { $0.contains("\"op\":\"start\"") })
 
-        // The media connection comes up: now the schedule starts over.
+        // The media connection comes up: now the schedule starts over. The
+        // client hears of it on a task of its own and then tells the
+        // session, so that comes when the computer gets to it: wait for
+        // the client's count of connections it has finished bringing up.
+        let handled = await client.mediaUpHandled
         try #require(recorder.peers.last).become(.connected)
-        await recorder.settle { false }
+        var done = await client.mediaUpHandled
+        while done == handled {
+            do {
+                try await Task.sleep(for: .milliseconds(20))
+            } catch {
+                // The test's time limit canceled it.
+                break
+            }
+            done = await client.mediaUpHandled
+        }
+        #expect(done > handled, "the client did not finish bringing media up")
         await transport.dropLink()
-        #expect(await session.state == .waitingToRetry(seconds: 1))
+        let state = await session.state
+        #expect(state == .waitingToRetry(seconds: 1))
         let peer = try #require(recorder.peers.last)
         await recorder.settle { peer.isClosed }
         #expect(peer.isClosed, "the lost session retired the peer")

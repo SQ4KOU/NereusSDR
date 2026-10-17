@@ -30,6 +30,13 @@
 // through LogManager and puts it back the same way, so the process keeps
 // LogManager's filter rules instead of an empty set. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-10-11: test flaw: stationNetworkServedWhileThisComputerIsBlocked
+// dials an address this computer can reach (ReachableOwnAddress.h), not its
+// first non-loopback one. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+// Claude Code.
+// 2026-10-15: FakeStationLink moved unchanged to tests/fakes/FakeStationLink.h
+// so the visual preview can use it too. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 #include "MultiDeviceHarness.h"
 
 #include <QtTest/QtTest>
@@ -42,6 +49,8 @@
 #include <QPushButton>
 
 #include "OperatorWording.h"
+#include "ReachableOwnAddress.h"
+#include "fakes/FakeStationLink.h"
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
 #include "core/SliceOwnership.h"
@@ -61,6 +70,7 @@
 
 using namespace NereusSDR;
 using BandFollow = TunerModel::BandFollow;
+using NereusSDR::Test::FakeStationLink;
 
 namespace {
 
@@ -96,54 +106,6 @@ struct TciApp {
         socket.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(port)));
     }
     bool has(const QString& frame) const { return frames.contains(frame); }
-};
-
-class FakeStationLink final : public IStationLink {
-public:
-    bool tciAvailable{true};
-    bool coreHere{false};
-    bool ready{true};
-    bool serverVersion2{true};
-    int stored{1};   // the Core has a stored station switch (-1: not known yet)
-    int requests{0};
-    bool requestedOn{false};
-    quint16 requestedPort{0};
-    int optionRequests{0};
-    bool requestedExpert{true};
-    CommandOutcome requestAddSlice(const QString&) override { return {}; }
-    CommandOutcome requestAddSliceOnPan(const QString&) override { return {}; }
-    CommandOutcome requestRemoveSlice(int) override { return {}; }
-    CommandOutcome requestActiveSlice(int) override { return {}; }
-    CommandOutcome requestSliceSampleRate(int, int) override { return {}; }
-    bool stationLinkReady() const override { return ready; }
-    bool stationTciAvailable() const override { return ready && tciAvailable; }
-    bool stationTciServerAvailable() const override
-    { return stationTciAvailable() && serverVersion2; }
-    bool coreServesTciOnThisComputer() const override { return coreHere; }
-    int coreStationTciStored() const override { return stored; }
-    CommandOutcome requestStationTci(bool on, quint16 port) override
-    {
-        ++requests;
-        requestedOn = on;
-        requestedPort = port;
-        return {true, {}, quint32(100 + requests)};   // command ids 101, 102, ...
-    }
-    CommandOutcome requestStationTciOptions(bool expert, bool, bool, bool) override
-    {
-        ++optionRequests;
-        requestedExpert = expert;
-        return {true, {}, quint32(200 + optionRequests)};
-    }
-    // JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1).
-    bool settingsAvailable{true};
-    QList<std::pair<QByteArray, QVariant>> settingRequests;
-    bool stationTciSettingsAvailable() const override
-    { return stationTciServerAvailable() && settingsAvailable; }
-    CommandOutcome requestStationTciSetting(const QByteArray& name, const QVariant& value) override
-    {
-        settingRequests.append({name, value});
-        return {true, {}, quint32(300 + settingRequests.size())};
-    }
 };
 
 } // namespace
@@ -1450,15 +1412,12 @@ private slots:
     // next retry, with no stop and start of the server.
     void stationNetworkServedWhileThisComputerIsBlocked()
     {
-        QString stationAddress;
-        for (const QHostAddress& address : QNetworkInterface::allAddresses()) {
-            if (address.protocol() == QAbstractSocket::IPv4Protocol && !address.isLoopback()) {
-                stationAddress = address.toString();
-                break;
-            }
-        }
+        // 2026-10-11: an address this computer can reach, not the first one
+        // it has (reachableOwnAddress).
+        const QString stationAddress = TestNetwork::reachableOwnAddress();
         if (stationAddress.isEmpty()) {
-            QSKIP("No non-loopback IPv4 address on this computer to stand in for the station.");
+            QSKIP("No IPv4 address this computer can reach, other than loopback, to stand in "
+                  "for the station.");
         }
         QTcpServer blocker;
         QVERIFY(blocker.listen(QHostAddress::LocalHost, 0));

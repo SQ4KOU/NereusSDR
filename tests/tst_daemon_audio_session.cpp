@@ -8,6 +8,7 @@
 
 #include <QtTest>
 
+#include "fakes/RecordingRtpSink.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/HpsdrModel.h"
@@ -22,8 +23,12 @@
 #include "models/RadioModel.h"
 
 #include <QPointer>
+#include <QRegularExpression>
+#include <QStringList>
 #include <QTemporaryDir>
 #include "fakes/UpgradedCoreToken.h"
+
+#include <mutex>
 
 using namespace NereusSDR;
 
@@ -41,29 +46,41 @@ public:
     bool acceptDescription(const QString&, const QString&) override { return true; }
     bool acceptCandidate(const QString&, const QString&) override { return true; }
     bool sendDisplay(const QByteArray&) override { return readyState; }
-    bool sendRtp(const QByteArray& packet) override
+    bool sendRtp(const QByteArray& packet) override { return rtpSink->sendRtpAccepted(packet); }
+    std::shared_ptr<MediaRtpSink> audioRtpSink() override
     {
-        ++rtpAttempts;
-        if (closeOnNextRtp) {
-            // This signal can synchronously destroy the owning MediaPeer.
-            // Do not touch fixture state after emitting it.
-            emit closed();
-            return false;
-        }
-        if (!readyState || !acceptRtp) { return false; }
-        rtpPackets.append(packet);
-        return true;
+        return giveAudioSink ? rtpSink : nullptr;
     }
     bool isReady() const override { return readyState; }
     void becomeReady() { readyState = true; emit ready(); }
 
     bool started{false};
-    bool readyState{false};
+    // False: a transport with no audio send for another thread, as the
+    // interface's default is.
+    bool giveAudioSink{true};
+    // R-AUD-SEND: the Core sends audio from its sender thread, through the
+    // sink; what the sink took is read under its lock.
+    const std::shared_ptr<Test::RecordingRtpSink> rtpSink{
+        std::make_shared<Test::RecordingRtpSink>()};
+    std::atomic<bool>& readyState{rtpSink->ready};
+    Test::SharedPacketList& rtpPackets{rtpSink->packets};
     StartOptions startOptions{Role::Answerer, 0};
-    QList<QByteArray> rtpPackets;
-    int rtpAttempts{0};
-    bool acceptRtp{true};
-    bool closeOnNextRtp{false};
+    std::atomic<int>& rtpAttempts{rtpSink->attempts};
+    std::atomic<bool>& acceptRtp{rtpSink->accept};
+    // The transport is closing: it is no longer ready, the next packet
+    // finds it so, and the transport then says it closed. From the sender
+    // thread, so the signal reaches the peer on its own thread, as the real
+    // transport's does.
+    void closeOnNextRtp()
+    {
+        readyState = false;
+        rtpSink->setHook([this](const QByteArray&) {
+            if (!m_closeSignalled.exchange(true)) {
+                QMetaObject::invokeMethod(this, [this] { emit closed(); }, Qt::QueuedConnection);
+            }
+        });
+    }
+    std::atomic<bool> m_closeSignalled{false};
 };
 
 QVector<float> stereoBlock(float left, float right)
@@ -82,6 +99,49 @@ QJsonObject audioControl(quint32 revision, bool enabled)
             {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
             {QStringLiteral("revision"), static_cast<qint64>(revision)},
             {QStringLiteral("enabled"), enabled}};
+}
+
+// The "daemon audio diagnostics" lines logged while one of these lives.
+class DiagnosticsLines final {
+public:
+    DiagnosticsLines()
+    {
+        s_lines = &m_lines;
+        m_previous = qInstallMessageHandler(&DiagnosticsLines::handle);
+    }
+    ~DiagnosticsLines()
+    {
+        qInstallMessageHandler(m_previous);
+        s_lines = nullptr;
+    }
+    DiagnosticsLines(const DiagnosticsLines&) = delete;
+    DiagnosticsLines& operator=(const DiagnosticsLines&) = delete;
+    QStringList lines() const
+    {
+        const std::lock_guard<std::mutex> lock(s_mutex);
+        return m_lines;
+    }
+
+private:
+    static void handle(QtMsgType, const QMessageLogContext&, const QString& message)
+    {
+        const std::lock_guard<std::mutex> lock(s_mutex);
+        if (s_lines != nullptr && message.contains(QLatin1String("daemon audio diagnostics "))) {
+            s_lines->append(message);
+        }
+    }
+    static inline std::mutex s_mutex;
+    static inline QStringList* s_lines = nullptr;
+    QStringList m_lines;
+    QtMessageHandler m_previous = nullptr;
+};
+
+// One field of a diagnostics line, as its text.
+QString diagnosticsField(const QString& line, const QString& name)
+{
+    const QRegularExpressionMatch match =
+        QRegularExpression(QStringLiteral(" %1=(\\S+)").arg(name)).match(line);
+    return match.hasMatch() ? match.captured(1) : QString();
 }
 
 QJsonObject latestAudioContext(const QSignalSpy& controls)
@@ -106,6 +166,7 @@ struct Harness {
     QPointer<FakeTransport> mediaTransport;
     DaemonMediaController controller;
     AudioEngine* engine{nullptr};
+    bool transportsGiveAudioSink{true};
     int sliceA{-1};
     int sliceB{-1};
 
@@ -115,6 +176,7 @@ struct Harness {
         , controller(&server, &radio, nullptr,
                      [this](QObject* parent) -> IMediaTransport* {
                          mediaTransport = new FakeTransport(parent);
+                         mediaTransport->giveAudioSink = transportsGiveAudioSink;
                          return mediaTransport;
                      })
     {
@@ -162,6 +224,9 @@ struct Harness {
             engine->rxBlockReady(sliceA, left.constData(), kDspFrames);
             engine->rxBlockReady(sliceB, right.constData(), kDspFrames);
         }
+        // R-AUD-SEND: no DSP callback follows the last one here; see
+        // DaemonAudioSource::handOverPendingForTest().
+        controller.handOverPendingAudioForTest();
     }
 };
 
@@ -310,7 +375,7 @@ private slots:
         QCOMPARE(rejected.sendUnresolvedAtRetirement, std::uint64_t{0});
         QCOMPARE(rejected.sendAttempts, rejected.sendAccepted + rejected.sendRejected
                  + rejected.sendInFlight + rejected.sendUnresolvedAtRetirement);
-        QCOMPARE(h.mediaTransport->rtpAttempts, 2);
+        QCOMPARE(h.mediaTransport->rtpAttempts.load(), 2);
         QCOMPARE(h.mediaTransport->rtpPackets.size(), 1);
 
         QVERIFY(h.client.sendMediaControl(audioControl(2, false), h.client.sessionEpoch()));
@@ -337,7 +402,147 @@ private slots:
                  rejected.sender.lastEmittedTimestamp);
     }
 
-    void audioDiagnosticsRetainAnAttemptWhenTransportRetiresPeerSynchronously()
+    // R-AUD-SEND: a transport with no audio send for the sender thread.
+    // Audio then goes nowhere, and the Core says so: once for the
+    // connection, however often its routes are brought up to date after.
+    void aTransportWithNoAudioSinkIsWarnedAboutOnce()
+    {
+        const QRegularExpression warning(
+            QStringLiteral("receive audio cannot be sent on media connection %1")
+                .arg(QLatin1String(kConnectionId)));
+        Harness h;
+        h.transportsGiveAudioSink = false;
+        h.establishAndReady();
+        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+        // The one line, which must come; any further one fails the test.
+        QTest::ignoreMessage(QtWarningMsg, warning);
+        QTest::failOnWarning(warning);
+        QVERIFY(h.client.sendMediaControl(audioControl(1, true), h.client.sessionEpoch()));
+        QTRY_VERIFY(h.controller.audioDiagnostics().activeContext);
+        // Off and on again: the routes are brought up to date each time.
+        QVERIFY(h.client.sendMediaControl(audioControl(2, false), h.client.sessionEpoch()));
+        QTRY_VERIFY(latestAudioContext(controls).value(QStringLiteral("revision")).toInteger() == 2);
+        QVERIFY(h.client.sendMediaControl(audioControl(3, true), h.client.sessionEpoch()));
+        QTRY_VERIFY(latestAudioContext(controls).value(QStringLiteral("revision")).toInteger() == 3);
+        // Nothing is sent, and nothing is counted against the transport.
+        h.feedMixed(DaemonAudioSource::kBlockFrames);
+        QTRY_VERIFY(h.controller.audioDiagnostics().sender.encodedPackets == std::uint64_t{1});
+        const auto diagnostics = h.controller.audioDiagnostics();
+        QCOMPARE(diagnostics.sendAttempts, std::uint64_t{0});
+        QCOMPARE(diagnostics.sendRejected, std::uint64_t{0});
+        QVERIFY(h.mediaTransport->rtpPackets.isEmpty());
+    }
+
+    // R-AUD-SEND: the diagnostics line says how evenly the sender thread
+    // sent: the longest gap between two packets since the context started
+    // and since the previous line, in milliseconds to one decimal, after
+    // sendUnresolvedAtRetirement. Reading the diagnostics for another
+    // purpose does not take the second figure; a line that is logged does,
+    // so one gap is reported as "since the previous line" exactly once.
+    void theDiagnosticsLineReportsTheLongestSendGap()
+    {
+        constexpr int kLineDeadlineMs = 20'000;
+        const QString none = QStringLiteral("-1");
+        const QString sinceStart = QStringLiteral("sendGapMaxMs");
+        const QString sinceLast = QStringLiteral("sendGapMaxSinceLastMs");
+        Harness h;
+        h.establishAndReady();
+        DiagnosticsLines log;
+
+        // A context with one packet: no gap was measured, in any line.
+        QVERIFY(h.client.sendMediaControl(audioControl(1, true), h.client.sessionEpoch()));
+        QTRY_VERIFY(h.controller.audioDiagnostics().activeContext);
+        h.feedMixed(DaemonAudioSource::kBlockFrames);
+        QTRY_COMPARE(h.mediaTransport->rtpPackets.size(), 1);
+        QVERIFY(h.client.sendMediaControl(audioControl(2, false), h.client.sessionEpoch()));
+        QTRY_VERIFY(!h.controller.audioDiagnostics().activeContext);
+        const QStringList single = log.lines();
+        QVERIFY(!single.isEmpty());
+        QVERIFY(single.constLast().contains(QLatin1String("diagnostics final ")));
+        for (const QString& line : single) {
+            QVERIFY2(line.contains(QLatin1String(
+                         " sendUnresolvedAtRetirement=0 sendGapMaxMs=-1 sendGapMaxSinceLastMs=-1 "
+                         "hasLastPacket=")),
+                     qPrintable(line));
+        }
+
+        // A context with two packets has one gap.
+        const qsizetype firstOfPair = single.size();
+        QVERIFY(h.client.sendMediaControl(audioControl(3, true), h.client.sessionEpoch()));
+        QTRY_VERIFY(h.controller.audioDiagnostics().activeContext);
+        h.feedMixed(DaemonAudioSource::kBlockFrames);
+        QTRY_COMPARE(h.mediaTransport->rtpPackets.size(), 2);
+        h.feedMixed(DaemonAudioSource::kBlockFrames);
+        QTRY_COMPARE(h.mediaTransport->rtpPackets.size(), 3);
+        // Read for another purpose, more than once: that takes nothing.
+        const qint64 gapUs = h.controller.audioDiagnostics().sender.longestSendGapUs;
+        QVERIFY(gapUs >= 0);
+        QCOMPARE(h.controller.audioDiagnostics().sender.longestSendGapUs, gapUs);
+        const QString expected = QString::number(double(gapUs) / 1000.0, 'f', 1);
+        QVERIFY2(QRegularExpression(QStringLiteral("^\\d+\\.\\d$")).match(expected).hasMatch(),
+                 qPrintable(expected));
+
+        // A periodic line after the gap, then the final one. Nothing was
+        // sent between them, so the final line has no gap since the last.
+        const qsizetype afterTheGap = log.lines().size();
+        QTRY_VERIFY_WITH_TIMEOUT(log.lines().size() > afterTheGap, kLineDeadlineMs);
+        QVERIFY(h.client.sendMediaControl(audioControl(4, false), h.client.sessionEpoch()));
+        QTRY_VERIFY(!h.controller.audioDiagnostics().activeContext);
+        const QStringList lines = log.lines();
+        QVERIFY(lines.constLast().contains(QLatin1String("diagnostics final ")));
+        int linesWithTheGapSinceLast = 0;
+        for (qsizetype i = firstOfPair; i < lines.size(); ++i) {
+            const QString& line = lines.at(i);
+            QVERIFY2(line.contains(QRegularExpression(QStringLiteral(
+                         " sendUnresolvedAtRetirement=\\d+ sendGapMaxMs=\\S+ "
+                         "sendGapMaxSinceLastMs=\\S+ hasLastPacket="))),
+                     qPrintable(line));
+            const QString last = diagnosticsField(line, sinceLast);
+            if (last == expected) {
+                ++linesWithTheGapSinceLast;
+            } else {
+                QVERIFY2(last == none, qPrintable(line));
+            }
+            if (i >= afterTheGap) {
+                QCOMPARE(diagnosticsField(line, sinceStart), expected);
+            }
+        }
+        QCOMPARE(linesWithTheGapSinceLast, 1);
+        QCOMPARE(diagnosticsField(lines.at(afterTheGap), sinceLast), expected);
+        QCOMPARE(diagnosticsField(lines.constLast(), sinceLast), none);
+        QCOMPARE(h.controller.audioDiagnostics().sender.longestSendGapUs, gapUs);
+    }
+
+    // R-AUD-SEND: a ready transport that will not take a packet. That is a
+    // transport fault to a reader of the diagnostics: one attempt, rejected.
+    void audioDiagnosticsCountAReadyTransportsRefusalAsRejected()
+    {
+        Harness h;
+        h.establishAndReady();
+        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+        QVERIFY(h.client.sendMediaControl(audioControl(1, true), h.client.sessionEpoch()));
+        QTRY_VERIFY(h.controller.audioDiagnostics().activeContext);
+
+        h.mediaTransport->acceptRtp = false;
+        h.feedMixed(DaemonAudioSource::kBlockFrames);
+        QTRY_COMPARE(h.mediaTransport->rtpAttempts.load(), 1);
+        QTRY_VERIFY(h.controller.audioDiagnostics().sendInFlight == std::uint64_t{0}
+                    && h.controller.audioDiagnostics().sendAttempts == std::uint64_t{1});
+        const auto refused = h.controller.audioDiagnostics();
+        QCOMPARE(refused.sendAttempts, std::uint64_t{1});
+        QCOMPARE(refused.sendAccepted, std::uint64_t{0});
+        QCOMPARE(refused.sendRejected, std::uint64_t{1});
+        QCOMPARE(refused.sendUnresolvedAtRetirement, std::uint64_t{0});
+    }
+
+    // R-AUD-SEND: a send that meets a closing transport. (Before the sender
+    // thread the send ran on the controller's thread, the close retired the
+    // peer inside it, and the attempt stayed unresolved. The send now runs
+    // on the sender thread: the transport is no longer ready when the
+    // packet comes, so nothing is asked of it, and the close reaches the
+    // controller on its own thread afterwards.) No attempt, nothing
+    // rejected, nothing unresolved at the retirement, and the counts add up.
+    void audioDiagnosticsDoNotCountASendThatMeetsAClosingTransport()
     {
         Harness h;
         h.establishAndReady();
@@ -346,22 +551,24 @@ private slots:
         QTRY_VERIFY(!latestAudioContext(controls).isEmpty());
         QTRY_VERIFY(h.controller.audioDiagnostics().activeContext);
 
-        // sendRtp() closes its MediaPeer synchronously. Keep no raw fixture
-        // pointer after feeding audio: closing can delete the transport later
-        // in this same event turn.
-        h.mediaTransport->closeOnNextRtp = true;
+        // The next packet finds the transport not ready and the transport
+        // says it closed. Keep no raw fixture pointer after feeding audio:
+        // closing retires the peer, and the transport with it.
+        const std::shared_ptr<Test::RecordingRtpSink> sink = h.mediaTransport->rtpSink;
+        h.mediaTransport->closeOnNextRtp();
         h.feedMixed(DaemonAudioSource::kBlockFrames);
 
         QTRY_VERIFY(!h.controller.audioDiagnostics().activeContext);
         const auto retired = h.controller.audioDiagnostics();
-        // The return value was interrupted by peer retirement, so it cannot
-        // be accepted or refused. It remains visible as an unresolved
-        // retirement result, which is not packet loss.
-        QCOMPARE(retired.sendAttempts, std::uint64_t{1});
+        // The packet reached the sink, which answered "not ready".
+        QCOMPARE(sink->attempts.load(), 1);
+        QCOMPARE(sink->packets.size(), 0);
+        QCOMPARE(retired.sender.encodedPackets, std::uint64_t{1});
+        QCOMPARE(retired.sendAttempts, std::uint64_t{0});
         QCOMPARE(retired.sendAccepted, std::uint64_t{0});
         QCOMPARE(retired.sendRejected, std::uint64_t{0});
         QCOMPARE(retired.sendInFlight, std::uint64_t{0});
-        QCOMPARE(retired.sendUnresolvedAtRetirement, std::uint64_t{1});
+        QCOMPARE(retired.sendUnresolvedAtRetirement, std::uint64_t{0});
         QCOMPARE(retired.sendAttempts, retired.sendAccepted + retired.sendRejected
                  + retired.sendInFlight + retired.sendUnresolvedAtRetirement);
     }

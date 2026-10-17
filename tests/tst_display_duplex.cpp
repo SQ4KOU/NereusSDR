@@ -380,7 +380,9 @@ private slots:
     void keyedTheTraceTakesThetisTransmitCalibration()
     {
         SpectrumWidget sw;
-        sw.setDbmCalOffset(-12.5f);          // RXOffset: preamp + calibration
+        // Display pill plan Task 8: the station's term has its own setter;
+        // setDbmCalOffset is the operator's Cal Offset now.
+        sw.setStationCalOffsetDb(-12.5f);    // RXOffset: preamp + calibration
         sw.setRxPreampOffsetDb(4.5f);        // its preamp half
         sw.setTxDisplayCalOffsetDb(3.0f);    // TX Display Cal Offset
         sw.setTxAttenuatorOffsetDb(7.0f);    // the TX attenuator applied
@@ -412,7 +414,7 @@ private slots:
         // transmit: it adds none, keyed or not.
         SpectrumWidget remote;
         remote.m_remoteSpectrum = true;
-        remote.setDbmCalOffset(-12.5f);
+        remote.setStationCalOffsetDb(-12.5f);
         remote.setTxDisplayCalOffsetDb(3.0f);
         remote.setTxAttenuatorOffsetDb(7.0f);
         QCOMPARE(remote.displayCalOffsetDb(), 0.0f);
@@ -596,10 +598,27 @@ private slots:
         window.controller->setDisplayDuplex(true);
         QVERIFY(window.controller->displayDuplex());
 
+        // Display pill plan Task 13: an edge first records keyedChanged and
+        // one setDisplayKeyed for each pan; what follows is the rise or the
+        // fall itself.
+        const auto riseOrFall = [](const QStringList& calls) {
+            QStringList out;
+            for (const QString& call : calls) {
+                if (!call.startsWith(QStringLiteral("keyedChanged("))
+                    && !call.startsWith(QStringLiteral("setDisplayKeyed("))) {
+                    out.append(call);
+                }
+            }
+            return out;
+        };
         window.controller->setCallRecording(true);
         window.controller->setKeyed(true, window.txSliceId);
+        QCOMPARE(window.controller->callLog().value(0), QStringLiteral("keyedChanged(true)"));
+        // A display-duplex pan is keyed like any other.
+        QVERIFY(two->displayKeyed());
         // The overlay only.
-        QCOMPARE(window.controller->callLog(), QStringList{QStringLiteral("setMoxOverlay(true)")});
+        QCOMPARE(riseOrFall(window.controller->callLog()),
+                 QStringList{QStringLiteral("setMoxOverlay(true)")});
         QVERIFY(two->m_moxOverlay);
         QVERIFY(two->displayDuplex());
         QVERIFY(!two->showsTransmitView());
@@ -625,7 +644,9 @@ private slots:
 
         window.controller->clearCallLog();
         window.controller->setKeyed(false, -1);
-        QCOMPARE(window.controller->callLog(),
+        QCOMPARE(window.controller->callLog().value(0), QStringLiteral("keyedChanged(false)"));
+        QVERIFY(!two->displayKeyed());
+        QCOMPARE(riseOrFall(window.controller->callLog()),
                  QStringList{QStringLiteral("setMoxOverlay(false)")});
         QVERIFY(!two->m_moxOverlay);
         QCOMPARE(two->m_refLevel, rxRef);

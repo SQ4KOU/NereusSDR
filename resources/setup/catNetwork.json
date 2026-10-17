@@ -358,7 +358,7 @@
             {
               "id": "catNetwork.tciServer.core.rxSensorIntervalMs",
               "label": "RX interval:",
-              "tooltip": "How often RX sensor data (signal level, AGC gain, etc.) is pushed to TCI clients that subscribe to sensors (30 to 1000 ms).",
+              "tooltip": "How often RX sensor values (signal level, AGC gain and so on) are sent to an app that turns sensors on without choosing its own rate (30 to 1000 ms).",
               "kind": "integer",
               "binding": {
                 "command": {
@@ -387,7 +387,7 @@
             {
               "id": "catNetwork.tciServer.core.txSensorIntervalMs",
               "label": "TX interval:",
-              "tooltip": "How often TX sensor data (forward power, SWR, ALC, etc.) is pushed to TCI clients that subscribe to sensors (30 to 1000 ms).",
+              "tooltip": "How often TX sensor values (forward power, SWR, ALC and so on) are sent to an app that turns sensors on without choosing its own rate (30 to 1000 ms).",
               "kind": "integer",
               "binding": {
                 "command": {

@@ -14,6 +14,10 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-10-12 - RadioInfo keeps the second firmware number a discovery
+//                 reply carries (firmwareBetaVersion) and words the two
+//                 in one place (firmwareText). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  clsRadioDiscovery.cs
@@ -92,6 +96,15 @@ struct RadioInfo {
     // Hardware
     HPSDRHW boardType{HPSDRHW::Unknown};
     int firmwareVersion{0};
+    // The second firmware number the radio reported in discovery, or 0 when
+    // it reported none (a zero byte, a short reply, a board with no such
+    // byte, a radio typed in by hand). Thetis's BetaVersion: byte 23 of a
+    // Protocol 2 reply, and byte 21 of an HL2's Protocol 1 reply (mi0bot).
+    // The Anvelina Pro 3 sends the third number of its release there (14
+    // for 2.2.14) and the HL2 its gateware's patch number. The ANAN-G2
+    // sends the version of its p2app program instead, which firmwareText()
+    // leaves out.
+    int firmwareBetaVersion{0};
     int adcCount{1};                     // Derived from boardType (1 or 2)
     int maxReceivers{4};                 // Board-dependent max simultaneous RX
     // The receiver count the radio itself reported in discovery byte 20,
@@ -116,6 +129,11 @@ struct RadioInfo {
 
     // Display helpers
     QString displayName() const;
+    // The firmware as every place that shows it words it: the number the
+    // radio reported, then a dot and its second number when it reported one
+    // ("22.14"). A radio that reported no second number reads as the first
+    // alone ("22").
+    QString firmwareText() const;
     static int adcCountForBoard(HPSDRHW type);
     static int maxReceiversForBoard(HPSDRHW type);
 

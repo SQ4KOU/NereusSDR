@@ -30,15 +30,22 @@
 //                                    time reach an app's peak hold
 //                                    (displayExtrasVersion 3).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-10  J.J. Boyd / KG4VCF  The key and un-key edges (kept AGC
+//                                    level, the hold) and
+//                                    DisplayExtrasCarry. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
+#include "core/ClarityController.h"
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/spectrum/ActivePeakHoldTrace.h"
 #include "core/spectrum/DisplayFollowers.h"
+#include "core/spectrum/MoxDisplayHold.h"
 #include "core/spectrum/PeakBlobDetector.h"
 
 #include <QByteArray>
+#include <QHash>
 #include <QJsonObject>
 #include <QStringList>
 #include <QVector>
@@ -48,8 +55,6 @@
 #include <utility>
 
 namespace NereusSDR {
-
-class ClarityController;
 
 // ── The subscription fields ─────────────────────────────────────────────
 
@@ -221,7 +226,14 @@ struct DisplayExtrasInputs {
     double filterLowHz {0.0};
     double filterHighHz {0.0};
     int band {0};
+    /// The Core is keyed, as its displays see it: from the end of the walk
+    /// into transmit to the end of the walk out (MoxController::
+    /// moxStateChanged), so a key shorter than the RF delay is not one.
     bool mox {false};
+    /// The un-key hold for this endpoint: moxHoldLengthMs of its source's
+    /// FFT size, decimation and sample rate. Clarity, the waterfall AGC and
+    /// the noise-floor fast attack all run it from the un-key.
+    qint64 holdLengthMs {kMoxHoldMinMs};
     /// The endpoint's slice is the one transmitting (MOX on and the slice
     /// is the transmit slice): Thetis's local_mox for that receiver.
     bool transmitting {false};
@@ -230,6 +242,30 @@ struct DisplayExtrasInputs {
     /// The endpoint's trace detector: normalise applies only with Average,
     /// Sample or RMS (normalizeAppliesToDetector), as on the desktop.
     int traceDetector {0};
+};
+
+/// What a display's processor hands to the one that replaces it when the
+/// display is asked for again on the same receiver (a pan, a zoom, a moved
+/// slider), so its levels carry on instead of starting again. The blobs and
+/// the peak hold are not in it: they start again with the new context.
+struct DisplayExtrasCarry {
+    /// The waterfall level mode the levels below were made under. They are
+    /// adopted only by a processor asked for the same mode.
+    std::optional<WaterfallLevelMode> levelMode;
+    /// Clarity's smoothed floor, last thresholds, smoothing clock and hold.
+    std::optional<ClarityController::CarriedState> clarity;
+    /// The waterfall AGC: its run level, the low level it last produced,
+    /// whether it is keyed and its hold.
+    WaterfallLevelFollower levels;
+    /// The AGC run level saved for each band at a key.
+    QHash<int, float> agcRunLevelByBand;
+    /// The levels in force.
+    float activeLowDbm {-122.0f};
+    float activeHighDbm {-62.0f};
+    /// The noise floor NF-AGC puts its low level on, with its fast attack.
+    NoiseFloorFollower noiseFloor;
+    /// The key state the processor last saw.
+    bool mox {false};
 };
 
 class DisplayExtrasProcessor {
@@ -241,9 +277,20 @@ public:
 
     const DisplayExtrasRequest& request() const { return m_request; }
 
-    /// A new endpoint context: the blobs and the peak hold start again, as a
-    /// desktop remote window's do on a new context.
+    /// A new endpoint context for a new picture: the blobs and the peak hold
+    /// start again, as a desktop remote window's do on a new picture.
+    /// R-DISP-RETUNE: also called for a moved picture (the same shape at
+    /// another center), whose peak hold and blobs were measured at
+    /// frequencies the pixels no longer show. The noise floor, the waterfall
+    /// levels and Clarity are not touched by it and carry on.
     void newContext();
+
+    /// R-DISP-HOLD: the same picture asked again with other display extras
+    /// settings. Takes the new request and restarts only the state a changed
+    /// setting invalidates: the blobs on a different count, the peak hold row
+    /// when it is switched off, the waterfall level follower (and Clarity) on
+    /// a different levels mode. Everything else carries on.
+    void updateRequest(const DisplayExtrasRequest& request);
 
     /// Clarity's input: the full-source noise floor the Core already
     /// estimates for the `noise-floor` operation, before any shift.
@@ -265,9 +312,27 @@ public:
     /// (before the shift) and returns the sections asked for, shifted, for
     /// that frame's endpoint, generation and sequence. The waterfall levels
     /// move only on a frame that adds a waterfall line.
+    ///
+    /// A change of inputs.mox is a key edge. On the key the AGC run level is
+    /// saved for inputs.band and the AGC stops estimating; on the un-key the
+    /// level saved for the band the endpoint is on then comes back (or the
+    /// restart floor, -150 dBm, when that band has none), and Clarity, the
+    /// AGC and the noise-floor fast attack run one hold of
+    /// inputs.holdLengthMs from inputs.nowMs.
     DisplayExtrasFrame process(const DisplayCodecFrame& frame, const DisplayExtrasInputs& inputs);
 
+    /// The state a replacement processor carries on from. This processor's
+    /// per-band levels move into it; nothing else changes.
+    DisplayExtrasCarry takeCarry();
+    /// Carries on from a replaced processor. The noise floor and the key
+    /// state are always taken; the levels (Clarity's, the AGC's, the
+    /// per-band ones) only when both were asked for the same level mode.
+    void adoptCarry(DisplayExtrasCarry&& carry);
+
     // Read-only views for tests.
+    bool keyed() const { return m_mox; }
+    std::optional<float> agcRunLevel() const { return m_levels.agcRunLevel(); }
+    const WaterfallLevelFollower& levelFollower() const { return m_levels; }
     const PeakBlobDetector& peakBlobs() const { return m_blobs; }
     const ActivePeakHoldTrace& activePeakHold() const { return m_peakHold; }
     const NoiseFloorFollower& noiseFloor() const { return m_noiseFloor; }
@@ -276,12 +341,19 @@ public:
     const ClarityController* clarity() const { return m_clarity.get(); }
 
 private:
+    void applyPeakBlobSettings();
+    void applyPeakHoldSettings();
+    void startWaterfallLevels();
+
     DisplayExtrasRequest m_request;
     PeakBlobDetector m_blobs;
     ActivePeakHoldTrace m_peakHold;
     NoiseFloorFollower m_noiseFloor;
     NoiseFloorFastAttackTrigger m_fastAttackTrigger;
     WaterfallLevelFollower m_levels;
+    // The AGC run level saved for each band at a key (memory only), as
+    // SpectrumWidget keeps it for a window's pan.
+    QHash<int, float> m_agcRunLevelByBand;
     std::unique_ptr<ClarityController> m_clarity;
     float m_activeLow {-122.0f};
     float m_activeHigh {-62.0f};

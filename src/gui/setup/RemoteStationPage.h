@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "gui/SetupPage.h"
+#include "gui/NereusGuiExport.h"
 
 #include <QByteArray>
 #include <QString>
@@ -22,7 +23,7 @@ namespace NereusSDR {
 class ConnectedDevicesList;
 class RemoteDevicesState;
 
-class RemoteStationPage : public SetupPage {
+class NEREUS_GUI_EXPORT RemoteStationPage : public SetupPage {
     Q_OBJECT
 public:
     struct Device {

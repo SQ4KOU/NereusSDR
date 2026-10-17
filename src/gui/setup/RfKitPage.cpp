@@ -44,9 +44,26 @@
 //                 via Anthropic Claude Code.
 //   2026-09-29 -- R-R3-49 / R-IOS-18: Setup description version 15 ids.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 -- The live status word reads
+//                 WorkspacePreview::statusColourName() (the status colour
+//                 choice). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-09 -- The page carries its title above the tabs, as every
+//                 Setup page does. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-09 - D25: the button row stacks when narrow (SetupFit::FitRow)
+//                 and the diagnostics line wraps. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-10-11 -- Connect and Disconnect in a window running its own radio
+//                 go through RadioModel (connectRfKitFromWindow), the
+//                 connection that window shares. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "RfKitPage.h"
+#include "gui/setup/SetupFit.h"
+#include "gui/SetupPage.h"
+#include "gui/styles/WorkspacePreview.h"
 
 #include "models/AccessoryDataModel.h"
 #include "models/RadioModel.h"
@@ -88,6 +105,9 @@ RfKitPage::RfKitPage(RadioModel* model, QWidget* parent)
 {
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(8, 8, 8, 8);
+
+    // The page title, as every Setup page draws it (SetupPage::init).
+    root->addWidget(SetupPage::makePageTitle(tr("RF-Kit"), this));
 
     m_tabs = new QTabWidget(this);
     root->addWidget(m_tabs);
@@ -261,7 +281,10 @@ QWidget* RfKitPage::buildRf2ksTab()
     m_disconnectBtn->setObjectName(QStringLiteral("rfKitDisconnectButton"));
     m_setTciBtn   = new QPushButton(tr("Set amp to TCI mode"), connBox);
     m_resetErrBtn = new QPushButton(tr("Reset amp error state"), connBox);
-    auto* btnRow  = new QHBoxLayout();
+    // D25: the four buttons stack, in this order, when the window is too
+    // narrow for them in one row.
+    auto* btnRow  = new SetupFit::FitRow();
+    btnRow->setObjectName(QStringLiteral("rfKitButtonRow"));
     btnRow->addWidget(m_testConnBtn);
     btnRow->addWidget(m_disconnectBtn);
     btnRow->addWidget(m_setTciBtn);
@@ -310,6 +333,8 @@ QWidget* RfKitPage::buildRf2ksTab()
     auto* diagLay = new QVBoxLayout(diagBox);
     m_diagnosticsLabel = new QLabel(diagBox);
     m_diagnosticsLabel->setTextFormat(Qt::RichText);
+    // D25: the counts wrap rather than widening the page.
+    m_diagnosticsLabel->setWordWrap(true);
     diagLay->addWidget(m_diagnosticsLabel);
     root->addWidget(diagBox);
 
@@ -580,7 +605,7 @@ void RfKitPage::onConnectClicked()
         return;
     }
     if (m_model->rfKitConnection()) {
-        m_model->rfKitConnection()->connectToAmp(
+        m_model->connectRfKitFromWindow(
             m_hostEdit->text(),
             static_cast<quint16>(m_portSpin->value()));
     }
@@ -600,7 +625,7 @@ void RfKitPage::onDisconnectClicked()
         return;
     }
     if (m_model->rfKitConnection()) {
-        m_model->rfKitConnection()->disconnect();
+        m_model->disconnectRfKitFromWindow();
     }
 }
 
@@ -915,8 +940,10 @@ void RfKitPage::refreshLiveStatus()
     Rf2ksConnection* conn = m_model->rfKitConnection();
     if (!conn) { return; }
     const QString status = conn->isConnected()
-        ? QStringLiteral("<span style='color:#34c759;'>CONNECTED</span>")
-        : QStringLiteral("<span style='color:#e64949;'>DISCONNECTED</span>");
+        ? QStringLiteral("<span style='color:%1;'>CONNECTED</span>")
+              .arg(WorkspacePreview::statusColourName("#34c759", "ok"))
+        : QStringLiteral("<span style='color:%1;'>DISCONNECTED</span>")
+              .arg(WorkspacePreview::statusColourName("#e64949", "danger"));
     m_liveStatusLabel->setText(
         QStringLiteral("RF2K-S: %1 &nbsp; %2:%3 &nbsp; %4")
             .arg(status, conn->peerAddress())

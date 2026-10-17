@@ -2,6 +2,12 @@
 #include <QtTest/QtTest>
 #include <QApplication>
 #include <QCheckBox>
+#include <QGroupBox>
+#include <QLabel>
+
+#include "GridHeaderAlignment.h"
+#include "core/RadioDiscovery.h"
+#include "gui/setup/HardwarePage.h"
 
 #include "core/AppSettings.h"
 
@@ -158,6 +164,78 @@ private slots:
         model.pennyLaneControllerMutable().setExtCtrlEnabled(false);
         QVERIFY(!box->isChecked());
         s.remove(perMac);
+    }
+    // Each P1-P7 header sits over its column of check boxes, in the RX and
+    // the TX matrix, every band row, on a Saturn and an HL2 (whose tab is
+    // "Hermes Lite Control"), in today's look and the workspace look (the
+    // headers spread across the width while the boxes packed at the left).
+    void pin_headers_sit_over_their_columns_data()
+    {
+        QTest::addColumn<bool>("workspace");
+        QTest::addColumn<int>("board");
+        QTest::newRow("today saturn") << false << static_cast<int>(HPSDRHW::Saturn);
+        QTest::newRow("today hl2") << false << static_cast<int>(HPSDRHW::HermesLite);
+        QTest::newRow("look saturn") << true << static_cast<int>(HPSDRHW::Saturn);
+        QTest::newRow("look hl2") << true << static_cast<int>(HPSDRHW::HermesLite);
+    }
+
+    void pin_headers_sit_over_their_columns()
+    {
+        QFETCH(bool, workspace);
+        QFETCH(int, board);
+        const GridHeaderAlignment::AppLook look(workspace);
+        const auto hw = static_cast<HPSDRHW>(board);
+        RadioModel model;
+        model.setBoardForTest(hw);
+        HardwarePage page(&model);
+        RadioInfo info;
+        info.boardType  = hw;
+        info.protocol   = hw == HPSDRHW::Saturn ? ProtocolVersion::Protocol2
+                                                : ProtocolVersion::Protocol1;
+        info.macAddress = QStringLiteral("aa:bb:cc:11:22:33");
+        page.onCurrentRadioChanged(info);
+        QVERIFY(GridHeaderAlignment::selectTab(&page, page.tabTextForTest(HardwarePage::Tab::OcOutputs)));
+        QVERIFY(GridHeaderAlignment::selectTab(&page, QStringLiteral("HF")));
+        auto* tab = page.findChild<OcOutputsHfTab*>();
+        QVERIFY(tab != nullptr);
+        look.apply(&page);
+        page.resize(1400, 900);
+        page.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&page));
+        int groupsChecked = 0;
+        for (QGroupBox* group : tab->findChildren<QGroupBox*>()) {
+            const bool tx = group->title().contains(QStringLiteral("TX OC"));
+            const bool rx = group->title().contains(QStringLiteral("RX OC"));
+            if (!tx && !rx) {
+                continue;
+            }
+            ++groupsChecked;
+            for (int pin = 1; pin <= 7; ++pin) {
+                QLabel* header = nullptr;
+                for (QLabel* label : group->findChildren<QLabel*>()) {
+                    if (label->text() == QStringLiteral("P%1").arg(pin)) {
+                        header = label;
+                    }
+                }
+                QVERIFY(header != nullptr);
+                const qreal headerX = GridHeaderAlignment::labelCentreX(header, &page);
+                int boxes = 0;
+                const QString pinTip = QStringLiteral(" OC pin %1, ").arg(pin);
+                for (QCheckBox* box : group->findChildren<QCheckBox*>()) {
+                    if (!box->toolTip().contains(pinTip)) {
+                        continue;
+                    }
+                    ++boxes;
+                    const qreal boxX = GridHeaderAlignment::indicatorCentreX(box, &page);
+                    QVERIFY2(qAbs(boxX - headerX) <= 1.0,
+                             qPrintable(QStringLiteral("%1 P%2: header centre %3, box centre %4 (%5)")
+                                            .arg(group->title()).arg(pin).arg(headerX).arg(boxX)
+                                            .arg(box->toolTip())));
+                }
+                QVERIFY(boxes > 0);
+            }
+        }
+        QCOMPARE(groupsChecked, 2);
     }
 };
 

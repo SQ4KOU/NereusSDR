@@ -1,0 +1,212 @@
+<div id="ps-explore" aria-label="PureSignal and AmpView window exploration">
+  <div class="px-switch"><button type="button" data-surface="pure" aria-pressed="true" class="cursor-interaction">PureSignal</button><button type="button" data-surface="amp" aria-pressed="false" class="cursor-interaction">AmpView</button><span>Interactive design study · synthetic data</span></div>
+  <div data-surface-panel="pure" class="viz-carousel viz-dotted-background" aria-label="PureSignal window layouts">
+    <section data-variant="Operating view"><div class="px-stage"><div class="px-window px-operating" data-pure aria-label="PureSignal operating view"></div></div></section>
+    <section data-variant="Bench view" hidden><div class="px-stage"><div class="px-window px-bench" data-pure aria-label="PureSignal bench view"></div></div></section>
+  </div>
+  <div data-surface-panel="amp" class="viz-carousel viz-dotted-background" aria-label="AmpView plot layouts" hidden>
+    <section data-variant="Linked plots"><div class="px-stage"><div class="px-window" data-amp="linked" aria-label="AmpView linked plots"></div></div></section>
+    <section data-variant="Unified plot" hidden><div class="px-stage"><div class="px-window" data-amp="unified" aria-label="AmpView unified plot"></div></div></section>
+  </div>
+  <template id="px-pure-template">
+    <header class="px-title"><span><i data-lucide="radio" aria-hidden="true"></i> PureSignal</span><label><input type="checkbox"> On top</label></header>
+    <div class="px-toolbar"><div class="px-actions"><button type="button" data-auto aria-pressed="true" class="cursor-interaction">Auto cal</button><button type="button" data-single class="cursor-interaction">Single cal</button><button type="button" data-tone aria-pressed="true" class="cursor-interaction">Two-tone <i data-lucide="radio-tower" aria-hidden="true"></i></button><button type="button" data-off class="px-off cursor-interaction">OFF</button></div><button type="button" data-open-amp class="px-quiet cursor-interaction">AmpView <i data-lucide="external-link" aria-hidden="true"></i></button></div>
+    <div class="px-preview-state"><span>Preview condition</span><select data-condition aria-label="Preview radio condition" class="cursor-interaction"><option value="correcting">Correcting</option><option value="idle">Receive / idle</option><option value="off">PureSignal off</option><option value="low">Feedback too low</option><option value="collecting">Collecting samples</option><option value="disconnected">Disconnected</option></select></div>
+    <div class="px-body">
+      <aside class="px-persistent">
+        <section class="px-feedback"><div class="px-eyebrow">RF FEEDBACK <span class="px-feedback-state px-green">In range</span></div><div class="px-feedback-reading"><span class="px-digits" data-feedback>155</span><span class="px-muted">level / 255</span></div><div class="px-ruler" role="img" aria-label="Feedback scale zero to 255, with an illustrated target range"><div class="px-range"></div><div class="px-meter-fill"></div><span class="px-needle"></span></div><div class="px-ticks"><span>0</span><span>91</span><span>129</span><span>181</span><span>255</span></div><div class="px-feedback-caption"><span>Auto attenuation</span><span class="px-green">Enabled</span></div></section>
+        <section class="px-correction"><div class="px-eyebrow">CORRECTION</div><div class="px-status-title"><span class="px-dot"></span><span data-correction>Applied</span></div><p class="px-state-help">New solutions are being calculated.</p><div class="px-cal-progress"><span class="px-green" data-stage="collect">● Collect</span><span>→</span><span class="px-green" data-stage="solve">● Solve</span><span>→</span><span class="px-green" data-stage="apply">● Apply</span></div><div class="px-pair"><span>Correction solutions <small>cor.cnt</small></span><strong data-count>24</strong></div><div class="px-pair"><span>Rejected sample sets <small>dg.cnt</small></span><strong data-reject>0</strong></div></section>
+      </aside>
+      <div class="px-workarea">
+        <div class="px-tabs" role="tablist" aria-label="PureSignal detail sections"><button type="button" role="tab" data-tab="calibration" aria-selected="true" class="cursor-interaction">Calibration</button><button type="button" role="tab" data-tab="measurements" aria-selected="false" class="cursor-interaction">IMD measurements</button><button type="button" role="tab" data-tab="diagnostics" aria-selected="false" class="cursor-interaction">Diagnostics</button></div>
+        <section class="px-panel" data-content="calibration">
+          <div class="px-section-title">Feedback control</div>
+          <div class="px-checks"><label><input type="checkbox" checked data-att> Auto attenuate</label><label><input type="checkbox"> Quick attenuate response</label></div>
+          <div class="px-section-title">Timing <span>Existing controls</span></div>
+          <div class="px-timing"><label>MOX wait <span><input type="number" min="0.1" max="10" step="0.1" value="2.0" aria-label="MOX wait seconds"> s</span></label><label>CAL wait <span><input type="number" min="0" max="100" step="0.1" value="0.0" aria-label="CAL wait seconds"> s</span></label><label>AMP delay <span><input type="number" min="0" max="25000000" step="20" value="150" aria-label="Amplifier delay nanoseconds"> ns</span></label></div>
+          <div class="px-section-title">Solution controls</div>
+          <div class="px-solution-controls"><label><input type="checkbox" checked> PIN <small>Pin upper gain curve</small></label><label><input type="checkbox" checked> MAP <small>Remap sample intervals</small></label><label><input type="checkbox"> STBL <small>Average sample collections</small></label><label><input type="checkbox"> Relax tolerance</label><label>TINT <select data-tint aria-label="TINT in decibels"><option>0.5</option><option>1.1</option><option>2.5</option></select> dB</label></div>
+          <div class="px-peak-reference"><div><span class="px-section-title">Hardware peak reference</span><div class="px-muted px-small">Measured and expected digital TX feedback</div></div><div class="px-peak-values"><span>GetPk <strong data-getpk>0.6121</strong></span><label>SetPk <input type="text" value="0.6121" aria-label="Expected hardware peak"></label><button type="button" data-default class="px-quiet cursor-interaction">Default</button></div></div>
+        </section>
+        <section class="px-panel" data-content="measurements" hidden>
+          <div class="px-measure-head"><label><input type="checkbox" checked data-show-imd> Show two-tone measurements</label><select data-imd-state aria-label="Preview measurement condition"><option value="valid">Valid peaks</option><option value="waiting">Waiting for two-tone</option><option value="missing">Peaks not found</option><option value="duplex">Duplex required</option></select></div>
+          <div class="px-imd-summary"><div><span class="px-eyebrow">WORST IMD3</span><strong data-imd3>−48.2 <small>dBc</small></strong></div><div><span class="px-eyebrow">WORST IMD5</span><strong data-imd5>−61.7 <small>dBc</small></strong></div></div>
+          <div class="px-measure-message px-green" data-imd-message aria-live="polite">Valid measurement · synthetic test signal</div>
+          <table class="px-results"><thead><tr><th>Product</th><th>Lower / dBm</th><th>Upper / dBm</th></tr></thead><tbody><tr><td>Fundamental</td><td data-measured>−20.0</td><td data-measured>−20.0</td></tr><tr><td>IMD3</td><td data-measured>−68.2</td><td data-measured>−69.1</td></tr><tr><td>IMD5</td><td data-measured>−81.7</td><td data-measured>−83.4</td></tr></tbody></table>
+          <div class="px-measure-note">Relative values use the per-tone reference in this study. Final presentation must identify the implemented reference.</div>
+          <div class="px-pair"><span>OIP3</span><strong data-measured>+4.1 dBm</strong></div><div class="px-pair"><span>OIP5</span><strong data-measured>−4.6 dBm</strong></div>
+        </section>
+        <section class="px-panel px-diagnostics" data-content="diagnostics" hidden>
+          <div class="px-section-title">Calibration diagnostics <span>Raw WDSP fields</span></div>
+          <div class="px-diag-grid"><div><span>Feedback curve <small>bldr.rx</small></span><strong>0</strong></div><div><span>Magnitude correction <small>bldr.cm</small></span><strong>0</strong></div><div><span>Cosine correction <small>bldr.cc</small></span><strong>0</strong></div><div><span>Sine correction <small>bldr.cs</small></span><strong>0</strong></div><div><span>Solution check <small>sln.chk</small></span><strong>0</strong></div><div><span>State code <small>state</small></span><strong>—</strong></div><div><span>RF feedback <small>feedbk</small></span><strong data-feedback>155</strong></div><div><span>Correction count <small>cor.cnt</small></span><strong data-count>24</strong></div><div><span>Rejected sets <small>dg.cnt</small></span><strong data-reject>0</strong></div></div>
+          <label class="px-spectrum-toggle"><input type="checkbox"> Display PS-RX and PS-TX spectra</label>
+        </section>
+      </div>
+    </div>
+    <footer class="px-footer"><div class="px-actions"><button type="button" data-save class="cursor-interaction"><i data-lucide="save" aria-hidden="true"></i> Save</button><button type="button" data-restore class="cursor-interaction">Restore…</button></div><span data-file-state>Correction files available</span><span class="px-preview-label">Preview only</span></footer>
+  </template>
+  <template id="px-amp-template">
+    <header class="px-title"><span><i data-lucide="chart-no-axes-combined" aria-hidden="true"></i> AmpView</span><label><input type="checkbox"> On top</label></header>
+    <div class="px-amp-top"><div><span class="px-eyebrow">AMPLIFIER TRANSFER</span><h2>Response &amp; correction</h2></div><span class="px-green px-small" data-amp-status>● Sample curves</span></div>
+    <div class="px-amp-toolbar"><div class="px-actions"><button type="button" data-gain aria-pressed="false" class="cursor-interaction">Show gain</button><button type="button" data-zoom aria-pressed="false" class="cursor-interaction">Phase zoom</button><button type="button" data-lowres aria-pressed="false" class="cursor-interaction">Low res</button></div><select data-data-state aria-label="Preview curve availability"><option value="valid">Available curves</option><option value="held">Retained curves / RX</option><option value="empty">No calibration data</option></select></div>
+    <div class="px-legend" aria-label="Visible curve series"><button type="button" data-series="magAmp" aria-pressed="true" class="cursor-interaction"><span class="px-swatch px-dot-swatch" style="color:#80a6c6">●</span> Amp magnitude</button><button type="button" data-series="magCorr" aria-pressed="true" class="cursor-interaction"><span class="px-swatch" style="color:#d8a55f">━</span> Mag correction</button><button type="button" data-series="phsAmp" aria-pressed="true" class="cursor-interaction"><span class="px-swatch" style="color:#bf9cb8">◆</span> Amp phase</button><button type="button" data-series="phsCorr" aria-pressed="true" class="cursor-interaction"><span class="px-swatch" style="color:#83b497">━</span> Phase correction</button><button type="button" data-series="ref" aria-pressed="true" class="cursor-interaction"><span class="px-swatch">┄</span> Reference</button></div>
+    <div class="px-chart-stack"><div class="px-chart-block" data-kind="mag"><div class="px-chart-label"><span data-mag-label>Magnitude</span><span class="px-muted">Normalized</span></div><canvas data-chart="mag" role="img" aria-label="Synthetic amplifier and correction magnitude versus input magnitude"></canvas></div><div class="px-chart-block" data-kind="phase"><div class="px-chart-label"><span>Phase</span><span class="px-muted">Degrees</span></div><canvas data-chart="phase" role="img" aria-label="Synthetic amplifier and correction phase versus input magnitude"></canvas></div><div class="px-chart-block" data-kind="unified"><div class="px-chart-label"><span data-mag-label>Magnitude</span><span class="px-muted">Phase / degrees · right axis</span></div><canvas data-chart="unified" role="img" aria-label="Five synthetic AmpView series on a shared input axis, magnitude left and phase right"></canvas></div></div>
+    <div class="px-cursor-readout" aria-live="polite"><div><span>Input magnitude</span><strong data-cursor-x>0.600</strong></div><div><span data-amp-mag-label>Amp magnitude</span><strong data-cursor-magamp>0.561</strong></div><div><span data-corr-mag-label>Mag correction</span><strong data-cursor-magcorr>0.649</strong></div><div><span>Amp phase</span><strong data-cursor-phsamp>3.24°</strong></div><div><span>Phase correction</span><strong data-cursor-phscorr>−3.24°</strong></div></div>
+    <footer class="px-footer"><span>Points: amplifier samples · lines: correction functions</span><span class="px-preview-label">Synthetic curves</span></footer>
+  </template>
+</div>
+<style>
+#ps-explore{color-scheme:dark;--px-bg:#0b0b0e;--px-panel:#131317;--px-line:#303037;--px-text:#dedee4;--px-muted:#a6a6b1;--px-amber:#d8a55f;--px-blue:#80a6c6;--px-green:#83b497;--px-red:#db8a81;font:12px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:var(--px-text)}
+#ps-explore *{box-sizing:border-box}
+#ps-explore [hidden]{display:none!important}
+#ps-explore .px-switch{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin:0 92px 14px 0}
+#ps-explore .px-switch>span{color:var(--px-muted);font-size:11px;margin-left:8px}
+#ps-explore .px-stage{min-height:845px;padding:14px 0 20px}
+#ps-explore .px-window{background:var(--px-bg);border:1px solid #3b3b43;border-radius:9px;overflow:hidden;width:100%;box-shadow:0 12px 35px #0004}
+#ps-explore button,#ps-explore select,#ps-explore input{font:inherit;color:var(--px-text)}
+#ps-explore button{min-height:30px;border:1px solid var(--px-line);border-radius:5px;padding:5px 9px;background:linear-gradient(#24242b,#19191f);display:inline-flex;justify-content:center;align-items:center;gap:6px}
+#ps-explore button:hover{border-color:#72727e}
+#ps-explore button[aria-pressed=true],#ps-explore .px-tabs button[aria-selected=true]{background:linear-gradient(#2c4a69,#20364e);border-color:#50769b}
+#ps-explore button:disabled{opacity:.4}
+#ps-explore .px-quiet{background:transparent;border-color:transparent}
+#ps-explore .px-off{color:var(--px-red)}
+#ps-explore select,#ps-explore input[type=number],#ps-explore input[type=text]{background:#1a1a20;border:1px solid #3b3b45;border-radius:4px;padding:5px 7px;min-height:29px;max-width:100%}
+#ps-explore input[type=number]{width:84px;text-align:right;font-family:'SFMono-Regular',Consolas,monospace;color:var(--px-amber)}
+#ps-explore input[type=text]{width:82px;text-align:right;font-family:'SFMono-Regular',Consolas,monospace;color:var(--px-amber)}
+#ps-explore input[type=checkbox]{accent-color:#527da4;flex-shrink:0}
+#ps-explore label{display:flex;align-items:center;gap:7px}
+#ps-explore .px-title{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 15px;background:linear-gradient(#232329,#1a1a1f);border-bottom:1px solid #08080b;color:var(--px-muted);font-size:12px}
+#ps-explore .px-title>span{display:flex;align-items:center;gap:9px;color:var(--px-text)}
+#ps-explore i,#ps-explore button svg,#ps-explore .px-title svg{width:14px;height:14px;flex-shrink:0}
+#ps-explore .px-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+#ps-explore .px-toolbar{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;background:var(--px-panel);padding:12px 15px;border-bottom:1px solid var(--px-line)}
+#ps-explore .px-preview-state{display:flex;justify-content:flex-end;align-items:center;gap:9px;color:var(--px-muted);padding:10px 15px 0;font-size:11px}
+#ps-explore .px-preview-state select{font-size:11px}
+#ps-explore .px-body{padding:18px 18px 0}
+#ps-explore .px-persistent{display:grid;grid-template-columns:1.05fr 1fr;gap:24px;padding-bottom:20px}
+#ps-explore .px-eyebrow{font-size:11px;letter-spacing:1.25px;color:var(--px-muted);display:flex;align-items:center;justify-content:space-between;gap:12px}
+#ps-explore .px-green{color:var(--px-green);letter-spacing:0}
+#ps-explore .px-red{color:var(--px-red)}
+#ps-explore .px-muted{color:var(--px-muted)}
+#ps-explore .px-small{font-size:11px}
+#ps-explore .px-feedback-reading{display:flex;gap:13px;align-items:baseline;margin:8px 0 15px}
+#ps-explore .px-digits{font:500 44px/1.1 'SFMono-Regular',Consolas,monospace;color:var(--px-amber);font-variant-numeric:tabular-nums}
+#ps-explore .px-ruler{height:18px;background:#24242d;border-radius:3px;position:relative;margin:12px 0 10px}
+#ps-explore .px-range{position:absolute;left:50.6%;width:20.4%;top:0;bottom:0;background:#2e4c3b}
+#ps-explore .px-meter-fill{position:absolute;left:0;top:5px;bottom:5px;width:60.8%;background:var(--px-blue);border-radius:2px}
+#ps-explore .px-needle{position:absolute;left:60.8%;width:2px;top:-5px;bottom:-5px;background:var(--px-text)}
+#ps-explore .px-ticks{position:relative;height:16px;font:11px/1.4 'SFMono-Regular',Consolas,monospace;color:var(--px-muted)}
+#ps-explore .px-ticks span{position:absolute;transform:translateX(-50%)}
+#ps-explore .px-ticks span:nth-child(1){left:0;transform:none}
+#ps-explore .px-ticks span:nth-child(2){left:35.7%}
+#ps-explore .px-ticks span:nth-child(3){left:50.6%}
+#ps-explore .px-ticks span:nth-child(4){left:71%}
+#ps-explore .px-ticks span:nth-child(5){right:0;transform:none}
+#ps-explore .px-feedback-caption{display:flex;justify-content:space-between;gap:10px;margin-top:15px;color:var(--px-muted);font-size:11px}
+#ps-explore .px-correction{border-left:1px solid var(--px-line);padding-left:24px}
+#ps-explore .px-status-title{font-size:28px;font-weight:500;display:flex;gap:10px;align-items:center;margin:10px 0 3px}
+#ps-explore .px-dot{width:9px;height:9px;border-radius:50%;background:var(--px-green);box-shadow:0 0 10px #83b49730}
+#ps-explore .px-state-help{margin:0;color:var(--px-muted);font-size:11px;min-height:32px}
+#ps-explore .px-cal-progress{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--px-muted);margin:8px 0 12px}
+#ps-explore .px-pair{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:4px 0;color:var(--px-muted)}
+#ps-explore strong{font-family:'SFMono-Regular',Consolas,monospace;font-weight:400;font-variant-numeric:tabular-nums;color:var(--px-amber)}
+#ps-explore small{font-size:11px;color:var(--px-muted)}
+#ps-explore .px-pair small{margin-left:5px;color:#888893}
+#ps-explore .px-tabs{display:flex;gap:5px;flex-wrap:wrap;padding:12px 0;border-top:1px solid var(--px-line);border-bottom:1px solid var(--px-line)}
+#ps-explore .px-tabs button{background:transparent;border-color:transparent}
+#ps-explore .px-panel{padding:17px 0;min-height:360px}
+#ps-explore .px-section-title{font-size:12px;color:var(--px-text);display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 0 11px}
+#ps-explore .px-section-title>span{font-size:11px;color:var(--px-muted)}
+#ps-explore .px-checks{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:20px;color:var(--px-muted)}
+#ps-explore .px-timing{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px;padding-bottom:20px}
+#ps-explore .px-timing>label{display:flex;flex-direction:column;align-items:flex-start;gap:6px;color:var(--px-muted)}
+#ps-explore .px-timing span{display:flex;align-items:center;gap:6px}
+#ps-explore .px-solution-controls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px 15px;margin-bottom:18px}
+#ps-explore .px-solution-controls>label{flex-wrap:wrap;color:var(--px-text)}
+#ps-explore .px-solution-controls small{flex-basis:100%;padding-left:23px}
+#ps-explore .px-peak-reference{border-top:1px solid var(--px-line);padding:15px 0 0;display:flex;gap:15px;justify-content:space-between;align-items:center;flex-wrap:wrap}
+#ps-explore .px-peak-reference .px-section-title{margin:0 0 4px}
+#ps-explore .px-peak-values{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+#ps-explore .px-peak-values>span{display:flex;gap:9px;align-items:center}
+#ps-explore .px-diag-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 20px}
+#ps-explore .px-diag-grid>div{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:11px 0;border-bottom:1px solid #26262e}
+#ps-explore .px-diag-grid small{display:block}
+#ps-explore .px-spectrum-toggle{margin-top:22px;color:var(--px-muted)}
+#ps-explore .px-footer{border-top:1px solid var(--px-line);padding:12px 15px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:var(--px-panel);font-size:11px;color:var(--px-muted)}
+#ps-explore .px-preview-label{margin-left:auto;color:#90909d}
+#ps-explore .px-measure-head{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;color:var(--px-muted)}
+#ps-explore .px-measure-head select{font-size:11px}
+#ps-explore .px-imd-summary{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin:20px 0 12px}
+#ps-explore .px-imd-summary strong{font-size:30px;display:block;margin-top:6px}
+#ps-explore .px-imd-summary small{font:12px -apple-system,sans-serif}
+#ps-explore .px-measure-message{font-size:11px;margin-bottom:16px}
+#ps-explore .px-results{width:100%;border-collapse:collapse;font-size:12px}
+#ps-explore .px-results th{font-weight:400;color:var(--px-muted);text-align:right;font-size:11px;padding:9px 0}
+#ps-explore .px-results td{text-align:right;border-top:1px solid var(--px-line);padding:9px 0;font-family:'SFMono-Regular',Consolas,monospace;color:var(--px-amber)}
+#ps-explore .px-results td:first-child,#ps-explore .px-results th:first-child{text-align:left;font-family:inherit;color:var(--px-muted)}
+#ps-explore .px-measure-note{color:var(--px-muted);font-size:11px;margin:14px 0}
+#ps-explore .px-bench .px-body{display:grid;grid-template-columns:205px minmax(0,1fr);gap:20px}
+#ps-explore .px-bench .px-persistent{display:flex;flex-direction:column;gap:23px;padding-right:18px;border-right:1px solid var(--px-line)}
+#ps-explore .px-bench .px-correction{padding:18px 0 0;border-left:0;border-top:1px solid var(--px-line)}
+#ps-explore .px-bench .px-status-title{font-size:24px}
+#ps-explore .px-bench .px-tabs{border-top:0;padding-top:0}
+#ps-explore .px-bench .px-tabs button[data-tab=diagnostics]{display:none}
+#ps-explore .px-bench .px-timing{gap:8px}
+#ps-explore .px-bench .px-solution-controls{grid-template-columns:1fr 1fr}
+#ps-explore .px-bench .px-panel{min-height:390px}
+#ps-explore .px-bench .px-diagnostic-dock{border-top:1px solid var(--px-line);padding:15px 18px}
+#ps-explore .px-bench .px-diagnostic-dock .px-panel{padding:0;min-height:0}
+#ps-explore .px-bench .px-diag-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+#ps-explore .px-bench .px-spectrum-toggle{margin-top:12px}
+#ps-explore .px-amp-top{padding:20px 18px 12px;display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap}
+#ps-explore h2{font-size:22px;font-weight:500;margin:4px 0 0}
+#ps-explore .px-amp-toolbar{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;padding:0 18px 14px}
+#ps-explore .px-amp-toolbar select{font-size:11px}
+#ps-explore .px-legend{display:flex;flex-wrap:wrap;gap:4px 12px;padding:12px 18px;border-top:1px solid var(--px-line);border-bottom:1px solid var(--px-line)}
+#ps-explore .px-legend button{font-size:11px;min-height:25px;background:transparent!important;border:0!important;padding:2px 0;color:var(--px-text)}
+#ps-explore .px-legend button[aria-pressed=false]{opacity:.4}
+#ps-explore .px-swatch{font-size:17px}
+#ps-explore .px-chart-stack{padding:16px 16px 0;background:#0d0d11}
+#ps-explore .px-chart-label{display:flex;justify-content:space-between;gap:10px;font-size:11px;padding:0 3px 4px}
+#ps-explore canvas{display:block;width:100%;height:208px}
+#ps-explore .px-chart-block{margin-bottom:12px}
+#ps-explore [data-amp=linked] [data-kind=unified],#ps-explore [data-amp=unified] [data-kind=mag],#ps-explore [data-amp=unified] [data-kind=phase]{display:none}
+#ps-explore [data-amp=unified] canvas{height:466px}
+#ps-explore .px-cursor-readout{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;padding:16px 18px;border-top:1px solid var(--px-line);background:var(--px-panel)}
+#ps-explore .px-cursor-readout>div{display:flex;flex-direction:column;gap:7px;min-width:0}
+#ps-explore .px-cursor-readout span{font-size:11px;color:var(--px-muted)}
+#ps-explore .px-cursor-readout strong{font-size:16px}
+@media(max-width:580px){#ps-explore .px-stage{min-height:1120px}#ps-explore .px-body{padding:16px 12px 0}#ps-explore .px-persistent{gap:14px}#ps-explore .px-correction{padding-left:14px}#ps-explore .px-cal-progress{gap:4px}#ps-explore .px-bench .px-body{grid-template-columns:1fr}#ps-explore .px-bench .px-persistent{display:grid;grid-template-columns:1fr 1fr;border-right:0;padding-right:0}#ps-explore .px-bench .px-correction{padding:0 0 0 14px;border-top:0;border-left:1px solid var(--px-line)}#ps-explore .px-solution-controls{grid-template-columns:1fr 1fr}#ps-explore .px-diag-grid,#ps-explore .px-bench .px-diag-grid{grid-template-columns:1fr 1fr}#ps-explore .px-cursor-readout{grid-template-columns:repeat(3,minmax(0,1fr))}#ps-explore .px-legend{gap:5px 10px}}
+@media(max-width:380px){#ps-explore .px-persistent,#ps-explore .px-bench .px-persistent{grid-template-columns:1fr}#ps-explore .px-correction,#ps-explore .px-bench .px-correction{border-left:0;border-top:1px solid var(--px-line);padding:14px 0 0}#ps-explore .px-timing{grid-template-columns:1fr}#ps-explore .px-timing>label{flex-direction:row;justify-content:space-between;align-items:center}#ps-explore .px-cursor-readout{grid-template-columns:1fr 1fr}#ps-explore .px-imd-summary strong{font-size:24px}#ps-explore .px-stage{min-height:1390px}}
+@media(pointer:coarse){#ps-explore button,#ps-explore select{min-height:44px}}
+</style>
+<script>
+(() => {
+ const root=document.getElementById('ps-explore');
+ const q=(el,s)=>el.querySelector(s),qa=(el,s)=>[...el.querySelectorAll(s)];
+ function surface(name){qa(root,'[data-surface-panel]').forEach(e=>e.hidden=e.dataset.surfacePanel!==name);qa(root,'[data-surface]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.surface===name)));requestAnimationFrame(()=>ampStates.forEach(drawAmp));}
+ qa(root,'[data-surface]').forEach(b=>b.addEventListener('click',()=>surface(b.dataset.surface)));
+ qa(root,'[data-pure]').forEach((win,index)=>{
+   win.append(q(root,'#px-pure-template').content.cloneNode(true));
+   const state={condition:'correcting',auto:true,tone:true,tab:'calibration',imd:'valid'};
+   let diagnostic=q(win,'[data-content=diagnostics]');
+   if(win.classList.contains('px-bench')){const dock=document.createElement('div');dock.className='px-diagnostic-dock';diagnostic.hidden=false;dock.append(diagnostic);q(win,'.px-footer').before(dock);}
+   qa(win,'[data-tab]').forEach((b,i)=>{b.id='px-tab-'+index+'-'+i;const panel=q(win,'[data-content='+b.dataset.tab+']');panel.id='px-panel-'+index+'-'+i;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',b.id);b.setAttribute('aria-controls',panel.id);b.addEventListener('click',()=>{state.tab=b.dataset.tab;update();});b.addEventListener('keydown',e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();const btns=qa(win,'[data-tab]').filter(x=>getComputedStyle(x).display!=='none');const next=btns[(btns.indexOf(b)+(e.key==='ArrowRight'?1:-1)+btns.length)%btns.length];next.click();next.focus();}});});
+   qa(win,'[data-measured]').forEach(e=>e.dataset.sample=e.textContent);
+   function update(){const disconnected=state.condition==='disconnected',idle=state.condition==='idle',off=state.condition==='off',low=state.condition==='low',collecting=state.condition==='collecting',valid=!(disconnected||idle||off||low||collecting);const level=disconnected||idle||off?'—':low?'72':collecting?'148':'155';qa(win,'[data-feedback]').forEach(e=>e.textContent=level);qa(win,'[data-count]').forEach(e=>e.textContent=disconnected?'—':off?'0':collecting?'23':'24');qa(win,'[data-reject]').forEach(e=>e.textContent=disconnected?'—':'0');q(win,'[data-correction]').textContent=disconnected?'Unavailable':off?'Off':collecting?'Calibrating':low?'Held':'Applied';q(win,'.px-state-help').textContent=disconnected?'Connect a radio to see correction status.':off?'Corrections reset; auto calibration is off.':idle?'Corrections retained; no current TX feedback.':low?'Correction retained; feedback is below range.':collecting?'Collecting feedback for a new solution.':state.auto?'New solutions are being calculated.':'Auto calibration is off.';const badge=q(win,'.px-feedback-state');badge.textContent=disconnected?'No radio':off?'Inactive':idle?'No TX feedback':low?'Too low':collecting?'Collecting':'In range';badge.classList.toggle('px-red',low);badge.classList.toggle('px-green',!low&&!disconnected&&!idle&&!off);q(win,'.px-meter-fill').style.width=level==='—'?'0%':Number(level)/255*100+'%';q(win,'.px-needle').hidden=level==='—';q(win,'.px-needle').style.left=Number(level)/255*100+'%';q(win,'.px-dot').style.background=disconnected||off?'#777782':low?'#d8a55f':'#83b497';qa(win,'[data-stage]').forEach(e=>e.classList.toggle('px-green',valid||(collecting&&e.dataset.stage==='collect')));q(win,'[data-getpk]').textContent=disconnected||idle||off?'—':'0.6121';qa(win,'[data-tab]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.tab===state.tab)));qa(win,'[data-content]').forEach(p=>p.hidden=p.dataset.content!==state.tab&&!(win.classList.contains('px-bench')&&p===diagnostic));q(win,'[data-auto]').setAttribute('aria-pressed',String(state.auto));q(win,'[data-tone]').setAttribute('aria-pressed',String(state.tone));qa(win,'[data-auto],[data-single],[data-tone],[data-off]').forEach(b=>b.disabled=disconnected);const compatible=q(win,'[data-tint]').value==='0.5';q(win,'[data-save]').disabled=disconnected||off||!compatible||collecting;q(win,'[data-restore]').disabled=disconnected||!compatible;q(win,'[data-file-state]').textContent=!compatible?'Save / Restore unavailable at this TINT':disconnected?'No radio connected':'Correction files available';const hasImd=valid&&state.tone&&state.imd==='valid'&&q(win,'[data-show-imd]').checked; q(win,'[data-imd3]').innerHTML=(hasImd?'−48.2':'—')+' <small>dBc</small>';q(win,'[data-imd5]').innerHTML=(hasImd?'−61.7':'—')+' <small>dBc</small>';qa(win,'[data-measured]').forEach(e=>e.textContent=hasImd?e.dataset.sample:'—');const message=!q(win,'[data-show-imd]').checked?'Measurements hidden':disconnected?'No radio connected':!state.tone||idle?'Waiting for two-tone transmission':state.imd==='duplex'?'Duplex display required':state.imd==='missing'||low?'Peaks not found · no current measurement':collecting?'Waiting for valid peaks':state.imd==='waiting'?'Waiting for two-tone transmission':'Valid measurement · synthetic test signal';q(win,'[data-imd-message]').textContent=message;q(win,'[data-imd-message]').classList.toggle('px-green',hasImd);}
+   q(win,'[data-condition]').addEventListener('change',e=>{state.condition=e.target.value;update();});q(win,'[data-auto]').addEventListener('click',()=>{state.auto=!state.auto;update();});q(win,'[data-tone]').addEventListener('click',()=>{state.tone=!state.tone;update();});q(win,'[data-single]').addEventListener('click',()=>{state.condition='collecting';q(win,'[data-condition]').value='collecting';update();});q(win,'[data-off]').addEventListener('click',()=>{state.auto=false;state.condition='off';state.tone=false;q(win,'[data-condition]').value='off';update();});q(win,'[data-open-amp]').addEventListener('click',()=>surface('amp'));q(win,'[data-tint]').addEventListener('change',update);q(win,'[data-imd-state]').addEventListener('change',e=>{state.imd=e.target.value;update();});q(win,'[data-show-imd]').addEventListener('change',update);q(win,'[data-default]').addEventListener('click',()=>q(win,'input[aria-label="Expected hardware peak"]').value='0.6121');qa(win,'[data-save],[data-restore]').forEach(b=>b.addEventListener('click',()=>q(win,'[data-file-state]').textContent='File action preview · no file written'));q(win,'[data-att]').addEventListener('change',e=>{const text=q(win,'.px-feedback-caption span:last-child');text.textContent=e.target.checked?'Enabled':'Manual';text.classList.toggle('px-green',e.target.checked);});update();
+   if(globalThis.Tweak){const style={meterDepth:18,readingSize:44};const redraw=()=>{q(win,'.px-ruler').style.height=style.meterDepth+'px';q(win,'.px-digits').style.fontSize=style.readingSize+'px';};const t=new Tweak({container:win,onChange:redraw});t.addSlider(style,'meterDepth',{label:'Feedback meter depth',min:10,max:26,unit:'px'});t.addSlider(style,'readingSize',{label:'Feedback reading size',min:32,max:50,unit:'px'});}
+ });
+ const ampStates=[];
+ const funcs={magAmp:x=>x-.18*x*x*x,magCorr:x=>x+.225*x*x*x,phsAmp:x=>9*x*x,phsCorr:x=>-9*x*x};
+ qa(root,'[data-amp]').forEach(win=>{
+   win.append(q(root,'#px-amp-template').content.cloneNode(true));const state={win,mode:win.dataset.amp,gain:false,zoom:false,lowres:false,data:'valid',cursor:.6,visible:new Set(['magAmp','magCorr','phsAmp','phsCorr','ref'])};ampStates.push(state);
+   ['gain','zoom','lowres'].forEach(key=>q(win,'[data-'+key+']').addEventListener('click',e=>{state[key]=!state[key];e.currentTarget.setAttribute('aria-pressed',String(state[key]));drawAmp(state);}));q(win,'[data-data-state]').addEventListener('change',e=>{state.data=e.target.value;drawAmp(state);});qa(win,'[data-series]').forEach(b=>b.addEventListener('click',()=>{const name=b.dataset.series;if(state.visible.has(name))state.visible.delete(name);else state.visible.add(name);b.setAttribute('aria-pressed',String(state.visible.has(name)));drawAmp(state);}));qa(win,'canvas').forEach(canvas=>{const move=e=>{const r=canvas.getBoundingClientRect(),right=state.mode==='unified'?r.width-55:r.width-22;state.cursor=Math.max(0,Math.min(1,(e.clientX-r.left-52)/(right-52)));drawAmp(state);};canvas.addEventListener('pointermove',move);canvas.addEventListener('pointerdown',move);});
+   if(globalThis.Tweak){const style={lineWidth:1.7};state.style=style;const t=new Tweak({container:win,onChange:()=>drawAmp(state)});t.addSlider(style,'lineWidth',{label:'Correction curve weight',min:1,max:3,step:.1,unit:'px'});}
+ });
+ function drawAmp(state){const {win}=state;const style=getComputedStyle(root),col=n=>style.getPropertyValue(n).trim();const colors={magAmp:col('--px-blue'),magCorr:col('--px-amber'),phsAmp:'#bf9cb8',phsCorr:col('--px-green'),ref:'#83838e'};const raw=(name,x)=>{const v=funcs[name](x);return state.gain&&name.startsWith('mag')?x===0?1:v/x:v;};q(win,'[data-amp-status]').textContent=state.data==='empty'?'No calibration data':state.data==='held'?'Retained curves · receive':'● Sample curves';qa(win,'[data-mag-label]').forEach(e=>e.textContent=state.gain?'Gain':'Magnitude');q(win,'[data-amp-mag-label]').textContent=state.gain?'Amp gain':'Amp magnitude';q(win,'[data-corr-mag-label]').textContent=state.gain?'Gain correction':'Mag correction';q(win,'[data-cursor-x]').textContent=state.cursor.toFixed(3);['magAmp','magCorr','phsAmp','phsCorr'].forEach(name=>q(win,'[data-cursor-'+name.toLowerCase()+']').textContent=state.data==='empty'||!state.visible.has(name)?'—':raw(name,state.cursor).toFixed(name.startsWith('phs')?2:3)+(name.startsWith('phs')?'°':''));
+ qa(win,'canvas').forEach(canvas=>{if(!canvas.clientWidth||getComputedStyle(canvas.parentElement).display==='none')return;const kind=canvas.dataset.chart,w=canvas.clientWidth,h=canvas.clientHeight,dpr=window.devicePixelRatio||1;canvas.width=w*dpr;canvas.height=h*dpr;const c=canvas.getContext('2d');c.scale(dpr,dpr);const left=52,right=w-(kind==='unified'?55:22),top=18,bottom=h-42,x=t=>left+t*(right-left),phaseMax=state.zoom?15:45,ym=v=>bottom-v/1.5*(bottom-top),yp=v=>bottom-(v+phaseMax)/(phaseMax*2)*(bottom-top),y=kind==='phase'?yp:ym;c.font='11px -apple-system,sans-serif';c.strokeStyle='#292932';c.fillStyle=col('--px-muted');c.textAlign='right';for(let i=0;i<=4;i++){const pos=bottom-(bottom-top)*i/4,v=kind==='phase'?-phaseMax+2*phaseMax*i/4:1.5*i/4;c.beginPath();c.moveTo(left,pos);c.lineTo(right,pos);c.stroke();c.fillText(kind==='phase'?String(Math.round(v)):v.toFixed(2),left-9,pos+4);if(kind==='unified'){c.textAlign='left';c.fillText(String(Math.round(-phaseMax+2*phaseMax*i/4)),right+9,pos+4);c.textAlign='right';}}c.textAlign='center';const ticks=w<400?[0,.5,1]:[0,.25,.5,.75,1];ticks.forEach(t=>{c.beginPath();c.moveTo(x(t),top);c.lineTo(x(t),bottom);c.stroke();c.fillText(t.toFixed(2),x(t),bottom+17);});c.fillText('Input magnitude',w/2,h-8);if(state.data==='empty'){c.fillStyle=col('--px-muted');c.fillText('No correction curves available',w/2,h/2);return;}c.save();c.beginPath();c.rect(left,top,right-left,bottom-top);c.clip();const drawLine=(name,fn,map,dash=[])=>{c.strokeStyle=colors[name];c.lineWidth=state.style?.lineWidth||1.7;c.setLineDash(dash);c.beginPath();for(let i=0;i<=100;i++){const t=i/100;i?c.lineTo(x(t),map(fn(t))):c.moveTo(x(t),map(fn(t)));}c.stroke();c.setLineDash([]);};if(kind!=='phase'&&state.visible.has('ref')){drawLine('ref',t=>state.gain?1:t,ym,[5,5]);if(!state.gain)drawLine('ref',()=>.5,ym,[5,5]);}['magAmp','magCorr','phsAmp','phsCorr'].forEach(name=>{if(!state.visible.has(name)||kind==='mag'&&name.startsWith('phs')||kind==='phase'&&name.startsWith('mag'))return;const map=name.startsWith('phs')?yp:ym;if(name.endsWith('Corr')){drawLine(name,t=>raw(name,t),map);return;}const n=state.lowres?20:100;c.fillStyle=colors[name];for(let i=1;i<=n;i++){const t=i/n,jitter=name.startsWith('phs')?.28*Math.sin(i*2):.0025*Math.sin(i*3),xx=x(t),yy=map(raw(name,t)+jitter);c.beginPath();if(name==='phsAmp'){c.moveTo(xx,yy-2);c.lineTo(xx+2,yy);c.lineTo(xx,yy+2);c.lineTo(xx-2,yy);c.closePath();}else c.arc(xx,yy,1.5,0,Math.PI*2);c.fill();}});c.strokeStyle='#757581';c.lineWidth=1;c.setLineDash([3,4]);c.beginPath();c.moveTo(x(state.cursor),top);c.lineTo(x(state.cursor),bottom);c.stroke();c.setLineDash([]);['magAmp','magCorr','phsAmp','phsCorr'].forEach(name=>{if(!state.visible.has(name)||kind==='mag'&&name.startsWith('phs')||kind==='phase'&&name.startsWith('mag'))return;const map=name.startsWith('phs')?yp:ym;c.strokeStyle=colors[name];c.fillStyle='#0d0d11';c.lineWidth=1.5;c.beginPath();c.arc(x(state.cursor),map(raw(name,state.cursor)),3.8,0,Math.PI*2);c.fill();c.stroke();});c.restore();});}
+ new ResizeObserver(()=>ampStates.forEach(drawAmp)).observe(root);
+ const observer=new MutationObserver(()=>requestAnimationFrame(()=>ampStates.forEach(drawAmp)));observer.observe(root,{attributes:true,subtree:true,attributeFilter:['hidden']});ampStates.forEach(drawAmp);if(globalThis.lucide)lucide.createIcons({attrs:{width:14,height:14}});
+})();
+</script>

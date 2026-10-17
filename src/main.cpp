@@ -1,11 +1,15 @@
 #include "gui/GuiConnectionController.h"
 #include "gui/GuiApplication.h"
 #include "gui/styles/AppTheme.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "core/AppSettings.h"
 #include "core/AudioDeviceConfig.h"
+#include "core/AudioEngine.h"
 #include "core/BuildIdentity.h"
 #include "core/CoreInit.h"
 #include "core/MacMicPermission.h"
+#include "core/audio/CaptureStandby.h"
+#include "core/audio/MacMicMode.h"
 #include "core/audio/RealtimeAudioPriority.h"
 #include "core/RadioConnection.h"
 #include "core/mmio/ExternalVariableEngine.h"
@@ -39,6 +43,8 @@ Q_LOGGING_CATEGORY(lcMainAccessibility, "nereus.gui.accessibility")
 #include <QFile>
 #include <QStandardPaths>
 #include <QStringList>
+
+#include <memory>
 
 // Parse --profile <name> out of argv *before* constructing QApplication so
 // AppSettings can pin the right path on first access. QCommandLineParser
@@ -172,7 +178,8 @@ int main(int argc, char* argv[])
     // (issue #203). The OS only prompts when something actually engages
     // TCC; relying on PortAudio's CoreAudio backend to do so is unreliable
     // on machines without a built-in mic, so call AVCaptureDevice directly.
-    NereusSDR::requestMicrophonePermission();
+    // 2026-10-16: asked with the first session's start (below), so on the
+    // Mac it comes after the standing capture helper's first audio call.
 
     // Re-parse properly so --help / --version / unknown options surface
     // via Qt's standard machinery. The earlyProfile pass above already
@@ -235,7 +242,21 @@ int main(int argc, char* argv[])
             QStringLiteral("Use this computer's built-in Core for local radios."));
         parser.addOption(localOpt);
 
+        // V-HW-8: the audio delay probe, for bench measurements.
+        QCommandLineOption delayProbeOpt(
+            QStringLiteral("audio-delay-probe"),
+            QStringLiteral(
+                "Measure the delay from the speakers to the microphone input. "
+                "A short click plays on the speakers once a second and the "
+                "delay is written to the log. Needs a cable from a speaker "
+                "output to an input."));
+        parser.addOption(delayProbeOpt);
+
         parser.process(app);
+        NereusSDR::AudioEngine::setDelayProbeRequestedAtStart(parser.isSet(delayProbeOpt));
+        // 2026-10-16: the window never waits for this computer's device
+        // list to open.
+        NereusSDR::AudioEngine::setDeviceListInBackground(true);
 
         // Command-line values only. The saved-Setup fallback cannot be read
         // yet: AppSettings is not loaded until CoreInit::initialize() below,
@@ -261,6 +282,9 @@ int main(int argc, char* argv[])
     app.setStyle(QStyleFactory::create("Fusion"));
     NereusSDR::applyDarkPalette(app);
     NereusSDR::applyAppBaselineQss(app);
+    if (NereusSDR::WorkspacePreview::enabled()) {
+        NereusSDR::applyWorkspacePalette(app);
+    }
 
     // Register custom metatypes for cross-thread signal/slot connections.
     // R1 Task 9: src/server_main.cpp registers this same pair itself
@@ -294,6 +318,33 @@ int main(int argc, char* argv[])
     // src/core/CoreInit.h for the full contract and its idempotency guard.
     NereusSDR::CoreInit::initialize(activeProfile);
 
+    // The waterfall's stored Black Level and Color Gain, converted once to
+    // the level model used under Clarity so the waterfall looks the same
+    // after the upgrade. Here, after the settings are loaded and before any
+    // window (and so any pan) reads them. These are this computer's display
+    // keys, so the window converts them and the Core (src/server_main.cpp)
+    // never does; the conversion keeps its own marker key and leaves
+    // SettingsSchemaVersion, which window and Core compare, alone.
+    NereusSDR::AppSettings::convertWaterfallLevelsForClarityModel(
+        NereusSDR::AppSettings::instance());
+
+    // The stored display Cal Offset, removed once: until now it held the
+    // station's receive offset, not a value the operator chose, and a pan
+    // would add it to the station's offset a second time. Here for the same
+    // reasons as the conversion above: before any pan reads it, the window's
+    // keys only, its own marker key.
+    NereusSDR::AppSettings::resetPollutedDisplayCalOffset(
+        NereusSDR::AppSettings::instance());
+
+    // The stored per-band noise floors, removed once: they were measured
+    // before Clarity's floor was calibrated, and a pan would start a band
+    // on a level that is off by the calibration offset. Each band is stored
+    // again after a few seconds of steady reception. Here for the same
+    // reasons as the two above: before any pan reads them, the window's
+    // keys only, its own marker key.
+    NereusSDR::AppSettings::clearUncalibratedClarityFloors(
+        NereusSDR::AppSettings::instance());
+
     qDebug() << "Starting NereusSDR" << app.applicationVersion();
     if (!activeProfile.isEmpty()) {
         const QString logDir = NereusSDR::AppSettings::resolveConfigDir(activeProfile);
@@ -306,6 +357,27 @@ int main(int argc, char* argv[])
     // their transport workers before the main window is shown.
     NereusSDR::ExternalVariableEngine::instance().init();
 
+#if defined(Q_OS_MAC)
+    // 2026-10-16: the microphone's capture helper starts here, before any
+    // window, and stands by for the whole application: every window's
+    // AudioEngine uses its supervisor, across Core switches.  A bundled
+    // app's first Core Audio call makes macOS read the app's stored Mic
+    // Mode, and with Voice Isolation stored the system's voice processing
+    // then goes round every audio process for 40 to 100 s, and device
+    // lists and microphone opens wait on it.  The helper has no bundle id,
+    // so it reads no Mic Mode; its warm-up first sets this app's stored
+    // Mic Mode to Standard, then lists its devices.  The first session
+    // (and the microphone permission query) starts once the helper has
+    // warmed, or after CaptureStandby::kWarmWaitMs, from the event loop:
+    // nothing waits here, and the window's own first audio call comes
+    // after the helper's.  See
+    // docs/architecture/2026-09-22-optional-microphone-capture-design.md.
+    NereusSDR::CaptureSupervisor::Options standingOptions;
+    standingOptions.micModeBundle = NereusSDR::macMainBundleId();
+    auto standingCapture = std::make_unique<NereusSDR::CaptureStandby>(standingOptions);
+    NereusSDR::AudioEngine::setSharedCaptureSupervisor(standingCapture->supervisor());
+#endif
+
     // R-R3-38: one application owner replaces complete local/remote sessions.
     // It resolves credentials as a single target tuple, installs a fresh proxy
     // before each remote model, and retires the window before its backend.
@@ -314,11 +386,26 @@ int main(int argc, char* argv[])
     {
         NereusSDR::GuiConnectionController connections;
         connections.sessions()->configureDesktopStation(activeProfile, ownership.ownsProfile());
+#if defined(Q_OS_MAC)
+        standingCapture->whenWarm(&connections, [&connections, &request]() {
+            NereusSDR::requestMicrophonePermission();
+            connections.start(request);
+        });
+#else
+        NereusSDR::requestMicrophonePermission();
         connections.start(request);
+#endif
         rc = app.exec();
         background = connections.sessions()->backgroundServiceOptions();
         connections.shutdown();
     }
+
+#if defined(Q_OS_MAC)
+    // Every window and its AudioEngine has gone; the helper goes last,
+    // within its stop bound.
+    NereusSDR::AudioEngine::setSharedCaptureSupervisor(nullptr);
+    standingCapture.reset();
+#endif
 
     // Graceful shutdown so worker threads drain before the engine
     // singleton is destroyed.
@@ -349,10 +436,24 @@ int main(int argc, char* argv[])
         // Options were copied while the local runtime existed. The launcher
         // uses that explicit profile without touching shutdown AppSettings.
         NereusSDR::StationServiceManager service(*background);
+        QStringList loggedReasons;
         while (!service.startBackground()) {
+            // The log closed with the profile just above. Take the profile
+            // back for as long as it takes to write why the start failed,
+            // once per reason, so the answer does not live only in a dialog.
+            // A background Core that did start owns the profile and its log;
+            // then nothing is written here.
+            const QString reason = service.lastError();
+            if (!loggedReasons.contains(reason) && ownership.acquire(0)) {
+                NereusSDR::CoreInit::logAfterShutdown(
+                    activeProfile,
+                    QStringLiteral("The background Core could not start. %1").arg(reason));
+                ownership.release();
+                loggedReasons << reason;
+            }
             const auto answer = QMessageBox::warning(nullptr, QStringLiteral("NereusSDR"),
                 QStringLiteral("The background Core could not start.\n\n%1")
-                    .arg(service.lastError()),
+                    .arg(reason),
                 QMessageBox::Retry | QMessageBox::Close, QMessageBox::Retry);
             if (answer != QMessageBox::Retry) { return 1; }
         }

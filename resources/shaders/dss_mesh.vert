@@ -15,6 +15,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Fill only uncovered extended overhang with retained row
+//                 quiet levels; preserve captured data. J.J. Boyd (KG4VCF),
+//                 AI-assisted via OpenAI Codex.
 //   2026-08-08 — Ported byte-for-byte for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code. One NereusSDR comment-only deviation below
@@ -80,6 +83,8 @@ layout(std140, binding = 0) uniform U {
     // a matching static_assert against DssRenderer::kRows; update both shaders
     // and the frame-age clamp below if that row count changes.
     vec4  rowFrames[104];     // FFT centre/bw, supplemental centre/bw; age order
+    // Native call 56 metadata: measured retained-row quiet dBm / known.
+    vec4 rowQuietLevels[104];
 };
 
 // RGBA16F ring rows: RG = exact FFT dBm/coverage; BA = calibrated native
@@ -175,6 +180,13 @@ vec2 effectiveDbmAt(float geometryU, float sampleAge, float rows)
                 return vec2(supplementalSample.b, 1.0);
             }
         }
+    }
+    // Accepted display-pill-live.html:1610-1613,1719-1720, call 56.
+    // Captured exact/wide data above keeps precedence; no demo texture.
+    vec4 quiet = rowQuietLevels[frameAge];
+    bool overhang = geometryU < 0.0 || geometryU > 1.0;
+    if (overhang && sampleAge < validRows && quiet.y > 0.5) {
+        return vec2(quiet.x, 1.0);
     }
     return vec2(floorDbm, 0.0);
 }

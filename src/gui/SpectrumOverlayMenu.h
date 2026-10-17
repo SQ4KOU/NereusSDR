@@ -16,6 +16,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Export signal addresses for Windows DLL consumers.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-04-16 — Ported/adapted in C++20/Qt6 for NereusSDR by
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.
@@ -27,6 +29,14 @@
 //                 via Anthropic Claude Code.
 //   2026-10-01 - Completed 3D port history during PR review by
 //                 J.J. Boyd (KG4VCF), with AI assistance via OpenAI Codex.
+//   2026-10-10 - Display pill plan Task 19: trimmed to CTUN, Add notch
+//                 here, Ref Level, Dyn Range and a "Display settings..."
+//                 line. The waterfall, fill and 3D VIEW rows are in the
+//                 pan's Display pill. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-12 - setCtunAvailable takes the reason the C-Tune switch is
+//                 held. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include <QWidget>
@@ -35,30 +45,31 @@
 #include <QCheckBox>
 #include <QLabel>
 #include <QPushButton>
+#include "gui/NereusGuiExport.h"
 
 namespace NereusSDR {
 
-// Right-click overlay menu for SpectrumWidget display settings.
-// Tier 2 settings: occasional adjustment (per-band or per-mode).
+// Right-click menu of a pan: the dB range (Ref Level and Dyn Range), CTUN,
+// "Add notch here" and one line that opens the pan's Display pill, which
+// holds every other display control (display pill design, section 7).
 //
 // Self-contained QWidget popup — communicates via signals only.
 // No awareness of containers or docking. Designed so it can later
 // be wrapped in a ContainerWidget (Phase 3F) without changes.
 //
 // From plan Step 9 / AetherSDR SpectrumOverlayMenu pattern.
-class SpectrumOverlayMenu : public QWidget {
+class NEREUS_GUI_EXPORT SpectrumOverlayMenu : public QWidget {
     Q_OBJECT
 
 public:
     explicit SpectrumOverlayMenu(QWidget* parent = nullptr);
 
-    // Set current values (called before showing)
-    void setValues(int wfColorGain, int wfBlackLevel, bool autoBlack,
-                   int wfScheme, float fillAlpha, bool panFill,
-                   bool heatMap, float refLevel, float dynRange,
-                   bool ctunEnabled = true);
+    // Set current values (called before showing). Does not emit.
+    void setValues(float refLevel, float dynRange, bool ctun = true);
 
-    void setCtunAvailable(bool available);
+    // `heldReason`, when C-Tune is available: the receiver's setting is not
+    // this window's to change, and the switch is disabled with these words.
+    void setCtunAvailable(bool available, const QString& heldReason = QString());
     void setCtunState(bool pinned);
 
     // Absolute RF Hz under the cursor at popup time.  The caller sets it
@@ -67,34 +78,7 @@ public:
     // changes on every right-click while the display knobs above do not.
     void setNotchAddFrequency(double freqHz);
 
-    // Set the 3D VIEW section's current values, called before showing
-    // alongside setValues() above.  Must not emit: opening the menu seeds
-    // these seven widgets from the live SpectrumWidget state, and an echo
-    // would immediately rewrite that state with whatever the widgets
-    // happened to already hold. From plan Task 13 / AetherSDR
-    // SpectrumOverlayMenu "3D VIEW" section (SpectrumOverlayMenu.cpp:
-    // 1874-1943 [@1872028c]); setDssValues itself is a NereusSDR-scoped
-    // name -- upstream's own seeding function for this range is the much
-    // larger syncDisplaySettings(), which also covers Panadapter/
-    // Waterfall/Background/Appearance/System rows NereusSDR does not have.
-    // rowDivider (3D Stacked-Trace Spectrum Plan Task 24, NereusSDR-
-    // original) is a trailing seventh parameter, added after the original
-    // six-arg signature: 0..10, seeds m_dssSpeedSlider/m_dssSpeedLabel.
-    void setDssValues(int mode, int floor, int gain, int span, int angle,
-                       bool sliceShadow, int rowDivider);
-
-    // Grey out the 3D Span row (slider + label + title) when the running
-    // render path is the CPU fallback, which cannot honor it. Ported
-    // verbatim from AetherSDR SpectrumOverlayMenu.cpp:2250-2273 [@1872028c]
-    // (both tooltip variants, the enabled one and the CPU-fallback one).
-    void setDssRowSpanSupported(bool supported);
-
 signals:
-    void wfColorGainChanged(int gain);
-    void wfBlackLevelChanged(int level);
-    void wfColorSchemeChanged(int scheme);
-    void fillAlphaChanged(float alpha);
-    void panFillChanged(bool on);
     void refLevelChanged(float dBm);
     void dynRangeChanged(float dB);
     void ctunChanged(bool enabled);
@@ -105,35 +89,16 @@ signals:
     // quantity in the stack is SpectrumWidget::NotchMarker::freqMhz.
     void notchAddRequested(double freqHz);
 
-    // ── 3D VIEW section (Task 13) ────────────────────────────────────────
-    // From AetherSDR SpectrumOverlayMenu.cpp:1874-1943 [@1872028c]: the
-    // Spectrum render-mode combo plus 3D Floor/3D Gain/3D Span. 3D Angle
-    // and 3D Slice Shadow are NereusSDR-original (the latter's placement
-    // here rather than its own QMenu is a coordinator ruling -- see Task
-    // 12's row in docs/attribution/aethersdr-reconciliation.md).
-    void spectrumRenderModeChanged(int mode);
-    void dssFloorDepthChanged(int dB);
-    void dssGainChanged(int pct);
-    void dssRowSpanChanged(int pct);
-    void dssAngleChanged(int pct);
-    // 3D Speed (Task 24, NereusSDR-original): row cadence divider, 0..10.
-    void dssRowDividerChanged(int n);
-    void dssSliceShadowChanged(bool on);
+    // "Display settings..." pressed: open this pan's Display pill. The
+    // menu has hidden itself by the time this is emitted.
+    void displaySettingsRequested();
 
 private:
     void buildUI();
     void updateNotchAddLabel();
 
-    QSlider*   m_wfGainSlider{nullptr};
-    QSlider*   m_wfBlackSlider{nullptr};
-    QComboBox* m_schemeCombo{nullptr};
-    QSlider*   m_fillAlphaSlider{nullptr};
-    QCheckBox* m_panFillCheck{nullptr};
     QSlider*   m_refLevelSlider{nullptr};
     QSlider*   m_dynRangeSlider{nullptr};
-    QLabel*    m_wfGainLabel{nullptr};
-    QLabel*    m_wfBlackLabel{nullptr};
-    QLabel*    m_fillAlphaLabel{nullptr};
     QLabel*    m_refLevelLabel{nullptr};
     QLabel*    m_dynRangeLabel{nullptr};
     QCheckBox* m_ctunCheck{nullptr};
@@ -143,22 +108,8 @@ private:
     QLabel*      m_notchFreqLabel{nullptr};
     double       m_notchAddFreqHz{0.0};
 
-    // ---- 3D View section (Task 13) ----
-    QComboBox*   m_renderModeCombo{nullptr};
-    QSlider*     m_dssFloorSlider{nullptr};  // 3DSS floor depth (dB below floor)
-    QLabel*      m_dssFloorLabel{nullptr};
-    QSlider*     m_dssGainSlider{nullptr};  // 3DSS colour floor (0-100)
-    QLabel*      m_dssGainLabel{nullptr};
-    QSlider*     m_dssRowSpanSlider{nullptr};  // 3DSS wedge close-in (0-100)
-    QLabel*      m_dssRowSpanLabel{nullptr};
-    QLabel*      m_dssRowSpanTitle{nullptr};
-    bool         m_dssRowSpanSupported{true};
-    QSlider*     m_dssAngleSlider{nullptr};  // 3DSS viewing angle (NereusSDR-original)
-    QLabel*      m_dssAngleLabel{nullptr};
-    // 3D Speed (Task 24, NereusSDR-original): row cadence divider.
-    QSlider*     m_dssSpeedSlider{nullptr};
-    QLabel*      m_dssSpeedLabel{nullptr};
-    QCheckBox*   m_dssSliceShadowChk{nullptr};
+    // ---- Display pill line ----
+    QPushButton* m_displaySettingsButton{nullptr};
 };
 
 } // namespace NereusSDR

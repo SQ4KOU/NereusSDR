@@ -9,6 +9,8 @@
 //   NereusSDR is also GPLv3. Attribution follows GPLv3 section 5 requirements.
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Add explicit display marker/top scale by J.J. Boyd
+//                 (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-05-19  Ported in C++20/Qt6 for NereusSDR by J.J. Boyd (KG4VCF),
 //                 with AI-assisted transformation via Anthropic Claude Code.
 //                 Layout from AetherSDR src/gui/SMeterWidget.{h,cpp} [@0cd4559].
@@ -74,8 +76,45 @@
 //                 does not send shows "--" with the reason, never 0.  The TX
 //                 readout text of both faces moved unchanged into txReadout().
 //                 NereusSDR-native; no upstream equivalent.
+//   2026-10-08  Per-copy settings (SettingsStore::Instance) for a dial
+//                 added to a container (workspace preview) by J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.  The constructor takes the store; an
+//                 Instance dial starts at today's defaults, and its setters
+//                 emit instanceSettingsChanged() in place of the AppSettings
+//                 writes.  The Global (Main Panel) path is unchanged.
+//                 NereusSDR-native; no upstream equivalent.
+//   2026-10-08  An added dial's face follows Setup's Meter Styles face
+//                 (SMeter_FaceStyle, via SMeterSetupFace) until the copy
+//                 picks its own; the Main Panel's dial announces the key's
+//                 changes.  Test-only plate limit for wide containers:
+//                 paintVintage() draws in plateRect(), which is rect()
+//                 unless setPlateLimitForTest() is on.  Geometry only; the
+//                 face drawing and the background colour are unchanged.
+//                 By J.J. Boyd (KG4VCF), with AI-assisted implementation
+//                 via Anthropic Claude Code.  NereusSDR-native.
+//   2026-10-08  Workspace preview data colours by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+//                 The classic face's background and the vintage faces'
+//                 surround read WorkspacePreview::dataBackground() (navy
+//                 until a choice is made); the face cache key carries it.
+//                 NereusSDR-native; no upstream equivalent.
+//   2026-10-08  JJ's dial and data colour decisions (D20, D22) by J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.  plateRect() limits every dial's plate to
+//                 kPlateMaxAspect and centres it (setPlateLimitForTest()
+//                 removed).  The vintage faces paint no surround: outside
+//                 the bezel the widget is clear and not opaque, so the
+//                 container's background shows.  The classic face's
+//                 background follows the container's (the user's colour
+//                 when set).  NereusSDR-native; no upstream equivalent.
 // =================================================================
+// Modification history (NereusSDR):
+//   2026-10-12 - Apply the approved workspace-only 11 px text minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
 #include "SMeterWidget.h"
+#include "gui/styles/WorkspacePreview.h"
 
 #include <cmath>
 
@@ -94,11 +133,31 @@
 
 namespace NereusSDR {
 
+SMeterSetupFace& SMeterSetupFace::instance()
+{
+    static SMeterSetupFace notice;
+    return notice;
+}
+
+int SMeterSetupFace::current()
+{
+    return static_cast<int>(SMeterWidget::faceStyleFromKey(
+        AppSettings::instance()
+            .value("SMeter_FaceStyle", SMeterWidget::faceStyleKey(SMeterWidget::FaceStyle::AgedCream))
+            .toString()));
+}
+
 // --- Construction ------------------------------------------------------------
 // From AetherSDR src/gui/SMeterWidget.cpp:13-47 [@0cd4559]
 
 SMeterWidget::SMeterWidget(QWidget* parent)
+    : SMeterWidget(SettingsStore::Global, parent)
+{
+}
+
+SMeterWidget::SMeterWidget(SettingsStore store, QWidget* parent)
     : QWidget(parent)
+    , m_settingsStore(store)
 {
     setMinimumSize(minimumSizeHint());
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
@@ -109,6 +168,8 @@ SMeterWidget::SMeterWidget(QWidget* parent)
     // one IOSurface memmove per paint.  SMeterWidget paints at 30 Hz
     // (needle animation) + on peak decay (20 Hz), so this fires frequently.
     setAttribute(Qt::WA_OpaquePaintEvent);
+    // NereusSDR-native: a vintage face is not opaque outside its bezel;
+    // updatePaintOpacity() below sets the attribute for the face shown.
 
     m_needleFraction = dbmToFraction(m_levelDbm);
     m_targetNeedleFraction = m_needleFraction;
@@ -139,6 +200,30 @@ SMeterWidget::SMeterWidget(QWidget* parent)
         update();
     });
 
+    // An Instance dial (NereusSDR-native) starts at the defaults the
+    // Global path below uses when no key is saved, and reads no key; its
+    // owner applies the copy's own settings after construction.
+    if (m_settingsStore == SettingsStore::Instance) {
+        setTxMode(QStringLiteral("Power"));
+        setRxMode(QStringLiteral("Signal"));
+        setPeakHoldEnabled(true);
+        setPeakDecayRate(QStringLiteral("Medium"));
+        m_faceStyle = FaceStyle::AgedCream;
+        updatePaintOpacity();
+        // Setup's face changed: a copy that follows it shows the new face.
+        connect(&SMeterSetupFace::instance(), &SMeterSetupFace::changed, this, [this](int face) {
+            if (!m_followsSetupFace) {
+                return;
+            }
+            m_faceStyle = static_cast<FaceStyle>(face);
+            updatePaintOpacity();
+            m_faceCache = QPixmap();
+            m_faceCacheKey.clear();
+            update();
+        });
+        return;
+    }
+
     // Load persisted mode and peak-hold settings from AppSettings.
     // Defaults match the member initialisers: TxSelect=0 (Power),
     // RxSelect=0 (Signal), PeakHoldEnabled=true, PeakDecayRate=Medium.
@@ -163,6 +248,7 @@ SMeterWidget::SMeterWidget(QWidget* parent)
     // widget does not write the default back to AppSettings.
     m_faceStyle = faceStyleFromKey(
         s.value("SMeter_FaceStyle", faceStyleKey(FaceStyle::AgedCream)).toString());
+    updatePaintOpacity();
 }
 
 // RadioModel* overload: delegates to the QWidget* constructor then wires the
@@ -319,8 +405,12 @@ void SMeterWidget::setTxMode(const QString& mode)
     // Persist TX mode selection.
     // Key SMeter_TxSelect (int 0..3): Power=0, SWR=1, Level=2, Compression=3.
     // NereusSDR-native key per design doc ss5.4.2.
-    AppSettings::instance().setValue("SMeter_TxSelect",
-                                     static_cast<int>(m_txMode));
+    if (m_settingsStore == SettingsStore::Global) {
+        AppSettings::instance().setValue("SMeter_TxSelect",
+                                         static_cast<int>(m_txMode));
+    } else {
+        emit instanceSettingsChanged();
+    }
     refreshTxToolTip();
     updateNeedleTarget();
     update();
@@ -356,8 +446,12 @@ void SMeterWidget::setRxMode(const QString& mode)
     // Persist RX mode selection.
     // Key SMeter_RxSelect (int 0..3): Signal=0, SignalAverage=1, SignalPeak=2, MaxBin=3.
     // Range widened from AetherSDR's 0..1 per design doc ss5.4.2.
-    AppSettings::instance().setValue("SMeter_RxSelect",
-                                     static_cast<int>(m_rxMode));
+    if (m_settingsStore == SettingsStore::Global) {
+        AppSettings::instance().setValue("SMeter_RxSelect",
+                                         static_cast<int>(m_rxMode));
+    } else {
+        emit instanceSettingsChanged();
+    }
     updateNeedleTarget();
     update();
 }
@@ -660,7 +754,7 @@ void SMeterWidget::paintClassic(QPainter& p)
     const int h = height();
 
     // Background
-    p.fillRect(rect(), QColor(0x0f, 0x0f, 0x1a));
+    p.fillRect(rect(), WorkspacePreview::dataBackground(QColor(0x0f, 0x0f, 0x1a), "panel", this));
 
     // -- Arc geometry ---------------------------------------------------------
     // Large radius with center far below widget -> shallow ~70 deg arc segment
@@ -736,7 +830,7 @@ void SMeterWidget::paintClassic(QPainter& p)
 
     // -- Tick drawing helpers -------------------------------------------------
     QFont tickFont = font();
-    tickFont.setPixelSize(qMax(10, h / 10));
+    tickFont.setPixelSize(WorkspacePreview::readableTextPixelSize(qMax(10, h / 10)));
     tickFont.setBold(true);
     p.setFont(tickFont);
     const QFontMetrics tfm(tickFont);
@@ -942,12 +1036,12 @@ void SMeterWidget::paintClassic(QPainter& p)
 
     // -- Text readout -- all top-aligned on the same baseline -----------------
     QFont srcFont = font();
-    srcFont.setPixelSize(qMax(9, h / 14));
+    srcFont.setPixelSize(WorkspacePreview::readableTextPixelSize(qMax(9, h / 14)));
     const QFontMetrics sfm(srcFont);
     const int topY = sfm.height() + 2;
 
     QFont valFont = font();
-    valFont.setPixelSize(qMax(13, h / 8));
+    valFont.setPixelSize(WorkspacePreview::readableTextPixelSize(qMax(13, h / 8)));
     valFont.setBold(true);
     const QFontMetrics vfm(valFont);
 
@@ -997,7 +1091,8 @@ void SMeterWidget::paintClassic(QPainter& p)
 void SMeterWidget::paintVintage(QPainter& p)
 {
     const VintageFaceTheme& theme = VintageMeterFace::theme(static_cast<int>(m_faceStyle));
-    const QRectF bounds = rect();
+    // NereusSDR-native: the plate keeps the Main Panel dial's proportions.
+    const QRectF bounds = plateRect();
 
     // -- Static artwork, cached -----------------------------------------------
     const qreal dpr = devicePixelRatioF();
@@ -1005,9 +1100,15 @@ void SMeterWidget::paintVintage(QPainter& p)
         ? QString("tx%1:%2:%3").arg(static_cast<int>(m_txMode))
                                .arg(m_powerScaleMax).arg(m_powerRedStart)
         : QString("rx%1").arg(static_cast<int>(m_rxMode));
-    const QString key = QString("%1x%2@%3|%4|%5")
+    // NereusSDR-native: no surround.  Outside the bezel's rounded outline
+    // the face leaves the widget clear, so the container's own background
+    // (the user's colour when set) shows at the corners and beside a
+    // centred plate.
+    const QColor surround(Qt::transparent);
+    const QString key = QString("%1x%2@%3|%4|%5|%6|%7")
         .arg(width()).arg(height()).arg(dpr)
-        .arg(static_cast<int>(m_faceStyle)).arg(scaleKey);
+        .arg(static_cast<int>(m_faceStyle)).arg(scaleKey).arg(bounds.width())
+        .arg(WorkspacePreview::enabled());
 
     if (key != m_faceCacheKey || m_faceCache.isNull()) {
         VintageScale scale;
@@ -1099,8 +1200,10 @@ void SMeterWidget::paintVintage(QPainter& p)
 
         m_faceCache = QPixmap((QSizeF(size()) * dpr).toSize());
         m_faceCache.setDevicePixelRatio(dpr);
+        // Clear outside the bezel (NereusSDR-native).
+        m_faceCache.fill(Qt::transparent);
         QPainter fp(&m_faceCache);
-        VintageMeterFace::paintStatic(fp, bounds, QColor(0x0f, 0x0f, 0x1a), theme,
+        VintageMeterFace::paintStatic(fp, bounds, surround, theme,
                                       scale, title, legend);
         m_faceCacheKey = key;
     }
@@ -1183,11 +1286,50 @@ void SMeterWidget::paintVintage(QPainter& p)
 void SMeterWidget::setFaceStyle(FaceStyle style)
 {
     m_faceStyle = style;
+    updatePaintOpacity();
     m_faceCache = QPixmap();
     m_faceCacheKey.clear();
-    AppSettings::instance().setValue("SMeter_FaceStyle", faceStyleKey(style));
+    if (m_settingsStore == SettingsStore::Global) {
+        AppSettings::instance().setValue("SMeter_FaceStyle", faceStyleKey(style));
+        // Added dials that follow Setup's face show it too.
+        SMeterSetupFace::instance().notify(static_cast<int>(style));
+    } else {
+        // A face picked for this copy: it no longer follows Setup's.
+        m_followsSetupFace = false;
+        emit instanceSettingsChanged();
+    }
     update();
     emit settingsChanged();
+}
+
+void SMeterWidget::setFollowsSetupFace(bool follow)
+{
+    if (m_settingsStore != SettingsStore::Instance) {
+        return;
+    }
+    m_followsSetupFace = follow;
+    if (follow) {
+        m_faceStyle = static_cast<FaceStyle>(SMeterSetupFace::current());
+        updatePaintOpacity();
+        m_faceCache = QPixmap();
+        m_faceCacheKey.clear();
+        update();
+    }
+}
+
+void SMeterWidget::updatePaintOpacity()
+{
+    setAttribute(Qt::WA_OpaquePaintEvent, m_faceStyle == FaceStyle::Classic);
+}
+
+QRectF SMeterWidget::plateRect() const
+{
+    const QRectF full = rect();
+    const double maxWidth = std::round(full.height() * kPlateMaxAspect);
+    if (full.width() <= maxWidth) {
+        return full;
+    }
+    return QRectF(std::round((full.width() - maxWidth) / 2.0), full.top(), maxWidth, full.height());
 }
 
 QString SMeterWidget::faceStyleKey(FaceStyle style)
@@ -1248,6 +1390,14 @@ void SMeterWidget::setPowerScale(int maxWatts, bool hasAmplifier)
 }
 
 // --- Peak hold configuration -------------------------------------------------
+void SMeterWidget::setPowerDisplayScale(double legalMarkerW, double scaleTopW)
+{
+    m_powerRedStart = static_cast<float>(legalMarkerW);
+    m_powerScaleMax = static_cast<float>(scaleTopW);
+    updateNeedleTarget();
+    update();
+}
+
 // From AetherSDR src/gui/SMeterWidget.cpp:660-698 [@0cd4559]
 
 void SMeterWidget::setPeakHoldEnabled(bool enabled)
@@ -1259,8 +1409,12 @@ void SMeterWidget::setPeakHoldEnabled(bool enabled)
 
     // Persist peak hold enabled state.
     // Key PeakHoldEnabled ("True"/"False") per design doc ss5.4.2.
-    AppSettings::instance().setValue("PeakHoldEnabled",
-                                     enabled ? QString("True") : QString("False"));
+    if (m_settingsStore == SettingsStore::Global) {
+        AppSettings::instance().setValue("PeakHoldEnabled",
+                                         enabled ? QString("True") : QString("False"));
+    } else {
+        emit instanceSettingsChanged();
+    }
     updateNeedleTarget();
     update();
     emit settingsChanged();
@@ -1292,8 +1446,20 @@ void SMeterWidget::setPeakDecayRate(const QString& rate)
     const QString canonical = (rate == "Fast")  ? QString("Fast")
                             : (rate == "Slow")  ? QString("Slow")
                                                 : QString("Medium");
-    AppSettings::instance().setValue("PeakDecayRate", canonical);
+    if (m_settingsStore == SettingsStore::Global) {
+        AppSettings::instance().setValue("PeakDecayRate", canonical);
+    } else {
+        emit instanceSettingsChanged();
+    }
     emit settingsChanged();
+}
+
+// The decay rate the menu shows checked.  NereusSDR-native.
+SMeterWidget::DecayRate SMeterWidget::peakDecayRate() const
+{
+    if (qFuzzyCompare(m_peakDecayDbPerSec, 20.0f)) { return DecayRate::Fast; }
+    if (qFuzzyCompare(m_peakDecayDbPerSec, 5.0f)) { return DecayRate::Slow; }
+    return DecayRate::Medium;
 }
 
 void SMeterWidget::resetPeak()

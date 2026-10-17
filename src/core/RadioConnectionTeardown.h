@@ -52,6 +52,14 @@
 // Both pointer references are set to nullptr on return; the QThread
 // container itself is main-thread-owned and safe to delete from the
 // caller, which this helper does.
+//
+// Ownership contract: a non-null worker and its parentless connection are
+// owned by the caller; the connection's affinity matches that worker.
+// Call from the QThread container's owning thread, with no concurrent
+// restart or external deletion. The historical null-worker branch does
+// not take ownership of a borrowed connection. If reclaiming a stopped
+// connection fails, its reference is retained and a warning is emitted;
+// this is the exception to clearing both references on return above.
 
 #pragma once
 
@@ -59,6 +67,7 @@
 
 #include <QLoggingCategory>
 #include <QMetaObject>
+#include <QPointer>
 #include <QSemaphore>
 #include <QThread>
 
@@ -116,6 +125,35 @@ inline void teardownWorkerThreadedConnection(RadioConnection*& conn,
             thread->terminate();
             thread->wait(kTerminateWaitMs);
         }
+    } else {
+        // An owned, parentless connection may outlive a never-started or
+        // finished worker. A new deleteLater() cannot rely on that worker
+        // processing another event. Guard against finished-time deletion
+        // while destroying the QThread container: its destructor waits for
+        // Finishing and clears the surviving objects' thread() pointers.
+        // Qt 6.11 qthread.cpp:465-475; QObject::moveToThread explicitly
+        // permits pulling an object with no affinity to the current thread:
+        // https://doc.qt.io/qt-6/qobject.html#moveToThread
+        QPointer<RadioConnection> remainingConnection(conn);
+        std::unique_ptr<QThread> stoppedThread(thread);
+        thread = nullptr;
+        stoppedThread.reset();
+        conn = remainingConnection.data();
+        if (conn) {
+            // Children follow the move. Do not pump events here: socket
+            // notifier re-enablement and old queued work must not run
+            // between the move and protocol cleanup / destruction.
+            conn->moveToThread(QThread::currentThread());
+            if (conn->thread() != QThread::currentThread()) {
+                QLoggingCategory cat("nereus.connection");
+                qCWarning(cat) << "teardownWorker: stopped connection could not be reclaimed";
+                return;
+            }
+            std::unique_ptr<RadioConnection> stoppedConnection(conn);
+            conn = nullptr;
+            stoppedConnection->disconnect();
+        }
+        return;
     }
 
     // conn was destroyed on the worker thread by the DeferredDelete

@@ -29,6 +29,10 @@
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-10-15: DelayLink delivers from one queue per link, so timers due
+//               at the same moment cannot reorder messages or let a close
+//               overtake data (Windows). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -36,6 +40,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPointer>
+#include <QQueue>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -83,12 +88,7 @@ public:
         if (!m_open || m_peer.isNull()) {
             return;
         }
-        const QPointer<DelayLink> peer(m_peer);
-        QTimer::singleShot(m_delayMs, peer, [peer, wire] {
-            if (peer && peer->m_open) {
-                emit peer->textReceived(wire);
-            }
-        });
+        m_peer->deliverLater(m_delayMs, Delivery{false, wire});
     }
     void ping() override
     {
@@ -107,12 +107,9 @@ public:
         }
         m_open = false;
         emit closed();
-        const QPointer<DelayLink> peer(m_peer);
-        QTimer::singleShot(m_delayMs, peer, [peer] {
-            if (peer) {
-                peer->closeLink(QString());
-            }
-        });
+        if (!m_peer.isNull()) {
+            m_peer->deliverLater(m_delayMs, Delivery{true, {}});
+        }
     }
     bool isOpen() const override { return m_open; }
     QString peerDescription() const override { return m_description; }
@@ -129,10 +126,37 @@ public:
     }
 
 private:
+    struct Delivery {
+        bool close = false;
+        QByteArray wire;
+    };
+
+    // Each timer delivers the oldest queued item, not the one it was
+    // started for: timers due at the same moment may fire in any order
+    // (they do on Windows), and a real link keeps its order, closes
+    // included.
+    void deliverLater(int delayMs, Delivery delivery)
+    {
+        m_inbox.enqueue(std::move(delivery));
+        const QPointer<DelayLink> self(this);
+        QTimer::singleShot(delayMs, this, [self] {
+            if (!self || self->m_inbox.isEmpty()) {
+                return;
+            }
+            const Delivery next = self->m_inbox.dequeue();
+            if (next.close) {
+                self->closeLink(QString());
+            } else if (self->m_open) {
+                emit self->textReceived(next.wire);
+            }
+        });
+    }
+
     QString m_description;
     int m_delayMs = 0;
     QPointer<DelayLink> m_peer;
     bool m_open = true;
+    QQueue<Delivery> m_inbox;
 };
 
 QByteArray numbered(const char* from, int n)

@@ -175,6 +175,14 @@ std::optional<Ps3StatusSnapshot> decodeStatus(const QString& json)
     }
     return status;
 }
+// The coordinator stamps a new sequence number and clock time on every
+// 100 ms poll, so two statuses that differ in those alone are one status.
+bool sameApartFromPollStamp(Ps3StatusSnapshot left, const Ps3StatusSnapshot& right)
+{
+    left.sequence = right.sequence;
+    left.capturedAtUnixMilliseconds = right.capturedAtUnixMilliseconds;
+    return left == right;
+}
 bool noArguments(const QVariantMap& arguments) { return arguments.isEmpty(); }
 bool oneArgument(const QVariantMap& arguments, const QString& key, int type)
 {
@@ -319,7 +327,8 @@ void PureSignalSessionFacade::setCoordinator(PureSignal* coordinator)
     m_coordinator = coordinator;
     if (coordinator) {
         coordinator->setSessionGeneration(m_displayGeneration);
-        connect(coordinator, &PureSignal::ps3StatusChanged, this, &PureSignalSessionFacade::refreshStatus);
+        connect(coordinator, &PureSignal::ps3StatusChanged, this,
+                &PureSignalSessionFacade::refreshPolledStatus);
         connect(coordinator, &PureSignal::fileOperationCompleted, this, &PureSignalSessionFacade::finishFile);
         connect(coordinator, &PureSignal::fileOperationRetired, this,
                 [this](int kind, quint64 generation, quint64 completion) {
@@ -547,9 +556,11 @@ Ps3ActionResult PureSignalSessionFacade::executeAction(Ps3Action action,
     case Ps3Action::SetTwoTone: {
         pending.twoToneTarget = arguments.value("enabled").toBool();
         TwoToneController* controller = m_radio ? m_radio->twoToneController() : nullptr;
-        if (pending.twoToneTarget && controller && controller->isDeactivationInFlight()) {
-            return fail(QStringLiteral("The two-tone test is still stopping. Try again after it stops."));
-        }
+        // A start inside the stop's settle adopts the live test
+        // (TwoToneController::setActive), as the TX button's and a remote
+        // device's do: the stop's request is replaced below, and the test
+        // stays on. Its m_active never drops, so twoToneActiveChanged does
+        // not fire for it.
         for (quint32 id : m_pending.keys()) {
             const PendingOperation previous = m_pending.value(id);
             if (previous.action == Ps3Action::SetTwoTone
@@ -656,9 +667,26 @@ void PureSignalSessionFacade::finishFile(int kind, int result, quint64 generatio
 
 void PureSignalSessionFacade::refreshStatus()
 {
+    updateStatus(true);
+}
+
+void PureSignalSessionFacade::refreshPolledStatus()
+{
+    // Off the air every poll repeats the last report. Announcing each one
+    // woke every listener here, and sent every window on this Core all six
+    // mirrored values, ten times a second with nothing to show for it.
+    updateStatus(false);
+}
+
+void PureSignalSessionFacade::updateStatus(bool announceUnchanged)
+{
     if (remote()) {
         return;
     }
+    const bool wasAvailable = m_available;
+    const bool couldActuate = m_canActuate;
+    const bool twoToneWasOn = m_twoToneOn;
+    const Ps3StatusSnapshot published = m_status;
     m_available = m_coordinator != nullptr;
     m_canActuate = m_coordinator && m_coordinator->canActuate();
     m_twoToneOn = m_radio && m_radio->twoToneController() && m_radio->twoToneController()->isActive();
@@ -689,8 +717,17 @@ void PureSignalSessionFacade::refreshStatus()
             ++it;
         }
     }
-    m_statusJson = encodeStatus(m_status);
-    emit statusChanged();
+    const bool changed = m_available != wasAvailable || m_canActuate != couldActuate
+        || m_twoToneOn != twoToneWasOn || !sameApartFromPollStamp(m_status, published);
+    if (changed || announceUnchanged) {
+        m_statusJson = encodeStatus(m_status);
+        emit statusChanged();
+    } else {
+        // statusSnapshot() stays the status statusJson() holds.
+        m_status = published;
+    }
+    // The operations below are settled on every poll, announced or not:
+    // they also wait on what the status does not carry.
     if (!m_coordinator) {
         return;
     }
@@ -779,34 +816,56 @@ bool PureSignalSessionFacade::applyRemoteProperty(const QByteArray& property, co
     if (!remote()) {
         return false;
     }
+    // A Core sends every value that shares statusChanged() whenever one of
+    // them changes (StateMirror::onWatchedPropertyChanged), so most of what
+    // arrives is the value already held. Only a change is announced.
     if (property == "statusJson") {
-        const auto status = decodeStatus(value.toString());
+        const QString json = value.toString();
+        const auto status = decodeStatus(json);
         if (!status) {
             return false;
         }
+        const bool changed = !sameApartFromPollStamp(*status, m_status);
         m_status = *status;
-        m_statusJson = value.toString();
+        m_statusJson = json;
+        if (!changed) {
+            // A Core that announces every poll: only its stamp moved.
+            return true;
+        }
     } else if (property == "available") {
+        if (value.toBool() == m_remoteRuntimeAvailable) {
+            return true;
+        }
         m_remoteRuntimeAvailable = value.toBool();
         m_available = m_remoteCapabilityAvailable && m_remoteRuntimeAvailable;
         m_canActuate = m_available && m_remoteTxPermitted && m_remoteRuntimeCanActuate;
     } else if (property == "canActuate") {
+        if (value.toBool() == m_remoteRuntimeCanActuate) {
+            return true;
+        }
         m_remoteRuntimeCanActuate = value.toBool();
         m_canActuate = m_available && m_remoteTxPermitted && m_remoteRuntimeCanActuate;
     } else if (property == "twoToneOn") {
+        if (value.toBool() == m_twoToneOn) {
+            return true;
+        }
         m_twoToneOn = value.toBool();
     } else if (property == "lastActionError") {
+        if (value.toString() == m_lastError) {
+            return true;
+        }
         m_lastError = value.toString();
     } else if (property == "displayGeneration") {
         const quint64 generation = value.toULongLong();
         if (generation == 0) {
             return false;
         }
-        if (generation != m_displayGeneration) {
-            m_displayGeneration = generation;
-            m_display.reset();
-            emit displayInvalidated();
+        if (generation == m_displayGeneration) {
+            return true;
         }
+        m_displayGeneration = generation;
+        m_display.reset();
+        emit displayInvalidated();
     } else {
         return false;
     }

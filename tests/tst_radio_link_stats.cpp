@@ -134,12 +134,20 @@ private slots:
 
         P1RadioConnection conn;
         conn.init();
-        QSignalSpy frames(&conn, &RadioConnection::frameReceived);
+        // EP6 frames parsed: one iqDataReceived for receiver 0 per frame.
+        // frameReceived is once per read since 2026-10-14 (P1 status at
+        // P2's rate), so it no longer counts frames.
+        int frameCount = 0;
+        QObject frameCtx;
+        QObject::connect(&conn, &RadioConnection::iqDataReceived, &frameCtx,
+                         [&frameCount](int rx, const QVector<float>&) {
+                             if (rx == 0) { ++frameCount; }
+                         });
         conn.connectToRadio(p1Info(fake));
         QTRY_VERIFY_WITH_TIMEOUT(fake.isRunning(), 3000);
 
         fake.sendEp6Frames(5);
-        QTRY_COMPARE_WITH_TIMEOUT(frames.count(), 5, 3000);
+        QTRY_COMPARE_WITH_TIMEOUT(frameCount, 5, 3000);
         RadioLinkStats::Snapshot s = conn.linkStats();
         QVERIFY(s.udpPacketsSeen >= 5);
         QCOMPARE(*s.packetLossPercent, 0.0);
@@ -148,7 +156,7 @@ private slots:
 
         fake.skipEp6Sequence(4);
         fake.sendEp6Frames(2);
-        QTRY_COMPARE_WITH_TIMEOUT(frames.count(), 7, 3000);
+        QTRY_COMPARE_WITH_TIMEOUT(frameCount, 7, 3000);
         s = conn.linkStats();
         QVERIFY(s.udpPacketsSeen >= 7);
         QCOMPARE(*s.packetLossPercent, 100.0 / 8.0);

@@ -11,6 +11,9 @@
 // AI-assisted via Anthropic Claude Code.
 // 2026-09-25: R-R3-49 (parity Task 8): showSavedEndpoint. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-11: StationAccessoryAdmission: a desktop window that shares its
+// accessories uses the device at the typed address, as it did before.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/StationTgxlController.h"
 #include "core/LanDiscovery.h"
 #include "core/LogCategories.h"
@@ -21,10 +24,15 @@ namespace NereusSDR {
 using Phase = TunerModel::ConnectionPhase;
 
 StationTgxlController::StationTgxlController(TgxlConnection* connection,
-                                           TunerModel* model, QObject* parent)
-    : QObject(parent), m_connection(connection), m_model(model)
+                                           TunerModel* model, QObject* parent,
+                                           StationAccessoryAdmission admission)
+    : QObject(parent), m_connection(connection), m_model(model), m_admission(admission)
 {
-    connection->setIdentityAdmissionRequired(true);
+    // TypedAddress: the link keeps its plain handshake, as in a window with
+    // no controller.
+    if (m_admission == StationAccessoryAdmission::Identified) {
+        connection->setIdentityAdmissionRequired(true);
+    }
     // R-R3-47 / R-R3-22: the tuner's own settings, through the
     // connection's own command methods (the local Advanced page's commands).
     StationDeviceSettings::Wire wire;
@@ -60,6 +68,17 @@ StationTgxlController::StationTgxlController(TgxlConnection* connection,
         tryAdmit();
     });
     connect(connection, &TgxlConnection::connected, this, [this] {
+        if (m_admission == StationAccessoryAdmission::TypedAddress) {
+            // Nothing was identified: what the link itself knows.
+            if (!m_running || !m_connection) { return; }
+            m_state.phase = Phase::Connected;
+            m_state.error.clear();
+            m_state.peerAddress = m_connection->peerAddress();
+            m_state.deviceVersion = m_connection->version();
+            m_outageFaulted = false;
+            publish();
+            return;
+        }
         if (!current(m_attempt)) { return; }
         stopDiscovery();
         m_state.phase = Phase::Connected;

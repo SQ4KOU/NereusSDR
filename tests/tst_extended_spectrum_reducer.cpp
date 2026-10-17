@@ -21,6 +21,7 @@
 
 #include "core/FFTEngine.h"
 #include "core/WidebandFftEngine.h"
+#include "core/spectrum/DisplayFollowers.h"
 #include "core/spectrum/ExtendedSpectrumReducer.h"
 #include "core/spectrum/WidebandDisplayReference.h"
 
@@ -68,6 +69,27 @@ class TstExtendedSpectrumReducer : public QObject
     Q_OBJECT
 
 private slots:
+    void timeWindowDepthAppliesToTheActualExtendedComposition()
+    {
+        ExtendedSpectrumReducer reducer;
+        ReducerConfig cfg = extendedConfig();
+        cfg.averageMode = 2;
+        cfg.averageFrames = 4;
+        cfg.averageAlpha = 0.01;
+        QVector<float> output;
+        for (float power : {1.0f, 3.0f, 5.0f}) {
+            reducer.setConfig(cfg);
+            QVERIFY(reducer.reduce(ddcBins(1024, power), 1.0, 0.0, {},
+                                   4'000'000.0, 0.0, -180.0, output));
+        }
+        QVERIFY(std::abs(output[50] - 4.7712125f) < 0.0001f);
+        cfg.averageFrames = 2;
+        reducer.setConfig(cfg);
+        QVERIFY(reducer.reduce(ddcBins(1024, 7.0f), 1.0, 0.0, {},
+                               4'000'000.0, 0.0, -180.0, output));
+        QVERIFY(std::abs(output[50] - 8.4509802f) < 0.0001f);
+    }
+
     void clippedIslandAndNoIsland()
     {
         const ReducerConfig cfg = extendedConfig();
@@ -182,6 +204,39 @@ private slots:
         QVERIFY(waterfall.reduce(ddcBins(), 1.0, 0.0, {}, 4'000'000.0, 0.0,
                                  -180.0, waterfallSecond));
         QVERIFY(traceSecond[50] > waterfallSecond[50] + 20.0f);
+    }
+
+    // The Core's reducer at the 1 ms floor of the desktop's averaging time
+    // (the constant a desktop window sends for it): the row is finite and
+    // is the frame just reduced, with nothing of the frame before in it.
+    void averagingAtOneMsFollowsEachFrame()
+    {
+        const double oneMs = double(averageAlphaForTimeMs(1, 30));
+        QVERIFY(oneMs >= 0.0 && oneMs < 1e-9);
+        ReducerConfig averaged = extendedConfig();
+        averaged.averageMode = 1;
+        averaged.averageAlpha = oneMs;
+        ReducerConfig plain = extendedConfig();
+        plain.averageMode = 0;
+        ExtendedSpectrumReducer withAveraging;
+        ExtendedSpectrumReducer without;
+        withAveraging.setConfig(averaged);
+        without.setConfig(plain);
+        QVector<float> loud = ddcBins();
+        loud[512] = 1.0f;
+        QVector<float> got;
+        QVector<float> want;
+        for (const QVector<float>& frame : {ddcBins(), loud, ddcBins(), loud}) {
+            QVERIFY(withAveraging.reduce(frame, 1.0, 0.0, {}, 4'000'000.0, 0.0, -180.0, got));
+            QVERIFY(without.reduce(frame, 1.0, 0.0, {}, 4'000'000.0, 0.0, -180.0, want));
+            QCOMPARE(got.size(), want.size());
+            for (int i = 0; i < got.size(); ++i) {
+                QVERIFY2(std::isfinite(got[i]), qPrintable(QString::number(i)));
+                QVERIFY2(std::abs(got[i] - want[i]) < 0.01f,
+                         qPrintable(QStringLiteral("pixel %1: %2 against %3")
+                                        .arg(i).arg(got[i]).arg(want[i])));
+            }
+        }
     }
 
     void recursiveAveragingIncludesChangingAdcRow()

@@ -6,16 +6,15 @@
 // =================================================================
 
 #include "gui/ConnectionSelector.h"
+#include "gui/QtCocoaAccessibleTableCache.h"
 
 #include "core/security/PairingCode.h"
 #include "core/session/StationPairingClient.h"
 
 #include <QAbstractItemView>
-#include <QAccessible>
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QGroupBox>
-#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -232,29 +231,18 @@ void ConnectionSelector::setTargets(const QList<ConnectionTargetRow>& targets)
         !groupStructureMatches(ConnectionTargetKind::LocalRadio, localRadios)
         || !groupStructureMatches(ConnectionTargetKind::LanCore, lanCores)
         || !groupStructureMatches(ConnectionTargetKind::SavedCore, savedCores);
-#if defined(Q_OS_MAC)
-    if (structureChanges && QGuiApplication::platformName() == QStringLiteral("cocoa")
-        && qVersion() == QStringLiteral("6.11.0")) {
-        // Qt 6.11 Cocoa releases real cell interfaces when old native rows
-        // expire (qcocoaaccessibilityelement.mm:219-226,257-267,342-362).
-        // QAccessibleTable retains their IDs and dereferences them during
-        // RowsRemoved/RowsInserted (itemviews.cpp:645-741). Clear that cache
-        // through its public API before changing rows. This does not reset
-        // the item model or replace surviving items/persistent indexes.
-        QAccessibleInterface* accessible = QAccessible::queryAccessibleInterface(m_targetTree);
-        if (accessible != nullptr && accessible->tableInterface() != nullptr) {
-            QAccessibleTableModelChangeEvent reset(
-                m_targetTree, QAccessibleTableModelChangeEvent::ModelReset);
-            accessible->tableInterface()->modelChange(&reset);
-        }
-    }
-#endif
     if (structureChanges && !previousKey.isEmpty()) {
         // Clear the selection before removing rows. Qt's macOS accessibility
         // bridge keeps separate table and selection caches; deleting the
         // selected interface during a model reset can leave it with a stale
         // pointer while AppKit is enumerating accessibilitySelectedChildren.
         m_targetTree->setCurrentItem(nullptr);
+    }
+    if (structureChanges) {
+        // With accessibility on, rows inserted or removed after the macOS
+        // bridge has expired its cells read a deleted cell; a real model
+        // reset first (the same items, copied) drops that cache safely.
+        resetItemsBeforeRowChange(m_targetTree);
     }
     addGroup(tr("Radios on this network"), ConnectionTargetKind::LocalRadio,
              tr("No radios found on this network."), localRadios);

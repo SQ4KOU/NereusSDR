@@ -46,7 +46,11 @@ extension DisplayOnThisPhonePage {
                     Text(Self.coreNote)
                 }
                 ForEach(controls, id: \.label) { control in
-                    if let reason = core.reason(control) {
+                    if let sizing = core.sizingReason(control) {
+                        // Sizing's own sentence says which control it grays.
+                        Text(sizing)
+                            .accessibilityIdentifier("core.\(control.settingsKey ?? control.subscribe).reason")
+                    } else if let reason = core.reason(control) {
                         Text("\(control.label): \(reason)")
                     }
                     let unsent = control.options.filter { !core.canSend($0, of: control) }
@@ -119,6 +123,8 @@ struct CoreControlRow: View {
     var body: some View {
         Group {
             switch control.kind {
+            case .choice where control.settingsKey == CoreDisplayModel.Sizing.settingsKey && core.sizingMode != nil:
+                sizing
             case .choice:
                 choice
             case .slider where !control.options.isEmpty:
@@ -144,6 +150,20 @@ struct CoreControlRow: View {
             ForEach(control.options.filter { core.canSend($0, of: control) }, id: \.value) { option in
                 Text(option.label).tag(option.value)
             }
+        }
+    }
+
+    /// Sizing: who sets the FFT size, as the app's segmented choice.
+    private var sizing: some View {
+        LabeledContent(control.label) {
+            Picker(control.label, selection: Binding(get: { core.value(control) ?? control.defaultValue ?? 0 },
+                                                     set: { core.set(control, to: $0) })) {
+                ForEach(control.options, id: \.value) { option in
+                    Text(option.label).tag(option.value)
+                }
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
         }
     }
 
@@ -175,7 +195,7 @@ struct CoreControlRow: View {
     /// slider under them where the range has many steps.
     private var slider: some View {
         let value = core.value(control)
-        let range = control.range
+        let range = core.range(control)
         return VStack(alignment: .leading, spacing: 4) {
             Stepper {
                 HStack {

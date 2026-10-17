@@ -1,6 +1,10 @@
 #!/bin/sh
 set -e
 # Leave /etc/nereusd.conf and /var/lib/nereusd intact on remove/purge.
+# /usr/lib/sysctl.d/10-nereusd.conf goes with the package's other files, so
+# the system starts with its own network receive buffer limit again. The
+# limit in force is not lowered here: what it was before is not known, and
+# something else may rely on it by now.
 if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload || true
 fi

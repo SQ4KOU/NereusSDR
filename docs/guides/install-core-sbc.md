@@ -95,6 +95,15 @@ check that the image is ARM64 Debian Trixie; use its normal repositories and
 a matching package. Installation leaves the radio service disabled until the
 next step.
 
+Packages newer than 2026.10.0 also change one system setting when they are
+installed: they raise Linux's network receive buffer limit
+(`net.core.rmem_max`) to the 4 MB the Core asks for on the socket its radio
+sends to, and `apt` prints a line saying what it did. A limit that is already
+higher is left alone. The file that does it is `/usr/lib/sysctl.d/10-nereusd.conf`,
+and removing the package removes it. The
+[README](../../README.md#the-system-setting-the-cores-installer-changes)
+says what it is for and how to undo it.
+
 ## 4. Configure and start it
 
 On this fresh installation, copy the sample and review it. With one visible

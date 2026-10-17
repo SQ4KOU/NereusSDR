@@ -199,7 +199,7 @@ scheduling and single-receiver limitations are not current release status.
 ### Remaining work after the 2026.10 release
 
 - CW transmit, sidetone, firmware keyer and QSK/break-in.
-- FM pre-emphasis, CAT/rigctld, legacy skin import and WAV/IQ recording.
+- FM pre-emphasis, legacy skin import and WAV/IQ recording.
 - Remaining native UI interactions and radio/accessory/on-air acceptance rows.
 - Sustained remote Core and SBC operation, and original-report reconnect retests.
 
@@ -571,7 +571,7 @@ Plan §13 open questions resolved:
 Authorised Thetis divergence (plan §10, one-off): new per-band grid slots initialise to Thetis uniform -40 / -140 rather than NereusSDR's existing -20 / -160. Source-first protocol stays as written — this phase is an exception, not a precedent.
 
 Known deferrals (tracked in PR description):
-- S7 Line Width on GPU (QRhi lacks portable setLineWidth; needs triangle strip rendering — deferred)
+- S7 Line Width on GPU (QRhi lacks portable setLineWidth; needs triangle strip rendering — deferred). Done 2026-10-11 with the Display pill rework: the GPU trace is a triangle strip of the line width (`src/gui/SpectrumTraceRibbon.h`).
 - S16 FFT Decimation (UI scaffolded, no FFTEngine setter)
 - W12/W14 TX filter/zero-line overlays (gated on TX state model — post-3M-1)
 - Data Line / Data Fill Color splitting (shares `m_fillColor` until UX feedback justifies splitting)
@@ -1017,11 +1017,15 @@ Bench verification: matrix at `docs/architecture/phase3r-verification/README.md`
 ### Phase 3K: CAT/rigctld + TCP Server
 **Goal:** External radio control for logging and contest software.
 
+The [approved design](architecture/2026-10-04-thetis-cat-design.md) and [implementation plan](architecture/2026-10-04-thetis-cat-plan.md) are implemented and merge to main with PR #340 (not yet in a release). Four stable slice-bound Thetis channels, native TCP/optional serial/POSIX PTY, live local Setup/applet/status/log/tester and a separate four-channel Hamlib rigctld dialect are delivered. All 419 descriptors have explicit contracts; 349 active registrations execute 783 production fixtures, with 129 unavailable outcomes. This establishes catalogue accounting, not full functional Thetis parity.
+
+[Verification and limitations](architecture/thetis-cat-verification/README.md) and the [accepted execution ledger](architecture/thetis-cat-verification/progress.md) record rebuilt macOS gates, current Linux Core CAT/official Hamlib 4.7 execution and optional-dependency checks. A full review against Thetis v2.10.3.15 ran before the merge and its findings are fixed or listed in the PR. Windows compilation, Linux GUI/x86, physical serial/PTT, other logging/digital-mode clients and radio/RF/RX-audio bench remain pending.
+
 Scope:
-- 4-channel slice-bound rigctld server (AetherSDR `RigctlServer` + `RigctlPty` pattern)
-- TCP/IP CAT server (AetherSDR pattern, verified against Thetis `TCPIPcatServer.cs`)
-- Verify CAT command set against Thetis `SIOListenerII` for completeness
-- CatApplet UI for configuration
+- Complete pinned Thetis descriptor inventory with explicit supported, adapted, inert, inactive or unavailable contracts
+- Four stable slice-bound CAT channels, native TCP/optional serial/PTY transports and source-grounded PTT/reporting settings
+- CatApplet, live setup/status/logging and production model/headless verification
+- Separate four-channel rigctld delivery, studying current AetherSDR `CatPort`/`RigctlProtocol`/`SmartCatSession` transport patterns
 
 ### Phase 3L: Protocol 1 Support
 **Goal:** Add P1 support for Hermes Lite 2 and older ANAN radios.
@@ -1087,6 +1091,7 @@ Scope:
 - **Linux bridge** — `pactl`-loaded `module-pipe-source` × 4 + `module-pipe-sink` × 1, rebranded to `nereussdr-vax-*`. Works on both Pulse and PipeWire-via-pipewire-pulse. Stale-module cleanup on startup.
 - **Windows BYO path** — `VirtualCableDetector` regex-matches VB-Audio family, VAC, Voicemeeter, Dante, FlexRadio DAX. First-run dialog pre-fills bindings; links to vendor install pages when none detected.
 - ~~Optional Direct ASIO engine (Windows) — cmASIO parity~~ **Deferred** per 2026-04-19 GPL-3 compliance review (Steinberg ASIO SDK not GPL-compatible). PortAudio's built-in ASIO host API remains as the ASIO path. See plan's GPL Compliance Review section and spec §8.5 compliance note.
+  - Corrected 2026-10-09: the incompatibility is no longer true. Steinberg dual-licensed the ASIO SDK 2.3.4 under GPL version 3, and NereusSDR bundles it (third_party/asiosdk/) for its own native ASIO engine (docs/architecture/2026-10-08-native-audio-engines-design.md). PortAudio's ASIO host API stays off.
 - **Routing model** — SmartSDR-style: `SliceModel.vaxChannel` (0..4) set via new `VaxChannelSelector` row on `VfoWidget`; speakers always-on unless muted; one VAX owns TX at a time (`TransmitModel.txOwnerSlot`).
 - **`VaxApplet` (docked, ported from AetherSDR `DaxApplet`, renamed DAX→VAX)** — 4 channel strips with meter + gain + mute + device picker + assigned-slice tags; TX row with gain + meter.
 - **Menu-bar `MasterOutputWidget`** — global volume + mute + right-click device picker; scroll-wheel fine-tune.

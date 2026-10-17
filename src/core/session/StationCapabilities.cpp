@@ -7,6 +7,20 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12: The radio's second firmware number: firmwareBeta, after
+//               spectrumPictureVersion and before coreBuildInfo, for a peer
+//               that declared firmwareBeta. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
+//   2026-10-11: R-DISP-RETUNE (third wave): spectrumPictureVersion, after
+//               coreSpeakerVersion, for a peer that declared spectrumPicture.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09: Core speaker: coreSpeakerVersion, after radioSpeakerVersion
+//               and before coreBuildInfo (native audio plan Task 21,
+//               R-AUD-25). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-06: Radio speaker: radioSpeakerVersion, after
+//               radeReasonVersion and before coreBuildInfo (R-SPK-14).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: RADE reason: radeReasonVersion, after
 //               rxFilterLowPassVersion and before coreBuildInfo. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -171,6 +185,12 @@
 //   2026-09-28 - Slice control plan Task 4: sliceAccessVersion, after
 //                radioAntennaRowsVersion, only with sliceAccessEntry. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-07 - CAT setup from a connected desktop: stationCatVersion, after
+//                radeReasonVersion and before coreBuildInfo. J.J. Boyd
+//                (KG4VCF). AI tooling: Claude Code.
+//   2026-10-08 - Rotor control plan Task 4b: remoteRotorControlVersion,
+//                after accessoryTxVersion, when it is not 0. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -412,6 +432,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
             updates.append(intEntry("miniDisplayVersion", miniDisplayVersion));
         }
         updates.append(intEntry("accessoryTxVersion", accessoryTxVersion));
+        // Rotor control plan Task 4b: the Core's rotor, on a Core that owns
+        // one (absent reads as 0).
+        if (remoteRotorControlVersion > 0) {
+            updates.append(intEntry("remoteRotorControlVersion", remoteRotorControlVersion));
+        }
         if (radioAntennaRowsVersion == 1) {
             updates.append(intEntry("radioAntennaRowsVersion", radioAntennaRowsVersion));
         }
@@ -534,6 +559,46 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
     if (radeReasonVersion > 0) {
         updates.append(intEntry("radeReasonVersion", radeReasonVersion));
     }
+    // CAT setup from a connected desktop: the Core's `stationCat` object,
+    // its four commands and the `catLog` stream, after radeReasonVersion
+    // and before coreBuildInfo (which stays last), only for a peer that
+    // declared stationCat.
+    if (stationCatVersion > 0) {
+        updates.append(intEntry("stationCatVersion", stationCatVersion));
+    }
+    // Radio speaker (R-SPK-14): radio's RADIO level, mute, amplifier choice
+    // and reports, after stationCatVersion and before coreBuildInfo (which
+    // stays last), only for a peer that declared radioSpeaker.
+    if (radioSpeakerVersion > 0) {
+        updates.append(intEntry("radioSpeakerVersion", radioSpeakerVersion));
+    }
+    // Core speaker (native audio plan Task 21): radio's six coreSpeaker
+    // properties, after radioSpeakerVersion and before coreBuildInfo (which
+    // stays last), only for a peer that declared coreSpeaker.
+    if (coreSpeakerVersion > 0) {
+        updates.append(intEntry("coreSpeakerVersion", coreSpeakerVersion));
+    }
+    // R-DISP-RETUNE: the picture value of a spectrum context, after
+    // coreSpeakerVersion and before coreBuildInfo (which stays last), only
+    // for a peer that declared spectrumPicture; any other peer is sent no
+    // entry, so its capabilities are today's.
+    if (spectrumPictureVersion > 0) {
+        updates.append(intEntry("spectrumPictureVersion", spectrumPictureVersion));
+    }
+    // The radio's second firmware number, after spectrumPictureVersion and
+    // before coreBuildInfo (which stays last), only for a peer that declared
+    // firmwareBeta; any other peer is sent no entry, so its capabilities are
+    // today's. A zero is sent: it says this radio reported none.
+    if (firmwareBetaEntry) {
+        updates.append(intEntry("firmwareBeta", firmwareBetaVersion));
+    }
+    // Waveform feed: the exact samples a waveform meter draws, after
+    // firmwareBeta (when declared) and before coreBuildInfo (which stays last),
+    // only for a peer that agreed the minor-11 block and declared waveform;
+    // any other peer is sent no entry, so its capabilities are today's.
+    if (radioIdentityEntries && waveformVersion > 0) {
+        updates.append(intEntry("waveformVersion", waveformVersion));
+    }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
         if (!json.isEmpty()) updates.append(stringEntry("coreBuildInfo", QString::fromUtf8(json)));
@@ -557,8 +622,25 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
     int radioMicEntries = 0;
     int rxFilterLowPassEntries = 0;
     int radeReasonEntries = 0;
+    int stationCatEntries = 0;
+    int radioSpeakerEntries = 0;
+    int coreSpeakerEntries = 0;
+    int firmwareBetaEntries = 0;
     for (const MirrorUpdate& u : updates) {
-        if (u.name == "mediaDirectVersion") {
+        if (u.name == "firmwareBeta") {
+            // The radio's second firmware number: one entry, an Int64 of 0
+            // to 255 (one byte of the radio's discovery reply). Anything
+            // else reads as no entry.
+            if (++firmwareBetaEntries == 1 && u.ordinal == 0
+                && u.kind == MirrorWireKind::Int64
+                && u.value.typeId() == QMetaType::LongLong) {
+                const qlonglong number = u.value.toLongLong();
+                if (number >= 0 && number <= 255) {
+                    caps.firmwareBetaEntry = true;
+                    caps.firmwareBetaVersion = static_cast<int>(number);
+                }
+            }
+        } else if (u.name == "mediaDirectVersion") {
             // The direct media ladder: one entry, an Int64 of 1 or more.
             if (++mediaDirectEntries == 1 && u.ordinal == 0 && u.kind == MirrorWireKind::Int64
                 && u.value.typeId() == QMetaType::LongLong) {
@@ -583,6 +665,34 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                 && u.value.typeId() == QMetaType::LongLong) {
                 const qlonglong version = u.value.toLongLong();
                 caps.radeReasonVersion = version > 0 && version <= 65535
+                    ? static_cast<int>(version) : 0;
+            }
+        } else if (u.name == "stationCatVersion") {
+            // CAT setup from a connected desktop: one entry, an Int64 of 1
+            // or more.
+            if (++stationCatEntries == 1 && u.ordinal == 0
+                && u.kind == MirrorWireKind::Int64
+                && u.value.typeId() == QMetaType::LongLong) {
+                const qlonglong version = u.value.toLongLong();
+                caps.stationCatVersion = version > 0 && version <= 65535
+                    ? static_cast<int>(version) : 0;
+            }
+        } else if (u.name == "coreSpeakerVersion") {
+            // Core speaker: one entry, an Int64 of 1 or more.
+            if (++coreSpeakerEntries == 1 && u.ordinal == 0
+                && u.kind == MirrorWireKind::Int64
+                && u.value.typeId() == QMetaType::LongLong) {
+                const qlonglong version = u.value.toLongLong();
+                caps.coreSpeakerVersion = version > 0 && version <= 65535
+                    ? static_cast<int>(version) : 0;
+            }
+        } else if (u.name == "radioSpeakerVersion") {
+            // Radio speaker: one entry, an Int64 of 1 or more.
+            if (++radioSpeakerEntries == 1 && u.ordinal == 0
+                && u.kind == MirrorWireKind::Int64
+                && u.value.typeId() == QMetaType::LongLong) {
+                const qlonglong version = u.value.toLongLong();
+                caps.radioSpeakerVersion = version > 0 && version <= 65535
                     ? static_cast<int>(version) : 0;
             }
         } else if (u.name == "radioMicVersion") {
@@ -794,6 +904,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "stationTciVersion"
                    || u.name == "accessoryDataVersion"
                    || u.name == "accessoryTxVersion"
+                   || u.name == "remoteRotorControlVersion"
                    || u.name == "remoteTgxlControlVersion"
                    || u.name == "stationIdentityVersion"
                    || u.name == "deviceAdminVersion"
@@ -825,8 +936,10 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "txWatchPathVersion"
                    || u.name == "txStateVersion"
                    || u.name == "txReadingsVersion"
+                   || u.name == "waveformVersion"
                    || u.name == "remoteIqVersion"
                    || u.name == "miniDisplayVersion"
+                   || u.name == "spectrumPictureVersion"
                    || u.name == "radioAntennaRowsVersion"
                    || u.name == "vaxVersion"
                    || u.name == "txEqCurveVersion"
@@ -860,6 +973,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.accessoryDataVersion = version;
                 } else if (u.name == "accessoryTxVersion") {
                     caps.accessoryTxVersion = version;
+                } else if (u.name == "remoteRotorControlVersion") {
+                    caps.remoteRotorControlVersion = version;
                 } else if (u.name == "radioAntennaRowsVersion") {
                     caps.radioAntennaRowsVersion = version == 1 ? 1 : 0;
                 } else if (u.name == "vaxVersion") {
@@ -945,10 +1060,14 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.controlChannelVersion = version;
                 } else if (u.name == "txMonitorAudioVersion") {
                     caps.txMonitorAudioVersion = version;
+                } else if (u.name == "waveformVersion") {
+                    caps.waveformVersion = version;
                 } else if (u.name == "remoteIqVersion") {
                     caps.remoteIqVersion = version;
                 } else if (u.name == "miniDisplayVersion") {
                     caps.miniDisplayVersion = version;
+                } else if (u.name == "spectrumPictureVersion") {
+                    caps.spectrumPictureVersion = version;
                 } else if (u.name == "stationFreedvVersion") {
                     caps.stationFreedvVersion = version;
                 } else if (u.name == "mediaReplaceVersion") {

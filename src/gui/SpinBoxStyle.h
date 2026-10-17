@@ -20,7 +20,8 @@ namespace NereusSDR {
 inline void applySpinBoxStyle(QAbstractSpinBox* spin)
 {
     spin->setFixedHeight(Style::kButtonH);
-    spin->setStyleSheet(QStringLiteral(
+    // Workspace preview: the Longpath look; unchanged when the switch is off.
+    spin->setStyleSheet(WorkspacePreview::lookQss(QStringLiteral(
         "QAbstractSpinBox {"
         "  background: %1; color: %2;"
         "  border: 1px solid %3; border-radius: 3px;"
@@ -51,7 +52,7 @@ inline void applySpinBoxStyle(QAbstractSpinBox* spin)
     ).arg(QString::fromLatin1(Style::kButtonBg),
           QString::fromLatin1(Style::kTextPrimary),
           QString::fromLatin1(Style::kBorder),
-          QString::fromLatin1(Style::kButtonHover)));
+          QString::fromLatin1(Style::kButtonHover)), spin));
 }
 
 } // namespace NereusSDR

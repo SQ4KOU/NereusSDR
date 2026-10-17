@@ -3786,24 +3786,43 @@ final class ConnectionFlow: ObservableObject {
 
     /// Keeps where the connected Core says it can be dialled (`devices`'
     /// `coreAddresses`, ``CoreAddressList``), replacing the last list, when
-    /// the Core offers it (agreed minor 11 and `coreAddressesVersion` 1). An
-    /// empty list, and a Core that sends none, leave the kept ones as they are.
+    /// the Core offers it (agreed minor 11 and `coreAddressesVersion` 1). The
+    /// Core's own empty list clears the ones its last list named; a Core that
+    /// sends none, or a list with no address the phone can dial, leaves the
+    /// kept ones as they are. A named address the new list drops leaves the
+    /// reached addresses too, but never the one this session is on. Nothing
+    /// is written when the list changes nothing kept.
     private func keepCoreAddresses() {
         guard phase == .connected, let station = current,
               CoreAddressList.isOffered(agreedMinor: app.mirror.agreedMinor ?? 0,
                                         capabilityVersion: app.mirror.capabilityVersion(CoreAddressList.capabilityName)),
-              let text = app.main.coreAddresses, let list = CoreAddressList.parse(text), !list.isEmpty,
-              list != station.directAddresses else {
+              let text = app.main.coreAddresses, let list = CoreAddressList.parse(text) else {
+            return
+        }
+        let inUse = sessionEndpoint
+        var changed = station
+        changed.keepCoreAddresses(list, inUse: inUse)
+        guard changed != station else {
             return
         }
         do {
-            if let updated = try dependencies.stations.recordCoreAddresses(identityKey: station.identityKey, list) {
+            if let updated = try dependencies.stations.recordCoreAddresses(identityKey: station.identityKey, list,
+                                                                           inUse: inUse) {
                 current = updated
             }
         } catch {
             Self.logger.warning("Where the Core can be dialled from anywhere could not be kept in the Keychain")
         }
         reloadCores()
+    }
+
+    /// The Core's address this session is on, when it reached the Core at
+    /// one rather than through the remote access service.
+    private var sessionEndpoint: StationEndpoint? {
+        guard dialPlan.indices.contains(dialIndex), case .address(let endpoint) = dialPlan[dialIndex] else {
+            return nil
+        }
+        return endpoint
     }
 
     /// The capability a Core declares its control data channel with.

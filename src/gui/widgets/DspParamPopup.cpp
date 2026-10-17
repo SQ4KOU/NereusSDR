@@ -12,10 +12,18 @@
 //                AetherSDR to NereusSDR; otherwise byte-for-byte.
 //                Authored by J.J. Boyd (KG4VCF) with AI-assisted
 //                review via Anthropic Claude Code.
+//   2026-10-10 - showAt() settles the popup's layouts after the show
+//                and places the popup again when that changed its
+//                size, so a popup opened at the screen's lower edge
+//                stays on screen with the workspace look on. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-12 - Keep the popup within the click's screen and make oversized
+//                content scrollable. J.J. Boyd (KG4VCF), OpenAI Codex.
 // =================================================================
 
 #include "DspParamPopup.h"
 #include "GuardedSlider.h"
+#include "DspPopupGeometry.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -28,8 +36,14 @@
 #include <QEvent>
 #include <QApplication>
 #include <QScreen>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QTimer>
 
 namespace NereusSDR {
+
+// Existing AetherSDR popup minimum width, retained unchanged.
+constexpr int kPopupMinimumWidth = 220;
 
 static const QString kPopupStyle = QStringLiteral(
     "QWidget#DspParamPopup { background: rgba(15, 15, 26, 240);"
@@ -53,9 +67,20 @@ DspParamPopup::DspParamPopup(QWidget* parent)
     setObjectName("DspParamPopup");
     setStyleSheet(kPopupStyle);
     setAttribute(Qt::WA_DeleteOnClose);
-    setMinimumWidth(220);
+    setMinimumWidth(kPopupMinimumWidth);
 
-    m_layout = new QVBoxLayout(this);
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    m_scroll = new QScrollArea(this);
+    m_scroll->setFrameShape(QFrame::NoFrame);
+    m_scroll->viewport()->setAutoFillBackground(false);
+    m_scroll->setWidgetResizable(true);
+    m_content = new QWidget(m_scroll);
+    m_content->installEventFilter(this);
+    m_layout = new QVBoxLayout(m_content);
+    m_scroll->setWidget(m_content);
+    m_content->setAutoFillBackground(false);
+    outer->addWidget(m_scroll);
     m_layout->setContentsMargins(10, 8, 10, 8);
     m_layout->setSpacing(6);
 }
@@ -176,22 +201,111 @@ void DspParamPopup::finalize(std::function<void()> onMore, std::function<void()>
     m_layout->addLayout(btnRow);
 }
 
+// NereusSDR: every layout under `w` brought up to date now, innermost
+// first, so a size change a child asked for reaches the window in this
+// call instead of over the next turns of the event loop.
+static void settleLayouts(QWidget* w)
+{
+    const QObjectList kids = w->children();
+    for (QObject* kid : kids) {
+        if (kid->isWidgetType()) {
+            settleLayouts(static_cast<QWidget*>(kid));
+        }
+    }
+    if (QLayout* layout = w->layout()) {
+        layout->activate();
+    }
+}
+
+QRect DspParamPopup::availableGeometry() const
+{
+    QScreen* target = QApplication::screenAt(m_anchor);
+    if (!target && parentWidget()) {
+        target = parentWidget()->screen();
+    }
+    if (!target) {
+        target = QApplication::primaryScreen();
+    }
+    return target ? target->availableGeometry() : QRect();
+}
+
+QSize DspParamPopup::sizeHint() const
+{
+    QSize wanted = m_content->sizeHint().expandedTo(QSize(kPopupMinimumWidth, 0));
+    if (m_anchored) {
+        const QRect available = availableGeometry();
+        if (available.isValid()) {
+            if (wanted.height() > available.height()) {
+                wanted.rwidth() += m_scroll->verticalScrollBar()->sizeHint().width();
+            }
+            wanted = wanted.boundedTo(available.size());
+        }
+    }
+    return wanted;
+}
+
+void DspParamPopup::containPopup()
+{
+    if (!m_anchored || m_containing) {
+        return;
+    }
+    m_containing = true;
+    settleLayouts(m_content);
+    const QRect available = availableGeometry();
+    if (available.isValid()) {
+        setMinimumWidth(qMin(kPopupMinimumWidth, available.width()));
+        setMaximumSize(available.size());
+        // Position above-right of the click point, keep on screen
+        // [original inline comment from DspParamPopup.cpp:204]
+        setGeometry(DspPopupGeometry::boundedGeometry(m_anchor, sizeHint(), available));
+    }
+    m_containing = false;
+}
+
+void DspParamPopup::scheduleContainment()
+{
+    if (!m_anchored || m_containing || m_containmentPending) {
+        return;
+    }
+    m_containmentPending = true;
+    QTimer::singleShot(0, this, [this]() {
+        m_containmentPending = false;
+        containPopup();
+    });
+}
+
 void DspParamPopup::showAt(const QPoint& globalPos)
 {
-    adjustSize();
-    // Position above-right of the click point, keep on screen
-    QPoint pos = globalPos;
-    QRect screen = QApplication::primaryScreen()->availableGeometry();
-    if (pos.x() + width() > screen.right())
-        pos.setX(screen.right() - width());
-    if (pos.y() + height() > screen.bottom())
-        pos.setY(globalPos.y() - height());
-    move(pos);
+    m_anchor = globalPos;
+    m_anchored = true;
+    containPopup();
     show();
+    // NereusSDR: a control can ask for more room when it is shown. With the
+    // workspace look on, the look's pass gives each slider thinner than its
+    // handle a taller minimum on the slider's Show event
+    // (WorkspacePreview.cpp, sliderFit), which leaves the layout to grow
+    // the popup on a later turn of the event loop, after it was placed: a
+    // popup placed against the screen's lower edge then ran past it by the
+    // pixels it grew. So the layouts are settled here and, if that changed
+    // the popup's size, it is placed again from the size it ends at. A
+    // popup whose size holds (the look off) is not moved.
+    settleLayouts(this);
+    containPopup();
+}
+
+bool DspParamPopup::eventFilter(QObject* watched, QEvent* ev)
+{
+    if (watched == m_content && ev->type() == QEvent::LayoutRequest) {
+        scheduleContainment();
+    }
+    return QWidget::eventFilter(watched, ev);
 }
 
 bool DspParamPopup::event(QEvent* ev)
 {
+    if (ev->type() == QEvent::LayoutRequest || ev->type() == QEvent::Resize) {
+        scheduleContainment();
+    }
     // Qt::Popup auto-closes on click outside — no custom handling needed
     return QWidget::event(ev);
 }

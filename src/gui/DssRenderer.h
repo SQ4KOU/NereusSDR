@@ -16,6 +16,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Retain measured folded-row quiet levels for uncovered
+//                 3D overhang. J.J. Boyd (KG4VCF), OpenAI Codex assisted.
 //   2026-08-08 — Ported/adapted in C++20/Qt6 for NereusSDR by
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.
@@ -32,6 +34,7 @@
 
 #include <array>
 #include <functional>
+#include <optional>
 
 #include "gui/DssGeometry.h"
 
@@ -122,6 +125,8 @@ public:
     int cols() const { return kDssCols; }
     int rows() const { return kDssRows; }
     int rowCount() const { return m_count; }     // valid rows (0..kDssRows)
+    /// Finite quiet level captured from that folded row, before DSS smoothing.
+    std::optional<float> rowQuietDbmAtAge(int age) const;
     int visibleRowCount() const
     {
         return std::min(m_count, kDssVisibleRows);
@@ -189,6 +194,7 @@ private:
     std::array<double, kDssRows> m_rowBandwidthMhz{};
     std::array<double, kDssRows> m_rowWideCenterMhz{};
     std::array<double, kDssRows> m_rowWideBandwidthMhz{};
+    std::array<std::optional<float>, kDssRows> m_rowQuietDbm{};
 
     int     m_head  = 0;         // index of the newest row
     int     m_count = 0;         // number of valid rows (0..kDssRows)

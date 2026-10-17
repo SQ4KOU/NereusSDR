@@ -140,6 +140,8 @@ public:
 
     // Consumer side (Role::TxInput only). Returns -1 for Vax1..4.
     qint64 pull(char* data, qint64 maxBytes) override;
+    // Keeps up to maxBacklogBytes behind the plugin's writer, not 16 ms.
+    qint64 pullKeepingBacklog(char* data, qint64 maxBytes, qint64 maxBacklogBytes) override;
 
     // R-R3-44 (Role::Vax1..4 only): playback timing from the ring. The
     // plugin's reader advances readPos as the app's IO reads it, so the
@@ -171,6 +173,10 @@ public:
     Role        role() const { return m_role; }
 
 private:
+    // pull()'s body: past maxBacklogSamples behind the writer, skips to
+    // keepSamples behind it.
+    qint64 drainTx(char* data, qint64 maxBytes, uint32_t maxBacklogSamples,
+                   uint32_t keepSamples);
     bool isProducer() const {
         return m_role == Role::Vax1 || m_role == Role::Vax2
             || m_role == Role::Vax3 || m_role == Role::Vax4;

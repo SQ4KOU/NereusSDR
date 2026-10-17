@@ -23,17 +23,23 @@
 //                 to Phase 3M. Pipe paths: /tmp/aethersdr-dax-* →
 //                 /tmp/nereussdr-vax-*. Sample rate/format: 24 kHz mono int16
 //                 → 48 kHz stereo float32 (spec §8.1).
+//   2026-10-14: Per-role ownership and private generation paths.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 
 #pragma once
 
 #include "core/IAudioBus.h"
 
+#include <QByteArray>
+#include <memory>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 
 namespace NereusSDR {
+
+class LinuxPipeOwnership;
 
 // ── LinuxPipeBus ─────────────────────────────────────────────────────────────
 //
@@ -42,10 +48,10 @@ namespace NereusSDR {
 // pactl module-pipe-source / module-pipe-sink. One instance per endpoint;
 // the Role enum selects the FIFO path and direction:
 //
-//   Role::Vax1..4  — producer; push() writes to /tmp/nereussdr-vax-{1..4}.pipe.
+//   Role::Vax1..4  — producer; push() writes to its private generation FIFO.
 //                    PulseAudio exposes these as 4 virtual input devices
 //                    ("NereusSDR VAX 1..4") that apps like WSJT-X open for RX.
-//   Role::TxInput  — consumer; pull() reads from /tmp/nereussdr-vax-tx.pipe.
+//   Role::TxInput  — consumer; pull() reads from its private generation FIFO.
 //                    PulseAudio exposes this as a virtual output device
 //                    ("NereusSDR TX") that apps write TX audio into.
 //
@@ -55,7 +61,8 @@ namespace NereusSDR {
 //
 // Lifecycle: open() creates the FIFO + loads the pactl module + opens the fd.
 //            close() closes the fd, unloads the module, and unlinks the FIFO.
-//            Stale module cleanup runs once per process (std::once_flag).
+//            A per-role lease protects live owners; only a verified dead
+//            generation can be recovered. Unknown resources remain untouched.
 //
 // Thread-ownership: open(), close(), and the destructor must all run on the
 //            main (GUI) thread. Internally they invoke QProcess to drive pactl,
@@ -120,8 +127,8 @@ public:
     AudioFormat negotiatedFormat() const override { return m_negFormat; }
     QString     errorString() const override { return m_err; }
 
-    // Diagnostics — FIFO path this instance uses (e.g. "/tmp/nereussdr-vax-1.pipe").
-    // Stable for the lifetime of the object; computed from Role at construction.
+    // Diagnostics — private FIFO path of the current open generation.
+    // The pointer remains valid until the next open() or destruction.
     const char* pipePath() const { return m_pipePath; }
     Role        role() const { return m_role; }
 
@@ -132,7 +139,9 @@ private:
     }
 
     Role         m_role;
-    const char*  m_pipePath;   // pointer into a string-literal table in the .cpp
+    const char*  m_pipePath;   // legacy diagnostic before the first open
+    QByteArray   m_generationPath;
+    std::unique_ptr<LinuxPipeOwnership> m_ownership;
 
     bool         m_open{false};
     int          m_pipeFd{-1};

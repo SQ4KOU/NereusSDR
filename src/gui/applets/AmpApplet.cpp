@@ -54,12 +54,24 @@
 //   2026-09-26  iPhone app plan Task 77 fix round 4: while operate=1 is
 //                 unconfirmed the click sends standby. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-10-10  Workspace look, JJ's D30: OPERATE carries
+//                 kLitWhenOnProperty, so its on sheet draws the lit green.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-12  Forward power is one large bar and reflected power, SWR
+//                 and temperature are slim rows, each with its number on
+//                 the face (BarInstrument through AccessoryReadouts), in
+//                 place of the three HGauge bars. One limit per reading;
+//                 the yellow band is gone. Forward, reflected and SWR show
+//                 dashes while the amplifier is not transmitting.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "AmpApplet.h"
 #include "core/session/IStationLink.h"
 #include "gui/OperatorReasonText.h"
-#include "gui/HGauge.h"
+#include "gui/applets/AccessoryReadouts.h"
+#include "gui/instruments/BarInstrument.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "models/AccessoryDataModel.h"
 #include "models/AmplifierModel.h"
 #include "models/RadioModel.h"
@@ -92,55 +104,43 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
     vbox->setContentsMargins(4, 2, 4, 2);
     vbox->setSpacing(2);
 
-    // Fwd Power gauge: 0-2000W
+    // Forward power: 0-2000 W, limit 1500 W
     // From AetherSDR src/gui/AmpApplet.cpp:18-22 [@0cd4559]
-    m_fwdGauge = new HGauge(this);
-    m_fwdGauge->setRange(0.0, 2000.0);
-    m_fwdGauge->setYellowStart(1000.0);
-    m_fwdGauge->setRedStart(1500.0);
-    m_fwdGauge->setTitle(QStringLiteral("Fwd Pwr"));
-    m_fwdGauge->setTickLabels({
-        QStringLiteral("0"),
-        QStringLiteral("500"),
-        QStringLiteral("1000"),
-        QStringLiteral("1.5k"),
-        QStringLiteral("2k")
-    });
-    vbox->addWidget(m_fwdGauge);
+    // The range and the red start are AetherSDR's. NereusSDR: the bar is
+    // the workspace look's instrument in its large form, with one limit
+    // (AetherSDR's yellow start at 1000 W is not carried over) and the
+    // number on its face.
+    m_fwdBar = AccessoryReadouts::makeLargeBar(
+        AccessoryReadouts::forwardPower(), AccessoryReadouts::forwardName(), this);
+    m_fwdBar->setAccessibleName(QStringLiteral("Forward power"));
+    vbox->addWidget(m_fwdBar);
 
-    // SWR gauge: 1-3
+    // Reflected power: 0-500 W, no limit. NereusSDR: the Power Genius
+    // does not report it; it is worked out from forward power and SWR
+    // (AccessoryReadouts::reflectedWatts).
+    m_refBar = AccessoryReadouts::makeSlimBar(
+        AccessoryReadouts::reflectedPower(), AccessoryReadouts::reflectedName(), this);
+    m_refBar->setAccessibleName(QStringLiteral("Reflected power"));
+    vbox->addWidget(m_refBar);
+
+    // SWR: 1-3, limit 2.5
     // From AetherSDR src/gui/AmpApplet.cpp:24-28 [@0cd4559]
-    m_swrGauge = new HGauge(this);
-    m_swrGauge->setRange(1.0, 3.0);
-    m_swrGauge->setYellowStart(2.0);
-    m_swrGauge->setRedStart(2.5);
-    m_swrGauge->setTitle(QStringLiteral("SWR"));
-    m_swrGauge->setValue(1.0);  // start at minimum (1:1)
-    m_swrGauge->setTickLabels({
-        QStringLiteral("1"),
-        QStringLiteral("1.5"),
-        QStringLiteral("2"),
-        QStringLiteral("2.5"),
-        QStringLiteral("3")
-    });
-    vbox->addWidget(m_swrGauge);
+    // The range and the red start are AetherSDR's. NereusSDR: a slim row
+    // with one limit (the yellow start at 2.0 is not carried over); it
+    // shows dashes, not 1:1, until the amplifier transmits.
+    m_swrBar = AccessoryReadouts::makeSlimBar(
+        AccessoryReadouts::swr(), AccessoryReadouts::swrName(), this);
+    m_swrBar->setAccessibleName(QStringLiteral("SWR"));
+    vbox->addWidget(m_swrBar);
 
-    // Temp gauge: 0-100 deg C
+    // Temperature: 0-100 deg C, limit 80
     // From AetherSDR src/gui/AmpApplet.cpp:30-34 [@0cd4559]
-    m_tempGauge = new HGauge(this);
-    m_tempGauge->setRange(0.0, 100.0);
-    m_tempGauge->setYellowStart(55.0);
-    m_tempGauge->setRedStart(80.0);
-    m_tempGauge->setTitle(QStringLiteral("Temp"));
-    m_tempGauge->setUnit(QStringLiteral("°C"));
-    m_tempGauge->setTickLabels({
-        QStringLiteral("0"),
-        QStringLiteral("30"),
-        QStringLiteral("55"),
-        QStringLiteral("80"),
-        QStringLiteral("100")
-    });
-    vbox->addWidget(m_tempGauge);
+    // The range and the red start are AetherSDR's. NereusSDR: a slim row
+    // with one limit (the yellow start at 55 is not carried over).
+    m_tempBar = AccessoryReadouts::makeSlimBar(
+        AccessoryReadouts::temperature(), AccessoryReadouts::temperatureName(), this);
+    m_tempBar->setAccessibleName(QStringLiteral("Temperature"));
+    vbox->addWidget(m_tempBar);
 
     // From AetherSDR src/gui/AmpApplet.cpp:36 [@0cd4559]
     vbox->addSpacing(8);
@@ -175,6 +175,9 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
 
     // From AetherSDR src/gui/AmpApplet.cpp:62-74 [@0cd4559]
     m_operateBtn = new QPushButton(QStringLiteral("OPERATE"), root);
+    // Workspace look (JJ's D30, 2026-10-10): OPERATE on is the lit green.
+    // The property is read only by the workspace look's sheet pass.
+    m_operateBtn->setProperty(WorkspacePreview::kLitWhenOnProperty, true);
     m_operateBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     m_operateBtn->setStyleSheet(
         QStringLiteral(
@@ -522,6 +525,8 @@ void AmpApplet::syncFromAmplifier()
         m_bandFollowLabel->setText(m_amp->bandFollowText());
     }
     if (!m_amp || !m_amp->present()) {
+        // No reading yet, or the amplifier is gone: every row shows dashes.
+        clearReadouts();
         return;
     }
     setTemp(static_cast<float>(m_amp->temperatureC()));
@@ -535,6 +540,48 @@ void AmpApplet::syncFromAmplifier()
     }
     setFwdPower(static_cast<float>(m_amp->forwardPowerW()));
     setSwr(static_cast<float>(m_amp->swr()));
+    // The model's transmitting flag may change with no other value
+    // changing; the rows follow it.
+    showReadouts();
+}
+
+// Whether the amplifier is passing power: the AmplifierModel's
+// transmitting flag, or for an applet with no model the state word given
+// to setState().
+bool AmpApplet::passingPower() const
+{
+    return m_amp ? m_amp->transmitting() : m_isTransmitting;
+}
+
+// The four rows from the values last given to the setters. Forward,
+// reflected and SWR are shown only while the amplifier is passing power
+// (BarInstrument::clearValue() is its dashes, and drops the held peak so
+// it cannot linger over them); temperature is shown whenever there is one.
+void AmpApplet::showReadouts()
+{
+    const bool keyed = passingPower();
+    const auto show = [](BarInstrument* bar, bool on, double value) {
+        if (!on) {
+            if (bar->hasValue()) { bar->clearValue(); }
+            return;
+        }
+        bar->setValue(value);
+    };
+    show(m_fwdBar, keyed && m_haveFwd, m_fwdWatts);
+    show(m_swrBar, keyed && m_haveSwr, m_swr);
+    show(m_refBar, keyed && m_haveFwd && m_haveSwr,
+         AccessoryReadouts::reflectedWatts(m_fwdWatts, m_swr));
+    show(m_tempBar, m_haveTemp, m_tempC);
+}
+
+// Every row to dashes, and the values forgotten: the next reading starts
+// from nothing.
+void AmpApplet::clearReadouts()
+{
+    m_haveFwd = false;
+    m_haveSwr = false;
+    m_haveTemp = false;
+    showReadouts();
 }
 
 void AmpApplet::updateStationState()
@@ -560,9 +607,14 @@ void AmpApplet::updateStationState()
     updateConnectionLine();
 }
 
-double AmpApplet::fwdGaugeValueForTesting() const { return m_fwdGauge->value(); }
-double AmpApplet::swrGaugeValueForTesting() const { return m_swrGauge->value(); }
-double AmpApplet::tempGaugeValueForTesting() const { return m_tempGauge->value(); }
+double AmpApplet::fwdGaugeValueForTesting() const { return m_fwdBar->value(); }
+double AmpApplet::swrGaugeValueForTesting() const { return m_swrBar->value(); }
+double AmpApplet::tempGaugeValueForTesting() const { return m_tempBar->value(); }
+double AmpApplet::reflectedValueForTesting() const { return m_refBar->value(); }
+bool AmpApplet::fwdHasValueForTesting() const { return m_fwdBar->hasValue(); }
+bool AmpApplet::reflectedHasValueForTesting() const { return m_refBar->hasValue(); }
+bool AmpApplet::swrHasValueForTesting() const { return m_swrBar->hasValue(); }
+bool AmpApplet::tempHasValueForTesting() const { return m_tempBar->hasValue(); }
 QString AmpApplet::powerLabelTextForTesting() const { return m_powerLabel->text(); }
 QString AmpApplet::meffLabelTextForTesting() const { return m_meffLabel->text(); }
 QString AmpApplet::operateButtonTextForTesting() const { return m_operateBtn->text(); }
@@ -584,19 +636,25 @@ QString AmpApplet::staleIndicatorTextForTesting() const
 // From AetherSDR src/gui/AmpApplet.cpp:79-82 [@0cd4559]
 void AmpApplet::setFwdPower(float watts)
 {
-    m_fwdGauge->setValue(static_cast<double>(watts));
+    m_fwdWatts = static_cast<double>(watts);
+    m_haveFwd = true;
+    showReadouts();
 }
 
 // From AetherSDR src/gui/AmpApplet.cpp:84-87 [@0cd4559]
 void AmpApplet::setSwr(float swr)
 {
-    m_swrGauge->setValue(static_cast<double>(swr));
+    m_swr = static_cast<double>(swr);
+    m_haveSwr = true;
+    showReadouts();
 }
 
 // From AetherSDR src/gui/AmpApplet.cpp:89-92 [@0cd4559]
 void AmpApplet::setTemp(float degC)
 {
-    m_tempGauge->setValue(static_cast<double>(degC));
+    m_tempC = static_cast<double>(degC);
+    m_haveTemp = true;
+    showReadouts();
 }
 
 // From AetherSDR src/gui/AmpApplet.cpp:94-98 [@0cd4559]
@@ -652,6 +710,8 @@ void AmpApplet::setState(const QString& state)
                 "QPushButton:hover { background: #204060; }"));
     }
     m_operateBtn->show();
+    // The rows follow the keyed state: dashes when it ends.
+    showReadouts();
 }
 
 // From AetherSDR src/gui/AmpApplet.cpp:137-141 [@0cd4559]

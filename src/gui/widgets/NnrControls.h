@@ -2,12 +2,16 @@
 // NereusSDR-original WDSP 2.10 NNR controls.
 // 2026-09-23: R-R3-40 runtime step-back notice and "Try again" action, by
 // J.J. Boyd (KG4VCF), with Anthropic Claude Code assistance.
+// 2026-10-13: Explicit GUI DLL imports/exports for typed signal lookup across images.
+// J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 #pragma once
 
+#include "gui/NereusGuiExport.h"
 #include <QMetaObject>
 #include <QPointer>
 #include <QWidget>
 #include <QVector>
+#include "gui/NereusGuiExport.h"
 
 class QComboBox;
 class QDoubleSpinBox;
@@ -21,7 +25,7 @@ namespace NereusSDR {
 class RadioModel;
 class SliceModel;
 
-class NnrControls final : public QWidget {
+class NEREUS_GUI_EXPORT NnrControls final : public QWidget {
     Q_OBJECT
 
 public:

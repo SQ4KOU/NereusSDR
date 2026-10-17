@@ -211,16 +211,43 @@ public struct PairedStation: Codable, Sendable, Equatable {
 
     /// The Core's own list of where it can be dialled (``CoreAddressList``)
     /// replaces what was kept, at most ``CoreAddressList/maximumCount``. An
-    /// empty list is nothing new: the Core has none to name now, which does
-    /// not make the kept ones wrong.
-    public mutating func keepCoreAddresses(_ addresses: [StationEndpoint]) {
-        guard !addresses.isEmpty else {
-            return
+    /// empty list is the Core saying it has none to name now (link document
+    /// section 7.1): the addresses its last list named (``coreListed``) are
+    /// cleared, and the ones this phone proved and the Core never named
+    /// stay. Either way, an address the last list named that the new one
+    /// does not is also dropped from the addresses the phone reached the
+    /// Core at (``endpoints``, never the last one, ``remove(_:)``) and is no
+    /// longer the one that worked last (``lastGood``), so no connect dials
+    /// it first again. `inUse`, the address this session is on, is never
+    /// taken from under it: it stays, and stays listed as the Core's, so the
+    /// next list a session elsewhere brings drops it then. The Core re-reads
+    /// its interfaces every 5 s, so a brief gap heals for a device still
+    /// connected, while a kept dead address costs every reconnect.
+    public mutating func keepCoreAddresses(_ addresses: [StationEndpoint], inUse: StationEndpoint? = nil) {
+        let named = Set(addresses.map(\.canonical))
+        let current = inUse?.canonical
+        let dropped = coreListed.filter { !named.contains($0.canonical) }
+        let held = dropped.first { $0.canonical == current }
+        if addresses.isEmpty {
+            let listed = Set(coreListed.map(\.canonical))
+            directAddresses.removeAll { listed.contains($0.canonical) && $0.canonical != current }
+            coreListed = held.map { [$0] } ?? []
+        } else {
+            var seen = Set<StationEndpoint>()
+            var kept = Array(addresses.filter { seen.insert($0.canonical).inserted }
+                .prefix(CoreAddressList.maximumCount))
+            if let held, kept.count < CoreAddressList.maximumCount {
+                kept.append(held)
+            }
+            directAddresses = kept
+            coreListed = directAddresses.map(\.canonical)
         }
-        var seen = Set<StationEndpoint>()
-        directAddresses = Array(addresses.filter { seen.insert($0.canonical).inserted }
-            .prefix(CoreAddressList.maximumCount))
-        coreListed = directAddresses.map(\.canonical)
+        for gone in dropped where gone.canonical != current {
+            remove(gone)
+            if lastGood?.canonical == gone.canonical {
+                lastGood = nil
+            }
+        }
     }
 
     /// Addresses this phone has just seen the Core answer at, its identity

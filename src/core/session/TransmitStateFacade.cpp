@@ -55,6 +55,14 @@
 //               compression readings the meter pump already took. Logging
 //               only. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-10-10: The six peak readings (txReadingsVersion 4) compared,
+//               applied and cleared with the other meters. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: The stage peaks line leaves out a leveler gain WDSP has
+//               not yet measured, which Thetis's reading turns into +400
+//               (it logged 400.0 dB on every key of the HL2 retest).
+//               Logging only. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/TransmitStateFacade.h"
@@ -108,7 +116,12 @@ bool sameReadings(const TxMeterReadings& a, const TxMeterReadings& b)
         && sameReading(a.eqDb, b.eqDb) && sameReading(a.levelerDb, b.levelerDb)
         && sameReading(a.levelerGainDb, b.levelerGainDb) && sameReading(a.cfcDb, b.cfcDb)
         && sameReading(a.cfcGainDb, b.cfcGainDb) && sameReading(a.alcGainDb, b.alcGainDb)
-        && sameReading(a.alcGroupDb, b.alcGroupDb);
+        && sameReading(a.alcGroupDb, b.alcGroupDb)
+        && sameReading(a.micPeakDb, b.micPeakDb) && sameReading(a.alcPeakDb, b.alcPeakDb)
+        && sameReading(a.compressionPeakDb, b.compressionPeakDb)
+        && sameReading(a.eqPeakDb, b.eqPeakDb)
+        && sameReading(a.levelerPeakDb, b.levelerPeakDb)
+        && sameReading(a.cfcPeakDb, b.cfcPeakDb);
 }
 
 } // namespace
@@ -446,7 +459,17 @@ void TransmitState::onMeterReadings(const TxMeterReadings& readings)
     // Control logging lane: the key's peaks, from this reading.
     ++m_keyReadings;
     m_keyPeaks.levelerDb = std::max(m_keyPeaks.levelerDb, readings.levelerDb);
-    m_keyPeaks.levelerGainDb = std::max(m_keyPeaks.levelerGainDb, readings.levelerGainDb);
+    // Thetis reads the leveler gain without the second negation its other
+    // readings get, so the -400 WDSP holds for a gain its meter has not yet
+    // measured reads +400 (WDSP flushes its transmit meters to -400 when
+    // the channel stops: meter.c:65-72, channel.c:153-172). That is no
+    // reading, so it is left out of the peak: the line shows the real gain,
+    // or none.
+    // From Thetis console.cs:46975 [v2.10.3.15]:
+    //   updateMetersReading(Reading.LVL_G, (float)Math.Max(0, WDSP.CalculateTXMeter(1, WDSP.MeterType.LVL_G)), 0);
+    if (readings.levelerGainDb < -TxMeterReadings::kNoReadingDb) {
+        m_keyPeaks.levelerGainDb = std::max(m_keyPeaks.levelerGainDb, readings.levelerGainDb);
+    }
     m_keyPeaks.alcDb = std::max(m_keyPeaks.alcDb, readings.alcDb);
     m_keyPeaks.alcGainDb = std::max(m_keyPeaks.alcGainDb, readings.alcGainDb);
     m_keyPeaks.compressionDb = std::max(m_keyPeaks.compressionDb, readings.compressionDb);
@@ -672,6 +695,16 @@ bool TransmitState::applyStationValue(const QByteArray& propertyName, const QVar
                                                                : nullptr) {
         // A9 (txReadingsVersion 3): the Core's seven stage readings.
         *stage = value.toDouble();
+        meters = true;
+    } else if (double* peak = propertyName == "micPeakDb"           ? &readings.micPeakDb
+                            : propertyName == "alcPeakDb"         ? &readings.alcPeakDb
+                            : propertyName == "compressionPeakDb" ? &readings.compressionPeakDb
+                            : propertyName == "eqPeakDb"          ? &readings.eqPeakDb
+                            : propertyName == "levelerPeakDb"     ? &readings.levelerPeakDb
+                            : propertyName == "cfcPeakDb"         ? &readings.cfcPeakDb
+                                                                  : nullptr) {
+        // txReadingsVersion 4: the Core's six peak readings.
+        *peak = value.toDouble();
         meters = true;
     } else if (propertyName == "stopReason") {
         stop = value.toString() != m_stopReason;

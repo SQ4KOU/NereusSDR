@@ -12,6 +12,9 @@ extension SetupDescription {
         var actions: [HygieneAction]?
         var antennaRows: AntennaRows?
         var phoneDependency: PhoneDependency?
+        var phoneAllOf: [PhoneDependency]?
+        /// V28: the word each option of a choice writes, by its index.
+        var optionLiterals: [Int64: Literal]?
         var perBand: PerBand?
         var confirm: String?
         var issue: String?
@@ -56,6 +59,32 @@ extension SetupDescription {
                   let table = antennaRows(raw, source: source) else { reject(); return result }
             result.antennaRows = table
             return result
+        }
+
+        if category == "display", version >= v28Version, v28Ids.contains(id) {
+            // V28's rows: Sizing, the Size and Hz/bin Target it gates, and
+            // the two averaging times from 1 ms, each checked as the exact
+            // closed object. A description below 28 carries the older form
+            // of the four that had one, checked below, and no Sizing row.
+            guard let checked = checkV28(raw, id: id, kind: kind, binding: binding, applies: applies,
+                                         gate: gate, range: range, decimals: decimals,
+                                         required: required) else {
+                reject(); return result
+            }
+            return checked
+        }
+
+        if category == "display", version >= v26Version, let spec = v26Specs[id] {
+            // V26's rows: Waterfall Defaults' level rows with their gates,
+            // each checked as the exact closed object. A description below
+            // 26 carries their V12 form, checked next.
+            guard let checked = checkV12(raw, spec: spec, id: id, category: category, version: version,
+                                         kind: kind, binding: binding, applies: applies, gate: gate,
+                                         range: range, decimals: decimals, required: required,
+                                         introduced: v26Version) else {
+                reject(); return result
+            }
+            return checked
         }
 
         if let spec = v12Specs[id] {
@@ -156,10 +185,15 @@ extension SetupDescription {
         }
 
         if category == "appearance", id.hasPrefix("appearance.colorsTheme.") {
-            guard kind == .colour, applies == .live, gate == nil, required == nil,
+            // V27's Trace Color needs 27 and says so; the ten swatches
+            // carry no version.
+            let trace = id == v27TraceColourId
+            guard kind == .colour, applies == .live, gate == nil,
+                  trace ? (version >= v27Version && required == v27Version) : required == nil,
                   let spec = colourSpecs[id], binding == .phone(spec.0) else { reject(); return result }
             if version >= 4 {
-                guard Set(raw.keys) == ["id", "label", "tooltip", "kind", "binding", "applies", "default"],
+                let keys: Set<String> = ["id", "label", "tooltip", "kind", "binding", "applies", "default"]
+                guard Set(raw.keys) == (trace ? keys.union(["requiresDescriptionVersion"]) : keys),
                       let colour = raw["default"] as? String, colour == spec.1,
                       isRGBA(colour) else { reject(); return result }
                 result.defaultValue = .text(colour)
@@ -249,7 +283,7 @@ extension SetupDescription {
         }
         return options
     }
-    private static func fftOptions(_ value: Any?, _ labels: [String]) -> [Option]? {
+    static func fftOptions(_ value: Any?, _ labels: [String]) -> [Option]? {
         guard let raw = value as? [[String: Any]], raw.count == 7 else { return nil }
         var options: [Option] = []
         for (index, item) in raw.enumerated() {
@@ -532,6 +566,7 @@ extension SetupDescription {
             options: ["Fast (20 dB/s)", "Medium (10 dB/s)", "Slow (5 dB/s)"]),
     ]
     private static let colourSpecs: [String: (String, String)] = [
+        v27TraceColourId: ("DisplayTraceColor", "#00E5FFFF"),
         "appearance.colorsTheme.traceFillColor": ("DisplayFillColor", "#00E5FFFF"),
         "appearance.colorsTheme.gridColor": ("DisplayGridColor", "#FFFFFF28"),
         "appearance.colorsTheme.gridFineColor": ("DisplayGridFineColor", "#FFFFFF14"),

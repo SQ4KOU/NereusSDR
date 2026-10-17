@@ -61,6 +61,7 @@ mw0lge@grange-lane.co.uk
 //============================================================================================//
 
 #include "MeterItem.h"
+#include "gui/NereusGuiExport.h"
 
 #include <QColor>
 #include <QFont>
@@ -75,7 +76,7 @@ namespace NereusSDR {
 // Ported from Thetis clsButtonBox (MeterManager.cs:12307+).
 // Handles configurable grid layout, rounded rect buttons, 3-state colors,
 // indicator system, icon support, click highlight timer.
-class ButtonBoxItem : public MeterItem {
+class NEREUS_GUI_EXPORT ButtonBoxItem : public MeterItem {
     Q_OBJECT
 
 public:

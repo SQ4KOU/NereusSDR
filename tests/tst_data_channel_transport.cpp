@@ -41,6 +41,10 @@
 //               Claude Code.
 //   2026-09-28: watch peers through two actual RelayLegs and a local WSS
 //               relay player; AI-assisted via OpenAI Codex for J.J. Boyd.
+//   2026-10-15: The loopback certificate's name is built as its own
+//               X509_NAME, as OpenSSL 4's X509_get_subject_name() is
+//               const. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -97,6 +101,14 @@
 #include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
+
+// MinGW imports a static constexpr member of an exported class by address
+// when it is bound to a reference (QCOMPARE does), and the Core DLL never
+// exports one, so this test did not link on Windows. It reads these
+// copies by value instead.
+namespace {
+constexpr quint8 kTagWatch = NereusSDR::RelayLeg::kTagWatch;
+} // namespace
 using NereusSDR::Test::LinkFixtures;
 using NereusSDR::Test::DataChannelPairEvent;
 using NereusSDR::Test::startDataChannelPair;
@@ -275,6 +287,7 @@ LoopbackTlsIdentity makeLoopbackTlsIdentity()
     using Key = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
     using Cert = std::unique_ptr<X509, decltype(&X509_free)>;
     using Bio = std::unique_ptr<BIO, decltype(&BIO_free)>;
+    using Name = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>;
     Key key(EVP_RSA_gen(2048), &EVP_PKEY_free);
     Cert cert(X509_new(), &X509_free);
     if (!key || !cert || X509_set_version(cert.get(), 2) != 1
@@ -284,11 +297,14 @@ LoopbackTlsIdentity makeLoopbackTlsIdentity()
         || X509_set_pubkey(cert.get(), key.get()) != 1) {
         return {QSslCertificate(), QSslKey()};
     }
-    X509_NAME* name = X509_get_subject_name(cert.get());
-    if (X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
-                                   reinterpret_cast<const unsigned char*>("127.0.0.1"),
-                                   -1, -1, 0) != 1
-        || X509_set_issuer_name(cert.get(), name) != 1) {
+    // Built as its own name: OpenSSL 4's X509_get_subject_name() is const.
+    Name name(X509_NAME_new(), &X509_NAME_free);
+    if (!name
+        || X509_NAME_add_entry_by_txt(name.get(), "CN", MBSTRING_ASC,
+                                      reinterpret_cast<const unsigned char*>("127.0.0.1"),
+                                      -1, -1, 0) != 1
+        || X509_set_subject_name(cert.get(), name.get()) != 1
+        || X509_set_issuer_name(cert.get(), name.get()) != 1) {
         return {QSslCertificate(), QSslKey()};
     }
     X509V3_CTX context;
@@ -426,7 +442,7 @@ private:
             m_primaryFrames.append(frame);
             return;
         }
-        if (tag != RelayLeg::kTagWatch || frame.size() < 2
+        if (tag != kTagWatch || frame.size() < 2
             || frame.size() > RelayLeg::kMaxDatagramBytes + 1) {
             ++m_rejected;
             socket->close();
@@ -785,7 +801,7 @@ private slots:
         QCOMPARE(atCore.last().first().toByteArray(), heartbeat);
         QVERIFY(!relay.forwardedWatchFrames().isEmpty());
         for (const QByteArray& frame : relay.forwardedWatchFrames()) {
-            QCOMPARE(static_cast<quint8>(frame.at(0)), RelayLeg::kTagWatch);
+            QCOMPARE(static_cast<quint8>(frame.at(0)), kTagWatch);
         }
         QCOMPARE(relay.primaryFrames().size(), 0);
         QCOMPARE(relay.rejected(), 0);

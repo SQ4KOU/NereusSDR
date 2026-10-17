@@ -34,6 +34,13 @@ void StationBinaryLocatorTest::layouts()
 {
     QFETCH(int, platform);
     QFETCH(QString, relativeBinary);
+#if defined(Q_OS_WIN)
+    // Windows calls a file executable only by its extension, so the
+    // extensionless macOS and Linux binaries can never be found there.
+    if (StationPlatform(platform) != StationPlatform::Windows) {
+        QSKIP("macOS and Linux binaries have no .exe extension");
+    }
+#endif
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
     const QString appDir = temp.filePath(QStringLiteral("NereusSDR.app/Contents/MacOS"));
@@ -61,6 +68,11 @@ void StationBinaryLocatorTest::missingOrNonExecutable()
 
 void StationBinaryLocatorTest::appImageLaunchUsesStableFile()
 {
+#if defined(Q_OS_WIN)
+    // Windows calls a file executable only by its extension, and an
+    // AppImage has none.
+    QSKIP("an AppImage is never executable on Windows");
+#endif
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
     const QString mounted = QDir::tempPath() + QStringLiteral("/.mount_NereusSDR/usr/bin");

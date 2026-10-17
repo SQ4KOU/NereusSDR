@@ -3,6 +3,7 @@
 
 import Combine
 import Foundation
+import UIKit
 import NereusBand
 import NereusMedia
 import NereusMirror
@@ -27,11 +28,13 @@ import os
 /// desktop and every device follow; only its size is this phone's.
 @MainActor
 final class DisplaySheetModel: ObservableObject {
-    /// The three level buttons, in their order.
+    /// The five approved local level choices, in their order.
     enum Level: CaseIterable, Equatable {
         case clarity
         case auto
+        case floor
         case manual
+        case scale
 
         var label: String {
             switch self {
@@ -39,8 +42,12 @@ final class DisplaySheetModel: ObservableObject {
                 return "Clarity"
             case .auto:
                 return "Auto"
+            case .floor:
+                return "Floor"
             case .manual:
                 return "Manual"
+            case .scale:
+                return "Scale"
             }
         }
 
@@ -50,11 +57,24 @@ final class DisplaySheetModel: ObservableObject {
                 return .clarity
             case .auto:
                 return .agc
+            case .floor:
+                return .noiseFloorAgc
             case .manual:
                 return .manual
+            case .scale:
+                return .scale
             }
         }
     }
+
+    enum GradientEditor: String, Identifiable {
+        case receive, transmit
+        var id: String { rawValue }
+    }
+    /// Opening the native Display sheet restores the focusedPan context.
+    var focusPan: () -> Void = {}
+    @Published var gradientEditor: GradientEditor?
+    @Published var choosingBackgroundPicture = false
 
     /// One of the band's three switches the Core computes. The desktop's
     /// classic Peak hold, which this phone draws itself, is its own switch
@@ -184,9 +204,6 @@ final class DisplaySheetModel: ObservableObject {
     /// The level the waterfall uses: without the Core's extras it is Manual
     /// whatever is kept; with them, noise-floor AGC (set in Setup) lights none.
     var level: Level? {
-        guard extrasAvailable else {
-            return .manual
-        }
         switch settings.waterfallLevelMode {
         case .clarity:
             return .clarity
@@ -195,13 +212,15 @@ final class DisplaySheetModel: ObservableObject {
         case .manual:
             return .manual
         case .noiseFloorAgc:
-            return nil
+            return .floor
+        case .scale:
+            return .scale
         }
     }
 
     /// Whether a level button can be chosen on this Core.
     func isAvailable(_ level: Level) -> Bool {
-        level == .manual || extrasAvailable
+        level == .manual || level == .scale || extrasAvailable
     }
 
     func select(_ level: Level) {
@@ -218,8 +237,12 @@ final class DisplaySheetModel: ObservableObject {
             return Self.clarityNote
         case .auto?:
             return Self.autoNote
+        case .floor?:
+            return "The Core's noise floor sets Low; the saved High remains remembered."
         case .manual?:
             return Self.manualNote
+        case .scale?:
+            return "The live spectrum minimum and maximum set the waterfall levels."
         case nil:
             return nil
         }
@@ -293,38 +316,31 @@ final class DisplaySheetModel: ObservableObject {
         changeDisplay { $0.traceFillOpacity = clamped / 100 }
     }
 
-    /// Line: the trace's width in points (D75).
-    var line: Double { settings.traceWidthPoints }
+    /// Visible Line Width uses physical pixels; the existing kept value
+    /// remains points, including the initial0.5-point default.
+    var line: Double { line(scale: UIScreen.main.scale) }
 
-    /// Line runs from one screen pixel to 3 points, in steps of one pixel,
-    /// on a screen of `scale` pixels per point.
+    func line(scale: CGFloat) -> Double { Double(settings.traceWidthPixels(scale: scale)) }
+
     static func lineRange(scale: CGFloat) -> StationCatalog.Range {
-        let limits = BandDisplaySettings.traceWidthRange(scale: scale)
-        return StationCatalog.Range(min: limits.lowerBound, max: limits.upperBound, step: limits.lowerBound)
+        StationCatalog.Range(min: 0.1, max: 5, step: 0.1)
     }
 
-    /// A new width, on the nearest whole pixel within the range.
+    /// A visible pixel value becomes points exactly once for persistence.
     func setLine(_ value: Double, scale: CGFloat) {
+        guard value.isFinite else { return }
+        let pixelsPerPoint = scale.isFinite && scale > 0 ? Double(scale) : 1
         let range = Self.lineRange(scale: scale)
-        guard value.isFinite else {
-            return
-        }
-        let pixels = (min(max(value, range.min), range.max) / range.step).rounded()
-        let width = min(max(pixels * range.step, range.min), range.max)
-        changeDisplay { $0.traceWidthPoints = width }
+        let stepped = (min(max(value, range.min), range.max) / range.step).rounded() * range.step
+        let pixels = min(max(stepped, range.min), range.max)
+        changeDisplay { $0.traceWidthPoints = pixels / pixelsPerPoint }
     }
 
-    /// The width as the Line row reads it: points, to two places at most.
-    static func lineText(_ points: Double) -> String {
-        let hundredths = (points * 100).rounded()
-        var text = String(format: "%.2f", hundredths / 100)
-        while text.hasSuffix("0") {
-            text.removeLast()
-        }
-        if text.hasSuffix(".") {
-            text.removeLast()
-        }
-        return "\(text) pt"
+    /// The visible physical width, to one decimal place at most.
+    static func lineText(_ pixels: Double) -> String {
+        var text = String(format: "%.1f", pixels)
+        if text.hasSuffix(".0") { text.removeLast(2) }
+        return "\(text) px"
     }
 
     /// Spectrum height: the spectrum's share of the band, 20 to 80 percent,

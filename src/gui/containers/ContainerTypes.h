@@ -7,6 +7,12 @@
 //   2026-10-02 — J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //                 Share saved enum values without a QWidget dependency.
 //                 Header/layout modes and DockMode are NereusSDR-original.
+//   2026-10-07 - DockEdge for the workspace preview's four-edge strips
+//                 (NereusSDR-original) by J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
+//   2026-10-11 - HeaderMode::Always is named Shown; Reveal exists only with
+//                 the workspace look off. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 /*  ucMeter.cs
@@ -64,7 +70,14 @@ enum class DockMode {
     Floating        // Separate window
 };
 
-enum class HeaderMode { Always, Reveal, Hidden };
+// The saved integers. Reveal (shown on hover or focus) exists only with the
+// workspace look off. With the look on a header is Shown or Hidden: the
+// manager saves a Reveal it loads as Hidden, and anything that still holds
+// Reveal there treats it as Hidden.
+enum class HeaderMode { Shown = 0, Reveal = 1, Hidden = 2 };
 enum class ContentLayout { LegacyCanvas = 0, VerticalStack = 1, FreeCanvas = 2 };
+// Workspace preview: the strip a PanelDocked container sits in. Saved by
+// name ("Left", "Top", "Bottom"); Right is the default and is not written.
+enum class DockEdge { Left = 0, Right = 1, Top = 2, Bottom = 3 };
 
 } // namespace NereusSDR

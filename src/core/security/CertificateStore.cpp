@@ -12,6 +12,10 @@
 //   2026-09-30: LINK minor 6: the private key is made owner-only again
 //               on every load. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-10-15: The certificate name is built as its own X509_NAME and
+//               set as subject and issuer, so the file compiles against
+//               OpenSSL 4, whose X509_get_subject_name() returns const.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/CertificateStore.h"
@@ -44,13 +48,15 @@ namespace {
 // early-return path below (and there are several -- each OpenSSL call
 // can fail) would need its own manual cleanup, which is exactly the
 // leak-on-early-return shape unique_ptr exists to remove.
-using EvpPkeyPtr = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
-using X509Ptr    = std::unique_ptr<X509, decltype(&X509_free)>;
+using EvpPkeyPtr  = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
+using X509Ptr     = std::unique_ptr<X509, decltype(&X509_free)>;
 using BioPtr      = std::unique_ptr<BIO, decltype(&BIO_free)>;
+using X509NamePtr = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>;
 
-EvpPkeyPtr makeEvpPkeyPtr(EVP_PKEY* p) { return EvpPkeyPtr(p, &EVP_PKEY_free); }
-X509Ptr    makeX509Ptr(X509* p)        { return X509Ptr(p, &X509_free); }
-BioPtr     makeBioPtr(BIO* p)          { return BioPtr(p, &BIO_free); }
+EvpPkeyPtr  makeEvpPkeyPtr(EVP_PKEY* p)   { return EvpPkeyPtr(p, &EVP_PKEY_free); }
+X509Ptr     makeX509Ptr(X509* p)          { return X509Ptr(p, &X509_free); }
+BioPtr      makeBioPtr(BIO* p)            { return BioPtr(p, &BIO_free); }
+X509NamePtr makeX509NamePtr(X509_NAME* p) { return X509NamePtr(p, &X509_NAME_free); }
 
 // RSA key size in bits. NereusSDR-original choice (see CertificateStore.h
 // top-of-file note): neither remote-daemon design document specifies an
@@ -448,21 +454,34 @@ bool CertificateStore::generateAndStore()
     // minor 9). Under fingerprint pinning, extensions buy nothing today,
     // and adding them later would change the DER encoding under every
     // already-paired client's pinned fingerprint.
-    X509_NAME* name = X509_get_subject_name(cert.get());
+    //
+    // The name is built as its own X509_NAME rather than edited in place
+    // through X509_get_subject_name(): OpenSSL 4 made that accessor return
+    // const X509_NAME*. The certificate's subject starts empty after
+    // X509_new(), so one CN entry built here and copied in by
+    // X509_set_subject_name() encodes exactly as the earlier in-place edit.
+    X509NamePtr name = makeX509NamePtr(X509_NAME_new());
+    if (!name) {
+        return failOpenSsl("X.509 name allocation");
+    }
     if (X509_NAME_add_entry_by_txt(
-            name, "CN", MBSTRING_ASC,
+            name.get(), "CN", MBSTRING_ASC,
             reinterpret_cast<const unsigned char*>(kSubjectCommonName), -1, -1, 0)
         != 1) {
         return failOpenSsl("Setting certificate subject name");
     }
-    // Self-signed: issuer == subject. X509_get_subject_name() above
-    // returns a pointer to the certificate's OWN internal name field, so
-    // a prior revision's X509_set_subject_name(cert.get(), name) call
-    // here was re-setting that field to itself -- a no-op at best, and a
-    // use-after-free footgun on OpenSSL 1.0.x (only made safe by a
-    // self-assignment guard OpenSSL >= 1.1 added). Deleted rather than
-    // kept as a defensive-looking no-op (review minor 8).
-    if (X509_set_issuer_name(cert.get(), name) != 1) {
+    if (X509_set_subject_name(cert.get(), name.get()) != 1) {
+        return failOpenSsl("Setting certificate subject name");
+    }
+    // Self-signed: issuer == subject. X509_set_subject_name() and
+    // X509_set_issuer_name() each store their own copy of the name, so
+    // the same locally owned name is set as both, and the local name is
+    // freed when it goes out of scope.
+    // (A prior revision edited the certificate's OWN internal subject
+    // field and re-set it to itself, a no-op at best and a use-after-free
+    // footgun on OpenSSL 1.0.x; the separate name here has no such
+    // self-assignment, review minor 8.)
+    if (X509_set_issuer_name(cert.get(), name.get()) != 1) {
         return failOpenSsl("Setting certificate issuer name");
     }
 

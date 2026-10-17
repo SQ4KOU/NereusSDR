@@ -1,6 +1,7 @@
 // NereusSDR for iOS: the RF-Kit RF2K-S's page: OPERATE or STANDBY, its readings, its antennas and its greyed tuner
 // SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-NereusSDR-AppStore-permission
 
+import NereusModels
 import SwiftUI
 
 /// The RF-Kit RF2K-S (spec section 5.4 item 4, picture 11): reached
@@ -37,9 +38,10 @@ struct Rf2ksPage: View {
                         .accessibilityIdentifier("rfkitBandFollow")
                 }
                 AccessoryChrome.Card {
-                    LinearGauge(scale: .ampPower, value: rfKit.forwardW)
-                    LinearGauge(scale: .ampSwr, value: rfKit.swr)
-                    LinearGauge(scale: .ampTemperature, value: rfKit.temperatureC)
+                    LinearGauge(scale: .ampPower, value: model.rfKitReadings.forwardW, readout: MeterReadout.power(model.rfKitReadings.forwardW))
+                    LinearGauge(scale: .reflectedPower, value: model.rfKitReadings.reflectedW, readout: MeterReadout.power(model.rfKitReadings.reflectedW))
+                    LinearGauge(scale: .ampSwr, value: model.rfKitReadings.swr, readout: MeterReadout.swr(model.rfKitReadings.swr))
+                    LinearGauge(scale: .ampTemperature, value: model.rfKitReadings.temperatureC, readout: MeterReadout.temperature(model.rfKitReadings.temperatureC))
                 }
                 Text(Self.readings(rfKit))
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
@@ -109,10 +111,9 @@ struct Rf2ksPage: View {
         !rfKit.activeAntennaExternal && rfKit.activeAntenna == Int64(port)
     }
 
-    /// "Fwd 0 W · SWR 1.00 · 53.2 V · 0.0 A".
+    /// "53.2 V · 0.0 A"; the bars carry the power and SWR readouts.
     static func readings(_ rfKit: AccessoriesModel.RfKit) -> String {
-        [String(format: "Fwd %.0f W", rfKit.forwardW), String(format: "SWR %.2f", rfKit.swr),
-         String(format: "%.1f V", rfKit.volts), String(format: "%.1f A", rfKit.amps)]
+        [String(format: "%.1f V", rfKit.volts), String(format: "%.1f A", rfKit.amps)]
             .joined(separator: " \u{00B7} ")
     }
 

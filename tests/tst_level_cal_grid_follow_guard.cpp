@@ -8,6 +8,7 @@
 // restores them at the end).
 
 #include "core/AppSettings.h"
+#include "core/settings/PanDisplayKeys.h"
 #include "gui/LevelCalGridFollowGuard.h"
 #include "gui/SpectrumWidget.h"
 #include "models/RadioModel.h"
@@ -98,7 +99,8 @@ private slots:
         SpectrumWidget pan;
         pan.setAdjustGridMinToNoiseFloor(true);
         pan.saveSettingsForTest();
-        QCOMPARE(AppSettings::instance().value(key).toString(), QStringLiteral("True"));
+        QCOMPARE(NereusSDR::PanDisplayKeys::read(key, 0, QStringLiteral("False")).toString(),
+                 QStringLiteral("True"));
 
         LevelCalGridFollowGuard guard(&model);
         guard.setAccess([&pan]() { return pan.adjustGridMinToNoiseFloor(); },
@@ -112,7 +114,8 @@ private slots:
         // Any save during the run (the closing one on a quit, or the
         // debounced one a crash leaves on disk) stores the user's value.
         pan.saveSettingsForTest();
-        QCOMPARE(AppSettings::instance().value(key).toString(), QStringLiteral("True"));
+        QCOMPARE(NereusSDR::PanDisplayKeys::read(key, 0, QStringLiteral("False")).toString(),
+                 QStringLiteral("True"));
 
         // The run ends: the follow is back and the hold is gone.
         QVERIFY(model.applyStationLevelCalValue("levelCalRunning", false));
@@ -120,7 +123,8 @@ private slots:
         QVERIFY(!SpectrumWidget::gridFollowSaveHold().has_value());
         pan.setAdjustGridMinToNoiseFloor(false);
         pan.saveSettingsForTest();
-        QCOMPARE(AppSettings::instance().value(key).toString(), QStringLiteral("False"));
+        QCOMPARE(NereusSDR::PanDisplayKeys::read(key, 0, QStringLiteral("False")).toString(),
+                 QStringLiteral("False"));
     }
 };
 

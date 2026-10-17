@@ -18,6 +18,10 @@
 //   2026-09-23 - R-R3-21: EP6 sequence error counter (NereusSDR addition)
 //                for Diagnostics > Connection Quality. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-14 - Publish cached telemetry with relaxed atomics for GUI and
+//                daemon readers. Post-port safety correction by J.J. Boyd
+//                (KG4VCF), AI-assisted via OpenAI Codex; upstream volatile
+//                rate caches do not synchronize cross-thread C++ access.
 // =================================================================
 
 // --- From bandwidth_monitor.h ---
@@ -191,7 +195,7 @@ void HermesLiteBandwidthMonitor::recordEp2Bytes(int bytes)
 double HermesLiteBandwidthMonitor::computeBps(std::atomic<int64_t>& totalBytes,
                                               std::atomic<int64_t>& lastBytes,
                                               std::atomic<int64_t>& lastMs,
-                                              double&               lastBps) const
+                                              std::atomic<double>&  lastBps) const
 {
     const int64_t t          = nowMs();
     const int64_t total      = totalBytes.load(std::memory_order_relaxed);
@@ -201,12 +205,12 @@ double HermesLiteBandwidthMonitor::computeBps(std::atomic<int64_t>& totalBytes,
     if (prevMs == 0) {
         lastBytes.store(total,  std::memory_order_relaxed);
         lastMs.store(t,         std::memory_order_relaxed);
-        lastBps = 0.0;
+        lastBps.store(0.0, std::memory_order_relaxed);
         return 0.0;
     }
 
     const int64_t dt = t - prevMs;
-    if (dt <= 0) { return lastBps; }
+    if (dt <= 0) { return lastBps.load(std::memory_order_relaxed); }
 
     const int64_t db = total - prevBytes;
     // Source: bandwidth_monitor.c:106 — bps = (double)db * 1000.0 / (double)dt
@@ -214,7 +218,7 @@ double HermesLiteBandwidthMonitor::computeBps(std::atomic<int64_t>& totalBytes,
 
     lastBytes.store(total, std::memory_order_relaxed);
     lastMs.store(t,        std::memory_order_relaxed);
-    lastBps = bps;
+    lastBps.store(bps, std::memory_order_relaxed);
     return bps;
 }
 
@@ -270,13 +274,16 @@ void HermesLiteBandwidthMonitor::tick()
     }
 
     const bool nowThrottled = (m_silentTicks >= kThrottleTickThreshold);
-    if (nowThrottled != m_throttled) {
-        m_throttled = nowThrottled;
-        if (m_throttled) { ++m_throttleEventCount; }
-        emit throttledChanged(m_throttled);
+    if (nowThrottled != m_throttled.load(std::memory_order_relaxed)) {
+        m_throttled.store(nowThrottled, std::memory_order_relaxed);
+        if (nowThrottled) {
+            m_throttleEventCount.fetch_add(1, std::memory_order_relaxed);
+        }
+        emit throttledChanged(nowThrottled);
     }
 
-    emit liveStatsUpdated(ep6Bps, ep2Bps, m_throttleEventCount);
+    emit liveStatsUpdated(ep6Bps, ep2Bps,
+                          m_throttleEventCount.load(std::memory_order_relaxed));
 }
 
 // ---------------------------------------------------------------------------
@@ -310,16 +317,16 @@ void HermesLiteBandwidthMonitor::reset()
     m_inLastMs.store(0,      std::memory_order_relaxed);
     m_outLastMs.store(0,     std::memory_order_relaxed);
     // Source: mi0bot bandwidth_monitor.c:71-72 [@c26a8a4]
-    m_inLastBps  = 0.0;
-    m_outLastBps = 0.0;
+    m_inLastBps.store(0.0,  std::memory_order_relaxed);
+    m_outLastBps.store(0.0, std::memory_order_relaxed);
 
     // NereusSDR throttle state (no upstream equivalent).
     m_silentTicks       = 0;
-    m_throttleEventCount = 0;
+    m_throttleEventCount.store(0, std::memory_order_relaxed);
     // R-R3-21: NereusSDR EP6 sequence error counter.
     m_ep6SequenceErrors.store(0, std::memory_order_relaxed);
-    if (m_throttled) {
-        m_throttled = false;
+    if (m_throttled.load(std::memory_order_relaxed)) {
+        m_throttled.store(false, std::memory_order_relaxed);
         emit throttledChanged(false);
     }
 }
@@ -330,10 +337,24 @@ void HermesLiteBandwidthMonitor::reset()
 // In the upstream these recompute on every call; here we cache the last
 // tick value so callers pay no extra computation cost between ticks.
 // ---------------------------------------------------------------------------
-double HermesLiteBandwidthMonitor::ep6IngressBytesPerSec() const { return m_inLastBps; }
-double HermesLiteBandwidthMonitor::ep2EgressBytesPerSec()  const { return m_outLastBps; }
+double HermesLiteBandwidthMonitor::ep6IngressBytesPerSec() const
+{
+    return m_inLastBps.load(std::memory_order_relaxed);
+}
 
-bool   HermesLiteBandwidthMonitor::isThrottled()       const { return m_throttled; }
-int    HermesLiteBandwidthMonitor::throttleEventCount() const { return m_throttleEventCount; }
+double HermesLiteBandwidthMonitor::ep2EgressBytesPerSec() const
+{
+    return m_outLastBps.load(std::memory_order_relaxed);
+}
+
+bool HermesLiteBandwidthMonitor::isThrottled() const
+{
+    return m_throttled.load(std::memory_order_relaxed);
+}
+
+int HermesLiteBandwidthMonitor::throttleEventCount() const
+{
+    return m_throttleEventCount.load(std::memory_order_relaxed);
+}
 
 } // namespace NereusSDR

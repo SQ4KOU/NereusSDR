@@ -32,6 +32,7 @@
 #include <QStackedWidget>
 #include <functional>
 #include <optional>
+#include "gui/NereusGuiExport.h"
 
 class QLabel;
 class QLineEdit;
@@ -42,7 +43,7 @@ namespace NereusSDR {
 // Slot 0: QLabel showing formatted value. Slot 1: QLineEdit for inline edit.
 // Double-click → edit mode; Enter or focus-loss → commit; Esc → cancel.
 // Wheel up = +step, wheel down = −step, clamped to [m_min, m_max].
-class ScrollableLabel : public QStackedWidget {
+class NEREUS_GUI_EXPORT ScrollableLabel : public QStackedWidget {
     Q_OBJECT
 
 public:

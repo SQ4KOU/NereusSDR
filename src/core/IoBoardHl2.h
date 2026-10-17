@@ -32,6 +32,14 @@
 //                SetI2CPollingPause), held while the manual I2C tool waits
 //                on an answer. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-10-14 - Comments only: the codec now drains the I2C queue and
+//                pushes the pending-read FIFO on P1's EP2 sender thread,
+//                under P1RadioConnection's frame lock. J.J. Boyd (KG4VCF),
+//                with AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-15 - Load-failure findings: a read given up is kept for the
+//                log (takeGivenUpReads) and printed after the frame lock
+//                is released. J.J. Boyd (KG4VCF), with AI-assisted
+//                implementation via Anthropic Claude Code.
 // =================================================================
 //
 // --- From Console/HPSDR/IoBoardHl2.cs ---
@@ -297,6 +305,16 @@ public:
     // pending-read FIFO when that next read goes out, so its missing answer
     // cannot take the next read's answer.
     static constexpr qint64 kReadAnswerMs = 21;
+    // The reads pushPendingRead gave up are kept for the log, not printed
+    // there: the push runs under P1RadioConnection's frame lock, and the
+    // connection takes them (takeGivenUpReads, frame lock held) and prints
+    // them (printGivenUpRead) once the lock is released (2026-10-15). A
+    // read given up while kGivenUpLogLines are still kept prints them and
+    // itself at once, so none is lost.
+    static constexpr int kGivenUpLogLines = 4;
+    using GivenUpLog = std::array<PendingRead, kGivenUpLogLines>;
+    int takeGivenUpReads(GivenUpLog& out);
+    static void printGivenUpRead(const PendingRead& r);
     // Tests drive the clock the FIFO ages reads by (milliseconds, any
     // origin, never going back). Null restores the monotonic clock.
     void setClockForTest(std::function<qint64()> nowMs);
@@ -393,8 +411,8 @@ signals:
 private:
     // The I2C queue is filled from the main thread (the I2C tool, the
     // output pins) and from the connection thread (the poll, the probe),
-    // and emptied by the codec on the connection thread as it builds each
-    // C&C frame. It is a bounded lock-free queue (each slot carries a
+    // and emptied by the codec on P1's EP2 sender thread (2026-10-14) as
+    // it builds each C&C frame. It is a bounded lock-free queue (each slot carries a
     // sequence number; producers and consumers claim positions with a
     // compare-exchange), so no thread ever waits on a lock and the send
     // path never blocks. FIFO order holds across all producers.
@@ -433,12 +451,18 @@ private:
     I2cReadResponse m_lastI2cRead{};
 
     // Pending-read FIFO — parallel to the I2C queue.  Each codec dequeue of a
-    // read txn pushes a record; each EP6 response pops the oldest.  Both run
-    // on the connection thread, so this FIFO needs no guard.
+    // read txn pushes a record; each EP6 response pops the oldest.  The push
+    // runs on P1's EP2 sender thread and the pop on the connection thread
+    // (2026-10-14), both under P1RadioConnection's frame lock, which is this
+    // FIFO's guard.
     std::array<PendingRead, kMaxI2cQueue> m_pendingReads{};
     int m_pendingHead{0};
     int m_pendingTail{0};
     int m_pendingCount{0};
+    // Reads given up and not yet taken for the log; the frame lock guards
+    // them as it does the FIFO.
+    GivenUpLog m_givenUpLog{};
+    int m_givenUpCount{0};
 };
 
 } // namespace NereusSDR

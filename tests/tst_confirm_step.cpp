@@ -97,16 +97,31 @@
 //   2026-09-30: take-over fix wave (M-2): forgetTakeBacks on its own. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-10-12: aPinRequestOnTheCoresOwnReceiverNamesTheCore: the pin
+//               refusal names the Core when its own position holds the
+//               receiver. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-10-12: a Core no desktop hosts names its own position in the
+//               sentences that name a device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-15: anAntennaKeptForTheCoresOwnSliceNamesTheCore: the antenna
+//               notice names the Core's own position on a Core no desktop
+//               hosts. J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
 
+#include <memory>
+
 #include "core/P1RadioConnection.h"
 #include "core/StepAttenuatorController.h"
 #include "core/WdspEngine.h"
+#include "core/accessories/AlexController.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/session/ConfirmStep.h"
 #include "core/safety/TransmitHolder.h"
+#include "models/Band.h"
 #include "models/RfKitModel.h"
 #include "models/TunerModel.h"
 
@@ -461,6 +476,43 @@ struct Listened {
     }
 };
 
+// What the Core's own position heard for one request.
+struct OwnHeard {
+    QJsonObject answer;
+    QJsonObject question;
+    int answers = 0;
+};
+
+QJsonObject asJson(const SessionMessage& message)
+{
+    return QJsonDocument::fromJson(SessionMessages::encode(message)).object();
+}
+
+// A request from the Core's own position, made the way a hosting desktop's
+// window makes one (StationServer::invokeAsStationDevice), on a Core no
+// desktop hosts: nothing has given that position a name. Waits for the
+// answer. Nothing in the product calls this on such a Core; it is how a
+// test makes the Core's own position the device that acted.
+std::shared_ptr<OwnHeard> asTheCoresOwnPosition(Core& core, const QByteArray& verb,
+                                                const QList<MirrorUpdate>& arguments)
+{
+    auto heard = std::make_shared<OwnHeard>();
+    core.server->invokeAsStationDevice(
+        SessionMessages::commandInvoke(verb, core.nextCommandId++, arguments),
+        [heard](const SessionMessage& result) {
+            heard->answer = asJson(result);
+            ++heard->answers;
+        },
+        [heard](const SessionMessage& ask) { heard->question = asJson(ask); });
+    const bool answered = QTest::qWaitFor([heard]() { return heard->answers > 0; }, 5000);
+    Q_UNUSED(answered);
+    return heard;
+}
+
+const QString kAffectsTheCore =
+    QStringLiteral("This change would affect the Core. Update NereusSDR to confirm changes that "
+                   "affect other devices.");
+
 } // namespace
 
 class TstConfirmStep : public QObject {
@@ -512,6 +564,37 @@ private slots:
             s.appA, "requestStreamCtunPinned",
             {int64("sliceId", 0), MirrorUpdate{0, "pinned", MirrorWireKind::Bool, true}});
         QCOMPARE(pinned.value(QStringLiteral("accepted")).toBool(false), true);
+    }
+
+    // The Core's own position holds the receiver on a Core no desktop hosts
+    // (CAT or TCI there). It has no entry among the connected devices, and
+    // the reason used to come out with an empty name: "This panadapter shows
+    // 's receiver." It names the Core, as the other slice refusals do.
+    void aPinRequestOnTheCoresOwnReceiverNamesTheCore()
+    {
+        Core core;
+        Device b{QStringLiteral("iPad"), QStringLiteral("tablet")};
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        ownership->setOwner(0, SliceOwnership::stationDevice());
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        const QList<int> own = ownership->ownedBy(b.key.fingerprint());
+        QCOMPARE(own.size(), 1);
+        core.model->sliceById(own.first())->setFrequency(7150000.0);
+        QCOMPARE(streamOf(core, own.first()), streamOf(core, 0));
+        QCOMPARE(ownership->anchorOf(streamOf(core, 0)), SliceOwnership::stationDevice());
+        const QJsonObject refused = core.invoke(
+            appB, "requestStreamCtunPinned",
+            {int64("sliceId", own.first()), MirrorUpdate{0, "pinned", MirrorWireKind::Bool, true}});
+        QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+        const QString reason = refused.value(QStringLiteral("reason")).toString();
+        QCOMPARE(reason, QStringLiteral("This panadapter shows the Core's receiver. Its C-Tune "
+                                        "setting is the Core's."));
+        QVERIFY(OperatorWording::isPlain(reason));
+        QVERIFY(!core.model->sliceById(0)->streamCtunPinned());
     }
 
     void theAnchorsCtuneMoveAsksNamingBThenMovesItsSlice()
@@ -2202,6 +2285,273 @@ private slots:
         QVERIFY(!end.contains(QStringLiteral("code")));
         QVERIFY(!s.core.sessions().entry(older.key.fingerprint()));
         QCOMPARE(s.core.model->slices().size(), 2);
+    }
+
+    // ── A Core no desktop hosts: its own position in the Core's sentences ─
+    //
+    // The Core of this file is one: nothing registers a hosting desktop, so
+    // the Core's own position (CAT and TCI there, and a slice a saved layout
+    // brings back as the Core's) has no entry among the connected devices
+    // and no name. Each sentence took the name alone and came out with a
+    // gap where it goes. They take their words for a device from one place
+    // now (StationServer::sliceHolderWords), which reads "the Core" there.
+
+    // A slice of the Core's own shares the older window's receiver, and the
+    // older window moves its panadapter away from it.
+    void anOlderWindowsPanMoveThatAffectsTheCoresOwnSliceNamesTheCore()
+    {
+        Core core;
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        Device older(QStringLiteral("Shack PC"), QStringLiteral("computer"));
+        core.pair(older);
+        LoopbackTransport* appOld = core.signIn(older, {{"deviceAuth", 1}});
+        QVERIFY(admitted(appOld));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        QCOMPARE(ownership->mark(0).owner, older.key.fingerprint());
+        // No panadapter of its own, so it opens on the active slice's
+        // receiver, as a slice a saved layout brings back does.
+        const int own = core.model->addSlice(QString());
+        QVERIFY(own >= 0);
+        ownership->setOwner(own, SliceOwnership::stationDevice());
+        core.model->sliceById(own)->setFrequency(7150000.0);
+        QCOMPARE(streamOf(core, own), streamOf(core, 0));
+        QCOMPARE(ownership->anchorOf(streamOf(core, 0)), older.key.fingerprint());
+        const QJsonObject refused = core.invoke(
+            appOld, "requestStreamCentre", {int64("sliceId", 0), f64("centreHz", 7000000.0)});
+        QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+        const QString reason = refused.value(QStringLiteral("reason")).toString();
+        QCOMPARE(reason, kAffectsTheCore);
+        QVERIFY(OperatorWording::isPlain(reason));
+        QCOMPARE(countOf(appOld, QStringLiteral("confirm.request")), 0);
+        QCOMPARE(streamOf(core, own), streamOf(core, 0));
+    }
+
+    // The same refusal for a setting that reaches every receiver on the ADC
+    // (the older window's own slice's diversity, an Ask row).
+    void anOlderWindowsSharedChangeThatAffectsTheCoresOwnSliceNamesTheCore()
+    {
+        Core core;
+        StepAttenuatorController stepAtt;
+        stepAtt.setTickTimerEnabled(false);
+        core.model->setStepAttController(&stepAtt);
+        core.model->configureStreamPool(3, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        core.model->sliceOwnership()->setOwner(0, SliceOwnership::stationDevice());
+        Device older(QStringLiteral("Shack PC"), QStringLiteral("computer"));
+        core.pair(older);
+        LoopbackTransport* appOld = core.signIn(older, {{"deviceAuth", 1}});
+        QVERIFY(admitted(appOld));
+        const QList<int> owned = core.model->sliceOwnership()->ownedBy(older.key.fingerprint());
+        QCOMPARE(owned.size(), 1);
+        const int oldSlice = owned.first();
+        const quint32 writeId = 4712;
+        appOld->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            ObjectRegistry::keyForSlice(oldSlice), {f64("diversityGainDb", 6.0)}, writeId)));
+        QJsonObject refused;
+        QVERIFY(QTest::qWaitFor([&]() {
+            refused = propertyResult(appOld, writeId);
+            return !refused.isEmpty();
+        }, 5000));
+        const QString reason = firstResultEntry(refused).value(QStringLiteral("reason")).toString();
+        QCOMPARE(reason, kAffectsTheCore);
+        QCOMPARE(firstResultEntry(refused).value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(core.model->sliceById(oldSlice)->diversityGainDb(), 0.0);
+        QCOMPARE(countOf(appOld, QStringLiteral("confirm.request")), 0);
+    }
+
+    // Every receiver held, one by the Core's own slice and one by a phone
+    // with no name: the refusal of a new slice says who holds them. The
+    // Core's position was left out, and the phone left a gap.
+    void aRefusedAddNamesTheCoreAmongTheReceiversHolders()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        ownership->setOwner(0, SliceOwnership::stationDevice());
+        QObject namelessSession;
+        DeviceSessionRegistry::Entry nameless;
+        nameless.deviceId = QByteArrayLiteral("nameless-phone");
+        nameless.deviceKind = QStringLiteral("phone");
+        QCOMPARE(core.sessions().admit(nameless, &namelessSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+        const int phoneSlice = core.model->addSlice(QStringLiteral("pan-phone"));
+        QVERIFY(phoneSlice >= 0);
+        ownership->setOwner(phoneSlice, nameless.deviceId);
+        core.model->sliceById(phoneSlice)->setFrequency(14074000.0);
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        const QList<int> own = ownership->ownedBy(b.key.fingerprint());
+        QCOMPARE(own.size(), 1);
+        core.model->sliceById(own.first())->setFrequency(21074000.0);
+        QVERIFY(streamOf(core, 0) >= 0 && streamOf(core, phoneSlice) >= 0
+                && streamOf(core, own.first()) >= 0);
+        QVERIFY(streamOf(core, 0) != streamOf(core, phoneSlice)
+                && streamOf(core, 0) != streamOf(core, own.first())
+                && streamOf(core, phoneSlice) != streamOf(core, own.first()));
+        const QJsonObject refused =
+            core.invoke(appB, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-b2"))});
+        QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+        const QString reason = refused.value(QStringLiteral("reason")).toString();
+        QVERIFY2(reason.endsWith(
+                     QStringLiteral(" The radio's receivers are in use by the Core and a phone.")),
+                 qPrintable(reason));
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+    }
+
+    // The three below make the Core's own position the device that acted,
+    // which only a test can do on a Core no desktop hosts (see
+    // asTheCoresOwnPosition). The sentence starts with its words.
+
+    // The Core's own position takes a receiver: its slice's owner and a
+    // device listening to that slice are each told who took it.
+    void theCoresOwnTakeOfAReceiverNamesTheCoreToItsOwnerAndItsListener()
+    {
+        Listened s;
+        QVERIFY(s.core.invoke(s.appC, "slice.listen", s.refOf(0))
+                    .value(QStringLiteral("accepted")).toBool(false));
+        const int aNotices = countOf(s.appA, QStringLiteral("notice"));
+        const int cNotices = countOf(s.appC, QStringLiteral("notice"));
+        const auto asked = asTheCoresOwnPosition(
+            s.core, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-core"))});
+        QCOMPARE(asked->answer.value(QStringLiteral("accepted")).toBool(true), false);
+        QTRY_VERIFY_WITH_TIMEOUT(!asked->question.isEmpty(), 5000);
+        QCOMPARE(asked->question.value(QStringLiteral("kind")).toString(),
+                 QStringLiteral("takeReceiver"));
+        const int choice = choiceForStream(asked->question, s.aStream())
+                               .value(QStringLiteral("choice")).toInt(-1);
+        QVERIFY2(choice >= 0, QJsonDocument(asked->question).toJson().constData());
+        const auto done = asTheCoresOwnPosition(
+            s.core, "confirm.proceed",
+            {int64("id", asked->question.value(QStringLiteral("id")).toInteger()),
+             int64("choice", choice)});
+        QVERIFY2(done->answer.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(done->answer).toJson().constData());
+        const QJsonObject owner = waitForLast(s.appA, QStringLiteral("notice"), aNotices);
+        QCOMPARE(owner.value(QStringLiteral("kind")).toString(), QStringLiteral("receiverTaken"));
+        QCOMPARE(owner.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("The Core took the receiver your slice A was on."));
+        QVERIFY(OperatorWording::isPlain(owner.value(QStringLiteral("reason")).toString()));
+        const QJsonObject listener = waitForLast(s.appC, QStringLiteral("notice"), cNotices);
+        QCOMPARE(listener.value(QStringLiteral("kind")).toString(), QStringLiteral("sliceClosed"));
+        QCOMPARE(listener.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("The Core took the receiver slice A was on. You were listening "
+                                "to it."));
+        QVERIFY(OperatorWording::isPlain(listener.value(QStringLiteral("reason")).toString()));
+    }
+
+    // The receiver it takes holds an older window's last slice: the older
+    // window ends, told who took it.
+    void theCoresOwnTakeOfAnOlderWindowsLastSliceNamesTheCore()
+    {
+        Core core;
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        ownership->setOwner(0, SliceOwnership::stationDevice());
+        Device older(QStringLiteral("Shack PC"), QStringLiteral("computer"));
+        core.pair(older);
+        LoopbackTransport* appOld = core.signIn(older, {{"deviceAuth", 1}});
+        QVERIFY(admitted(appOld));
+        const QList<int> owned = ownership->ownedBy(older.key.fingerprint());
+        QCOMPARE(owned.size(), 1);
+        core.model->sliceById(owned.first())->setFrequency(14074000.0);
+        const int oldReceiver = streamOf(core, owned.first());
+        QVERIFY(oldReceiver >= 0 && oldReceiver != streamOf(core, 0));
+        const auto asked = asTheCoresOwnPosition(
+            core, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-core"))});
+        QTRY_VERIFY_WITH_TIMEOUT(!asked->question.isEmpty(), 5000);
+        const int choice = choiceForStream(asked->question, oldReceiver)
+                               .value(QStringLiteral("choice")).toInt(-1);
+        QVERIFY2(choice >= 0, QJsonDocument(asked->question).toJson().constData());
+        const auto done = asTheCoresOwnPosition(
+            core, "confirm.proceed",
+            {int64("id", asked->question.value(QStringLiteral("id")).toInteger()),
+             int64("choice", choice)});
+        QVERIFY2(done->answer.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(done->answer).toJson().constData());
+        const QJsonObject end = endOf(appOld);
+        QCOMPARE(end.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("The Core took the receiver this app was using. Update NereusSDR "
+                                "to share the Core."));
+        QCOMPARE(end.value(QStringLiteral("code")).toString(), QStringLiteral("takenOver"));
+    }
+
+    // It takes control of a slice it listens to: the device that had control
+    // is told who has it now.
+    void theCoresOwnTakeOfControlNamesTheCore()
+    {
+        Core core;
+        core.model->configureStreamPool(2, 5, 192000);
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kShares);
+        QVERIFY(admitted(appB));
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        QCOMPARE(ownership->mark(0).owner, b.key.fingerprint());
+        const QList<MirrorUpdate> ref{
+            int64("sliceId", 0),
+            int64("incarnation", static_cast<qint64>(ownership->incarnation(0)))};
+        const auto listening = asTheCoresOwnPosition(core, "slice.listen", ref);
+        QVERIFY2(listening->answer.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(listening->answer).toJson().constData());
+        const int before = countOf(appB, QStringLiteral("notice"));
+        const auto taken = asTheCoresOwnPosition(
+            core, "slice.takeControl",
+            QList<MirrorUpdate>(ref)
+                << int64("controlRevision", static_cast<qint64>(ownership->controlRevision(0))));
+        QVERIFY2(taken->answer.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(taken->answer).toJson().constData());
+        QCOMPARE(ownership->mark(0).owner, SliceOwnership::stationDevice());
+        const QJsonObject told = waitForLast(appB, QStringLiteral("notice"), before);
+        QCOMPARE(told.value(QStringLiteral("kind")).toString(), QStringLiteral("controlTaken"));
+        QCOMPARE(told.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("The Core took control of slice A. You are still listening."));
+        QVERIFY(OperatorWording::isPlain(told.value(QStringLiteral("reason")).toString()));
+    }
+
+    // A slice of the Core's own listens through the relay, and a device
+    // tunes across a band edge: the antenna stays, and the device is told
+    // who listens on it. The Core's own position was left out, and with
+    // nobody else listening no notice was sent at all.
+    void anAntennaKeptForTheCoresOwnSliceNamesTheCore()
+    {
+        Core core;
+        core.model->setCapsForTest(true);
+        core.model->configureStreamPool(2, 5, 192000);
+        AlexController& alex = core.model->alexControllerMutable();
+        alex.setRxAnt(Band::Band40m, 2);
+        core.model->enableBandTrackingForTest();
+        core.model->sliceById(0)->setFrequency(21074000.0);  // 15 m, ANT1
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        ownership->setOwner(0, SliceOwnership::stationDevice());
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        const QList<int> own = ownership->ownedBy(b.key.fingerprint());
+        QCOMPARE(own.size(), 1);
+        core.model->sliceById(own.first())->setFrequency(14074000.0);  // 20 m, ANT1
+        QVERIFY(streamOf(core, 0) >= 0 && streamOf(core, own.first()) >= 0);
+        const int before = countOf(appB, QStringLiteral("notice"));
+        const quint32 writeId = 4713;
+        appB->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            ObjectRegistry::keyForSlice(own.first()), {f64("frequency", 7074000.0)}, writeId)));
+        QJsonObject written;
+        QVERIFY(QTest::qWaitFor([&]() {
+            written = propertyResult(appB, writeId);
+            return !written.isEmpty();
+        }, 5000));
+        QCOMPARE(firstResultEntry(written).value(QStringLiteral("accepted")).toBool(false), true);
+        QVERIFY(core.model->keptReceiveAntennaBandForTest().has_value());
+        const QJsonObject told = waitForLast(appB, QStringLiteral("notice"), before);
+        QCOMPARE(told.value(QStringLiteral("kind")).toString(), QStringLiteral("antennaKept"));
+        QCOMPARE(told.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("The antenna stays on ANT1 while the Core listens on it."));
+        QVERIFY(OperatorWording::isPlain(told.value(QStringLiteral("reason")).toString()));
     }
 
     // ── iPhone app Task 75: settings that affect every device ────────────

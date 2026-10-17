@@ -1,5 +1,63 @@
 // no-port-check: NereusSDR-original mixed-content projection, no radio actions.
 // Modification history (NereusSDR):
+//   2026-10-16 - An applet whose capability is off (Power Genius, Tuner
+//                 Genius, RF-Kit, RADE) stays in its place grayed, with its
+//                 reason, instead of being hidden: disabled, never hidden.
+//                 Its entry's own visibility still shows or hides it.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - Workspace preview only: an auto-height stack scales its
+//                 bars by the width without the vertical bar, so a container
+//                 growing to fit them settles. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-11 - The container header mode is Shown or Hidden. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - Workspace preview only: the entry header's options menu
+//                 lives on the heap under the host too. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - The entry menus live on the heap under the host
+//                 (OwnedMenu.h): an entry action that removes the container
+//                 while its menu is open no longer frees a menu on the
+//                 stack. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-09 - Workspace preview only: an overlaid entry header sits below
+//                 the container's overlaid group header (Arrange in Reveal
+//                 and Hidden), which covered the first entry header's
+//                 buttons. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-08 - Workspace preview only: a factory widget's own config
+//                 edits (ContentConfigNotifier) go to the workspace document
+//                 through ContainerArrangeController::setEntryConfig, queued
+//                 so the commit never runs inside the widget's menu; a widget
+//                 that already shows the committed config is kept, not
+//                 rebuilt. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-08 - The host is never narrower than its contents: its minimum
+//                 width counts the widest visible row, the body margins and
+//                 the vertical bar, follows rows shown and hidden, and is
+//                 announced to the container (today's look and the workspace
+//                 preview). Workspace preview only: the body's 8 px right
+//                 margin goes to the vertical bar while the bar shows.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - Workspace preview only: the header's hide button hides the
+//                 entry or container (Containers > Hidden brings it back).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - Workspace preview only: the entry header's pop-out button
+//                 runs the entry menu's Pop Out and is enabled when that
+//                 item is. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-08 - Workspace preview only: the insertion line lets a drop
+//                 through as a native view (macOS). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - Workspace preview only: a free-canvas factory widget is not
+//                 reused as an explanation label (gated on the switch).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-07 - Workspace preview only: per-instance widget content rows from
+//                 ContainerContentRegistry widget factories, by J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-07 - Workspace preview only: entry headers (in a reserved 16 px
+//                 slot in Always, over the content in Arrange) replace the
+//                 20 px left gutter and its grips by J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-10-04 — Project native bar rows into responsive viewport allocations by
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-04 — Fit stacked button groups to compact shared rows by
@@ -15,6 +73,8 @@
 #include "ContainerArrangeController.h"
 #include "ContainerWorkspaceStore.h"
 #include "FreeCanvasSurface.h"
+#include "WorkspaceHeader.h"
+#include "gui/applets/AppletWidget.h"
 #include <QLoggingCategory>
 Q_LOGGING_CATEGORY(lcFreeCanvas,"nereus.container.canvas")
 #include <QDrag>
@@ -27,16 +87,23 @@ Q_LOGGING_CATEGORY(lcFreeCanvas,"nereus.container.canvas")
 #include <QTimer>
 #include <QSet>
 #include "ContainerContentRegistry.h"
+#include "core/LogCategories.h"
 #include "gui/meters/MeterWidget.h"
 #include "gui/meters/MeterItem.h"
 #include "gui/meters/presets/BarPresetItem.h"
 #include "gui/meters/presets/CompositePresetItem.h"
+#include "gui/meters/WaveformMeterItem.h"
+#include "gui/styles/WorkspacePreview.h"
+#include "gui/styles/WorkspaceStyle.h"
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QMenu>
+#include "gui/containers/OwnedMenu.h"
+#include <QStyle>
 #include <QJsonArray>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -48,6 +115,58 @@ int preferredWidgetHeight(const QWidget* widget, int width)
     const int wrapped = widget->hasHeightForWidth() ? widget->heightForWidth(width) : -1;
     const int preferred = wrapped >= 0 ? wrapped : widget->sizeHint().height();
     return qBound(widget->minimumHeight(), preferred, widget->maximumHeight());
+}
+// Workspace preview: a factory widget whose own controls set its config
+// (ContentConfigNotifier) already shows `current`; it may be kept when
+// nothing but the config differs from `previous`.
+bool showsConfigLive(const QWidget* widget, const ContentEntry& current, ContentEntry previous)
+{
+    if (!widget) { return false; }
+    const QVariant applied = widget->property(ContentConfigNotifier::kAppliedConfigProperty);
+    if (!applied.isValid() || applied.toJsonObject() != current.config) { return false; }
+    previous.config = current.config;
+    return previous == current;
+}
+// Disabled, never hidden: a live applet view whose capability is off is
+// grayed with the registry's reason; available again, it is enabled. Only
+// graying done here is undone, so a view its owner disabled stays so.
+void presentAvailability(QWidget* view, const ContainerContentRegistry& registry, const QString& typeId)
+{
+    if (!view) { return; }
+    const bool available = registry.isAvailable(typeId);
+    if (auto* applet = qobject_cast<AppletWidget*>(view)) {
+        applet->setUnavailableReason(available ? QString() : registry.unavailableReason(typeId));
+        return;
+    }
+    static const char* const kGrayed = "containerGrayedUnavailable";
+    // The view's own tooltip, kept while the reason stands in for it.
+    static const char* const kOwnToolTip = "containerOwnToolTip";
+    static const char* const kReasonToolTip = "containerReasonToolTip";
+    if (!available) {
+        const QString reason = registry.unavailableReason(typeId);
+        if (!view->property(kReasonToolTip).isValid()) {
+            view->setProperty(kOwnToolTip, view->toolTip());
+        }
+        view->setToolTip(reason);
+        view->setProperty(kReasonToolTip, reason);
+        if (!view->property(kGrayed).toBool() && !view->testAttribute(Qt::WA_ForceDisabled)) {
+            view->setEnabled(false);
+            view->setProperty(kGrayed, true);
+        }
+        return;
+    }
+    if (const QVariant reason = view->property(kReasonToolTip); reason.isValid()) {
+        // Unless the view set a new one meanwhile.
+        if (view->toolTip() == reason.toString()) {
+            view->setToolTip(view->property(kOwnToolTip).toString());
+        }
+        view->setProperty(kReasonToolTip, QVariant());
+        view->setProperty(kOwnToolTip, QVariant());
+    }
+    if (view->property(kGrayed).toBool()) {
+        view->setProperty(kGrayed, false);
+        view->setEnabled(true);
+    }
 }
 } // namespace
 ContainerContentHost::ContainerContentHost(ContainerContentRegistry& registry, QWidget* parent)
@@ -62,6 +181,8 @@ ContainerContentHost::ContainerContentHost(ContainerContentRegistry& registry, Q
     scroll->viewport()->setAcceptDrops(true);
     scroll->viewport()->installEventFilter(this);
     m_body->installEventFilter(this);
+    // Workspace preview: the body's right margin follows the vertical bar.
+    if (WorkspacePreview::enabled()) { scroll->verticalScrollBar()->installEventFilter(this); }
     m_indicator=new QWidget(m_body);m_indicator->setObjectName(QStringLiteral("containerInsertionLine"));
     m_indicator->setStyleSheet(QStringLiteral("background:#00b4d8;"));m_indicator->setAttribute(Qt::WA_TransparentForMouseEvents);m_indicator->hide();
     m_layout->setSpacing(0);
@@ -71,7 +192,48 @@ ContainerContentHost::ContainerContentHost(ContainerContentRegistry& registry, Q
         const auto result=m_arrange->placeFreeCanvas(id,rect,original);
         if(!result.ok) {qCWarning(lcFreeCanvas)<<result.error;m_canvas->project(m_document,[this]{QHash<QString,QPointer<QWidget>> views;for(const auto& row:m_rows) {views[row.entryId]=row.widget;}return views;}());}
     });
-    connect(m_canvas,&FreeCanvasSurface::entryContextMenuRequested,this,[this](const QString& id,const QPoint& position){QMenu menu(this);addEntryActions(menu,id);if(!menu.isEmpty()) {menu.exec(position);}});
+    connect(m_canvas,&FreeCanvasSurface::entryContextMenuRequested,this,[this](const QString& id,const QPoint& position){OwnedMenu owned(this);QMenu& menu=owned.menu();addEntryActions(menu,id);if(!menu.isEmpty()) {menu.exec(position);}});
+    connect(m_canvas,&FreeCanvasSurface::entryPopOutRequested,this,&ContainerContentHost::popOutEntry);
+    connect(m_canvas,&FreeCanvasSurface::entryHideRequested,this,&ContainerContentHost::hideEntry);
+    if (WorkspacePreview::enabled()) {
+        // Workspace preview, explicit roles: the insertion line, the
+        // applets banner button and Longpath's narrow scroll bar. The
+        // background is the container's panel role (ContainerWidget's
+        // content holder). The content itself goes through the scoped
+        // pass after every reconcile.
+        m_indicator->setStyleSheet(QStringLiteral("background:%1;")
+                                       .arg(Workspace::role("accent", "#00b4d8")));
+        // The insertion line is a native view on macOS while a drag runs;
+        // the drop goes to the stack under it.
+        WorkspacePreview::passInputThrough(m_indicator);
+        // Longpath's scroll bar is 10 px thick; the preview keeps the
+        // thickness the platform style gives the legacy bar, so the
+        // content area does not change width.
+        const int barPx = style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, this);
+        QString scrollBars = QString::fromLatin1(Workspace::kScrollBarStyle);
+        scrollBars.replace(QLatin1String("width: 10px; margin: 0;"),
+                           QStringLiteral("width: %1px; margin: 0;").arg(barPx));
+        scrollBars.replace(QLatin1String("height: 10px; margin: 0;"),
+                           QStringLiteral("height: %1px; margin: 0;").arg(barPx));
+        setStyleSheet(scrollBars
+            + QStringLiteral(
+                  "QPushButton#containerAppletsMenu {"
+                  " background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 %1, stop:1 %2);"
+                  " border: 1px solid %3; border-top-color: %7; border-bottom-color: %8;"
+                  " border-radius: 4px; color: %4; }"
+                  "QPushButton#containerAppletsMenu:hover { background: %5; color: %6; }"
+                  "QPushButton#containerAppletsMenu::menu-indicator { image: none; width: 0; }")
+                  .arg(Workspace::role("raised-top", "#222227"),
+                       Workspace::role("raised-bottom", "#141417"),
+                       Workspace::role("border", "#2c2c31"),
+                       Workspace::role("text-secondary", "#a6a6ac"),
+                       Workspace::role("button-hover", "#26262b"),
+                       Workspace::role("text", "#dcdce1"),
+                       Workspace::role("edge-light", "#38383e"),
+                       Workspace::role("edge-dark", "#1f1f23")));
+        connect(this, &ContainerContentHost::reconciled, this,
+                [this]() { WorkspacePreview::themeSubtree(m_body); });
+    }
 }
 ContainerContentHost::~ContainerContentHost() { releaseViews(); }
 QJsonObject ContainerContentHost::effectiveContext(const ContainerDocument& document, const ContentEntry& entry)
@@ -123,6 +285,10 @@ void ContainerContentHost::releaseViews()
     }
     m_rows.clear();m_canvas->clearViews();m_canvas->hide();
     for(const auto& grip:m_grips) {if(grip) {delete grip.data();}} m_grips.clear();
+    for (const auto& header : std::as_const(m_entryHeaders)) {
+        if (header) { delete header.data(); }
+    }
+    m_entryHeaders.clear();
     while (QLayoutItem* child = m_layout->takeAt(0)) {
         if (child->widget() && child->widget()!=m_canvas) { delete child->widget(); }
         delete child;
@@ -152,6 +318,14 @@ bool ContainerContentHost::needsReconcile(const ContainerDocument& document) con
         if(document.layout==ContentLayout::FreeCanvas) {
             comparable.extensions.remove("freeCanvasRect");previous.extensions.remove("freeCanvasRect");
             comparable.paintOrder=previous.paintOrder;comparable.visible=previous.visible;comparable.name=previous.name;
+        }
+        if (comparable!=previous && m_registry.hasWidgetFactory(entry.typeId)) {
+            // Workspace preview: the widget's own config edit, already shown.
+            const auto row = std::find_if(m_rows.cbegin(), m_rows.cend(),
+                                          [&](const EntryRow& r) { return r.entryId == entry.id; });
+            if (row != m_rows.cend() && !row->item && showsConfigLive(row->widget, comparable, previous)) {
+                previous = comparable;
+            }
         }
         if (comparable!=previous || effectiveContext(document,entry) != effectiveContext(m_document,prior)) { return true; }
         if (m_registry.isAvailable(entry.typeId) !=
@@ -197,9 +371,13 @@ void ContainerContentHost::reconcile(const ContainerDocument& document)
                 label->setText(entry.name + QStringLiteral(" — ") + (!claim?QStringLiteral("duplicate singleton placement; original data retained"):
                     (m_registry.isAvailable(entry.typeId)?QStringLiteral("waiting for its live view"):m_registry.unavailableReason(entry.typeId))));
             }
-            row.presentationVisible = view && claim ? row.effectiveVisible : entry.visible;
+            // Unavailable, a claimed view is grayed, not hidden.
+            row.presentationVisible = entry.visible;
+            if (view && claim) { presentAvailability(view, m_registry, entry.typeId); }
             if (row.widget) { row.widget->setVisible(row.presentationVisible); }
         }
+        // A row shown or hidden changes what the body needs across.
+        updateContentMinimumWidth();
         scheduleStackProjection();
         updateGrips();
         emit reconciled();
@@ -268,7 +446,10 @@ void ContainerContentHost::reconcile(const ContainerDocument& document)
                 view->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
                 if (entry.typeId == "applet:s_meter") { view->setMinimumHeight(130); }
                 row.widget = view; m_layout->addWidget(view);
-                view->setVisible(row.effectiveVisible);
+                // Unavailable, it is grayed with its reason, not hidden.
+                row.presentationVisible = entry.visible;
+                presentAvailability(view, m_registry, entry.typeId);
+                view->setVisible(entry.visible);
             } else {
                 auto* label = new QLabel(entry.name + QStringLiteral(" — ") +
                     (unique ? QStringLiteral("waiting for its live view") : QStringLiteral("duplicate singleton placement; original data retained")), m_body);
@@ -285,6 +466,20 @@ void ContainerContentHost::reconcile(const ContainerDocument& document)
             label->setWordWrap(true); row.widget = label; m_layout->addWidget(label);
             row.presentationVisible = entry.visible;
             label->setVisible(entry.visible); m_rows.append(row); continue;
+        }
+        if (m_registry.hasWidgetFactory(entry.typeId)) {
+            // Per-instance widget content (workspace preview): its own row,
+            // like an applet, but created for this entry alone.
+            ContentEntry effective = entry; effective.context = row.context;
+            if (QWidget* widget = m_registry.createWidget(effective, m_body)) {
+                finishRun();
+                widget->setProperty("containerSourceContext", row.context);
+                widget->setProperty(WorkspacePreview::kSkipProperty, true);
+                connectConfigNotifier(widget, entry.id);
+                row.widget = widget; m_layout->addWidget(widget);
+                widget->setVisible(row.effectiveVisible);
+                m_rows.append(row); continue;
+            }
         }
         if (run && document.layout == ContentLayout::VerticalStack && row.context != runContext) { finishRun(); }
         if (!run) {
@@ -317,6 +512,9 @@ void ContainerContentHost::reconcile(const ContainerDocument& document)
             height=stackSize.height();
             run->setMinimumWidth(qMax(run->minimumWidth(),containerStackButtonMinimum(item).width()));
         }
+        if (auto* face = qobject_cast<WaveformMeterItem*>(item)) {
+            height=face->preferredFaceHeight();run->setMinimumWidth(qMax(run->minimumWidth(),face->minimumFaceSize().width()));
+        }
         if (auto* face = qobject_cast<BarPresetItem*>(item)) {
             height = face->preferredFaceHeight();
             // Stack bars follow the usable viewport width. Other layouts retain
@@ -334,15 +532,22 @@ void ContainerContentHost::reconcile(const ContainerDocument& document)
                 child->setProperty("unsupportedSourceReason",item->property("unsupportedSourceReason"));
             }
         }
-        row.widget = run; row.item = item; row.offset = runHeight; row.height = height;
+        // Workspace preview, Always: each entry keeps a header slot above it.
+        const int headerGap = entryHeaderReserve();
+        row.widget = run; row.item = item; row.offset = runHeight + headerGap; row.height = height;
         row.baseHeight = height;
-        runHeight += height; runRows.append(m_rows.size()); m_rows.append(row);
+        runHeight += headerGap + height; runRows.append(m_rows.size()); m_rows.append(row);
         run->addItem(item);
     }
     finalRun = true; finishRun(); m_layout->addStretch();
     m_generation = m_registry.generation(); m_materialized = true;
     int minimumWidth=0; for (auto* meter : meterSurfaces()) { minimumWidth=qMax(minimumWidth,meter->minimumWidth()); }
-    setMinimumWidth(minimumWidth ? minimumWidth + (m_arrange ? 28 : 8) : 0);
+    // Workspace preview: no left gutter, so Arrange adds no width.
+    const int gutter = m_arrange && !WorkspacePreview::enabled() ? 28 : 8;
+    m_surfaceMinimumWidth = minimumWidth ? minimumWidth + gutter : 0;
+    setMinimumWidth(m_surfaceMinimumWidth);
+    // Applet and widget rows and the vertical bar count too.
+    updateContentMinimumWidth();
     scheduleStackProjection();
     updateGrips();
     emit reconciled();
@@ -353,7 +558,7 @@ void ContainerContentHost::reconcileFreeCanvas(const ContainerDocument& document
     const auto prior=m_document;const auto oldRows=m_rows;
     m_rows.clear();m_meters.clear();QSet<QWidget*> retained;
     QHash<QString,QPointer<QWidget>> views;
-    m_document=document;setMinimumWidth(0);
+    m_document=document;m_surfaceMinimumWidth=0;setMinimumWidth(0);
     if(m_layout->indexOf(m_canvas)<0) {m_layout->addWidget(m_canvas);}
     m_canvas->show();
     for(const auto& entry:document.contents) {
@@ -370,9 +575,32 @@ void ContainerContentHost::reconcileFreeCanvas(const ContainerDocument& document
                 singleton->setProperty("freeCanvasMinimum",QSizeF(minimum));singleton->setMinimumSize(0,0);singleton->setMaximumSize(QWIDGETSIZE_MAX,QWIDGETSIZE_MAX);
                 row.widget=singleton;
             } else {
-                if(old && old->widget && old->widget->property("singletonTypeId").toString().isEmpty()) {row.widget=old->widget;}
+                // Workspace preview: a factory widget (no item, no singleton) is
+                // never reused as the explanation label. With the switch off the
+                // old widget here is always that label.
+                if(old && old->widget && old->widget->property("singletonTypeId").toString().isEmpty() && (!WorkspacePreview::enabled() || qobject_cast<QLabel*>(old->widget.data()))) {row.widget=old->widget;}
                 else {row.widget=new QLabel(m_canvas);}
                 if(auto* label=qobject_cast<QLabel*>(row.widget.data())) {label->setWordWrap(true);label->setText(entry.name+QStringLiteral(" — ")+(claim?tr("waiting for its live view"):tr("duplicate singleton placement; original data retained")));}
+            }
+        } else if(row.effectiveVisible && m_registry.hasWidgetFactory(entry.typeId)) {
+            // Per-instance widget content (workspace preview).
+            if(old && old->widget && !old->item && old->widget->property("containerFactoryType").toString()==entry.typeId) {
+                ContentEntry current=entry,previous;current.extensions.remove("freeCanvasRect");current.paintOrder=0;
+                for(const auto& candidate:prior.contents) {if(candidate.id==entry.id) {previous=candidate;previous.extensions.remove("freeCanvasRect");previous.paintOrder=0;break;}}
+                previous.visible=current.visible;previous.name=current.name;
+                if((previous==current || showsConfigLive(old->widget,current,previous)) && effectiveContext(prior,previous)==row.context) {row.widget=old->widget;}
+            }
+            if(!row.widget) {
+                ContentEntry effective=entry;effective.context=row.context;
+                if(QWidget* widget=m_registry.createWidget(effective,m_canvas)) {
+                    widget->setProperty("containerSourceContext",row.context);
+                    widget->setProperty(WorkspacePreview::kSkipProperty,true);
+                    connectConfigNotifier(widget,entry.id);
+                    widget->setProperty("freeCanvasMinimum",QSizeF(widget->minimumSizeHint()));
+                    widget->setProperty("freeCanvasHint",widget->sizeHint());
+                    widget->setMinimumSize(0,0);widget->setMaximumSize(QWIDGETSIZE_MAX,QWIDGETSIZE_MAX);
+                    row.widget=widget;
+                }
             }
         } else if(row.effectiveVisible) {
             ContentEntry current=entry;current.extensions.remove("freeCanvasRect");current.paintOrder=0;
@@ -387,6 +615,9 @@ void ContainerContentHost::reconcileFreeCanvas(const ContainerDocument& document
                     item->setProperty("containerEntryId",entry.id);item->setProperty("containerSourceContext",row.context);
                     QSize minimum = isSingleContainerControl(item) ? singleContainerControlMinimum() : QSize(24,24);
                     if(auto* face=qobject_cast<BarPresetItem*>(item)) {minimum=face->minimumFaceSize();}
+                    if (auto* face = qobject_cast<WaveformMeterItem*>(item)) {
+                        minimum = face->minimumFaceSize();
+                    }
                     if(auto* face=qobject_cast<CompositePresetItem*>(item)) {
                         minimum=face->minimumFaceSize();for(auto* child:face->internalItems()) {child->setProperty("containerSourceContext",row.context);child->setProperty("containerEntryId",entry.id);}
                     }
@@ -401,11 +632,14 @@ void ContainerContentHost::reconcileFreeCanvas(const ContainerDocument& document
             if(auto* meter=qobject_cast<MeterWidget*>(row.widget.data())) {m_meters.append(meter);}
         }
         if(!row.widget) {
-            if(old && old->widget && !old->item && old->widget->property("singletonTypeId").toString().isEmpty()) {row.widget=old->widget;}
+            // Workspace preview: as above, a factory widget is not the label.
+            if(old && old->widget && !old->item && old->widget->property("singletonTypeId").toString().isEmpty() && (!WorkspacePreview::enabled() || qobject_cast<QLabel*>(old->widget.data()))) {row.widget=old->widget;}
             else {row.widget=new QLabel(m_canvas);}
             if(auto* label=qobject_cast<QLabel*>(row.widget.data())) {label->setWordWrap(true);label->setText(entry.name+QStringLiteral(" — ")+m_registry.unavailableReason(entry.typeId));}
         }
-        row.widget->setProperty("freeCanvasEffectiveVisible",!row.widget->property("singletonTypeId").toString().isEmpty()?row.effectiveVisible:entry.visible);
+        // A singleton view is grayed when unavailable, never hidden for it.
+        if(!row.widget->property("singletonTypeId").toString().isEmpty()) {presentAvailability(row.widget,m_registry,entry.typeId);}
+        row.widget->setProperty("freeCanvasEffectiveVisible",entry.visible);
         retained.insert(row.widget);views[entry.id]=row.widget;m_rows.append(row);
     }
     for(const auto& row:oldRows) {
@@ -414,7 +648,29 @@ void ContainerContentHost::reconcileFreeCanvas(const ContainerDocument& document
         else {delete row.widget.data();}
     }
     auto sceneDocument=document;sceneDocument.locked=document.locked || !m_arrange;
-    m_canvas->project(sceneDocument,views);m_generation=m_registry.generation();m_materialized=true;emit reconciled();
+    m_canvas->project(sceneDocument,views);m_generation=m_registry.generation();m_materialized=true;
+    updateContentMinimumWidth();
+    emit reconciled();
+}
+void ContainerContentHost::connectConfigNotifier(QWidget* widget, const QString& entryId)
+{
+    auto* notifier = widget->findChild<ContentConfigNotifier*>(QString(), Qt::FindDirectChildrenOnly);
+    if (!notifier) { return; }
+    // Queued: the commit reconciles every host, which must not run inside
+    // the widget's own menu. Several edits before the first delivery each
+    // commit the widget's latest config (the applied-config property), so
+    // an earlier one never rebuilds the widget away from what it shows.
+    QPointer<QWidget> guard(widget);
+    connect(notifier, &ContentConfigNotifier::configEdited, this, [this, entryId, guard](const QJsonObject& edited) {
+        if (!m_arrange) {
+            qCWarning(lcContainer) << "entry" << entryId << "config not saved: no arrange controller";
+            return;
+        }
+        const QVariant applied = guard ? guard->property(ContentConfigNotifier::kAppliedConfigProperty) : QVariant();
+        const QJsonObject config = applied.isValid() ? applied.toJsonObject() : edited;
+        const ArrangeResult result = m_arrange->setEntryConfig(entryId, config);
+        if (!result.ok) { qCWarning(lcContainer) << "entry" << entryId << "config not saved:" << result.error; }
+    }, Qt::QueuedConnection);
 }
 QVector<MeterWidget*> ContainerContentHost::meterSurfaces() const
 {
@@ -523,7 +779,8 @@ class EntryGrip final : public QWidget
     {
         QPainter p(this);
         p.setPen(Qt::NoPen);
-        p.setBrush(underMouse() ? QColor("#00b4d8") : QColor("#8090a0"));
+        p.setBrush(underMouse() ? WorkspacePreview::roleColour(QColor("#00b4d8"), "accent")
+                                : WorkspacePreview::roleColour(QColor("#8090a0"), "text-scale"));
         for (int x : {5, 11}) {
             for (int y : {5, 11, 17}) {
                 p.drawEllipse(QPoint(x, y), 1, 1);
@@ -535,13 +792,99 @@ class EntryGrip final : public QWidget
 void ContainerContentHost::setArrangeController(ContainerArrangeController *controller)
 {
     m_arrange = controller;
-    m_layout->setContentsMargins(controller ? 20 : 0, 0, 8, 0);
+    // Workspace preview: entry headers replace the 20 px grip gutter.
+    const int gutter = controller && !WorkspacePreview::enabled() ? 20 : 0;
+    m_layout->setContentsMargins(gutter, 0, 8, 0);
+    if (WorkspacePreview::enabled()) { applyPreviewRightMargin(); }
+    // The gutter is part of what the contents need across.
+    updateContentMinimumWidth();
     if (!controller) {
         for (const auto& grip : m_grips) {
             if (grip) { grip->hide(); }
         }
     }
+    // Workspace preview: the entry pop-out buttons follow the controller.
+    updateEntryHeaders();
     scheduleStackProjection();
+}
+int ContainerContentHost::verticalBarExtent() const
+{
+    // The width QAbstractScrollArea takes from the viewport for the bar
+    // (its size hint), none when the bar is off or the style overlays it.
+    QScrollBar *bar = m_scroll->verticalScrollBar();
+    if (m_scroll->verticalScrollBarPolicy() == Qt::ScrollBarAlwaysOff
+        || bar->style()->styleHint(QStyle::SH_ScrollBar_Transient, nullptr, bar)) {
+        return 0;
+    }
+    return bar->sizeHint().width();
+}
+void ContainerContentHost::applyPreviewRightMargin()
+{
+    // Workspace preview: the 8 px right margin mirrors the legacy applet
+    // panel's 8 px bar, which this scroll area does not use; while this
+    // scroll area's own bar shows, the bar takes that place instead.
+    if (!WorkspacePreview::enabled()) {
+        return;
+    }
+    const bool barShown = !m_scroll->verticalScrollBar()->isHidden() && verticalBarExtent() > 0;
+    QMargins margins = m_layout->contentsMargins();
+    const int right = barShown ? 0 : kBodyRightMarginPx;
+    if (margins.right() != right) {
+        margins.setRight(right);
+        m_layout->setContentsMargins(margins);
+    }
+}
+void ContainerContentHost::updateContentMinimumWidth()
+{
+    // JJ's choice (2026-10-08): a container is never narrower than its
+    // contents, in today's look and in the workspace preview. The body's
+    // minimum is the widest visible row and the body margins (today's
+    // 20 px grip gutter included); the vertical bar takes its extent from
+    // the viewport whenever the rows scroll, so it counts as well.
+    int minimum = 0;
+    if (m_document.layout != ContentLayout::FreeCanvas) {
+        minimum = m_surfaceMinimumWidth;
+        const QMargins margins = m_layout->contentsMargins();
+        const int body = m_body->minimumSizeHint().width();
+        if (body > margins.left() + margins.right()) {
+            const int bar = verticalBarExtent();
+            // Workspace preview: the right margin and the bar share one place.
+            const int need = WorkspacePreview::enabled()
+                ? body - margins.right() + qMax(int(kBodyRightMarginPx), bar)
+                : body + bar;
+            minimum = qMax(minimum, need);
+        }
+    }
+    if (minimumWidth() != minimum) {
+        setMinimumWidth(minimum);
+    }
+    if (m_contentMinimumWidth != minimum) {
+        m_contentMinimumWidth = minimum;
+        emit contentMinimumWidthChanged(minimum);
+    }
+}
+void ContainerContentHost::popOutEntry(const QString &entryId)
+{
+    // The entry menu's Pop Out, from the entry header's pop-out button.
+    if (!m_arrange || m_document.locked) {
+        return;
+    }
+    const ArrangeResult result = m_arrange->popOut(entryId);
+    if (!result.ok) {
+        qWarning() << result.error;
+    }
+}
+void ContainerContentHost::hideEntry(const QString &entryId)
+{
+    // The entry header's hide button: the entry's saved visibility, the
+    // state Containers > Applets also writes for an applet.
+    if (!m_arrange || m_document.locked) {
+        return;
+    }
+    const ArrangeResult result = m_arrange->setEntryVisible(entryId, false);
+    if (!result.ok) {
+        qWarning() << result.error;
+    }
 }
 void ContainerContentHost::scheduleStackProjection()
 {
@@ -567,9 +910,11 @@ void ContainerContentHost::projectStackRows()
     if (usableWidth <= 0) { return; }
     double responsiveBaseHeight = 0;
     double fixedHeight = margins.top() + margins.bottom() + (m_bannerMenu ? 22 : 0);
+    const int headerGap = entryHeaderReserve();
     QSet<QWidget*> fixedWidgets;
     for (const auto& row : std::as_const(m_rows)) {
         if (!row.widget || !row.presentationVisible) { continue; }
+        fixedHeight += headerGap;
         if (row.item) {
             if (qobject_cast<BarPresetItem*>(row.item.data())) {
                 responsiveBaseHeight += row.baseHeight;
@@ -581,13 +926,29 @@ void ContainerContentHost::projectStackRows()
             fixedHeight += preferredWidgetHeight(row.widget, usableWidth);
         }
     }
-    if (responsiveBaseHeight <= 0) { return; }
-    const double widthRatio = double(usableWidth) / kBarReferenceWidth;
-    const double availableRatio = qMax(0.0, m_scroll->viewport()->height() - fixedHeight) / responsiveBaseHeight;
-    const double desiredScale = m_document.autoHeight ? widthRatio : qMin(widthRatio, qMax(1.0, availableRatio));
-    // Bound presentation arithmetic to Qt's representable widget extent even
-    // when an imported calibration is huge; the stored value remains intact.
-    const double scale = qMin(desiredScale, double(QWIDGETSIZE_MAX) / responsiveBaseHeight);
+    // Workspace preview: header slots still need placing without bar rows.
+    if (responsiveBaseHeight <= 0 && headerGap == 0) { return; }
+    double scale = 1.0;
+    if (responsiveBaseHeight > 0) {
+        // Workspace preview, auto height: the bars scale by the width the
+        // rows have with no vertical bar. A container growing to fit its
+        // bars is too short for a moment and the bar shows; were the bars
+        // then scaled to the narrower rows they would need less height, the
+        // bar would go, the rows would widen and the bar would show again,
+        // without end, and the container would stay short of its content.
+        int scaleWidth = usableWidth;
+        if (WorkspacePreview::enabled() && m_document.autoHeight) {
+            // What the bar takes from the viewport; nothing when it is
+            // hidden or the style lays it over the content.
+            scaleWidth += qMax(0, m_scroll->maximumViewportSize().width() - m_scroll->viewport()->width());
+        }
+        const double widthRatio = double(scaleWidth) / kBarReferenceWidth;
+        const double availableRatio = qMax(0.0, m_scroll->viewport()->height() - fixedHeight) / responsiveBaseHeight;
+        const double desiredScale = m_document.autoHeight ? widthRatio : qMin(widthRatio, qMax(1.0, availableRatio));
+        // Bound presentation arithmetic to Qt's representable widget extent even
+        // when an imported calibration is huge; the stored value remains intact.
+        scale = qMin(desiredScale, double(QWIDGETSIZE_MAX) / responsiveBaseHeight);
+    }
     // Carry fractional rounding across all runs, so their combined allocation
     // fits the available height without one rounding pixel per row/run causing
     // a scrollbar to appear, shrink the width, then disappear again.
@@ -606,10 +967,10 @@ void ContainerContentHost::projectStackRows()
                 height = qMax(1, bottom - responsiveBottom);
                 responsiveBottom += height;
             }
-            changed = changed || row.offset != runHeight || row.height != height;
-            row.offset = runHeight;
+            changed = changed || row.offset != runHeight + headerGap || row.height != height;
+            row.offset = runHeight + headerGap;
             row.height = height;
-            runHeight += height;
+            runHeight += headerGap + height;
             runRows.append(&row);
         }
         if (runHeight <= 0) { continue; }
@@ -634,6 +995,10 @@ void ContainerContentHost::projectStackRows()
 }
 void ContainerContentHost::updateGrips()
 {
+    if (WorkspacePreview::enabled()) {
+        updateEntryHeaders();
+        return;
+    }
     if (!m_arrange || m_document.layout==ContentLayout::FreeCanvas) {
         return;
     }
@@ -680,6 +1045,11 @@ int ContainerContentHost::preferredContentHeight() const
             continue;
         }
         seen.insert(row.widget);
+        if (!row.item) {
+            // Workspace preview, Always: the header slot above a widget row
+            // (meter runs carry theirs inside their fixed height).
+            height += entryHeaderReserve();
+        }
         height += m_document.layout == ContentLayout::VerticalStack ? preferredWidgetHeight(row.widget, usableWidth)
             : qBound(row.widget->minimumHeight(), row.widget->sizeHint().height(), row.widget->maximumHeight());
     }
@@ -694,7 +1064,166 @@ QRect ContainerContentHost::gripGeometry(const QString &id) const
                          grip->size());
         }
     }
+    if (auto *header = entryHeader(id); header && header->isVisible()) {
+        return QRect(header->mapTo(const_cast<ContainerContentHost *>(this), QPoint()), header->size());
+    }
     return {};
+}
+void ContainerContentHost::setArrangeActive(bool active)
+{
+    if (m_arrangeActive == active) {
+        return;
+    }
+    m_arrangeActive = active;
+    updateEntryHeaders();
+}
+void ContainerContentHost::setTopOverlayInset(int px)
+{
+    const int inset = qMax(0, px);
+    if (m_topOverlayInset == inset) {
+        return;
+    }
+    m_topOverlayInset = inset;
+    updateEntryHeaders();
+}
+void ContainerContentHost::setContainerHeaderMode(HeaderMode mode)
+{
+    if (m_containerHeaderMode == mode) {
+        return;
+    }
+    m_containerHeaderMode = mode;
+    if (!WorkspacePreview::enabled()) {
+        return;
+    }
+    updateEntryHeaders();
+    scheduleStackProjection();
+}
+WorkspaceEntryHeader *ContainerContentHost::entryHeader(const QString &entryId) const
+{
+    return m_entryHeaders.value(entryId).data();
+}
+int ContainerContentHost::entryHeaderReserve() const
+{
+    // Workspace preview, header shown: a multi-content stack keeps a 16 px
+    // slot above each entry. Hidden shows the headers over the content.
+    const bool reserve = WorkspacePreview::enabled() && m_document.layout == ContentLayout::VerticalStack
+        && m_document.contents.size() > 1 && m_containerHeaderMode == HeaderMode::Shown;
+    return reserve ? WorkspaceEntryHeader::kHeight : 0;
+}
+QString ContainerContentHost::entryTitle(const ContentEntry &entry) const
+{
+    if (!entry.name.isEmpty()) {
+        return entry.name;
+    }
+    for (const auto &descriptor : m_registry.descriptors()) {
+        if (descriptor.typeId == entry.typeId) {
+            return descriptor.title;
+        }
+    }
+    return entry.id;
+}
+void ContainerContentHost::updateEntryHeaders()
+{
+    if (!WorkspacePreview::enabled()) {
+        return;
+    }
+    // A single entry's title is the container's header, so it never gets a
+    // second bar. Free canvas leaves carry their own headers.
+    const bool shown = m_materialized && m_document.layout != ContentLayout::FreeCanvas
+        && m_document.contents.size() > 1
+        && (m_containerHeaderMode == HeaderMode::Shown || m_arrangeActive);
+    const bool reserve = shown && entryHeaderReserve() > 0;
+    const QMargins margins = m_layout->contentsMargins();
+    QSet<QString> live;
+    for (int i = 0; i < m_rows.size(); ++i) {
+        const auto &row = m_rows[i];
+        live.insert(row.entryId);
+        const bool visible = shown && row.widget
+            && (m_document.layout == ContentLayout::VerticalStack ? row.presentationVisible : row.effectiveVisible);
+        WorkspaceEntryHeader *header = entryHeader(row.entryId);
+        if (!header && !visible) {
+            continue;
+        }
+        if (!header) {
+            header = new WorkspaceEntryHeader(row.entryId, m_body);
+            header->setProperty("entryGripId", row.entryId);
+            header->installEventFilter(this);
+            const QString id = row.entryId;
+            connect(header, &WorkspaceEntryHeader::popOutClicked, this,
+                    [this, id] { popOutEntry(id); });
+            connect(header, &WorkspaceEntryHeader::hideClicked, this,
+                    [this, id] { hideEntry(id); });
+            connect(header, &WorkspaceEntryHeader::optionsClicked, this, [this, id] {
+                auto *source = entryHeader(id);
+                if (!source) {
+                    return;
+                }
+                OwnedMenu owned(this);
+                QMenu &menu = owned.menu();
+                addEntryActions(menu, id);
+                if (!menu.isEmpty()) {
+                    QPushButton *button = source->optionsButton();
+                    menu.exec(button->mapToGlobal(QPoint(0, button->height())));
+                }
+            });
+            m_entryHeaders.insert(row.entryId, header);
+        }
+        if (row.widget && !row.widget->property("workspaceHeaderWatched").toBool()) {
+            row.widget->setProperty("workspaceHeaderWatched", true);
+            row.widget->installEventFilter(this);
+        }
+        if (i < m_document.contents.size() && m_document.contents[i].id == row.entryId) {
+            header->setTitle(entryTitle(m_document.contents[i]));
+        }
+        header->setCursor(m_document.locked ? Qt::ArrowCursor : Qt::OpenHandCursor);
+        // Pop out and hide: enabled exactly when the entry menu's Pop Out is.
+        header->setActionsEnabled(m_arrange && !m_document.locked);
+        const bool inLayout = visible && reserve && !row.item;
+        const int position = m_layout->indexOf(header);
+        if (inLayout) {
+            const int target = m_layout->indexOf(row.widget);
+            if (position < 0 || position + 1 != target) {
+                if (position >= 0) {
+                    m_layout->removeWidget(header);
+                }
+                m_layout->insertWidget(qMax(0, m_layout->indexOf(row.widget)), header);
+            }
+            header->setOverlay(false);
+            header->setVisible(true);
+            continue;
+        }
+        if (position >= 0) {
+            m_layout->removeWidget(header);
+        }
+        header->setVisible(visible);
+        if (!visible) {
+            continue;
+        }
+        const QRect boundary = entryBoundary(row.entryId);
+        int top = m_body->mapFrom(this, boundary.topLeft()).y() - (reserve ? WorkspaceEntryHeader::kHeight : 0);
+        if (!reserve && m_topOverlayInset > 0) {
+            // Below the container's overlaid group header, which would
+            // otherwise cover this header's buttons.
+            top = qMax(top, m_body->mapFrom(this, QPoint(0, m_topOverlayInset)).y());
+        }
+        const QRect target(margins.left(), top, qMax(0, m_body->width() - margins.left() - margins.right()),
+                           WorkspaceEntryHeader::kHeight);
+        if (header->geometry() != target) {
+            header->setGeometry(target);
+        }
+        header->setOverlay(!reserve);
+        header->raise();
+    }
+    for (auto it = m_entryHeaders.begin(); it != m_entryHeaders.end();) {
+        if (!it.value() || !live.contains(it.key())) {
+            if (it.value()) {
+                delete it.value().data();
+            }
+            it = m_entryHeaders.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 int ContainerContentHost::insertionIndex(const QPoint &position) const
 {
@@ -772,6 +1301,18 @@ void ContainerContentHost::addContentsMenu(QMenu &menu)
 }
 bool ContainerContentHost::eventFilter(QObject *watched, QEvent *event)
 {
+    if (watched == m_scroll->verticalScrollBar()) {
+        // Workspace preview: the bar showing or hiding moves the body's
+        // right margin.
+        if (event->type() == QEvent::ShowToParent || event->type() == QEvent::HideToParent) {
+            applyPreviewRightMargin();
+        }
+        return QWidget::eventFilter(watched, event);
+    }
+    if (watched == m_body && event->type() == QEvent::LayoutRequest) {
+        // A row's minimum, or the rows shown, changed.
+        updateContentMinimumWidth();
+    }
     if (event->type() == QEvent::Resize || event->type() == QEvent::LayoutRequest ||
         event->type() == QEvent::Show) {
         scheduleStackProjection();
@@ -791,7 +1332,8 @@ bool ContainerContentHost::eventFilter(QObject *watched, QEvent *event)
     if (!id.isEmpty()) {
         if (event->type() == QEvent::ContextMenu) {
             auto *context = static_cast<QContextMenuEvent *>(event);
-            QMenu menu(this);
+            OwnedMenu owned(this);
+            QMenu &menu = owned.menu();
             addEntryActions(menu, id);
             menu.exec(context->globalPos());
             return true;

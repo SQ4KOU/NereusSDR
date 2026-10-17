@@ -3,6 +3,7 @@
 
 #include <QWidget>
 #include <QString>
+#include "gui/NereusGuiExport.h"
 
 class QLabel;
 
@@ -14,7 +15,7 @@ namespace NereusSDR {
 // with Disconnect / Edit / Forget per design spec §STATION block).
 // When disconnected, the block paints a dashed-red border with italic
 // gray "Click to connect" placeholder text.
-class StationBlock : public QWidget {
+class NEREUS_GUI_EXPORT StationBlock : public QWidget {
     Q_OBJECT
 
 public:

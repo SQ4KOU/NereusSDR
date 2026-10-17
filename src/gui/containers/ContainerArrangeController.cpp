@@ -1,6 +1,18 @@
 // no-port-check: NereusSDR-original atomic layout transactions; no radio/model access.
 // Modification history (NereusSDR):
 //   2026-10-02 — J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-08 - Workspace preview only: the header's hide button hides the
+//                 entry or container (Containers > Hidden brings it back).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - Workspace preview only: setEntryConfig commits an entry's
+//                 own settings. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-11 - A pop-out shell takes its default place through
+//                 ContainerManager::defaultWindowRect, so two shells never
+//                 open on one spot. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-11 - A pop-out shell is saved with the monitor its place is on.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "ContainerArrangeController.h"
 #include "ContainerWorkspaceStore.h"
 #include "ContainerManager.h"
@@ -358,7 +370,14 @@ ArrangeResult ContainerArrangeController::popOut(const QString& id)
         }
     }
     shell.contents = {entry};
-    shell.geometry = QRect(140, 140, 360, 300);
+    // The shell's usual spot, or the next one down and right when another
+    // container already has it.
+    constexpr QRect kPopOutShellRect(140, 140, 360, 300);
+    shell.geometry = m_manager ? m_manager->defaultWindowRect(kPopOutShellRect) : kPopOutShellRect;
+    if (m_manager) {
+        // Saved with its monitor, so the next start puts it there again.
+        shell.screen = m_manager->screenForNewWindow(shell.geometry);
+    }
     d.containers[source].contents.removeAt(index);
     d.containers.append(shell);
     return commit(d);
@@ -421,6 +440,37 @@ ArrangeResult ContainerArrangeController::returnEntry(const QString& id)
     if (d.containers[source].popOutShell && d.containers[source].contents.isEmpty()) {
         d.containers.removeAt(source);
     }
+    return commit(d);
+}
+ArrangeResult ContainerArrangeController::setEntryVisible(const QString& id, bool visible)
+{
+    auto d = m_store.snapshot();
+    const auto [source, index] = locate(d, id);
+    if (source < 0) {
+        return failure(tr("Entry is unavailable"));
+    }
+    auto& container = d.containers[source];
+    if (!visible && container.locked) {
+        return failure(tr("Arrangement is locked"));
+    }
+    container.contents[index].visible = visible;
+    if (visible) {
+        container.visible = true;
+        container.config["enabled"] = true;
+    }
+    return commit(d);
+}
+ArrangeResult ContainerArrangeController::setEntryConfig(const QString& id, const QJsonObject& config)
+{
+    auto d = m_store.snapshot();
+    const auto [source, index] = locate(d, id);
+    if (source < 0) {
+        return failure(tr("Entry is unavailable"));
+    }
+    if (d.containers[source].contents[index].config == config) {
+        return {true, {}};
+    }
+    d.containers[source].contents[index].config = config;
     return commit(d);
 }
 ArrangeResult ContainerArrangeController::closeContainer(const QString& id)

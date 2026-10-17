@@ -57,6 +57,11 @@ mw0lge@grange-lane.co.uk
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+// Modification history (NereusSDR):
+//   2026-10-12 - Apply the approved workspace-only 11 px text minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
+#include "gui/styles/WorkspacePreview.h"
 #include "VfoDisplayItem.h"
 #include <QPainter>
 #include <QMouseEvent>
@@ -68,14 +73,14 @@ namespace {
 // NereusSDR correction: height-derived fonts must also fit the face width.
 void fitTextWidth(QFont& font, const QStringList& texts, int width)
 {
-    int low=1, high=font.pixelSize();
+    int low=WorkspacePreview::readableTextPixelSize(1), high=font.pixelSize();
     while(low<high) {
-        const int candidate=(low+high+1)/2; font.setPixelSize(candidate);
+        const int candidate=(low+high+1)/2; font.setPixelSize(WorkspacePreview::readableTextPixelSize(candidate));
         const QFontMetrics metrics(font); bool fits=true;
         for(const QString& text:texts) { fits=fits && metrics.horizontalAdvance(text)<=width; }
         if(fits) { low=candidate; } else { high=candidate-1; }
     }
-    font.setPixelSize(low);
+    font.setPixelSize(WorkspacePreview::readableTextPixelSize(low));
 }
 }
 
@@ -122,8 +127,8 @@ void VfoDisplayItem::paint(QPainter& p, int widgetW, int widgetH)
     // live.
     if (!m_unavailableText.isEmpty()) {
         const QRect textRect = rect.adjusted(6, 2, -6, -2);
-        QFont font = p.font();
-        font.setPixelSize(qMax(10, textRect.height() / 4));
+        QFont font = WorkspacePreview::readableFont(p.font(), p.device());
+        font.setPixelSize(WorkspacePreview::readableTextPixelSize(qMax(10, textRect.height() / 4)));
         font.setBold(false);
         p.setFont(font);
         p.setPen(m_modeColour);
@@ -133,8 +138,8 @@ void VfoDisplayItem::paint(QPainter& p, int widgetW, int widgetH)
 
     // Frequency text (top 60%)
     const QRect freqRect(rect.left() + 6, rect.top() + 2, rect.width() - 12, rect.height() * 6 / 10);
-    QFont freqFont = p.font();
-    freqFont.setPixelSize(qMax(12, freqRect.height() - 4));
+    QFont freqFont = WorkspacePreview::readableFont(p.font(), p.device());
+    freqFont.setPixelSize(WorkspacePreview::readableTextPixelSize(qMax(12, freqRect.height() - 4)));
     freqFont.setBold(true);
     fitTextWidth(freqFont,{formatFrequency(m_frequencyHz)},freqRect.width());
     p.setFont(freqFont);
@@ -145,7 +150,7 @@ void VfoDisplayItem::paint(QPainter& p, int widgetW, int widgetH)
     if (m_split) {
         p.setPen(m_splitColour);
         QFont splitFont = freqFont;
-        splitFont.setPixelSize(freqFont.pixelSize() / 2);
+        splitFont.setPixelSize(WorkspacePreview::readableTextPixelSize(freqFont.pixelSize() / 2));
         p.setFont(splitFont);
         p.drawText(freqRect, Qt::AlignVCenter | Qt::AlignRight, QStringLiteral("SPLIT"));
     }
@@ -153,8 +158,8 @@ void VfoDisplayItem::paint(QPainter& p, int widgetW, int widgetH)
     // Labels below frequency (bottom 40%)
     const QRect labelRect(rect.left() + 6, rect.top() + rect.height() * 6 / 10,
                           rect.width() - 12, rect.height() * 4 / 10);
-    QFont labelFont = p.font();
-    labelFont.setPixelSize(qMax(9, labelRect.height() - 4));
+    QFont labelFont = WorkspacePreview::readableFont(p.font(), p.device());
+    labelFont.setPixelSize(WorkspacePreview::readableTextPixelSize(qMax(9, labelRect.height() - 4)));
     labelFont.setBold(false);
     fitTextWidth(labelFont,{m_modeLabel,m_filterLabel,m_bandLabel},labelRect.width()/3);
     p.setFont(labelFont);

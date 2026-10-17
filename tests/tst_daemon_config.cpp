@@ -45,9 +45,13 @@
 // 2026-09-27: comments follow sample_rate_hz becoming a starting value only
 // (R-R3-49), by J.J. Boyd (KG4VCF), with AI-assisted implementation via
 // Anthropic Claude Code.
+// 2026-10-12: resolveDaemonFolderArgument(), the rule behind --security-dir
+// and --dsp-cache-dir, by J.J. Boyd (KG4VCF), with AI-assisted
+// implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
+#include <QDir>
 #include <QFile>
 #include <QTemporaryFile>
 #include <QTextStream>
@@ -1040,6 +1044,58 @@ private slots:
             resolveDaemonProfileArgument(QStringLiteral("with space"), true, &err);
         QVERIFY(!err.isEmpty());
         QVERIFY(profile.isEmpty());
+    }
+
+    // --security-dir and --dsp-cache-dir. The desktop app names these two
+    // folders when it starts its Core in the background; a Core started any
+    // other way gets neither and keeps to its own.
+    void absentFolderArgumentLeavesTheCoresOwnFolder()
+    {
+        QString err = QStringLiteral("stale");
+        const QString folder = resolveDaemonFolderArgument(
+            QStringLiteral("--security-dir"), QString(), false, &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QVERIFY(folder.isEmpty());
+    }
+
+    void folderArgumentIsKeptAsACleanPath()
+    {
+        QString err;
+        const QString root = QDir::tempPath();
+        QCOMPARE(resolveDaemonFolderArgument(QStringLiteral("--dsp-cache-dir"),
+                                             root + QStringLiteral("/a b/../plans & $/"), true,
+                                             &err),
+                 QDir::cleanPath(root) + QStringLiteral("/plans & $"));
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+#ifdef Q_OS_WIN
+        // The Windows task file holds paths the way Windows writes them.
+        QCOMPARE(resolveDaemonFolderArgument(QStringLiteral("--security-dir"),
+                                             QStringLiteral("C:\\Users\\op\\AppData\\Local\\NereusSDR"),
+                                             true, &err),
+                 QStringLiteral("C:/Users/op/AppData/Local/NereusSDR"));
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+#endif
+    }
+
+    // A mistake in an entry that starts a Core is loud, as a mistyped
+    // --profile is: the wrong folder means a Core no paired device knows.
+    void folderArgumentMustBeAnAbsolutePath_data()
+    {
+        QTest::addColumn<QString>("requested");
+        QTest::newRow("empty") << QString();
+        QTest::newRow("relative") << QStringLiteral("profiles/desk");
+        QTest::newRow("dot") << QStringLiteral(".");
+    }
+
+    void folderArgumentMustBeAnAbsolutePath()
+    {
+        QFETCH(QString, requested);
+        QString err;
+        const QString folder = resolveDaemonFolderArgument(
+            QStringLiteral("--security-dir"), requested, true, &err);
+        QVERIFY(folder.isEmpty());
+        QVERIFY2(err.contains(QStringLiteral("--security-dir")), qPrintable(err));
+        QVERIFY2(err.contains(QStringLiteral("absolute")), qPrintable(err));
     }
 };
 

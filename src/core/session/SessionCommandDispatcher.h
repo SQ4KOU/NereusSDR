@@ -233,6 +233,13 @@
 //                                    handleSliceListenLevel for
 //                                    slice.setListenLevel. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-10-07  J.J. Boyd / KG4VCF  CAT setup from a connected desktop:
+//                                    handleStationCat. AI tooling: Claude
+//                                    Code.
+//   2026-10-08  J.J. Boyd / KG4VCF  Rotor control plan Task 4b: the seven
+//                                    rotor verbs, and a session's end ends
+//                                    its rotor hold. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -252,6 +259,7 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/safety/TxRefusal.h"
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
@@ -281,7 +289,7 @@ struct CommandVerbSpec {
     quint16 minMinor = 0;
 };
 
-class SessionCommandDispatcher : public QObject {
+class NEREUS_CORE_EXPORT SessionCommandDispatcher : public QObject {
     Q_OBJECT
 
 public:
@@ -562,11 +570,25 @@ private:
     void handleStationTciServer(const NereusSDR::SessionMessage& invoke);
     // JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1).
     void handleSetStationTciSettings(const NereusSDR::SessionMessage& invoke);
+    // CAT setup from a connected desktop (stationCatVersion 1):
+    // setStationCatChannel, setStationCatGlobal, testStationCatCommand and
+    // refreshStationCatDevices.
+    void handleStationCat(const NereusSDR::SessionMessage& invoke);
     // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory
     // records and settings.
     void handleSetTxInterlockPolicy(const NereusSDR::SessionMessage& invoke);
     void handleSetPgxlPowerCap(const NereusSDR::SessionMessage& invoke);
     void handleClearAccessoryFaults(const NereusSDR::SessionMessage& invoke);
+    // Rotor control plan Task 4b (remoteRotorControlVersion 1): the Core's
+    // rotor (remote rotor control v1, "Commands").
+    void handleSetRotorTarget(const NereusSDR::SessionMessage& invoke);
+    void handleTurnRotorToCall(const NereusSDR::SessionMessage& invoke);
+    void handleStopRotor(const NereusSDR::SessionMessage& invoke);
+    void handleNudgeRotor(const NereusSDR::SessionMessage& invoke);
+    void handleConfigureRotor(const NereusSDR::SessionMessage& invoke);
+    void handleDisconnectRotor(const NereusSDR::SessionMessage& invoke);
+    void handleRefreshRotorPorts(const NereusSDR::SessionMessage& invoke);
+    void handleSetRotorPresets(const NereusSDR::SessionMessage& invoke);
     // R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
     // 1): the amp's and tuner's own settings, sent by the Core to the device
     // as the local Advanced page's own commands.

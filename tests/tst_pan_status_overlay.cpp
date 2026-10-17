@@ -185,6 +185,8 @@ private slots:
 
         QSignalSpy chain(overlay, &SpectrumStatusOverlay::chainTagClicked);
         QSignalSpy wide(overlay, &SpectrumStatusOverlay::wideBadgeClicked);
+        QVERIFY(chain.isValid());
+        QVERIFY(wide.isValid());
         const QRect chainRect = overlay->badgeRect(SpectrumStatusOverlay::Badge::ChainTag);
         const QRect wideRect = overlay->badgeRect(SpectrumStatusOverlay::Badge::Wide);
         QTest::mouseClick(overlay, Qt::LeftButton, Qt::NoModifier,

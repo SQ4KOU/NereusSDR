@@ -52,6 +52,11 @@
 //                                    dropped from a saved layout, and an
 //                                    old id does nothing. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-10-12  J.J. Boyd / KG4VCF  The CTUN button on a receiver whose
+//                                    C-Tune setting is another's to change:
+//                                    unavailable with the reason, and a
+//                                    click changes nothing. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -194,11 +199,14 @@ private slots:
             ContainerButtonDispatcher dispatcher(&f.model,std::move(hooks));const auto entry=registry.makeEntry("control."+action.first);
             for(const auto mode:{ContentRenderMode::Preview,ContentRenderMode::Live}) {
                 std::unique_ptr<MeterItem> item(registry.createMeterItem(entry,nullptr,mode));auto* other=qobject_cast<OtherButtonItem*>(item.get());QVERIFY(other);other->setRect(0,0,1,1);
-                connect(other,&OtherButtonItem::otherButtonClicked,this,[&](int id){QVERIFY(dispatcher.click(Id(id),kSliceA).isEmpty());});dispatcher.apply(other,kSliceA);
+                const QMetaObject::Connection connection = connect(other, &OtherButtonItem::otherButtonClicked,
+                    this, [&](int id) { QVERIFY(dispatcher.click(Id(id), kSliceA).isEmpty()); });
+                QVERIFY(connection);
+                dispatcher.apply(other,kSliceA);
                 QMouseEvent press(QEvent::MouseButtonPress,QPointF(55,20),QPointF(55,20),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);QMouseEvent release(QEvent::MouseButtonRelease,QPointF(55,20),QPointF(55,20),Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
                 other->handleMousePress(&press,112,44);other->handleMouseRelease(&release,112,44);QCOMPARE(requests,mode==ContentRenderMode::Live?1:0);
                 QVERIFY(!f.model.moxController()->isMox());QVERIFY(!f.model.isTune());QVERIFY(!f.model.twoToneController()->isActive());
-                if(mode==ContentRenderMode::Live) {f.model.setRxOnly(true);dispatcher.apply(other,kSliceA);QVERIFY(!other->isButtonAvailable(action.second));QSignalSpy refused(other,&ButtonBoxItem::unavailableButtonClicked);other->handleMousePress(&press,112,44);other->handleMouseRelease(&release,112,44);QCOMPARE(requests,1);QCOMPARE(refused.count(),1);f.model.setRxOnly(false);}
+                if(mode==ContentRenderMode::Live) {f.model.setRxOnly(true);dispatcher.apply(other,kSliceA);QVERIFY(!other->isButtonAvailable(action.second));QSignalSpy refused(other,&ButtonBoxItem::unavailableButtonClicked);QVERIFY(refused.isValid());other->handleMousePress(&press,112,44);other->handleMouseRelease(&release,112,44);QCOMPARE(requests,1);QCOMPARE(refused.count(),1);f.model.setRxOnly(false);}
             }
         }
         f.model.setConnectionStateForTest(ConnectionState::Disconnected);
@@ -384,6 +392,8 @@ private slots:
         f.dispatcher->apply(&item, kSliceA);
         QSignalSpy clicked(&item, &OtherButtonItem::otherButtonClicked);
         QSignalSpy refused(&item, &ButtonBoxItem::unavailableButtonClicked);
+        QVERIFY(clicked.isValid());
+        QVERIFY(refused.isValid());
         clickShownButton(item, item.indexOf(Id::Anf));
         QCOMPARE(clicked.count(), 1);
         QCOMPARE(clicked.at(0).at(0).toInt(), int(Id::Anf));
@@ -440,6 +450,8 @@ private slots:
         // The click on the drawn button says why and changes nothing.
         QSignalSpy clicked(&item, &OtherButtonItem::otherButtonClicked);
         QSignalSpy refused(&item, &ButtonBoxItem::unavailableButtonClicked);
+        QVERIFY(clicked.isValid());
+        QVERIFY(refused.isValid());
         clickShownButton(item, item.indexOf(Id::Anf));
         QCOMPARE(clicked.count(), 0);
         QCOMPARE(refused.count(), 1);
@@ -637,6 +649,21 @@ private slots:
         QCOMPARE(f.spectrumB.ctunEnabled(), ctunB);
         f.dispatcher->apply(&item, kSliceA);
         QCOMPARE(item.buttonState(Id::Ctun), !ctunA);
+
+        // A receiver whose C-Tune setting is another holder's: the button
+        // shows the receiver's setting, unavailable with the reason, and a
+        // click changes nothing.
+        const QString held = QStringLiteral(
+            "This panadapter shows Shack PC's receiver. Its C-Tune setting is Shack PC's.");
+        f.spectrumA.applyRemoteCtunState(true, !ctunA, held);
+        const ContainerButtonDispatcher::State heldState = f.dispatcher->stateOf(Id::Ctun, kSliceA);
+        QVERIFY(!heldState.available);
+        QCOMPARE(heldState.reason, held);
+        QCOMPARE(heldState.on, !ctunA);
+        QCOMPARE(f.dispatcher->click(Id::Ctun, kSliceA), held);
+        QCOMPARE(f.spectrumA.ctunEnabled(), !ctunA);
+        f.spectrumA.applyRemoteCtunState(true, !ctunA);
+        QVERIFY(f.dispatcher->stateOf(Id::Ctun, kSliceA).available);
     }
 
     void vaxButtonsOpenAndCloseThisComputersVaxOutputs()

@@ -279,6 +279,43 @@ private slots:
         }
     }
 
+    // The radio repeats its PTT level on every status frame, and the Core's
+    // holder hook rebuilds device names: it is asked only on a press edge.
+    void theHolderHookIsAskedOnlyOnAPressEdge()
+    {
+        Rig rig;
+        int hookCalls = 0;
+        rig.mox.setOtherDeviceHolds([&hookCalls]() {
+            ++hookCalls;
+            return true;
+        });
+        rig.mox.setManualKey(true);
+        rig.mox.setMox(true, remote("phone"));
+        rig.settle();
+        QVERIFY(rig.mox.isMox());
+        const int before = rig.gate.asked;
+        rig.gate.answer = KeyingAnswer{KeyingVerdict::Take, {}};
+        for (int frame = 0; frame < 5; ++frame) {
+            rig.mox.onMicPttFromRadio(true);
+        }
+        QCOMPARE(hookCalls, 1);
+        QCOMPARE(rig.gate.asked, before + 1);
+        for (int frame = 0; frame < 5; ++frame) {
+            rig.mox.onMicPttFromRadio(false);
+        }
+        QCOMPARE(hookCalls, 1);
+        QCOMPARE(rig.gate.asked, before + 1);
+        for (int frame = 0; frame < 5; ++frame) {
+            rig.mox.onMicPttFromRadio(true);
+        }
+        QCOMPARE(hookCalls, 2);
+        QCOMPARE(rig.gate.asked, before + 2);
+        rig.mox.onMicPttFromRadio(false);
+        rig.mox.setMox(false, remote("phone"));
+        rig.mox.setManualKey(false);
+        rig.settle();
+    }
+
     // Fix wave M1 still holds for a holder that is not on the air: a press
     // the band plan refuses takes nothing (the gate is never asked). A
     // holder on the air is taken from all the same (ruling 8.9).

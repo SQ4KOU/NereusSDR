@@ -50,6 +50,29 @@
 //               title and the detected log line use plain punctuation,
 //               not em dashes. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-10-08  J.J. Boyd (KG4VCF): Qt 6.11.0 Cocoa accessibility cache
+//               repair on a live item view (QtCocoaAccessibleTableCache).
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - D25: the status, configuration and I2C rows stack when
+//               narrow (SetupFit::FitRow), and the twelve-step state-machine
+//               strip, too wide for the window, scrolls sideways inside its
+//               own frame (SetupFit::SidewaysFrame); the register table is
+//               as wide as its columns, so its decoded values are never cut
+//               short. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
+//   2026-10-09 - Workspace preview only: the status bar, the state-machine
+//               steps and the Reset outline take the workspace colour for
+//               their meaning (the lit step and an active board are the
+//               decided ok, Reset is danger, the rest the surface and its
+//               edge). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
+//   2026-10-10 - Workspace look only: "throttled" is the decided danger
+//               (status lights by meaning, D21); "not throttled" and the
+//               LEDs take ok and off through the colour table. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15  J.J. Boyd (KG4VCF): rows change after a real model reset
+//               (resetItemsBeforeRowChange), so accessibility cannot read a
+//               deleted cell. AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // --- From Console/setup.cs ---
@@ -193,6 +216,9 @@ mw0lge@grange-lane.co.uk
 // =================================================================
 
 #include "Hl2IoBoardTab.h"
+#include "gui/QtCocoaAccessibleTableCache.h"
+#include "gui/setup/SetupFit.h"
+#include "gui/styles/WorkspacePreview.h"
 
 #include "core/BoardCapabilities.h"
 #include "core/HermesLiteBandwidthMonitor.h"
@@ -215,11 +241,13 @@ mw0lge@grange-lane.co.uk
 #include <QListWidget>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QTableWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <cmath>
 
 namespace NereusSDR {
@@ -238,6 +266,23 @@ const Hl2IoBoardTab::RegRow Hl2IoBoardTab::kRegRows[Hl2IoBoardTab::kRegRowCount]
     { IoBoardHl2::Register::REG_ANTENNA_TUNER, "REG_ANTENNA_TUNER",0x1D },
     { IoBoardHl2::Register::REG_FAULT,         "REG_FAULT",        0x1D },
 };
+
+// D25: the register table is never narrower than its columns' contents, so
+// the row it sits in stacks instead of cutting the decoded values short.
+// The decoded text changes with the values, so this runs on every refresh.
+static void keepColumnsWhole(QTableWidget* table)
+{
+    const int grid = table->showGrid() ? 1 : 0;
+    int width = 2 * table->frameWidth() + table->verticalScrollBar()->sizeHint().width();
+    for (int c = 0; c < table->columnCount(); ++c) {
+        int column = table->horizontalHeader()->sectionSizeHint(c);
+        for (int r = 0; r < table->rowCount(); ++r) {
+            column = std::max(column, table->sizeHintForIndex(table->model()->index(r, c)).width() + grid);
+        }
+        width += column;
+    }
+    table->setMinimumWidth(width);
+}
 
 // ── LED helper ────────────────────────────────────────────────────────────────
 static QFrame* makeLed(QWidget* parent)
@@ -259,6 +304,58 @@ static void setLedColor(QFrame* led, bool active)
         led->setStyleSheet(QStringLiteral(
             "QFrame { background: #606060; border-radius: 6px; }"));
     }
+}
+
+// ── Workspace colours by meaning ─────────────────────────────────────────────
+// With the workspace preview off each sheet is byte for byte the original
+// literal sheet; with it on the colours are the roles of their meaning.
+
+// The status bar: an active board is the ok state, otherwise the surface.
+static QString statusFrameSheet(bool detected)
+{
+    using WorkspacePreview::roleColourName;
+    if (detected) {
+        return QStringLiteral(
+            "QFrame { background: %1; border: 1px solid %2; border-radius: 4px; }")
+            .arg(roleColourName("#1a2f1a", "ok-bg"), roleColourName("#2a5a2a", "ok-border"));
+    }
+    return QStringLiteral(
+        "QFrame { background: %1; border: 1px solid %2; border-radius: 4px; }")
+        .arg(roleColourName("#2a2a2a", "panel"), roleColourName("#444", "border"));
+}
+
+// One step of the state machine: the step the machine is on is a live
+// status (the decided ok), the others the surface and its edge.
+static QString stepFrameSheet(bool lit)
+{
+    using WorkspacePreview::roleColourName;
+    if (lit) {
+        return QStringLiteral(
+            "QFrame { border: 2px solid %1; border-radius: 4px; "
+            "background: %2; padding: 2px; }")
+            .arg(WorkspacePreview::statusColourName("#22cc44", "ok"),
+                 roleColourName("#1a2f1a", "ok-bg"));
+    }
+    return QStringLiteral(
+        "QFrame { border: 1px solid %1; border-radius: 4px; "
+        "background: %2; padding: 2px; }")
+        .arg(roleColourName("#444", "border"), roleColourName("#222", "panel"));
+}
+
+static QString stepNumberSheet(bool lit)
+{
+    if (lit) {
+        return QStringLiteral(
+            "QLabel { background: %1; border-radius: 8px; "
+            "font-weight: bold; font-size: 10px; color: #000; min-width: 16px; "
+            "max-width: 16px; min-height: 16px; max-height: 16px; }")
+            .arg(WorkspacePreview::statusColourName("#22cc44", "ok"));
+    }
+    return QStringLiteral(
+        "QLabel { background: %1; border-radius: 8px; "
+        "font-weight: bold; font-size: 10px; min-width: 16px; "
+        "max-width: 16px; min-height: 16px; max-height: 16px; }")
+        .arg(WorkspacePreview::roleColourName("#444", "button"));
 }
 
 // ── Constructor ───────────────────────────────────────────────────────────────
@@ -365,12 +462,17 @@ void Hl2IoBoardTab::buildStatusBar(QVBoxLayout* outer)
 {
     m_statusFrame = new QFrame(this);
     m_statusFrame->setFrameShape(QFrame::StyledPanel);
-    m_statusFrame->setStyleSheet(QStringLiteral(
-        "QFrame { background: #2a2a2a; border: 1px solid #444; border-radius: 4px; }"));
+    m_statusFrame->setStyleSheet(statusFrameSheet(false));
 
-    auto* row = new QHBoxLayout(m_statusFrame);
-    row->setContentsMargins(8, 4, 8, 4);
+    // D25: the bar holds three parts (the board, the live OC byte, the
+    // probe) that stack in that order when the tab is too narrow for them.
+    auto* bar = new SetupFit::FitRow(m_statusFrame);
+    bar->setObjectName(QStringLiteral("hl2IoStatusRow"));
+    bar->setContentsMargins(8, 4, 8, 4);
+    bar->setSpacing(8);
+    auto* row = new QHBoxLayout;
     row->setSpacing(8);
+    bar->addLayout(row);
 
     m_statusLed = makeLed(m_statusFrame);
     row->addWidget(m_statusLed);
@@ -389,7 +491,10 @@ void Hl2IoBoardTab::buildStatusBar(QVBoxLayout* outer)
     row->addWidget(m_statusLabel);
 
     // Live OC byte indicator — band, hex, MOX, and 7 pin LEDs.
-    row->addSpacing(16);
+    row = new QHBoxLayout;
+    row->setSpacing(8);
+    row->setContentsMargins(16, 0, 0, 0);
+    bar->addLayout(row, 1);
     row->addWidget(new QLabel(tr("OC bank 0:"), m_statusFrame));
     m_ocBandLabel = new QLabel(QStringLiteral("—"), m_statusFrame);
     m_ocBandLabel->setStyleSheet(QStringLiteral("color: #aaa; font-size: 10px;"));
@@ -415,6 +520,10 @@ void Hl2IoBoardTab::buildStatusBar(QVBoxLayout* outer)
 
     row->addStretch();
 
+    row = new QHBoxLayout;
+    row->setSpacing(8);
+    bar->addLayout(row);
+
     // I2C address (static — 0x1D per mi0bot IoBoardHl2.cs:139 [@c26a8a4])
     m_i2cAddrLabel = new QLabel(
         QStringLiteral("I2C addr: 0x%1")
@@ -434,7 +543,10 @@ void Hl2IoBoardTab::buildStatusBar(QVBoxLayout* outer)
 
 void Hl2IoBoardTab::buildConfigAndRegisterRow(QVBoxLayout* outer)
 {
-    auto* row = new QHBoxLayout;
+    // D25: Configuration stacks above the register table when they do not
+    // fit side by side.
+    auto* row = new SetupFit::FitRow;
+    row->setObjectName(QStringLiteral("hl2IoConfigRow"));
     row->setSpacing(8);
 
     // ── Left: Configuration ───────────────────────────────────────────────────
@@ -469,7 +581,9 @@ void Hl2IoBoardTab::buildConfigAndRegisterRow(QVBoxLayout* outer)
         rowL->setSpacing(4);
         auto* lbl = new QLabel(label, rowW);
         lbl->setStyleSheet(QStringLiteral("color: #aaa; font-size: 10px;"));
-        lbl->setFixedWidth(160);
+        // Workspace fonts need one more pixel for the longest register name;
+        // leave a small fixed allowance so the label is never clipped.
+        lbl->setFixedWidth(164);
         valueLabel = new QLabel(QStringLiteral("—"), rowW);
         valueLabel->setStyleSheet(QStringLiteral("font-size: 10px; font-family: monospace;"));
         rowL->addWidget(lbl);
@@ -490,9 +604,11 @@ void Hl2IoBoardTab::buildConfigAndRegisterRow(QVBoxLayout* outer)
     auto* btnRow = new QHBoxLayout;
     m_probeButton = new QPushButton(tr("Probe board"), configGroup);
     m_resetButton = new QPushButton(tr("Reset I/O board"), configGroup);
+    // Reset clears the board: a destructive action, the decided danger.
     m_resetButton->setStyleSheet(QStringLiteral(
-        "QPushButton { color: #ff6666; border: 1px solid #ff6666; "
-        "border-radius: 3px; padding: 2px 6px; }"));
+        "QPushButton { color: %1; border: 1px solid %1; "
+        "border-radius: 3px; padding: 2px 6px; }")
+        .arg(WorkspacePreview::statusColourName("#ff6666", "danger")));
     btnRow->addWidget(m_probeButton);
     btnRow->addWidget(m_resetButton);
     configLayout->addLayout(btnRow);
@@ -550,16 +666,21 @@ void Hl2IoBoardTab::buildStateMachineRow(QVBoxLayout* outer)
 {
     // 12-step UpdateIOBoard state machine per mi0bot console.cs:25844-25928 [@c26a8a4]
     auto* smGroup = new QGroupBox(tr("State machine  (UpdateIOBoard, 12 steps)"), this);
-    auto* smLayout = new QHBoxLayout(smGroup);
+    // D25: the twelve steps stay in one line, so where the window is too
+    // narrow for them the strip scrolls sideways inside its own frame.
+    auto* smGroupLayout = new QVBoxLayout(smGroup);
+    auto* smFrame = new SetupFit::SidewaysFrame(smGroup);
+    smFrame->setObjectName(QStringLiteral("hl2IoStateMachineFrame"));
+    auto* smCells = new QWidget(smFrame);
+    auto* smLayout = new QHBoxLayout(smCells);
+    smLayout->setContentsMargins(0, 0, 0, 0);
     smLayout->setSpacing(4);
 
     for (int i = 0; i < kSteps; ++i) {
         // Each cell: vertical layout — numbered circle + descriptor
-        auto* cell = new QFrame(smGroup);
+        auto* cell = new QFrame(smCells);
         cell->setFrameShape(QFrame::StyledPanel);
-        cell->setStyleSheet(QStringLiteral(
-            "QFrame { border: 1px solid #444; border-radius: 4px; "
-            "background: #222; padding: 2px; }"));
+        cell->setStyleSheet(stepFrameSheet(false));
         auto* cellLayout = new QVBoxLayout(cell);
         cellLayout->setSpacing(2);
         cellLayout->setContentsMargins(4, 2, 4, 2);
@@ -567,10 +688,7 @@ void Hl2IoBoardTab::buildStateMachineRow(QVBoxLayout* outer)
         // Step number circle (label styled as circle)
         auto* numLabel = new QLabel(QString::number(i), cell);
         numLabel->setAlignment(Qt::AlignCenter);
-        numLabel->setStyleSheet(QStringLiteral(
-            "QLabel { background: #444; border-radius: 8px; "
-            "font-weight: bold; font-size: 10px; min-width: 16px; "
-            "max-width: 16px; min-height: 16px; max-height: 16px; }"));
+        numLabel->setStyleSheet(stepNumberSheet(false));
         cellLayout->addWidget(numLabel, 0, Qt::AlignHCenter);
 
         // Step descriptor
@@ -588,6 +706,9 @@ void Hl2IoBoardTab::buildStateMachineRow(QVBoxLayout* outer)
         smLayout->addWidget(cell, 1);
     }
 
+    smFrame->setWidget(smCells);
+    smCells->setAutoFillBackground(false);
+    smGroupLayout->addWidget(smFrame);
     outer->addWidget(smGroup);
 }
 
@@ -595,7 +716,10 @@ void Hl2IoBoardTab::buildStateMachineRow(QVBoxLayout* outer)
 
 void Hl2IoBoardTab::buildI2cAndBandwidthRow(QVBoxLayout* outer)
 {
-    auto* row = new QHBoxLayout;
+    // D25: the I2C log stacks above the bandwidth monitor when they do not
+    // fit side by side.
+    auto* row = new SetupFit::FitRow;
+    row->setObjectName(QStringLiteral("hl2IoI2cRow"));
     row->setSpacing(8);
 
     // ── Left: I2C transaction log ─────────────────────────────────────────────
@@ -704,15 +828,13 @@ void Hl2IoBoardTab::updateStatusBar(bool detected)
 
     if (detected) {
         m_statusLabel->setText(tr("mi0bot custom I/O board (0x41): Active"));
-        m_statusFrame->setStyleSheet(QStringLiteral(
-            "QFrame { background: #1a2f1a; border: 1px solid #2a5a2a; border-radius: 4px; }"));
+        m_statusFrame->setStyleSheet(statusFrameSheet(true));
         m_lastProbeLabel->setText(
             QStringLiteral("Last probe: %1")
                 .arg(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss"))));
     } else {
         m_statusLabel->setText(tr("mi0bot custom I/O board (0x41): Not detected"));
-        m_statusFrame->setStyleSheet(QStringLiteral(
-            "QFrame { background: #2a2a2a; border: 1px solid #444; border-radius: 4px; }"));
+        m_statusFrame->setStyleSheet(statusFrameSheet(false));
     }
 }
 
@@ -798,6 +920,7 @@ void Hl2IoBoardTab::refreshAllRegisters()
             item->setText(decodeRegister(kRegRows[i].reg, val));
         }
     }
+    keepColumnsWhole(m_registerTable);
 
     // Refresh quick-view labels
     m_opModeValue->setText(
@@ -824,25 +947,15 @@ void Hl2IoBoardTab::highlightStep(int step)
 {
     // Clear previous highlight
     if (m_currentHighlightedStep >= 0 && m_currentHighlightedStep < kSteps) {
-        m_stepFrames[m_currentHighlightedStep]->setStyleSheet(QStringLiteral(
-            "QFrame { border: 1px solid #444; border-radius: 4px; "
-            "background: #222; padding: 2px; }"));
-        m_stepNumLabels[m_currentHighlightedStep]->setStyleSheet(QStringLiteral(
-            "QLabel { background: #444; border-radius: 8px; "
-            "font-weight: bold; font-size: 10px; min-width: 16px; "
-            "max-width: 16px; min-height: 16px; max-height: 16px; }"));
+        m_stepFrames[m_currentHighlightedStep]->setStyleSheet(stepFrameSheet(false));
+        m_stepNumLabels[m_currentHighlightedStep]->setStyleSheet(stepNumberSheet(false));
     }
 
     m_currentHighlightedStep = step;
 
     if (step >= 0 && step < kSteps) {
-        m_stepFrames[step]->setStyleSheet(QStringLiteral(
-            "QFrame { border: 2px solid #22cc44; border-radius: 4px; "
-            "background: #1a2f1a; padding: 2px; }"));
-        m_stepNumLabels[step]->setStyleSheet(QStringLiteral(
-            "QLabel { background: #22cc44; border-radius: 8px; "
-            "font-weight: bold; font-size: 10px; color: #000; min-width: 16px; "
-            "max-width: 16px; min-height: 16px; max-height: 16px; }"));
+        m_stepFrames[step]->setStyleSheet(stepFrameSheet(true));
+        m_stepNumLabels[step]->setStyleSheet(stepNumberSheet(true));
     }
 }
 
@@ -850,6 +963,7 @@ void Hl2IoBoardTab::highlightStep(int step)
 
 void Hl2IoBoardTab::appendI2cLogEntry(const QString& text)
 {
+    resetItemsBeforeRowChange(m_i2cLog);
     m_i2cLog->addItem(text);
     // Trim to max lines
     while (m_i2cLog->count() > kMaxLogLines) {
@@ -928,8 +1042,11 @@ void Hl2IoBoardTab::showThrottleState(std::optional<bool> throttled)
         m_throttleStatusLabel->setStyleSheet(QStringLiteral("font-size: 10px;"));
     } else if (*throttled) {
         m_throttleStatusLabel->setText(tr("● throttled"));
+        // Workspace look (D21, settled 2026-10-10): a throttled link is a
+        // fault, the decided danger.
         m_throttleStatusLabel->setStyleSheet(
-            QStringLiteral("font-size: 10px; color: #ff4444;"));
+            QStringLiteral("font-size: 10px; color: %1;")
+                .arg(WorkspacePreview::statusColourName("#ff4444", "danger")));
     } else {
         m_throttleStatusLabel->setText(tr("○ not throttled"));
         m_throttleStatusLabel->setStyleSheet(
@@ -1338,6 +1455,11 @@ int Hl2IoBoardTab::ep2BarPercentForTest() const
 QString Hl2IoBoardTab::throttleStatusTextForTest() const
 {
     return m_throttleStatusLabel ? m_throttleStatusLabel->text() : QString();
+}
+
+QString Hl2IoBoardTab::throttleStatusSheetForTest() const
+{
+    return m_throttleStatusLabel ? m_throttleStatusLabel->styleSheet() : QString();
 }
 
 QString Hl2IoBoardTab::throttleEventTextForTest() const

@@ -1,0 +1,143 @@
+<div id="imd-pan-study" aria-label="Two-tone IMD panadapter design study">
+  <div class="viz-carousel viz-dotted-background" aria-label="IMD spectrum and waterfall treatments">
+    <section data-variant="Measurement rail"><div class="ip-stage"><div class="ip-window" data-layout="rail" aria-label="IMD measurement rail"></div></div></section>
+    <section data-variant="Bench inspector" hidden><div class="ip-stage"><div class="ip-window" data-layout="inspector" aria-label="IMD bench inspector"></div></div></section>
+  </div>
+  <template id="ip-template">
+    <header class="ip-title"><span><i data-lucide="radio" aria-hidden="true"></i> NereusSDR · Pan A</span><span>Design study · synthetic RF</span></header>
+    <div class="ip-panbar"><div class="ip-vfo"><span>A</span><strong>14.200000</strong><small>MHz · USB</small></div><div class="ip-tags"><span>TWO-TONE</span><span>700 / 1900 Hz</span><label><input type="checkbox" checked data-enabled> IMD overlay</label></div></div>
+    <div class="ip-demo-controls"><div class="ip-demo-switch"><span>Preview correction</span><button type="button" data-ps="on" aria-pressed="true" class="cursor-interaction">Applied</button><button type="button" data-ps="off" aria-pressed="false" class="cursor-interaction">Off</button></div><select data-state aria-label="Preview measurement condition"><option value="valid">Valid measurement</option><option value="missing">IMD5 peaks missing</option><option value="cropped">Products outside view</option><option value="waiting">Waiting for TX</option></select></div>
+    <div class="ip-workspace">
+      <div class="ip-plot-area">
+        <div class="ip-rail"><div class="ip-measure-state"><span data-status class="ip-green">● Valid peaks</span><small>Current spectrum · EMA</small></div><div><span>WORST IMD3</span><strong data-imd3>−48.2 <small>dBc</small></strong></div><div><span>WORST IMD5</span><strong data-imd5>−61.7 <small>dBc</small></strong></div><button type="button" data-guides aria-pressed="true" class="ip-quiet cursor-interaction"><i data-lucide="scan-line" aria-hidden="true"></i> Guides</button></div>
+        <div class="ip-spectrum-wrap"><div class="ip-caption"><span>TX feedback spectrum</span><span>dBm</span></div><canvas data-spectrum role="img" aria-label="Synthetic two-tone spectrum showing lower and upper fundamentals and third and fifth order intermodulation products"></canvas></div>
+        <div class="ip-waterfall-wrap"><div class="ip-caption"><span>Waterfall history</span><span>Newest at top · guides show frequency</span></div><canvas data-waterfall role="img" aria-label="Synthetic waterfall with brighter uncorrected products below a correction event and weaker corrected products above it"></canvas></div>
+        <div class="ip-product-picker" aria-label="Inspect a tone or intermodulation product"><button type="button" data-product="0" class="cursor-interaction">IMD5 L</button><button type="button" data-product="1" aria-pressed="true" class="cursor-interaction">IMD3 L</button><button type="button" data-product="2" class="cursor-interaction">Tone L</button><button type="button" data-product="3" class="cursor-interaction">Tone U</button><button type="button" data-product="4" class="cursor-interaction">IMD3 U</button><button type="button" data-product="5" class="cursor-interaction">IMD5 U</button></div>
+        <div class="ip-selection" aria-live="polite"><span data-selected-name>IMD3 L</span><strong data-selected-freq>14.199500 MHz</strong><span data-selected-level>−68.2 dBm · −48.2 dBc</span><span class="ip-muted" data-selected-state>Measured peak</span></div>
+        <div class="ip-message" data-message hidden aria-live="polite"></div>
+      </div>
+      <aside class="ip-inspector" aria-label="Detailed IMD readings">
+        <div class="ip-inspector-title"><span>Two-tone measurements</span><span class="ip-green" data-detail-status>Valid</span></div>
+        <div class="ip-detail-summary"><div><span>Worst IMD3</span><strong data-imd3>−48.2 <small>dBc</small></strong></div><div><span>Worst IMD5</span><strong data-imd5>−61.7 <small>dBc</small></strong></div></div>
+        <table class="ip-table"><thead><tr><th>Product</th><th>dBm</th><th>dBc</th><th>MHz</th></tr></thead><tbody data-table></tbody></table>
+        <div class="ip-reference"><span>Reference</span><strong>Single tone</strong><small>Equal fundamentals in this study</small></div>
+        <div class="ip-reference"><span>Tone separation</span><strong>1.200 kHz</strong><small>Measured spectrum positions</small></div>
+        <div class="ip-keys"><span><b class="ip-tone">○</b> Fundamentals</span><span><b class="ip-third">◇</b> Third order</span><span><b class="ip-fifth">□</b> Fifth order</span><span class="ip-muted">Hollow / dashed: expected, unmeasured</span></div>
+      </aside>
+    </div>
+    <details class="ip-expanded"><summary class="cursor-interaction">All six peaks · levels and frequencies</summary><div data-extra-readings></div></details>
+    <footer class="ip-footer"><span>Live values come from the spectrum; waterfall shows history.</span><span>Preview only</span></footer>
+  </template>
+</div>
+<style>
+#imd-pan-study{color-scheme:dark;--ip-bg:#0b0b0e;--ip-panel:#141419;--ip-line:#303039;--ip-text:#dedee4;--ip-muted:#a6a6b1;--ip-amber:#d8a55f;--ip-green:#83b497;--ip-third:#d28f98;--ip-fifth:#afa0d1;font:12px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:var(--ip-text)}
+#imd-pan-study *{box-sizing:border-box}
+#imd-pan-study [hidden]{display:none!important}
+#imd-pan-study .ip-stage{min-height:850px;padding:14px 0 24px}
+#imd-pan-study .ip-window{background:var(--ip-bg);border:1px solid #3b3b43;border-radius:9px;overflow:hidden;box-shadow:0 14px 36px #0004}
+#imd-pan-study .ip-title{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 15px;background:linear-gradient(#232329,#1a1a1f);font-size:11px;color:var(--ip-muted)}
+#imd-pan-study .ip-title>span:first-child{display:flex;align-items:center;gap:9px;color:var(--ip-text)}
+#imd-pan-study button,#imd-pan-study select{font:inherit;color:var(--ip-text);background:linear-gradient(#24242b,#19191f);border:1px solid var(--ip-line);border-radius:5px;min-height:29px;padding:5px 8px}
+#imd-pan-study button{display:inline-flex;align-items:center;justify-content:center;gap:6px}
+#imd-pan-study button:hover{border-color:#737382}
+#imd-pan-study button[aria-pressed=true]{background:#203b55;border-color:#557b9d}
+#imd-pan-study button:disabled{opacity:.4}
+#imd-pan-study .ip-quiet{background:transparent;border-color:transparent}
+#imd-pan-study select{max-width:100%;font-size:11px}
+#imd-pan-study input{accent-color:#527da4}
+#imd-pan-study i,#imd-pan-study svg{width:14px;height:14px;flex-shrink:0}
+#imd-pan-study .ip-panbar{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;padding:13px 15px;background:var(--ip-panel);border-bottom:1px solid var(--ip-line)}
+#imd-pan-study .ip-vfo{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+#imd-pan-study .ip-vfo>span{padding:2px 5px;background:#263849;border-radius:3px;color:#9db6cd;font-size:11px}
+#imd-pan-study strong{font-family:'SFMono-Regular',Consolas,monospace;font-weight:400;font-variant-numeric:tabular-nums;color:var(--ip-amber)}
+#imd-pan-study .ip-vfo strong{font-size:24px}
+#imd-pan-study small{font-size:11px;color:var(--ip-muted)}
+#imd-pan-study .ip-tags{display:flex;align-items:center;flex-wrap:wrap;gap:10px;color:var(--ip-muted);font-size:11px}
+#imd-pan-study .ip-tags>span:first-child{color:var(--ip-amber);letter-spacing:1px}
+#imd-pan-study label{display:flex;align-items:center;gap:6px}
+#imd-pan-study .ip-demo-controls{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:9px;padding:10px 15px;border-bottom:1px solid var(--ip-line);background:#101014}
+#imd-pan-study .ip-demo-switch{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+#imd-pan-study .ip-demo-switch>span{font-size:11px;color:var(--ip-muted);margin-right:6px}
+#imd-pan-study .ip-rail{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:13px 15px;border-bottom:1px solid var(--ip-line);background:#121217}
+#imd-pan-study .ip-rail>div{display:flex;flex-direction:column;gap:4px}
+#imd-pan-study .ip-rail>div>span{font-size:11px;color:var(--ip-muted);letter-spacing:.8px}
+#imd-pan-study .ip-rail strong{font-size:22px}
+#imd-pan-study .ip-rail strong small{font-family:-apple-system,sans-serif;font-size:11px}
+#imd-pan-study .ip-green{color:var(--ip-green)!important}
+#imd-pan-study .ip-muted{color:var(--ip-muted)}
+#imd-pan-study .ip-caption{display:flex;justify-content:space-between;gap:12px;padding:9px 14px 2px;font-size:11px;color:var(--ip-muted)}
+#imd-pan-study .ip-spectrum-wrap{background:#0d0d13}
+#imd-pan-study canvas{display:block;width:100%}
+#imd-pan-study [data-spectrum]{height:267px}
+#imd-pan-study [data-waterfall]{height:242px}
+#imd-pan-study .ip-waterfall-wrap{background:#080b12;border-top:1px solid #303039}
+#imd-pan-study .ip-product-picker{display:flex;justify-content:space-between;gap:4px;flex-wrap:wrap;padding:10px 12px 6px}
+#imd-pan-study .ip-product-picker button{font-size:11px;background:transparent;padding:4px 6px;min-height:28px}
+#imd-pan-study .ip-product-picker button[aria-pressed=true]{background:#263647}
+#imd-pan-study .ip-selection{display:flex;align-items:center;flex-wrap:wrap;gap:7px 13px;padding:9px 14px 13px;font-size:11px}
+#imd-pan-study .ip-selection>span:first-child{color:var(--ip-text)}
+#imd-pan-study .ip-selection>span:last-child{margin-left:auto}
+#imd-pan-study .ip-message{margin:0 14px 12px;padding:10px 12px;background:#29211b;color:#deb98a;border-radius:4px;font-size:11px}
+#imd-pan-study .ip-inspector{display:none}
+#imd-pan-study .ip-expanded{border-top:1px solid var(--ip-line);padding:12px 15px;color:var(--ip-muted)}
+#imd-pan-study .ip-expanded summary{font-size:11px}
+#imd-pan-study .ip-expanded[open] summary{margin-bottom:13px}
+#imd-pan-study .ip-inspector-title{display:flex;justify-content:space-between;gap:10px;font-size:12px;margin-bottom:18px}
+#imd-pan-study .ip-table{border-collapse:collapse;width:100%;font-size:11px}
+#imd-pan-study .ip-table th{text-align:right;font-weight:400;color:var(--ip-muted);padding:7px 3px}
+#imd-pan-study .ip-table td{text-align:right;font-family:'SFMono-Regular',Consolas,monospace;padding:9px 3px;border-top:1px solid #303039;color:var(--ip-text)}
+#imd-pan-study .ip-table th:first-child,#imd-pan-study .ip-table td:first-child{text-align:left;font-family:inherit}
+#imd-pan-study .ip-table tr.is-selected td{background:#1b2837}
+#imd-pan-study .ip-reference{display:grid;grid-template-columns:1fr auto;gap:6px;font-size:11px;border-top:1px solid var(--ip-line);padding-top:14px;margin-top:17px;color:var(--ip-muted)}
+#imd-pan-study .ip-reference small{grid-column:1/-1}
+#imd-pan-study .ip-keys{display:flex;flex-wrap:wrap;gap:8px 15px;margin-top:19px;font-size:11px;color:var(--ip-muted)}
+#imd-pan-study .ip-keys b{font-weight:400;margin-right:5px}
+#imd-pan-study .ip-tone{color:var(--ip-amber)}
+#imd-pan-study .ip-third{color:var(--ip-third)}
+#imd-pan-study .ip-fifth{color:var(--ip-fifth)}
+#imd-pan-study .ip-detail-summary{display:flex;gap:25px;margin-bottom:19px}
+#imd-pan-study .ip-detail-summary>div{display:flex;flex-direction:column;gap:6px;color:var(--ip-muted);font-size:11px}
+#imd-pan-study .ip-detail-summary strong{font-size:21px}
+#imd-pan-study .ip-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;border-top:1px solid var(--ip-line);padding:11px 15px;background:var(--ip-panel);color:var(--ip-muted);font-size:11px}
+#imd-pan-study [data-layout=inspector] .ip-workspace{display:grid;grid-template-columns:minmax(0,1fr) 255px}
+#imd-pan-study [data-layout=inspector] .ip-inspector{display:block;padding:16px 12px;background:var(--ip-panel);border-left:1px solid var(--ip-line)}
+#imd-pan-study [data-layout=inspector] .ip-rail>div:not(.ip-measure-state){display:none}
+#imd-pan-study [data-layout=inspector] .ip-expanded{display:none}
+#imd-pan-study [data-layout=inspector] .ip-table th:last-child,#imd-pan-study [data-layout=inspector] .ip-table td:last-child{display:none}
+#imd-pan-study [data-layout=inspector] .ip-selection{min-height:67px}
+#imd-pan-study [data-layout=inspector] .ip-detail-summary{gap:14px}
+#imd-pan-study [data-layout=inspector] .ip-detail-summary strong{font-size:20px}
+@media(max-width:680px){#imd-pan-study [data-layout=inspector] .ip-workspace{grid-template-columns:1fr}#imd-pan-study [data-layout=inspector] .ip-inspector{border-left:0;border-top:1px solid var(--ip-line);padding:15px}#imd-pan-study [data-layout=inspector] .ip-table th:last-child,#imd-pan-study [data-layout=inspector] .ip-table td:last-child{display:table-cell}#imd-pan-study .ip-stage{min-height:1200px}}
+@media(max-width:400px){#imd-pan-study .ip-rail{gap:12px}#imd-pan-study .ip-measure-state{flex-basis:100%}#imd-pan-study .ip-rail strong{font-size:20px}#imd-pan-study .ip-product-picker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}#imd-pan-study .ip-table td,#imd-pan-study .ip-table th{font-size:10px;padding-left:1px;padding-right:1px}#imd-pan-study .ip-selection>span:last-child{margin-left:0}#imd-pan-study .ip-stage{min-height:1320px}}
+@media(pointer:coarse){#imd-pan-study button,#imd-pan-study select{min-height:44px}}
+</style>
+<script>
+(() => {
+ const root=document.getElementById('imd-pan-study'),q=(e,s)=>e.querySelector(s),qa=(e,s)=>[...e.querySelectorAll(s)];
+ const products=[{name:'IMD5 L',offset:-3000,group:5,corrected:-81.7,uncorrected:-64},{name:'IMD3 L',offset:-1800,group:3,corrected:-68.2,uncorrected:-48},{name:'Tone L',offset:-600,group:1,corrected:-20,uncorrected:-20},{name:'Tone U',offset:600,group:1,corrected:-20,uncorrected:-20},{name:'IMD3 U',offset:1800,group:3,corrected:-69.1,uncorrected:-49.1},{name:'IMD5 U',offset:3000,group:5,corrected:-83.4,uncorrected:-65.4}];
+ const windows=[];
+ function rf(p){return (14.2013+p.offset/1e6).toFixed(6);}
+ function signed(v,d=1){return (v<0?'−':'+')+Math.abs(v).toFixed(d);}
+ qa(root,'[data-layout]').forEach(win=>{
+   win.append(q(root,'#ip-template').content.cloneNode(true));
+   const state={win,corrected:true,condition:'valid',enabled:true,guides:true,selected:1,guideAlpha:.42};windows.push(state);
+   const aside=q(win,'.ip-inspector');const detailCopy=aside.cloneNode(true);detailCopy.className='ip-extra';q(win,'[data-extra-readings]').append(detailCopy);
+   qa(win,'[data-ps]').forEach(b=>b.addEventListener('click',()=>{state.corrected=b.dataset.ps==='on';update(state);}));q(win,'[data-state]').addEventListener('change',e=>{state.condition=e.target.value;update(state);});q(win,'[data-enabled]').addEventListener('change',e=>{state.enabled=e.target.checked;update(state);});q(win,'[data-guides]').addEventListener('click',()=>{state.guides=!state.guides;update(state);});qa(win,'[data-product]').forEach(b=>b.addEventListener('click',()=>{state.selected=Number(b.dataset.product);update(state);}));qa(win,'canvas').forEach(canvas=>canvas.addEventListener('pointerdown',e=>{const r=canvas.getBoundingClientRect(),domain=state.condition==='cropped'?[-2400,2400]:[-4000,4000],freq=domain[0]+(e.clientX-r.left-48)/(r.width-65)*(domain[1]-domain[0]);let nearest=0;products.forEach((p,i)=>{if(Math.abs(p.offset-freq)<Math.abs(products[nearest].offset-freq))nearest=i;});state.selected=nearest;update(state);}));
+   update(state);
+   if(globalThis.Tweak){const t=new Tweak({container:win,onChange:()=>update(state)});t.addSlider(state,'guideAlpha',{label:'Waterfall guide emphasis',min:.15,max:.65,step:.05});}
+ });
+ function valid(state,p){return state.enabled&&state.condition!=='waiting'&&!(state.condition==='missing'&&p.group===5)&&!(state.condition==='cropped'&&p.group===5);}
+ function update(state){const {win}=state,measured=state.enabled&&state.condition==='valid',level=p=>state.corrected?p.corrected:p.uncorrected;qa(win,'[data-ps]').forEach(b=>b.setAttribute('aria-pressed',String((b.dataset.ps==='on')===state.corrected)));q(win,'[data-guides]').setAttribute('aria-pressed',String(state.guides));qa(win,'[data-product]').forEach(b=>b.setAttribute('aria-pressed',String(Number(b.dataset.product)===state.selected)));const status=!state.enabled?'Overlay off':state.condition==='valid'?'● Valid peaks':state.condition==='missing'?'IMD5 unmeasured':state.condition==='cropped'?'IMD5 outside view':'Waiting for TX';q(win,'[data-status]').textContent=status;qa(win,'[data-detail-status]').forEach(e=>e.textContent=measured?'Valid':'Incomplete');q(win,'[data-status]').classList.toggle('ip-green',measured);qa(win,'[data-imd3]').forEach(e=>e.innerHTML=(measured?signed(level(products[1])+20):'—')+' <small>dBc</small>');qa(win,'[data-imd5]').forEach(e=>e.innerHTML=(measured?signed(level(products[0])+20):'—')+' <small>dBc</small>');qa(win,'[data-table]').forEach(t=>{t.replaceChildren();products.forEach((p,i)=>{const row=document.createElement('tr');row.classList.toggle('is-selected',i===state.selected);[p.name,valid(state,p)?signed(level(p)):'—',valid(state,p)?signed(level(p)+20):'—',rf(p)].forEach(value=>{const cell=document.createElement('td');cell.textContent=value;row.append(cell);});t.append(row);});});const p=products[state.selected];q(win,'[data-selected-name]').textContent=p.name;q(win,'[data-selected-freq]').textContent=rf(p)+' MHz';q(win,'[data-selected-level]').textContent=valid(state,p)?signed(level(p))+' dBm · '+signed(level(p)+20)+' dBc':'— dBm · — dBc';q(win,'[data-selected-state]').textContent=valid(state,p)?'Measured peak':'Expected position · unmeasured';const message=q(win,'[data-message]');message.hidden=state.condition==='valid'||!state.enabled;message.textContent=state.condition==='missing'?'IMD5 peaks not found. Expected locations remain dashed; missing levels are blank.':state.condition==='cropped'?'IMD5 lies outside this span. Widen the display to include both fifth-order products.':'Waiting for two-tone transmission. Current values are blank; waterfall history remains visible.';q(win,'.ip-rail').hidden=!state.enabled;q(win,'.ip-product-picker').hidden=!state.enabled;q(win,'.ip-selection').hidden=!state.enabled;qa(win,'[data-guides]').forEach(b=>b.disabled=!state.enabled);draw(state);}
+ function draw(state){const {win}=state,styles=getComputedStyle(root),color=n=>styles.getPropertyValue(n).trim(),col=p=>color(p.group===1?'--ip-amber':p.group===3?'--ip-third':'--ip-fifth'),domain=state.condition==='cropped'?[-2400,2400]:[-4000,4000],range=domain[1]-domain[0];
+   const canvas=q(win,'[data-spectrum]');if(!canvas.clientWidth)return;const w=canvas.clientWidth,h=canvas.clientHeight,dpr=window.devicePixelRatio||1;canvas.width=w*dpr;canvas.height=h*dpr;const c=canvas.getContext('2d');c.scale(dpr,dpr);const left=48,right=w-17,top=44,bottom=h-44,x=f=>left+(f-domain[0])/range*(right-left),y=db=>bottom-((db+120)/110)*(bottom-top);c.font='11px -apple-system,sans-serif';c.strokeStyle='#2b2b37';c.fillStyle=color('--ip-muted');c.textAlign='right';[-20,-40,-60,-80,-100,-120].forEach(db=>{c.beginPath();c.moveTo(left,y(db));c.lineTo(right,y(db));c.stroke();c.fillText(String(db),left-8,y(db)+4);});const ticks=w<420?[-3000,0,3000]:[-4000,-2000,0,2000,4000];c.textAlign='center';ticks.filter(f=>f>=domain[0]&&f<=domain[1]).forEach(f=>{c.beginPath();c.moveTo(x(f),top);c.lineTo(x(f),bottom);c.stroke();c.fillText((f/1000).toFixed(1),x(f),bottom+18);});c.fillText('Offset from tone midpoint / kHz',w/2,h-8);
+   const level=(f,corrected,condition)=>{let db=-112+1.8*Math.sin(f*.073)+1.4*Math.cos(f*.033);if(condition==='waiting')return db;products.forEach(p=>{if(condition==='missing'&&p.group===5)return;const peak=corrected?p.corrected:p.uncorrected,dist=Math.abs(f-p.offset),v=peak-10*Math.log10(1+Math.pow(dist/11,4));db=Math.max(db,v);});return db;};
+   c.save();c.beginPath();c.rect(left,top,right-left,bottom-top);c.clip();const points=[];for(let px=left;px<=right;px++){const f=domain[0]+(px-left)/(right-left)*range;points.push([px,y(level(f,state.corrected,state.condition))]);}c.beginPath();c.moveTo(left,bottom);points.forEach(p=>c.lineTo(...p));c.lineTo(right,bottom);c.closePath();const grad=c.createLinearGradient(0,top,0,bottom);grad.addColorStop(0,'#80a6c628');grad.addColorStop(1,'#80a6c606');c.fillStyle=grad;c.fill();c.beginPath();points.forEach((p,i)=>i?c.lineTo(...p):c.moveTo(...p));c.strokeStyle='#c5d3e0';c.lineWidth=1.3;c.stroke();c.restore();
+   function symbol(ctx,p,xx,yy,measured,selected){ctx.strokeStyle=col(p);ctx.lineWidth=selected?2:1.4;ctx.setLineDash(measured?[]:[2,3]);ctx.beginPath();if(p.group===1)ctx.arc(xx,yy,5,0,Math.PI*2);else if(p.group===3){ctx.moveTo(xx,yy-5);ctx.lineTo(xx+5,yy);ctx.lineTo(xx,yy+5);ctx.lineTo(xx-5,yy);ctx.closePath();}else ctx.rect(xx-4,yy-4,8,8);ctx.stroke();ctx.setLineDash([]);}
+   if(state.enabled){products.forEach((p,i)=>{if(p.offset<domain[0]||p.offset>domain[1])return;const measured=valid(state,p),xx=x(p.offset),yy=y(measured?(state.corrected?p.corrected:p.uncorrected):-105),label=w<470?p.name.replace('IMD','I'):p.name;c.font='11px -apple-system,sans-serif';c.fillStyle=col(p);const labelY=w<470?(i%2?31:14):19;c.fillText(label,xx,labelY);c.strokeStyle=col(p);c.globalAlpha=i===state.selected?.6:.25;c.setLineDash(measured?[]:[3,4]);c.beginPath();c.moveTo(xx,labelY+7);c.lineTo(xx,yy-9);c.stroke();c.setLineDash([]);c.globalAlpha=1;symbol(c,p,xx,yy,measured,i===state.selected);if(w>=580&&measured){c.fillStyle=color('--ip-text');c.fillText(p.group===1?'0 dBc':signed((state.corrected?p.corrected:p.uncorrected)+20)+' dBc',xx,yy+21);}});}
+   const wf=q(win,'[data-waterfall]'),wh=wf.clientHeight;wf.width=w*dpr;wf.height=wh*dpr;const g=wf.getContext('2d');g.scale(dpr,dpr);const eventY=102,plotHeight=wh-16,pw=Math.round(right-left),ph=Math.round(plotHeight),image=g.createImageData(pw,ph),stops=[[0,6,10,19],[.18,13,23,45],[.38,27,49,82],[.58,44,96,136],[.78,118,173,190],[1,223,207,142]];const palette=t=>{t=Math.max(0,Math.min(1,t));for(let i=1;i<stops.length;i++){const a=stops[i-1],b=stops[i];if(t<=b[0]){const r=(t-a[0])/(b[0]-a[0]);return [a[1]+(b[1]-a[1])*r,a[2]+(b[2]-a[2])*r,a[3]+(b[3]-a[3])*r];}}return [223,207,142];};for(let row=0;row<ph;row++){const corrected=row<eventY?state.corrected:false;for(let px=0;px<pw;px++){const f=domain[0]+px/pw*range,jitter=1.1*Math.sin(px*1.33+row*2.77)+1.2*Math.cos(px*.7-row*1.19),v=level(f,corrected,row<eventY?state.condition:'valid')+jitter,c=palette((v+118)/98),k=(row*pw+px)*4;image.data[k]=c[0];image.data[k+1]=c[1];image.data[k+2]=c[2];image.data[k+3]=255;}}const backing=document.createElement('canvas');backing.width=pw;backing.height=ph;backing.getContext('2d').putImageData(image,0,0);g.drawImage(backing,left,0,pw,ph);g.font='11px -apple-system,sans-serif';g.fillStyle=color('--ip-muted');g.textAlign='right';g.fillText('now',left-8,13);g.fillText('−10s',left-8,eventY-7);g.fillText('−20s',left-8,ph-7);
+   if(state.corrected){g.strokeStyle='#abc0d17a';g.setLineDash([3,5]);g.beginPath();g.moveTo(left,eventY);g.lineTo(right,eventY);g.stroke();g.setLineDash([]);g.fillStyle='#101720';const eventText='Correction applied · preview';const tx=left+8,tw=g.measureText(eventText).width+16;g.fillRect(tx,eventY+4,tw,20);g.fillStyle='#b6c9d8';g.textAlign='left';g.fillText(eventText,tx+8,eventY+18);}
+   if(state.enabled&&state.guides){products.forEach((p,i)=>{if(p.offset<domain[0]||p.offset>domain[1])return;g.strokeStyle=col(p);g.globalAlpha=i===state.selected?Math.min(.8,state.guideAlpha+.2):state.guideAlpha;g.lineWidth=1;g.setLineDash([2,6]);g.beginPath();g.moveTo(x(p.offset),0);g.lineTo(x(p.offset),ph);g.stroke();g.setLineDash([]);g.globalAlpha=1;});}
+ }
+ new ResizeObserver(()=>windows.forEach(draw)).observe(root);new MutationObserver(()=>requestAnimationFrame(()=>windows.forEach(draw))).observe(root,{attributes:true,subtree:true,attributeFilter:['hidden']});if(globalThis.lucide)lucide.createIcons({attrs:{width:14,height:14}});
+})();
+</script>

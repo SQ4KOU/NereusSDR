@@ -33,12 +33,25 @@
 //                 on a dispatch queue of their own, instead of walking every
 //                 device on each call. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-10-16: pullKeepingBacklog(): a remote window's uplink reads the
+//                 TX ring on a 10 ms GUI timer, and the 16 ms guard dropped
+//                 a tenth of WSJT-X's audio between reads. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-16: the reader watch marks the process's first native audio
+//                 call (NativeAudioFirstCall), for the persistent capture
+//                 helper's timing. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-17: pullKeepingBacklog() keeps a whole stereo frame; the
+//                 drain comment says the guard's thresholds come from the
+//                 caller. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "CoreAudioHalBus.h"
 
 #include "core/LogCategories.h"
 #include "core/PerfMonitor.h"
+#include "core/audio/NativeAudioFirstCall.h"
 
 #include <QLoggingCategory>
 
@@ -173,6 +186,7 @@ struct CoreAudioHalBus::ReaderWatch {
         runningListener = Block_copy(^(UInt32, const AudioObjectPropertyAddress*) {
             self->readRunning();
         });
+        markNativeAudioCall("VAX device watch");
         AudioObjectAddPropertyListenerBlock(kAudioObjectSystemObject, &kDevicesAddress,
                                             queue, devicesListener);
         // The first answer before open() returns, so a caller asking right
@@ -473,6 +487,21 @@ qint64 CoreAudioHalBus::push(const char* data, qint64 bytes) {
 }
 
 qint64 CoreAudioHalBus::pull(char* data, qint64 maxBytes) {
+    return drainTx(data, maxBytes, kMaxBacklogSamples, kTargetBacklogSamples);
+}
+
+qint64 CoreAudioHalBus::pullKeepingBacklog(char* data, qint64 maxBytes, qint64 maxBacklogBytes) {
+    // At least pull()'s guard; at most half the ring, as a lapped reader
+    // keeps. Rounded down to a whole stereo frame, so a skip never starts
+    // the read on a right-channel sample.
+    qint64 samples = std::clamp<qint64>(maxBacklogBytes / qint64(sizeof(float)),
+                                        kMaxBacklogSamples, VaxShmBlock::RING_SIZE / 2);
+    samples &= ~qint64(1);
+    return drainTx(data, maxBytes, uint32_t(samples), uint32_t(samples));
+}
+
+qint64 CoreAudioHalBus::drainTx(char* data, qint64 maxBytes, uint32_t maxBacklogSamples,
+                                uint32_t keepSamples) {
     if (isProducer()) {
         return -1;
     }
@@ -481,9 +510,12 @@ qint64 CoreAudioHalBus::pull(char* data, qint64 maxBytes) {
     }
 
 #ifdef Q_OS_MAC
-    // Drain TX audio written by the HAL plugin. Ported verbatim from
+    // Drain TX audio written by the HAL plugin. Ported from
     // VirtualAudioBridge::readTxAudio — acquire loads, wrap-skip if the writer
     // has lapped the reader, backlog guards to keep near-real-time latency.
+    // The guard's thresholds are the caller's: pull() passes readTxAudio's
+    // frame counts unchanged, which at 48 kHz is half its time;
+    // pullKeepingBacklog() passes a deeper one.
     uint32_t rp = m_block->readPos.load(std::memory_order_acquire);
     uint32_t wp = m_block->writePos.load(std::memory_order_acquire);
 
@@ -505,8 +537,8 @@ qint64 CoreAudioHalBus::pull(char* data, qint64 maxBytes) {
 
     // Low-latency guard: if backlog grows, skip stale audio and keep only
     // a small recent window near the writer head.
-    if (available > kMaxBacklogSamples) {
-        rp = wp - kTargetBacklogSamples;
+    if (available > maxBacklogSamples) {
+        rp = wp - keepSamples;
         available = wp - rp;
     }
 
@@ -537,6 +569,8 @@ qint64 CoreAudioHalBus::pull(char* data, qint64 maxBytes) {
 #else
     (void)data;
     (void)maxBytes;
+    (void)maxBacklogSamples;
+    (void)keepSamples;
     return 0;
 #endif
 }

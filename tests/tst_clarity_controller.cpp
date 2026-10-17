@@ -2,8 +2,9 @@
 //
 // Phase 3G-9c — ClarityController unit tests. Covers the stateful wrapper
 // around NoiseFloorEstimator: enable/disable gating, EWMA smoothing,
-// deadband gating, poll-rate throttling, TX pause, manual override,
-// threshold margin math, and the 30 dB min-gap clamp.
+// emission on every changed floor, poll-rate throttling, TX pause, the
+// level kept through a key, the hold after it, the calibration offset,
+// manual override, threshold margin math, and the 30 dB min-gap clamp.
 //
 // Strict TDD: every test written first, verified RED, then minimal code
 // to green. QSignalSpy is used to capture emissions.
@@ -12,6 +13,8 @@
 #include <QSignalSpy>
 
 #include "core/ClarityController.h"
+
+#include <cmath>
 
 using namespace NereusSDR;
 
@@ -50,7 +53,7 @@ private slots:
         feed(-130.0f, 0);
         feed(-100.0f, 100); // Same cadence suppression as the local path.
         QCOMPARE(remoteFloors.size(), 1);
-        feed(-130.0f, 500); // Stable floor still passes the deadband gate.
+        feed(-130.0f, 500); // An unchanged floor emits no second pair.
         QCOMPARE(remoteThresholds.size(), 1);
         feed(-100.0f, 1000); // Same EWMA response to a changed noise floor.
         local.notifyManualOverride();
@@ -164,6 +167,258 @@ private slots:
         QCOMPARE(spy.count(), 1);
     }
 
+    void transmitRelease_keepsThePreKeyThresholdsThenFollowsTheNewFloor()
+    {
+        // Was transmitRelease_reEmitsAtTheUnchangedFloor (bench 2026-10-06,
+        // #359). The un-key no longer re-anchors: the pre-key thresholds stay
+        // the last emitted pair, and a different floor after the key is
+        // smoothed from the kept one.
+        ClarityController ctrl;
+        ctrl.setEnabled(true);
+        QSignalSpy spy(&ctrl, &ClarityController::waterfallThresholdsChanged);
+
+        ctrl.feedBins(QVector<float>(2048, -130.0f), 0);
+        QCOMPARE(spy.count(), 1);
+        const float lowBefore = ctrl.lastLow();
+        const float highBefore = ctrl.lastHigh();
+
+        ctrl.setTransmitting(true);
+        ctrl.feedBins(QVector<float>(2048, -110.0f), 500);   // rejected while keyed
+        ctrl.feedBins(QVector<float>(2048, -110.0f), 2500);
+        ctrl.setTransmitting(false);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(ctrl.lastLow(), lowBefore);
+        QCOMPARE(ctrl.lastHigh(), highBefore);
+
+        ctrl.feedBins(QVector<float>(2048, -110.0f), 3000);
+        QCOMPARE(spy.count(), 2);
+        QCOMPARE(spy.at(0).at(0).toFloat(), lowBefore);
+        QCOMPARE(spy.at(0).at(1).toFloat(), highBefore);
+        const float lowAfter = spy.at(1).at(0).toFloat();
+        QVERIFY2(lowAfter > lowBefore, "the floor moves toward the post-key reading");
+        QVERIFY2(lowAfter < -110.0f - 5.0f, "the post-key reading is not taken whole");
+    }
+
+    void transmitRelease_restoresThePreKeyFloor()
+    {
+        // Was transmitRelease_takesTheFirstPostKeyFloorWhole. Steady floor
+        // before a key: the key, the un-key and the hold change nothing and
+        // emit no level at either edge.
+        ClarityController ctrl;
+        ctrl.setEnabled(true);
+        ctrl.setSmoothingTauSec(3.0f);
+        ctrl.feedBins(QVector<float>(2048, -120.0f), 0);
+        ctrl.feedBins(QVector<float>(2048, -120.0f), 500);
+        QCOMPARE(ctrl.smoothedFloor(), -120.0f);
+        const float lowBefore = ctrl.lastLow();
+        const float highBefore = ctrl.lastHigh();
+
+        QSignalSpy thresholds(&ctrl, &ClarityController::waterfallThresholdsChanged);
+        QSignalSpy floors(&ctrl, &ClarityController::noiseFloorChanged);
+        ctrl.setTransmitting(true);
+        QCOMPARE(thresholds.count(), 0);
+        QCOMPARE(floors.count(), 0);
+        ctrl.setTransmitting(false);
+        ctrl.beginHold(1000, 2000);
+        QVERIFY(ctrl.inHold(2000));
+        QVERIFY(ctrl.inHold(2999));
+        QVERIFY(!ctrl.inHold(3000));
+        QCOMPARE(ctrl.smoothedFloor(), -120.0f);
+        QCOMPARE(ctrl.lastLow(), lowBefore);
+        QCOMPARE(ctrl.lastHigh(), highBefore);
+        QCOMPARE(thresholds.count(), 0);
+        QCOMPARE(floors.count(), 0);
+
+        // The kept floor is what the next reading is smoothed from.
+        ctrl.feedBins(QVector<float>(2048, -100.0f), 3500);
+        QVERIFY(ctrl.smoothedFloor() > -120.0f);
+        QVERIFY(ctrl.smoothedFloor() < -110.0f);
+    }
+
+    void hold_takesInNothingAndEmitsNothing()
+    {
+        ClarityController ctrl;
+        ctrl.setEnabled(true);
+        ctrl.feedBins(QVector<float>(2048, -120.0f), 0);
+        ctrl.setTransmitting(true);
+        ctrl.setTransmitting(false);
+        ctrl.beginHold(1000, 2000);
+
+        QSignalSpy thresholds(&ctrl, &ClarityController::waterfallThresholdsChanged);
+        QSignalSpy floors(&ctrl, &ClarityController::noiseFloorChanged);
+        ctrl.feedBins(QVector<float>(2048, -100.0f), 2000);
+        ctrl.feedBins(QVector<float>(2048, -100.0f), 2500);
+        ctrl.feedNoiseFloor(-100.0f, 2999);
+        QCOMPARE(ctrl.smoothedFloor(), -120.0f);
+        QCOMPARE(thresholds.count(), 0);
+        QCOMPARE(floors.count(), 0);
+    }
+
+    void hold_restartsTheSmoothingClock()
+    {
+        // A key 10 s long is longer than 3 x tau. Smoothed over the time
+        // since the last pre-key reading, the first reading after it would
+        // move the floor 97 percent of the way. The clock restarts at the
+        // hold's end, so it moves by the 500 ms step.
+        ClarityController ctrl;
+        ctrl.setEnabled(true);
+        ctrl.setSmoothingTauSec(3.0f);
+        ctrl.feedBins(QVector<float>(2048, -120.0f), 0);
+        ctrl.feedBins(QVector<float>(2048, -120.0f), 500);
+        ctrl.feedBins(QVector<float>(2048, -120.0f), 1000);
+        QCOMPARE(ctrl.smoothedFloor(), -120.0f);
+
+        ctrl.setTransmitting(true);                           // keyed at 1000
+        ctrl.feedBins(QVector<float>(2048, -40.0f), 6000);
+        ctrl.setTransmitting(false);                          // un-keyed at 11000
+        ctrl.beginHold(1000, 11000);
+
+        QSignalSpy thresholds(&ctrl, &ClarityController::waterfallThresholdsChanged);
+        const QVector<float> after(2048, -100.0f);
+        ctrl.feedBins(after, 11500);                          // in the hold
+        ctrl.feedBins(after, 12000);                          // the hold's end: no time has run
+        QCOMPARE(ctrl.smoothedFloor(), -120.0f);
+        QCOMPARE(thresholds.count(), 0);
+
+        ctrl.feedBins(after, 12500);
+        const float step = 1.0f - std::exp(-0.5f / 3.0f);     // about 0.154
+        const float expected = -120.0f + step * 20.0f;        // about -116.9
+        QVERIFY2(qAbs(ctrl.smoothedFloor() - expected) < 0.01f,
+                 qPrintable(QString::number(ctrl.smoothedFloor())));
+        QCOMPARE(thresholds.count(), 1);
+
+        // The cadence gate still applies after an emission.
+        ctrl.feedBins(after, 12600);
+        QCOMPARE(thresholds.count(), 1);
+        ctrl.feedBins(after, 13000);
+        QCOMPARE(thresholds.count(), 2);
+        QVERIFY(ctrl.smoothedFloor() > expected);
+        QVERIFY(ctrl.smoothedFloor() < -100.0f);
+    }
+
+    void keyDuringHold_cancelsItAndKeepsTheLevel()
+    {
+        ClarityController ctrl;
+        ctrl.setEnabled(true);
+        ctrl.feedBins(QVector<float>(2048, -120.0f), 0);
+        ctrl.setTransmitting(true);
+        ctrl.setTransmitting(false);
+        ctrl.beginHold(1000, 2000);
+        QVERIFY(ctrl.inHold(2200));
+
+        QSignalSpy thresholds(&ctrl, &ClarityController::waterfallThresholdsChanged);
+        QSignalSpy floors(&ctrl, &ClarityController::noiseFloorChanged);
+        ctrl.setTransmitting(true);                           // re-key at 2200
+        QVERIFY(!ctrl.inHold(2200));
+        QCOMPARE(ctrl.smoothedFloor(), -120.0f);
+        ctrl.feedBins(QVector<float>(2048, -100.0f), 2400);   // keyed
+        QCOMPARE(ctrl.smoothedFloor(), -120.0f);
+
+        ctrl.setTransmitting(false);                          // un-key at 2500
+        QVERIFY(!ctrl.inHold(2500));
+        ctrl.beginHold(1000, 2500);                           // a fresh hold
+        QVERIFY(ctrl.inHold(3400));                           // past the first hold's end
+        ctrl.feedBins(QVector<float>(2048, -100.0f), 3400);
+        QCOMPARE(ctrl.smoothedFloor(), -120.0f);
+        QVERIFY(!ctrl.inHold(3500));
+        QCOMPARE(thresholds.count(), 0);
+        QCOMPARE(floors.count(), 0);
+    }
+
+    void cancelHold_endsTheHold()
+    {
+        ClarityController ctrl;
+        ctrl.setEnabled(true);
+        ctrl.setSmoothingTauSec(0.0f);
+        ctrl.feedBins(QVector<float>(2048, -120.0f), 0);
+        ctrl.beginHold(1000, 1000);
+        QVERIFY(ctrl.inHold(1500));
+        ctrl.cancelHold();
+        QVERIFY(!ctrl.inHold(1500));
+        ctrl.feedBins(QVector<float>(2048, -100.0f), 1500);
+        QCOMPARE(ctrl.smoothedFloor(), -100.0f);
+    }
+
+    void enabledWhileKeyed_takesTheFirstReadingAfterTheHoldWhole()
+    {
+        // No level before the key, so there is nothing to restore.
+        ClarityController ctrl;
+        ctrl.setTransmitting(true);
+        ctrl.setEnabled(true);
+        QSignalSpy thresholds(&ctrl, &ClarityController::waterfallThresholdsChanged);
+        QSignalSpy floors(&ctrl, &ClarityController::noiseFloorChanged);
+        ctrl.feedBins(QVector<float>(2048, -90.0f), 0);       // keyed
+        ctrl.setTransmitting(false);
+        ctrl.beginHold(1000, 5000);
+        ctrl.feedBins(QVector<float>(2048, -90.0f), 5500);    // in the hold
+        QCOMPARE(thresholds.count(), 0);
+        QCOMPARE(floors.count(), 0);
+
+        ctrl.feedBins(QVector<float>(2048, -100.0f), 6000);
+        QCOMPARE(ctrl.smoothedFloor(), -100.0f);
+        QCOMPARE(floors.count(), 1);
+        QCOMPARE(thresholds.count(), 1);
+        QCOMPARE(thresholds.first().at(0).toFloat(), -105.0f);
+        QCOMPARE(thresholds.first().at(1).toFloat(), -45.0f);
+    }
+
+    void afterTheHold_emitsWithoutRetuneOrBandChange()
+    {
+        // R-DSP-25 (#359): Clarity is active again after the un-key with no
+        // retuneNow() and no snapToFloor().
+        ClarityController ctrl;
+        ctrl.setEnabled(true);
+        ctrl.feedBins(QVector<float>(2048, -120.0f), 0);
+        ctrl.setTransmitting(true);
+        ctrl.setTransmitting(false);
+        ctrl.beginHold(1000, 3000);
+
+        QSignalSpy thresholds(&ctrl, &ClarityController::waterfallThresholdsChanged);
+        QSignalSpy floors(&ctrl, &ClarityController::noiseFloorChanged);
+        ctrl.feedBins(QVector<float>(2048, -119.0f), 4500);
+        ctrl.feedBins(QVector<float>(2048, -119.0f), 5000);
+        QCOMPARE(floors.count(), 2);
+        QCOMPARE(thresholds.count(), 2);
+        QVERIFY(ctrl.smoothedFloor() > -120.0f);
+        QVERIFY(ctrl.smoothedFloor() < -119.0f);
+    }
+
+    void calibrationOffset_isAddedToBinsOnly()
+    {
+        // Bins whose 30th percentile is -100, with strong signals above it.
+        QVector<float> bins(1000, -100.0f);
+        for (int i = 800; i < bins.size(); ++i) { bins[i] = -20.0f; }
+
+        ClarityController local;
+        local.setEnabled(true);
+        local.setCalibrationOffsetDb(-12.0f);
+        local.feedBins(bins, 0);
+        QCOMPARE(local.smoothedFloor(), -112.0f);
+
+        // A floor from the Core is calibrated already.
+        ClarityController remote;
+        remote.setEnabled(true);
+        remote.setCalibrationOffsetDb(-12.0f);
+        remote.feedNoiseFloor(-112.0f, 0);
+        QCOMPARE(remote.smoothedFloor(), -112.0f);
+    }
+
+    void smallFloorSteps_emitOnEveryReading()
+    {
+        // No 2 dB steps: the consumer slews, so every changed floor goes out.
+        ClarityController ctrl;
+        ctrl.setEnabled(true);
+        ctrl.setSmoothingTauSec(0.0f);
+        QSignalSpy spy(&ctrl, &ClarityController::waterfallThresholdsChanged);
+        for (int i = 0; i < 6; ++i) {
+            const float floor = -130.0f + 0.5f * static_cast<float>(i);
+            ctrl.feedBins(QVector<float>(2048, floor), 500 * i);
+            QCOMPARE(spy.count(), i + 1);
+            QCOMPARE(spy.last().at(0).toFloat(), floor - 5.0f);
+            QCOMPARE(spy.last().at(1).toFloat(), floor + 55.0f);
+        }
+    }
+
     void manualOverride_suppressesUntilRetune()
     {
         // User dragged the Low/High slider while Clarity was running.
@@ -217,16 +472,16 @@ private slots:
         QCOMPARE(pausedSpy.first().at(0).toBool(), false);
     }
 
-    void stableFloor_deadbandSuppressesAfterFirstEmission()
+    void stableFloor_emitsOnce()
     {
-        // Locked spec (§6.2.2): ±2 dB deadband. On a stationary noise
-        // floor, Clarity should emit exactly once then stop talking
-        // until the floor actually drifts past the deadband.
+        // Was stableFloor_deadbandSuppressesAfterFirstEmission. On a
+        // stationary noise floor Clarity emits once, then stays quiet until
+        // the floor moves: a pair goes out only when the floor differs from
+        // the last emitted one.
         // (τ set to 0 so raw-floor == smoothed for this isolation test.)
         ClarityController ctrl;
         ctrl.setEnabled(true);
         ctrl.setSmoothingTauSec(0.0f);
-        ctrl.setDeadbandDb(2.0f);
         QSignalSpy spy(&ctrl, &ClarityController::waterfallThresholdsChanged);
 
         QVector<float> bins(2048, -130.0f);
@@ -237,14 +492,13 @@ private slots:
         QCOMPARE(spy.count(), 1);
     }
 
-    void floorDriftBeyondDeadband_emitsAgain()
+    void floorDrift_emitsAgain()
     {
-        // Same setup, but between frames the floor moves 10 dB — well
-        // past the deadband — so a second emission must fire.
+        // Was floorDriftBeyondDeadband_emitsAgain. Same setup, but between
+        // frames the floor moves 10 dB, so a second emission must fire.
         ClarityController ctrl;
         ctrl.setEnabled(true);
         ctrl.setSmoothingTauSec(0.0f);
-        ctrl.setDeadbandDb(2.0f);
         QSignalSpy spy(&ctrl, &ClarityController::waterfallThresholdsChanged);
 
         QVector<float> noise (2048, -130.0f);
@@ -265,7 +519,6 @@ private slots:
         ClarityController ctrl;
         ctrl.setEnabled(true);
         ctrl.setSmoothingTauSec(3.0f);
-        ctrl.setDeadbandDb(0.0f);
         QSignalSpy spy(&ctrl, &ClarityController::waterfallThresholdsChanged);
 
         QVector<float> cold(2048, -130.0f);

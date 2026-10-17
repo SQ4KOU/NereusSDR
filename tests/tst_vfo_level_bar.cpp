@@ -1,11 +1,30 @@
 #include <QtTest/QtTest>
 #include "gui/widgets/VfoLevelBar.h"
 #include <limits>
+#include <QFontMetrics>
+#include "gui/styles/WorkspacePreview.h"
 using namespace NereusSDR;
 
 class TestVfoLevelBar : public QObject {
     Q_OBJECT
 private slots:
+    void workspaceSizeHintReservesTwoReadableRows() {
+        WorkspacePreview::setEnabledForTest(false);
+        VfoLevelBar bar;
+        QCOMPARE(bar.sizeHint(), QSize(230, 26));
+        WorkspacePreview::setEnabledForTest(true);
+        QFont ticks = bar.font();
+        ticks.setPixelSize(11);
+        QFont readout = ticks;
+        readout.setBold(true);
+        QVERIFY(bar.sizeHint().height() >= 4 + QFontMetrics(ticks, &bar).height()
+                                                   + QFontMetrics(readout, &bar).height());
+        bar.resize(bar.sizeHint());
+        bar.setValue(-130.0f);
+        QVERIFY(!bar.grab().isNull());
+        WorkspacePreview::setEnabledForTest(false);
+        QCOMPARE(bar.sizeHint(), QSize(230, 26));
+    }
     void fillFractionAtFloor() {
         VfoLevelBar bar; bar.resize(200, 24);
         bar.setValue(-130.0f);

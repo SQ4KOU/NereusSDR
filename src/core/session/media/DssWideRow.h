@@ -3,10 +3,19 @@
 // src/core/session/media/DssWideRow.h  (NereusSDR)
 // =================================================================
 //
-// no-port-check: NereusSDR-original extraction of the calibrated-dBm crop
-// boundary already used by SpectrumWidget::buildDssWideRow(). This is only
-// crop and peak reduction; detector and avenger processing stay exclusively
-// on the exact waterfall plane.
+// no-port-check: NereusSDR-original extraction of the crop boundary already
+// used by SpectrumWidget::buildDssWideRow(). This is only crop and peak
+// reduction; detector and avenger processing stay exclusively on the exact
+// waterfall plane.
+//
+// The row may be calibrated dBm (SpectrumWidget) or linear power
+// (SpectrumEndpoint, which converts only the values it sends). Both rise
+// with the power, so the crop and the peak reduction give the same bins
+// either way. The binsDbm names date from when only dBm rows came here.
+//
+// Modification history (NereusSDR):
+//   2026-10-15: Comments say the row may be dBm or linear power.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //
 // =================================================================
 
@@ -29,9 +38,9 @@ struct DssWideRow {
     double spanHz {0.0};
 };
 
-/// Crops an already calibrated full-source dBm row. The returned row is the
-/// same DDC-window calculation local 3D uses; it intentionally does not run
-/// the trace/waterfall detector or averager again.
+/// Crops a full-source row (calibrated dBm or linear power). The returned
+/// row is the same DDC-window calculation local 3D uses; it intentionally
+/// does not run the trace/waterfall detector or averager again.
 DssWideRow cropDssWideRow(const QVector<float>& fullBinsDbm,
                           const DssWideRowRequest& request);
 

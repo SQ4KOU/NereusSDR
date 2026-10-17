@@ -44,8 +44,8 @@ extension DisplayOnThisPhonePage {
                            id: "waterfallOpacity") { value in change { $0.waterfallOpacityPercent = Int(value) } }
             Toggle("Stop while transmitting", isOn: binding(\.waterfallStopOnTx))
                 .accessibilityIdentifier("waterfallStopOnTx")
-            Toggle("Use the scale's top and bottom", isOn: binding(\.useSpectrumMinMax))
-                .accessibilityIdentifier("useSpectrumMinMax")
+            // Scale is now the fifth coherent level choice above; its
+            // inactive bit is not a second independently visible switch.
             Button("Copy the scale to High and Low") { copyScaleToLevels() }
                 .accessibilityIdentifier("copyScaleToLevels")
             Button("Copy High and Low to the scale") { copyLevelsToScale() }

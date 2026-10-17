@@ -28,6 +28,8 @@
 //                 decision per phase3m-4-puresignal-design.md §15 #14).
 //   2026-09-21 — Migrated the data feed to bounded owning PS3 snapshots;
 //                 widgets no longer receive raw WDSP display buffers.
+//   2026-10-13 — Linked readout and session-local visibility;
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 
 /*  AmpView.cs
@@ -76,6 +78,7 @@ mw0lge@grange-lane.co.uk
 
 #include <QDialog>
 #include <QPointer>
+#include "gui/NereusGuiExport.h"
 
 #include <cstdint>
 
@@ -98,7 +101,7 @@ struct Ps3Snapshot;
 // Modeless PS3 display.  It consumes the session-neutral facade and never
 // holds a TxChannel or calls WDSP.  The legacy constructor shape remains for
 // PsForm and standalone coordinator tests.
-class AmpViewWindow final : public QDialog {
+class NEREUS_GUI_EXPORT AmpViewWindow final : public QDialog {
     Q_OBJECT
 
 public:
@@ -133,10 +136,13 @@ private:
     void acceptSnapshot(const Ps3Snapshot& snapshot);
     void invalidateDisplay();
     void refreshAvailability();
+    void updateReadout();
+    void applyPresentationStyle();
 
     QPointer<PureSignalSessionFacade> m_facade;
     AmpViewChart* m_chart{nullptr};
     QLabel* m_displayStatus{nullptr};
+    QLabel* m_cursorReadout{nullptr};
     QCheckBox* m_chkShowGain{nullptr};
     QCheckBox* m_chkPhaseZoom{nullptr};
     QCheckBox* m_chkLowRes{nullptr};
@@ -150,6 +156,7 @@ private:
     std::uint64_t m_displayGeneration{0};
     std::uint64_t m_lastSequence{0};
     qint64 m_lastCaptureMs{0};
+    bool m_lastCaptureWhileMox{false};
     bool m_subscribed{false};
 };
 

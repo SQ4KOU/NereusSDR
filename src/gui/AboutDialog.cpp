@@ -96,10 +96,15 @@ mw0lge@grange-lane.co.uk
 //                 frmAbout.cs verbatim header, version pin [@501e3f5],
 //                 canonical inline cite above kRoster. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - The title and section headings read
+//                 WorkspacePreview::roleColourName() (title-text) with the
+//                 workspace preview on. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #include "AboutDialog.h"
 #include "StyleConstants.h"
+#include "gui/styles/WorkspacePreview.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -157,7 +162,7 @@ void AboutDialog::buildUI()
     title->setAlignment(Qt::AlignCenter);
     title->setStyleSheet(
         QStringLiteral("font-size: 22px; font-weight: bold; color: %1;")
-            .arg(Style::kAccent));
+            .arg(WorkspacePreview::roleColourName(Style::kAccent, "title-text")));
     mainLayout->addWidget(title);
 
     auto* version = new QLabel(
@@ -200,7 +205,7 @@ void AboutDialog::buildUI()
         QStringLiteral("Standing on the Shoulders of Giants"), this);
     giantsHeading->setStyleSheet(
         QStringLiteral("color: %1; font-size: 13px; font-weight: 600;")
-            .arg(Style::kAccent));
+            .arg(WorkspacePreview::roleColourName(Style::kAccent, "title-text")));
     mainLayout->addWidget(giantsHeading);
     mainLayout->addSpacing(6);
 
@@ -306,7 +311,7 @@ void AboutDialog::buildUI()
     auto* linksHeading = new QLabel(QStringLiteral("Links"), this);
     linksHeading->setStyleSheet(
         QStringLiteral("color: %1; font-size: 13px; font-weight: 600;")
-            .arg(Style::kAccent));
+            .arg(WorkspacePreview::roleColourName(Style::kAccent, "title-text")));
     mainLayout->addWidget(linksHeading);
     mainLayout->addSpacing(6);
 
@@ -346,7 +351,7 @@ void AboutDialog::buildUI()
     auto* builtHeading = new QLabel(QStringLiteral("Built With"), this);
     builtHeading->setStyleSheet(
         QStringLiteral("color: %1; font-size: 13px; font-weight: 600;")
-            .arg(Style::kAccent));
+            .arg(WorkspacePreview::roleColourName(Style::kAccent, "title-text")));
     mainLayout->addWidget(builtHeading);
     mainLayout->addSpacing(6);
 
@@ -367,9 +372,10 @@ void AboutDialog::buildUI()
     for (const auto& lib : kLibraries) {
         // §D exception: #aabbcc — card subtitle blue-gray; lighter than kTitleText (#8aa8c0).
         auto* card = new QLabel(
-            QStringLiteral("<b>%1</b><br><span style=\"color:#aabbcc\">%2</span>")  // §D exception
+            QStringLiteral("<b>%1</b><br><span style=\"color:%3\">%2</span>")  // §D exception
                 .arg(QString::fromUtf8(lib.name),
-                     QString::fromUtf8(lib.desc)),
+                     QString::fromUtf8(lib.desc),
+                     WorkspacePreview::roleColourName("#aabbcc", "text-secondary")),
             this);
         card->setAlignment(Qt::AlignCenter);
         card->setStyleSheet(

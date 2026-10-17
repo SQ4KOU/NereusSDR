@@ -7,6 +7,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Shared accessory display readings and independent legal
+//                 marker / display scale by J.J. Boyd (KG4VCF),
+//                 AI-assisted via OpenAI Codex.
+//   2026-10-08 - Rotor control plan Task 5: a rotator dial repaints when
+//                 its rotor's heading moves (RotatorItem::repaintRequested).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-10-04 — Selected RX source identity and RX-only presentation reset by
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-03 — Invalidate handled interaction layers by J.J. Boyd (KG4VCF),
@@ -38,6 +44,15 @@
 //                 binding's items are drawn dimmed with the reason as their
 //                 tooltip (setBindingUnavailable). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - Workspace preview data colours: the default background
+//                 and the unavailable veil read
+//                 WorkspacePreview::dataBackground() (navy until a choice
+//                 is made). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-08 - JJ's data colour decision: the default background is the
+//                 container's, the user's colour when the container has
+//                 one, and is redrawn when the container's changes. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -80,7 +95,13 @@ mw0lge@grange-lane.co.uk
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+// Modification history (NereusSDR):
+//   2026-10-12 - Refresh cached text layers when the workspace floor changes.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
+#include "core/ControlRanges.h"
 #include "MeterWidget.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "gui/containers/ContainerContentRegistry.h"
 #include "gui/containers/LegacyContainerImporter.h"
 #include "MeterItem.h"
@@ -158,7 +179,7 @@ MeterWidget::MeterWidget(QWidget* parent)
     // CPU fallback: dark background
     setAutoFillBackground(true);
     QPalette pal = palette();
-    pal.setColor(QPalette::Window, QColor(0x0f, 0x0f, 0x1a));
+    pal.setColor(QPalette::Window, WorkspacePreview::dataBackground(QColor(0x0f, 0x0f, 0x1a), "panel"));
     setPalette(pal);
 #endif
 
@@ -182,8 +203,14 @@ void MeterWidget::addItem(MeterItem* item)
         item->setParent(this);
     }
     m_items.append(item);
+    // Rotor control plan Task 5: the rotor's heading arrives outside the
+    // meter poller; the dial asks to be repainted.
+    if (auto* rotator = qobject_cast<RotatorItem*>(item)) {
+        connect(rotator, &RotatorItem::repaintRequested, this,
+                [this, rotator]() { invalidatePresentation(rotator); });
+    }
     if (m_unitMode) { item->setUnitMode(*m_unitMode); }
-    if (m_powerScale > 0) { item->setPowerScale(m_powerScale); }
+    if (m_powerScale > 0) { if (m_explicitPowerScale) { item->setPowerScale(m_powerScale, m_powerScaleTop); } else { item->setPowerScale(m_powerScale); } }
     item->resetForTxTransition(m_mox);
     for (int binding : item->readingBindings()) {
         if (!item->hasMmioBinding()) { item->setBindingSupport(binding, bindingSupport(binding)); }
@@ -392,7 +419,19 @@ void MeterWidget::rescalePowerMeters(int paMaxWatts)
 {
     if (paMaxWatts <= 0) { return; }
     m_powerScale = paMaxWatts;
+    m_powerScaleTop = paMaxWatts * ControlRanges::kRfPowerGaugeHeadroom;
+    m_explicitPowerScale = false;
     for (MeterItem* item : m_items) { item->setPowerScale(paMaxWatts); }
+    invalidateReadingLayers(true);
+}
+
+void MeterWidget::rescalePowerMeters(int visualLimitWatts, double topWatts)
+{
+    if (visualLimitWatts <= 0 || topWatts <= 0.0) { return; }
+    m_powerScale = visualLimitWatts;
+    m_powerScaleTop = topWatts;
+    m_explicitPowerScale = true;
+    for (MeterItem* item : m_items) { item->setPowerScale(visualLimitWatts, topWatts); }
     invalidateReadingLayers(true);
 }
 
@@ -457,7 +496,7 @@ void MeterWidget::paintEvent(QPaintEvent* event)
 #else
     Q_UNUSED(event);
     QPainter p(this);
-    p.fillRect(rect(), QColor(0x0f, 0x0f, 0x1a));
+    p.fillRect(rect(), WorkspacePreview::dataBackground(QColor(0x0f, 0x0f, 0x1a), "panel", this));
     drawItems(p);
 #endif
 }
@@ -695,7 +734,7 @@ void MeterWidget::drawUnavailableVeils(QPainter& p) const
         const QRect rect(static_cast<int>(item->x() * w), static_cast<int>(item->y() * h),
                          static_cast<int>(item->itemWidth() * w),
                          static_cast<int>(item->itemHeight() * h));
-        p.fillRect(rect, QColor(0x0f, 0x0f, 0x1a, 170));
+        p.fillRect(rect, WorkspacePreview::dataBackground(QColor(0x0f, 0x0f, 0x1a, 170), "panel", this));
     }
 }
 
@@ -755,6 +794,17 @@ QString MeterWidget::unavailableReasonAt(const QPointF& pos) const
 
 bool MeterWidget::event(QEvent* event)
 {
+    // Workspace preview: the default background follows the container
+    // around the meter (dataBackground()); a container that changes its
+    // background re-polishes its children, and a meter can move into
+    // another container.
+    if ((event->type() == QEvent::StyleChange || event->type() == QEvent::ParentChange)
+        && WorkspacePreview::enabled()) {
+#ifdef NEREUS_GPU_SPECTRUM
+        m_bgDirty = true;
+#endif
+        update();
+    }
     if (event->type() == QEvent::ToolTip) {
         auto* help = static_cast<QHelpEvent*>(event);
         const QString reason = unavailableReasonAt(help->pos());
@@ -1043,6 +1093,13 @@ void MeterWidget::initialize(QRhiCommandBuffer* cb)
 
 void MeterWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 {
+    const bool readableText = WorkspacePreview::enabled();
+    if (m_readableTextCache != readableText) {
+        m_readableTextCache = readableText;
+        markOverlayDirty();
+        m_bgDirty = true;
+    }
+
     QRhi* r = rhi();
     const int w = width();
     const int h = height();
@@ -1068,7 +1125,7 @@ void MeterWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         }
 
         if (m_bgDirty) {
-            m_bgImage.fill(QColor(0x0f, 0x0f, 0x1a));
+            m_bgImage.fill(WorkspacePreview::dataBackground(QColor(0x0f, 0x0f, 0x1a), "panel", this));
             QPainter p(&m_bgImage);
             p.setRenderHint(QPainter::Antialiasing, false);
             for (MeterItem* item : m_items) {
@@ -1165,7 +1222,7 @@ void MeterWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     cb->resourceUpdate(batch);
 
     // ---- Begin render pass ----
-    const QColor clearColor(0x0f, 0x0f, 0x1a);
+    const QColor clearColor = WorkspacePreview::dataBackground(QColor(0x0f, 0x0f, 0x1a), "panel", this);
     cb->beginPass(renderTarget(), clearColor, {1.0f, 0});
 
     const QSize outputSize = renderTarget()->pixelSize();

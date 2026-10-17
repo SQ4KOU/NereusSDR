@@ -87,6 +87,17 @@ StationServiceOptions isolatedService(AppSettings& settings, const QString& home
     return service;
 }
 
+// Windows counts a file as executable by its extension, so the stand-in
+// Core is nereusd.exe there.
+QString fakeCoreFileName()
+{
+#ifdef Q_OS_WIN
+    return QStringLiteral("nereusd.exe");
+#else
+    return QStringLiteral("nereusd");
+#endif
+}
+
 QString preservedSettingsPath(const QString& path)
 {
     return path + QStringLiteral(".runtime-test-original");
@@ -507,6 +518,9 @@ private slots:
         QVERIFY(writeConfig(serviceConfigPath(settings), port));
         RadioModel model;
         StationServiceOptions service;
+        // An explicit platform: Windows would ask PowerShell for the
+        // startup task, and the fake runner answers nothing.
+        service.platform = StationPlatform::MacOS;
         service.profileDirectory = QFileInfo(settings.filePath()).absolutePath();
         service.homeDirectory = temp.filePath(QStringLiteral("home"));
         service.inheritActiveProfile = false;
@@ -878,6 +892,9 @@ private slots:
         AppSettings& settings = AppSettings::instance();
         QVERIFY(writeConfig(serviceConfigPath(settings), freePort()));
         StationServiceOptions service;
+        // An explicit platform: Windows would ask PowerShell for the
+        // startup task, and the fake runner answers nothing.
+        service.platform = StationPlatform::MacOS;
         service.profileDirectory = QFileInfo(settings.filePath()).absolutePath();
         service.homeDirectory = temp.filePath(QStringLiteral("home"));
         service.inheritActiveProfile = false;
@@ -914,7 +931,7 @@ private slots:
         QVERIFY(original.open(QIODevice::ReadOnly));
         const QByteArray bytes = original.readAll();
         original.close();
-        const QString binary = temp.filePath(QStringLiteral("nereusd"));
+        const QString binary = temp.filePath(fakeCoreFileName());
         QFile executable(binary);
         QVERIFY(executable.open(QIODevice::WriteOnly));
         executable.write("binary");
@@ -964,7 +981,7 @@ private slots:
         QVERIFY(temp.isValid());
         AppSettings& settings = AppSettings::instance();
         QVERIFY(writeConfig(serviceConfigPath(settings), freePort()));
-        const QString binary = temp.filePath(QStringLiteral("nereusd"));
+        const QString binary = temp.filePath(fakeCoreFileName());
         QFile executable(binary);
         QVERIFY(executable.open(QIODevice::WriteOnly));
         executable.write("binary");

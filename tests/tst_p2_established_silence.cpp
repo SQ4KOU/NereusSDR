@@ -3,9 +3,15 @@
 // Real-loopback verification for the Protocol 2 established-stream silence
 // boundary. The fake sends one genuine 1444-byte DDC2 datagram through the
 // production QUdpSocket path, then controls the other accepted role traffic.
+//
+// Modification history (NereusSDR):
+//   2026-10-15: transmitCutSendsPttOffAtOnceAndRefusesAKey, the transmit
+//               cut on the wire. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 
 #include <QtTest/QtTest>
 
+#include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QStringList>
 #include <QThread>
@@ -240,6 +246,80 @@ private slots:
         QCOMPARE(errorSpy.at(0).at(0).value<RadioConnectionError>(),
                  RadioConnectionError::NoDataTimeout);
         QTRY_COMPARE_WITH_TIMEOUT(fake.stopCount(), 1, 1000);
+    }
+
+    // The transmit cut (2026-10-15): keyed, cutTransmit() puts a
+    // high-priority packet with PTT off on the wire at once (the cut's own
+    // setMox(false)), the composed PTT bit already reads unkeyed before it
+    // runs, a key is refused while the cut is set, and after
+    // clearTransmitCut the next key goes out.
+    void transmitCutSendsPttOffAtOnceAndRefusesAKey()
+    {
+        P2FakeRadio fake;
+        QVERIFY(fake.start());
+        P2RadioConnection connection;
+        configureConnection(connection, fake);
+        QVERIFY(establish(connection, fake));
+
+        // Keeps the established link alive throughout.
+        QTimer statusTimer;
+        statusTimer.setInterval(30);
+        QObject::connect(&statusTimer, &QTimer::timeout,
+                         &fake, &P2FakeRadio::sendStatus);
+        statusTimer.start();
+
+        connection.setMox(true);
+        QTRY_VERIFY_WITH_TIMEOUT(fake.moxAssertedCount() > 0, 2000);
+
+        const int recordsBefore = fake.highPriorityRecords().size();
+        QElapsedTimer sinceCut;
+        sinceCut.start();
+        connection.cutTransmit();
+
+        // Before the queued unkey runs, the composed packet is unkeyed.
+        quint8 composed[1444] = {};   // P2RadioConnection::kBufLen (Thetis BUFLEN)
+        connection.composeCmdHighPriorityForTest(composed);
+        QCOMPARE(int(composed[4] & 0x02), 0);
+        QVERIFY(connection.transmitCut());
+
+        auto pttOffSince = [&fake](int from) {
+            const auto& records = fake.highPriorityRecords();
+            for (int i = from; i < records.size(); ++i) {
+                if ((records.at(i).flags & 0x02u) == 0) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        // Polled every millisecond (QTRY polls every 50 ms, too coarse to
+        // tell the cut's own packet from the next 100 ms heartbeat).
+        while (!pttOffSince(recordsBefore) && sinceCut.elapsed() < 2000) {
+            QTest::qWait(1);
+        }
+        const qint64 pttOffMs = sinceCut.elapsed();
+        QVERIFY(pttOffSince(recordsBefore));
+        qInfo("cut: PTT off on the wire after %lld ms", static_cast<long long>(pttOffMs));
+        QVERIFY2(pttOffMs < 500, "PTT off did not go out at once");
+
+        // Refused while cut: nothing keyed reaches the wire.
+        const int assertedAtCut = fake.moxAssertedCount();
+        const int recordsAtRefusal = fake.highPriorityRecords().size();
+        connection.setMox(true);
+        QTest::qWait(150);
+        QCOMPARE(fake.moxAssertedCount(), assertedAtCut);
+        for (int i = recordsAtRefusal; i < fake.highPriorityRecords().size(); ++i) {
+            QCOMPARE(int(fake.highPriorityRecords().at(i).flags & 0x02u), 0);
+        }
+
+        // Cleared: the next key goes out.
+        connection.clearTransmitCut();
+        QVERIFY(!connection.transmitCut());
+        connection.setMox(true);
+        QTRY_VERIFY_WITH_TIMEOUT(fake.moxAssertedCount() > assertedAtCut, 2000);
+
+        connection.setMox(false);
+        statusTimer.stop();
+        connection.disconnect();
     }
 
     void statusOnlyTrafficKeepsEstablishedLinkAlive()

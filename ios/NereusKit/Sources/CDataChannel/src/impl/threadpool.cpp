@@ -11,6 +11,10 @@
 
 namespace rtc::impl {
 
+// NereusSDR: an idle worker looks at the queue again after this long, woken
+// or not, so a task whose wake-up never arrived is still taken.
+const auto IDLE_RECHECK_INTERVAL = std::chrono::milliseconds(100);
+
 ThreadPool &ThreadPool::Instance() {
 	static ThreadPool *instance = new ThreadPool;
 	return *instance;
@@ -86,10 +90,12 @@ std::function<void()> ThreadPool::dequeue() {
 		--mBusyWorkers;
 		scope_guard guard([&]() { ++mBusyWorkers; });
 		mWaitingCondition.notify_all();
-		if (time)
-			mTasksCondition.wait_until(lock, *time);
-		else
-			mTasksCondition.wait(lock);
+		// NereusSDR: never wait on the notification alone. A wake-up that does
+		// not reach any worker must not leave a queued task waiting for ever.
+		auto deadline = clock::now() + IDLE_RECHECK_INTERVAL;
+		if (time && *time < deadline)
+			deadline = *time;
+		mTasksCondition.wait_until(lock, deadline);
 	}
 	return nullptr;
 }

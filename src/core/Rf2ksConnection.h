@@ -22,6 +22,7 @@
 #include <QHash>
 #include <QSet>
 #include <memory>
+#include "core/NereusCoreExport.h"
 
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -58,7 +59,7 @@ struct RfKitAntenna {
     State state   = State::Available;
 };
 
-class Rf2ksConnection : public QObject {
+class NEREUS_CORE_EXPORT Rf2ksConnection : public QObject {
     Q_OBJECT
 public:
     explicit Rf2ksConnection(QObject* parent = nullptr);

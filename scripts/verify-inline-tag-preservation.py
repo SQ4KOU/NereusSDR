@@ -36,6 +36,12 @@ Exit code 0 iff no findings (strict) or always 0 in audit mode.
 
 Configuration:
     NEREUS_THETIS_DIR:      override ../Thetis path
+    NEREUS_THETIS_V21015_DIR: override ../Thetis-v2.10.3.15 path
+                            ([v2.10.3.15] and [@3759d09] cites)
+    NEREUS_THETIS_V21013_DIR: override ../Thetis-v2.10.3.13 path
+                            ([v2.10.3.13] and [@501e3f5] cites, plus
+                            every ramdor cite with no stamp or a stamp
+                            no tree here matches)
     NEREUS_MI0BOT_DIR:      override ../mi0bot-Thetis path
     NEREUS_FREEDV_DIR:      override ../freedv-gui path
 """
@@ -85,7 +91,7 @@ MI0BOT_DIR = Path(os.environ.get(
 # ---------------------------------------------------------------------
 # Per-version ramdor checkouts
 # ---------------------------------------------------------------------
-# THETIS_DIR is pinned to ONE commit (501e3f5, tag v2.10.3.13). Cites
+# THETIS_DIR is pinned to ONE commit (3759d09, tag v2.10.3.15). Cites
 # stamped against a different release must resolve against THAT release,
 # for exactly the reason resolve_upstream() refuses to cross the
 # ramdor/mi0bot fork boundary: opening a cited line number in the wrong
@@ -111,16 +117,74 @@ MI0BOT_DIR = Path(os.environ.get(
 THETIS_V21015_DIR = Path(os.environ.get(
     "NEREUS_THETIS_V21015_DIR",
     discover_sibling("Thetis-v2.10.3.15"))).expanduser()
+# 2026-10-15: THETIS_DIR moved from 501e3f5 to the CLAUDE.md pin
+# (v2.10.3.15, 3759d09), so local runs against ../Thetis and CI agree.
+# The cites stamped against the old pin (`[v2.10.3.13]`, `[@501e3f5]`,
+# about 2,400 of them) keep resolving against 501e3f5, now its own tree.
+# 501e3f5 is v2.10.3.13 plus seven commits; it is the tree those cites
+# were written against. So do the unstamped cites and those stamped for
+# a release with no tree here (about 390): see THETIS_LEGACY_DIR. Since
+# then ../Thetis decides no cite's tree; it is required only so a run
+# with no upstream at all stops instead of passing.
+THETIS_V21013_DIR = Path(os.environ.get(
+    "NEREUS_THETIS_V21013_DIR",
+    discover_sibling("Thetis-v2.10.3.13"))).expanduser()
 
+# SHA keys are the FULL commit ids. A `[@sha]` stamp matches when it is a
+# prefix of one, so `[@501e3f5]`, `[@501e3f51]` and the full id all route
+# to the same tree (see thetis_tree_for_stamp).
 THETIS_VERSION_DIRS = {
     "2.10.3.15": THETIS_V21015_DIR,
-    "3759d09":   THETIS_V21015_DIR,
+    "3759d096067b7574550b963c1e7a22003da2ab00": THETIS_V21015_DIR,
+    "2.10.3.13": THETIS_V21013_DIR,
+    "501e3f513f73f07742d7e1b85a0e9528bd14977d": THETIS_V21013_DIR,
+}
+THETIS_VERSION_ENV = {
+    "2.10.3.15": "NEREUS_THETIS_V21015_DIR",
+    "2.10.3.13": "NEREUS_THETIS_V21013_DIR",
 }
 
 # The stamp on a cite line: `[v2.10.3.15]`, `[@3759d09]`, or the combined
 # `[v2.10.3.13 @501e3f5]` form. Captures whichever token is present so the
 # resolver can look it up in THETIS_VERSION_DIRS.
 RE_STAMP = re.compile(r"\[\s*(?:v(?P<ver>\d+(?:\.\d+)+)|@(?P<sha>[0-9a-f]{7,40}))")
+
+# The tree a ramdor cite is checked against when its stamp names no tree
+# above: no stamp at all, or a release we keep no checkout for
+# (`[v2.10.3.6]`, `[v2.10.3.14]`, `[@0cd4559]`). That is the old pin,
+# 501e3f5. CLAUDE.md requires every new cite to carry a stamp, so an
+# unstamped cite is a legacy one, written against 501e3f5 when that was
+# ../Thetis; checking it there is exactly what this script did before
+# ../Thetis moved to v2.10.3.15, so no existing cite loses coverage.
+# Checking those cites against v2.10.3.15 instead would let a port drop
+# a tag that sits beside the cited lines in 501e3f5 but not in .15
+# (RxChannel.h, BoardCapabilities.cpp and seven others did).
+THETIS_LEGACY_DIR = THETIS_V21013_DIR
+
+
+def thetis_tree_for_stamp(stamp: str | None) -> Path:
+    """The ramdor tree a cite with this stamp is checked against.
+
+    A release stamp matches its key exactly; a SHA stamp matches when it
+    is a prefix of a key's full commit id (7 to 40 hex digits). Anything
+    else, including no stamp, gets THETIS_LEGACY_DIR.
+    """
+    if stamp:
+        if stamp in THETIS_VERSION_DIRS:
+            return THETIS_VERSION_DIRS[stamp]
+        if re.fullmatch(r"[0-9a-f]{7,40}", stamp):
+            hits = {d for k, d in THETIS_VERSION_DIRS.items()
+                    if "." not in k and k.startswith(stamp)}
+            if len(hits) == 1:
+                return hits.pop()
+    return THETIS_LEGACY_DIR
+
+
+# Prefix matching is only safe while no two known SHAs share a 7-digit
+# prefix; fail loudly if a new tree ever breaks that.
+_SHA_KEYS = [k for k in THETIS_VERSION_DIRS if "." not in k]
+assert len({k[:7] for k in _SHA_KEYS}) == len(_SHA_KEYS), \
+    "THETIS_VERSION_DIRS SHAs collide at 7 digits; stamps would be ambiguous"
 DESKHPSDR_DIR = Path(os.environ.get(
     "NEREUS_DESKHPSDR_DIR", discover_sibling("deskhpsdr"))).expanduser()
 FREEDV_DIR = Path(os.environ.get(
@@ -333,7 +397,10 @@ def resolve_upstream(cite_file: str, which: str,
     `stamp` is the version token from the cite (`2.10.3.15`, `3759d09`).
     A ramdor cite carrying a stamp we have a dedicated checkout for is
     resolved against THAT checkout and nowhere else -- same rule as the
-    fork boundary, same reason. See THETIS_VERSION_DIRS.
+    fork boundary, same reason. A ramdor cite with no stamp, or a stamp
+    no checkout matches, is resolved against the old pin (501e3f5,
+    THETIS_LEGACY_DIR) it was written against, never against ../Thetis.
+    See THETIS_VERSION_DIRS and thetis_tree_for_stamp.
     """
     if which in ("deskhpsdr", "freedv-gui"):
         # These cite paths are relative to the upstream repo root
@@ -369,16 +436,16 @@ def resolve_upstream(cite_file: str, which: str,
     # tool that fabricates GPL-attribution violations is worse than one
     # that reports it cannot check, so an absent clone now warns.
     if which == "ramdor":
-        versioned = THETIS_VERSION_DIRS.get(stamp) if stamp else None
-        if versioned is not None:
-            # Absent clone returns None -> "upstream-not-found" warning,
-            # NOT a silent fall-through to the default pin. Falling through
-            # is precisely the phantom-failure path this mapping exists to
-            # close, and a check that cannot verify must say so rather than
-            # verify against the wrong tree.
-            bases = [versioned] if versioned.is_dir() else []
-        else:
-            bases = [THETIS_DIR]
+        # Every ramdor cite routes to exactly one tree: the release its
+        # stamp names, or the old pin (501e3f5) when the stamp is absent
+        # or names no tree we keep. ../Thetis itself is never a fallback.
+        tree = thetis_tree_for_stamp(stamp)
+        # Absent clone returns None -> "upstream-not-found" warning, NOT a
+        # silent fall-through to a different tree. Falling through is
+        # precisely the phantom-failure path this mapping exists to close,
+        # and a check that cannot verify must say so rather than verify
+        # against the wrong tree.
+        bases = [tree] if tree.is_dir() else []
     else:
         bases = [MI0BOT_DIR]
     for base in bases:
@@ -525,10 +592,13 @@ def main() -> int:
     for ver, path in sorted(set((v, p) for v, p in THETIS_VERSION_DIRS.items()
                                 if "." in v)):
         if not path.is_dir():
+            also = (" (and every unstamped or unmatched ramdor cite)"
+                    if path == THETIS_LEGACY_DIR else "")
             print(f"WARN: Thetis v{ver} not found at {path}. Every cite "
-                  f"stamped [v{ver}] will emit upstream-not-found instead "
-                  f"of being verified. Set NEREUS_THETIS_V21015_DIR or "
-                  f"clone to a sibling directory.", file=sys.stderr)
+                  f"stamped [v{ver}]{also} will emit upstream-not-found "
+                  f"instead of being verified. Set "
+                  f"{THETIS_VERSION_ENV[ver]} or clone to a sibling "
+                  f"directory.", file=sys.stderr)
 
     # deskhpsdr is optional for now — warn if absent so local runs without
     # the clone still pass, but CI that has it cloned will do full checks.

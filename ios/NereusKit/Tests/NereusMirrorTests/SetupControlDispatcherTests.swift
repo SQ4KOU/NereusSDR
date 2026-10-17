@@ -49,10 +49,16 @@ final class TestRoute: @unchecked Sendable {
     var sent: [(session: Int, message: LinkMessage)] { lock.withLock { sentMessages } }
 
     private var awake = false
+    /// How many waits with an edit have begun. An edit's watcher lives
+    /// until the edit ends, often after its own wait has its sends, so it
+    /// wakes only the wait it was started for.
+    private var watchedWaits = 0
 
-    /// Wakes every waiter, whatever has been sent: an edit ended first.
-    private func wakeAll() {
+    /// Wakes every waiter, whatever has been sent: the edit that wait
+    /// `wait` watches ended first.
+    private func wakeAll(for wait: Int) {
         let all = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            guard wait == watchedWaits else { return [] }
             awake = true
             defer { waiters = [] }
             return waiters.map(\.1)
@@ -62,8 +68,12 @@ final class TestRoute: @unchecked Sendable {
 
     /// Waits for `count` sends, or for `edit` to end without them.
     func waitForCount(_ count: Int, unless edit: Task<SetupEditOutcome, Never>) async -> Bool {
-        lock.withLock { awake = false }
-        let watcher = Task { _ = await edit.value; wakeAll() }
+        let wait = lock.withLock { () -> Int in
+            awake = false
+            watchedWaits += 1
+            return watchedWaits
+        }
+        let watcher = Task { _ = await edit.value; wakeAll(for: wait) }
         await waitForCount(count)
         watcher.cancel()
         return sent.count >= count
@@ -260,7 +270,7 @@ private final class PhoneKeys: SetupPhoneKeys {
         let toggle = rig.control("toggle")
         #expect(dispatcher.state(of: toggle, in: "general") == .init(value: .bool(false), editable: true, reason: nil))
         let writing = Task { await dispatcher.edit(toggle, in: "general", to: .bool(true)) }
-        #expect(await rig.route.waitForCount(1, unless: writing))
+        try #require(await rig.route.waitForCount(1, unless: writing))
         guard case .settingsWrite(let write) = rig.route.sent[0].message else {
             Issue.record("no settings write"); return
         }
@@ -270,7 +280,7 @@ private final class PhoneKeys: SetupPhoneKeys {
 
         // A choice among named choices writes its ordinal.
         let choosing = Task { await dispatcher.edit(rig.control("mode"), in: "general", to: .integer(2)) }
-        #expect(await rig.route.waitForCount(2, unless: choosing))
+        try #require(await rig.route.waitForCount(2, unless: choosing))
         guard case .settingsWrite(let choice) = rig.route.sent[1].message else { Issue.record("no choice"); return }
         #expect(choice.properties.first?.value == .utf8("2"))
         rig.settings.apply(.settingsValue(.init(key: choice.key, origin: choice.origin, properties: choice.properties)))
@@ -280,7 +290,7 @@ private final class PhoneKeys: SetupPhoneKeys {
         let slope = rig.control("slope")
         #expect(dispatcher.state(of: slope, in: "general").value == .decimal(2.5))
         let sloping = Task { await dispatcher.edit(slope, in: "general", to: .decimal(3.5)) }
-        #expect(await rig.route.waitForCount(3, unless: sloping))
+        try #require(await rig.route.waitForCount(3, unless: sloping))
         guard case .propertyWrite(let property) = rig.route.sent[2].message else { Issue.record("no write"); return }
         #expect(property.key == "slice:0" && property.properties.first?.value == .f64(3.5))
         rig.store.apply(.delta(.init(key: "slice:0", properties: [.init(name: "agcSlope", value: .f64(3.5))])))
@@ -289,7 +299,7 @@ private final class PhoneKeys: SetupPhoneKeys {
         // A verb: the edited value and the others read now, from this session.
         let emulate = rig.control("emulate")
         let invoking = Task { await dispatcher.edit(emulate, in: "general", to: .bool(true)) }
-        #expect(await rig.route.waitForCount(4, unless: invoking))
+        try #require(await rig.route.waitForCount(4, unless: invoking))
         guard case .commandInvoke(let invoke) = rig.route.sent[3].message else { Issue.record("no verb"); return }
         #expect(invoke.verb == "setOptions")
         #expect(invoke.args == [.init(name: "emulate", value: .bool(true)), .init(name: "other", value: .bool(true)),
@@ -300,7 +310,7 @@ private final class PhoneKeys: SetupPhoneKeys {
 
         // A button sends its literal arguments; a refusal carries the Core's words.
         let pressing = Task { await dispatcher.edit(rig.control("preset"), in: "general", to: nil) }
-        #expect(await rig.route.waitForCount(5, unless: pressing))
+        try #require(await rig.route.waitForCount(5, unless: pressing))
         guard case .commandInvoke(let preset) = rig.route.sent[4].message else { Issue.record("no button"); return }
         #expect(preset.args == [.init(name: "name", value: .utf8("defaults"))])
         await rig.commands.receive(.commandResult(.init(verb: preset.verb, id: preset.id, accepted: false,
@@ -328,7 +338,7 @@ private final class PhoneKeys: SetupPhoneKeys {
 
         // A setting: settings.reject with the Core's value.
         let writing = Task { await dispatcher.edit(rig.control("toggle"), in: "general", to: .bool(true)) }
-        #expect(await rig.route.waitForCount(1, unless: writing))
+        try #require(await rig.route.waitForCount(1, unless: writing))
         guard case .settingsWrite(let write) = rig.route.sent[0].message else { Issue.record("no write"); return }
         rig.settings.apply(.settingsReject(.init(key: write.key, properties: [.init(name: write.key, value: .utf8("False"))],
                                                  reason: waiting)))
@@ -338,7 +348,7 @@ private final class PhoneKeys: SetupPhoneKeys {
 
         // A property: property.result with the Core's value.
         let sloping = Task { await dispatcher.edit(rig.control("slope"), in: "general", to: .decimal(3.5)) }
-        #expect(await rig.route.waitForCount(2, unless: sloping))
+        try #require(await rig.route.waitForCount(2, unless: sloping))
         guard case .propertyWrite(let property) = rig.route.sent[1].message else { Issue.record("no property"); return }
         let writeId = try #require(property.writeId)
         rig.store.apply(.propertyResult(.init(key: property.key, writeId: writeId, results: [
@@ -351,7 +361,7 @@ private final class PhoneKeys: SetupPhoneKeys {
 
         // A verb answered by phase, with no words.
         let invoking = Task { await dispatcher.edit(rig.control("emulate"), in: "general", to: .bool(true)) }
-        #expect(await rig.route.waitForCount(3, unless: invoking))
+        try #require(await rig.route.waitForCount(3, unless: invoking))
         guard case .commandInvoke(let invoke) = rig.route.sent[2].message else { Issue.record("no verb"); return }
         await rig.commands.receive(.commandResult(.init(verb: invoke.verb, id: invoke.id, accepted: false, reason: "",
                                                         affected: [], values: [.init(name: "phase",
@@ -362,7 +372,7 @@ private final class PhoneKeys: SetupPhoneKeys {
 
         // A button answered by the words alone.
         let pressing = Task { await dispatcher.edit(rig.control("preset"), in: "general", to: nil) }
-        #expect(await rig.route.waitForCount(4, unless: pressing))
+        try #require(await rig.route.waitForCount(4, unless: pressing))
         guard case .commandInvoke(let preset) = rig.route.sent[3].message else { Issue.record("no button"); return }
         await rig.commands.receive(.commandResult(.init(verb: preset.verb, id: preset.id, accepted: false,
                                                         reason: waiting, affected: [])))

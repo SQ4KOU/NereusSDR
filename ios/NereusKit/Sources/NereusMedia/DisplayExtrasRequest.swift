@@ -112,7 +112,11 @@ public struct DisplayExtrasRequest: Equatable, Sendable {
     public static let levelRange = -400.0...100.0
     public static let offsetRange = -60...60
     public static let calibrationRange = -30.0...30.0
+    /// The averaging times every Core takes. A Core whose own controls go
+    /// lower says so, and ``averageTimeFloorMs`` carries its floor.
     public static let averageTimeRange = 10...9999
+    /// The least averaging time any Core takes.
+    public static let leastAverageTimeMs = 1
 
     /// The NSDX section bits (display extras document, section 3.2).
     public static let peakBlobsSection: UInt8 = 0x01
@@ -134,12 +138,17 @@ public struct DisplayExtrasRequest: Equatable, Sendable {
     public var normalize: Bool?
     /// -30 to 30: every dBm moves by it.
     public var calibrationOffsetDb: Double?
-    /// 10 to 9999: the spectrum's averaging time, and the waterfall's when
-    /// `waterfallAverageTimeMs` is absent.
+    /// ``averageTimeFloorMs`` to 9999: the spectrum's averaging time, and
+    /// the waterfall's when `waterfallAverageTimeMs` is absent.
     public var averageTimeMs: Int?
-    /// 10 to 9999: the waterfall's own averaging time. Absent, the waterfall
-    /// takes `averageTimeMs`'s; with neither, its plane's `averageAlpha`.
+    /// ``averageTimeFloorMs`` to 9999: the waterfall's own averaging time.
+    /// Absent, the waterfall takes `averageTimeMs`'s; with neither, its
+    /// plane's `averageAlpha`.
     public var waterfallAverageTimeMs: Int?
+    /// The least averaging time this Core offered: 10 ms unless the Core's
+    /// own averaging controls start lower (1 ms from link version 28's
+    /// Core). Not sent; ``validate()`` refuses a time below it.
+    public var averageTimeFloorMs: Int = DisplayExtrasRequest.averageTimeRange.lowerBound
 
     public init(peakBlobs: PeakBlobs? = nil, activePeakHold: ActivePeakHold? = nil, noiseFloor: NoiseFloor? = nil,
                 waterfallLevels: WaterfallLevels? = nil, normalize: Bool? = nil, calibrationOffsetDb: Double? = nil,
@@ -156,7 +165,16 @@ public struct DisplayExtrasRequest: Equatable, Sendable {
 
     /// No field is present: the subscription asks for nothing extra.
     public var isEmpty: Bool {
-        self == DisplayExtrasRequest()
+        var fields = self
+        fields.averageTimeFloorMs = Self.averageTimeRange.lowerBound
+        return fields == DisplayExtrasRequest()
+    }
+
+    /// The averaging times this request may carry: from the Core's floor,
+    /// never below 1 ms.
+    public var admittedAverageTimeRange: ClosedRange<Int> {
+        let floor = min(max(averageTimeFloorMs, Self.leastAverageTimeMs), Self.averageTimeRange.upperBound)
+        return floor...Self.averageTimeRange.upperBound
     }
 
     /// The NSDX sections these fields ask for.
@@ -241,10 +259,10 @@ public struct DisplayExtrasRequest: Equatable, Sendable {
                 throw Invalid.calibrationOffsetDb
             }
         }
-        if let time = averageTimeMs, !Self.averageTimeRange.contains(time) {
+        if let time = averageTimeMs, !admittedAverageTimeRange.contains(time) {
             throw Invalid.averageTimeMs
         }
-        if let time = waterfallAverageTimeMs, !Self.averageTimeRange.contains(time) {
+        if let time = waterfallAverageTimeMs, !admittedAverageTimeRange.contains(time) {
             throw Invalid.waterfallAverageTimeMs
         }
     }

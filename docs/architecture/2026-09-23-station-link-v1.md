@@ -39,6 +39,7 @@ maintained there:
 | Display extras (the subscription fields that ask the Core for the peak blobs, peak hold, noise floor, waterfall levels, normalise, calibration and averaging, and the NSDX v1 datagram beside each NSDC frame) | [2026-09-23-display-extras-v1.md](2026-09-23-display-extras-v1.md) |
 | Notch control (the `notches` object and the `notch.*` commands) | [2026-09-23-remote-notch-control-v1.md](2026-09-23-remote-notch-control-v1.md) |
 | Accessory control (the `tuner`, `amplifier`, `rfkit`, `stationTci`, `accessoryData` and `accessorySettings` objects, the 4O3A, RF-Kit, station TCI, accessory record and device settings commands and refusals) | [2026-09-23-remote-accessory-control-v1.md](2026-09-23-remote-accessory-control-v1.md) |
+| Rotor control (the `rotor` object, the seven rotor commands and their refusals, bearings on spots) | [2026-10-07-remote-rotor-control-v1.md](2026-10-07-remote-rotor-control-v1.md) |
 
 The design authority behind all of them is the
 [remote daemon architecture design](2026-07-28-remote-daemon-architecture-design.md),
@@ -978,6 +979,50 @@ built for, with no `radeReason`, and a change to it alone sends that peer
 no slice delta. The station does not declare it; the desktop's remote
 window does.
 
+**`radioSpeaker` 1** (the radio speaker): the client shows and sets the
+radio speaker at the Core: the receive audio level and mute of the radio's
+own speaker output and its speaker amplifier choice. A peer that declares
+it is sent `radioSpeakerVersion` (section 6.3) and the `radio` object's
+`radioSpeakerVolume`, `radioSpeakerMuted`, `speakerAmplifierMode`,
+`radioSpeakerAvailability` and `speakerAmplifierAvailable` (section 7); a
+peer that does not sees exactly the wire it was built for, with none of the
+five, and a change to them alone sends that peer no `radio` delta. A write
+of one from a peer that did not declare it is refused. The station does not
+declare it; the desktop's remote window does.
+
+**`coreSpeaker` 1** (the Core speaker): the client shows and sets the
+Core's own sound card output: its level and mute, the card it plays on and
+that card's buffer, delay setting and sample rate. A peer that declares it,
+on a Core that has its own speaker (a desktop that hosts a station has
+none), is sent `coreSpeakerVersion` (section 6.3) and the `radio` object's
+`coreSpeakerVolume`, `coreSpeakerMuted`, `coreSpeakerDevice`,
+`coreSpeakerDevices`, `coreSpeakerState` and `coreSpeakerDetails` (section
+7); a peer that does not sees exactly the wire it was built for, with none
+of the six, and a change to them alone sends that peer no `radio` delta. A
+write of one from a peer that is not sent them is refused with "Update this
+app to change the Core speaker on this Core." The station does not declare
+it; the desktop's remote window does.
+
+**`spectrumPicture` 1** (R-DISP-RETUNE): the client reads, in each spectrum
+`context`, which picture the context's frames continue. A peer that
+declares it at agreed minor 11, while media is available, is sent
+`spectrumPictureVersion` (section 6.3) and may declare
+`spectrumPictureVersion` 1 in its media `start`; each `context` it is then
+sent carries one more field, `pictureGeneration` (the media control
+document's "The picture a context continues"). A peer that does not declare
+it sees exactly the wire it was built for: no capability entry, and every
+`context` byte for byte as before. The station does not declare it; the
+desktop's remote window and the phone app do.
+
+**`firmwareBeta` 1** (the radio's second firmware number): the client words
+the firmware release of the Core's radio in full, as a window running that
+radio does. A release is two numbers (22 and 14 read "22.14"), and
+`firmwareVersion` is the first alone. A peer that declares it at agreed
+minor 11 is sent `firmwareBeta` (section 6.3), the second. A peer that does
+not declare it sees exactly the wire it was built for: no capability entry,
+and `firmwareVersion` as before. The station does not declare it; the
+desktop's remote window and the phone app do.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -1136,7 +1181,7 @@ table.
 | `remoteTxVersion` | 2 |
 | `txWatchPathVersion` | not advertised by this fixture |
 | `txStateVersion` | 2 |
-| `txReadingsVersion` | 3 |
+| `txReadingsVersion` | 4 |
 | `mediaTunnelVersion` | 1 |
 | `mediaRelayRoutingVersion` | 1 |
 | `settingsHygieneVersion` | 2 |
@@ -1146,6 +1191,7 @@ table.
 | `setupDescriptionVersion` | 1 |
 | `miniDisplayVersion` | 1 |
 | `accessoryTxVersion` | 1 |
+| `remoteRotorControlVersion` | 1 |
 | `radioAntennaRowsVersion` | 1 |
 | `vaxVersion` | 1 |
 | `txEqCurveVersion` | 2 |
@@ -1168,6 +1214,11 @@ table.
 | `radioMicVersion` | 2 |
 | `rxFilterLowPassVersion` | 1 |
 | `radeReasonVersion` | 1 |
+| `stationCatVersion` | 1 |
+| `radioSpeakerVersion` | 1 |
+| `coreSpeakerVersion` | 1 |
+| `spectrumPictureVersion` | 1 |
+| `waveformVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1558,6 +1609,23 @@ When a feature is off, its version is 0:
   properties, the `tciClients` record stream, `setStationTciOptions`, and
   `disconnectStationTciClient`. The Core keeps the options; a window does
   not write `stationTci` properties.
+- `stationCatVersion`: optional, sent only at agreed minor 11 to a peer
+  whose hello declared `stationCat` 1, on a Core that runs CAT (the Local
+  role: `nereusd`, or a desktop running its own radio) and keeps record
+  streams. 1: the Core sends the read-only `stationCat` object (section 7;
+  its seven properties are each one compact UTF-8 JSON text: `global`,
+  `channel1` to `channel4`, `platform`, `lastTest`), the `catLog` record
+  stream, and takes `setStationCatChannel`, `setStationCatGlobal`,
+  `testStationCatCommand` and `refreshStationCatDevices` (section 9.1;
+  the JSON shapes are in `src/models/StationCatModel.h` and the remote CAT
+  setup plan, `2026-10-07-remote-cat-setup-plan.md`). A channel config
+  may carry `primaryRebind` and `secondaryRebind` (bool): the binding was
+  just picked, so its slice id binds to the live slice even when the
+  channel holds that id. An accepted `testStationCatCommand` result
+  carries the CAT reply as its `reply` value (utf8). A peer that did not
+  declare the feature is sent neither this entry, the object nor the
+  stream, and its four commands and a `catLog` subscription are refused.
+  A window never writes `stationCat`.
 - `accessoryDataVersion`: sent only at agreed minor 11, and 0 unless the
   Core owns its accessories. At 1 the station sends the read-only
   `accessoryData` object (fault histories, connection counters, the
@@ -2149,7 +2217,7 @@ When a feature is off, its version is 0:
   the read-only `txState` object (section 18.8) to that peer; any other
   peer never sees it or its schema.
 - `txReadingsVersion` (remote-window parity Task 33, R-R3-49, R-R3-32):
-  sent right after `txStateVersion` and only with it. 2 on a Core with its
+  sent right after `txStateVersion` and only with it. 4 on a Core with its
   own radio model and record streams (`recordStreamVersion` at least 1), 0
   otherwise. At 1 `txState` also carries `forwardAdcRaw` and
   `reflectedAdcRaw`, the radio's raw forward and reflected power readings,
@@ -2166,6 +2234,13 @@ When a feature is off, its version is 0:
   (section 18.8). A window below 3 shows each of those meters disabled
   with "This Core does not send this reading. Updating the Core may
   help.", never hidden and never a 0.
+  At 4 `txState` also carries the six peak readings a local window's
+  container meter bars show as their main value, `micPeakDb`, `alcPeakDb`,
+  `compressionPeakDb`, `eqPeakDb`, `levelerPeakDb` and `cfcPeakDb`
+  (section 18.8), so a bar such as MIC shows the same peak in a remote
+  window as in a local one, with the average beside it. A window below 4
+  shows each peak meter disabled with the same sentence, never hidden and
+  never a 0; the averages are unchanged.
 
 `txPermitted` (iPhone app plan Task 34) is true only for a session the
 station transmit gate permits (section 18.1): false until
@@ -2224,6 +2299,67 @@ the last entry before it when that is absent) and before `coreBuildInfo`.
 At 1 each `slice:<id>` object carries `radeReason` (section 7). A peer
 that did not declare the feature is sent no entry and no `radeReason`.
 
+**The Core's CAT.** A client that declared `stationCat` 1 is sent
+`stationCatVersion`, an `i64`, 1, after `radeReasonVersion` (or after the
+last entry before it when that is absent) and before `coreBuildInfo`, on a
+Core that runs CAT. At 1 the `stationCat` object (section 7), the `catLog`
+record stream (capacity 10000; each record `{channel, inbound, text,
+time}`, the exchanged bytes as Latin-1 text and the time in milliseconds
+since the epoch) and the four CAT commands (section 9.1) are that peer's.
+A window's CAT log subscribes with a backlog of 10000, the lines it keeps,
+and shows each record once by its rising id across a new session's
+backlog. A peer that did not declare the feature is sent none of them.
+
+**The radio speaker.** A client that declared `radioSpeaker` 1 is sent
+`radioSpeakerVersion`, an `i64`, 1, after `stationCatVersion` (or after
+the last entry before it when that is absent) and before `coreBuildInfo`.
+At 1 the `radio` object carries `radioSpeakerVolume`, `radioSpeakerMuted`
+and `speakerAmplifierMode`, which the client may write, and
+`radioSpeakerAvailability` and `speakerAmplifierAvailable`, which it may
+not (section 7). A peer that did not declare the feature is sent no entry
+and none of the five. A client connected to a Core that sends no entry
+shows the radio speaker disabled, with the reason "This Core can't set the
+radio speaker. Update the Core.", and sends no write of the three.
+
+**The Core speaker.** A client that declared `coreSpeaker` 1 is sent
+`coreSpeakerVersion`, an `i64`, 1, by a Core that has its own speaker,
+after `radioSpeakerVersion` (or after the last entry before it when that is
+absent) and before `coreBuildInfo`. At 1 the `radio` object carries
+`coreSpeakerVolume`, `coreSpeakerMuted`, `coreSpeakerDevice` and
+`coreSpeakerDetails`, which the client may write, and `coreSpeakerDevices`
+and `coreSpeakerState`, which it may not (section 7). A peer that did not
+declare the feature, or a Core without its own speaker, is sent no entry
+and none of the six. A client connected to a Core that sends no entry shows
+the Core speaker disabled, with the reason "This Core can't set its speaker
+from here. Update the Core.", and sends no write of the four.
+
+**The picture a spectrum context continues** (R-DISP-RETUNE). A client at
+agreed minor 11 that declared `spectrumPicture` 1 is sent
+`spectrumPictureVersion`, an `i64`, 1, while media is available, after
+`coreSpeakerVersion` (or after the last entry before it when that is
+absent) and before `coreBuildInfo`. At 1 the client's media `start` may
+declare `spectrumPictureVersion` 1, and each spectrum `context` it is sent
+then carries `pictureGeneration`. A peer that did not declare the feature
+is sent no entry. A client connected to a Core that sends no entry treats
+a context that differs from the one it shows in more than its dBm range or
+frame rate as a new picture; nothing is shown to the operator for it.
+
+**The radio's second firmware number.** A client at agreed minor 11 that
+declared `firmwareBeta` 1 is sent `firmwareBeta`, an `i64` of 0 to 255,
+after `spectrumPictureVersion` (or after the last entry before it when that
+is absent) and before `coreBuildInfo`. It is the second number of the
+radio's firmware release as the radio's discovery reply gave it (byte 23 of
+a Protocol 2 reply, byte 21 of a Hermes Lite 2's), and 0 when the radio
+gave none or the Core has no radio; `firmwareVersion` stays the first
+number alone. A client words the two as "22.14", and the first alone when
+the second is 0. On an ANAN-G2 or ANAN-G2 MkII (`board` 10 or 11) the
+number is the version of the radio's own program, not of its gateware: it
+is carried, and a client leaves it out of the text. An entry that is not an
+`i64` of 0 to 255 reads as no entry. A peer that did not declare the
+feature is sent no entry. A client connected to a Core that sends no entry
+words the firmware by its first number alone; nothing is shown to the
+operator for it.
+
 **Core executable identity.** A client at agreed minor 11 may declare
 `coreBuildInfo` 1. After authentication, a Core with a known product version
 appends one optional `coreBuildInfo` utf8 capability after all existing
@@ -2259,7 +2395,12 @@ peer that declared `paProfiles` (section 6.1); `radeStatusVersion` only
 for a peer that declared `radeStatus`; `txInhibitReasonVersion` only for a
 peer that declared `txInhibitReason` (section 6.1); `paTransmitBandVersion` only for a
 peer that declared `paTransmitBand`; `radeReasonVersion` only for a peer
-that declared `radeReason`. A client ignores a capability it does not know
+that declared `radeReason`; `stationCatVersion` only for a peer that
+declared `stationCat` on a Core that runs CAT; `radioSpeakerVersion` only for a peer that
+declared `radioSpeaker`; `coreSpeakerVersion` only for a peer that declared
+`coreSpeaker` on a Core with its own speaker; `spectrumPictureVersion` only
+for a peer that declared `spectrumPicture` while media is available;
+`firmwareBeta` only for a peer that declared `firmwareBeta`. A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
 **Each device's share of the display budget** (iPhone app plan Task 76; the
@@ -2431,30 +2572,37 @@ older window sees only the values it was built for.
 | 82 | `setupDescriptionVersion` | `i64` |
 | 83 | `miniDisplayVersion` | `i64` |
 | 84 | `accessoryTxVersion` | `i64` |
-| 85 | `radioAntennaRowsVersion` | `i64` |
-| 86 | `vaxVersion` | `i64` |
-| 87 | `txEqCurveVersion` | `i64` |
-| 88 | `band2mVersion` | `i64` |
-| 89 | `diversityPatternVersion` | `i64` |
-| 90 | `diversityControlVersion` | `i64` |
-| 91 | `logCategoryListVersion` | `i64` |
-| 92 | `radioModelsVersion` | `i64` |
-| 93 | `coreAddressesVersion` | `i64` |
-| 94 | `audioQualityVersion` | `i64` |
-| 95 | `stationTciSettingsVersion` | `i64` |
-| 96 | `adcAttenuatorVersion` | `i64` |
-| 97 | `paProfileVersion` | `i64` |
-| 98 | `radeStatusVersion` | `i64` |
-| 99 | `txInhibitReasonVersion` | `i64` |
-| 100 | `paTransmitBandVersion` | `i64` |
-| 101 | `sliceAccessVersion` | `i64` |
-| 102 | `mediaDirectVersion` | `i64` |
-| 103 | `mediaStunUrls` | `utf8` |
-| 104 | `rx2AttenuatorVersion` | `i64` |
-| 105 | `radioMicVersion` | `i64` |
-| 106 | `rxFilterLowPassVersion` | `i64` |
-| 107 | `radeReasonVersion` | `i64` |
-| 108 | `coreBuildInfo` | `utf8` |
+| 85 | `remoteRotorControlVersion` | `i64` |
+| 86 | `radioAntennaRowsVersion` | `i64` |
+| 87 | `vaxVersion` | `i64` |
+| 88 | `txEqCurveVersion` | `i64` |
+| 89 | `band2mVersion` | `i64` |
+| 90 | `diversityPatternVersion` | `i64` |
+| 91 | `diversityControlVersion` | `i64` |
+| 92 | `logCategoryListVersion` | `i64` |
+| 93 | `radioModelsVersion` | `i64` |
+| 94 | `coreAddressesVersion` | `i64` |
+| 95 | `audioQualityVersion` | `i64` |
+| 96 | `stationTciSettingsVersion` | `i64` |
+| 97 | `adcAttenuatorVersion` | `i64` |
+| 98 | `paProfileVersion` | `i64` |
+| 99 | `radeStatusVersion` | `i64` |
+| 100 | `txInhibitReasonVersion` | `i64` |
+| 101 | `paTransmitBandVersion` | `i64` |
+| 102 | `sliceAccessVersion` | `i64` |
+| 103 | `mediaDirectVersion` | `i64` |
+| 104 | `mediaStunUrls` | `utf8` |
+| 105 | `rx2AttenuatorVersion` | `i64` |
+| 106 | `radioMicVersion` | `i64` |
+| 107 | `rxFilterLowPassVersion` | `i64` |
+| 108 | `radeReasonVersion` | `i64` |
+| 109 | `stationCatVersion` | `i64` |
+| 110 | `radioSpeakerVersion` | `i64` |
+| 111 | `coreSpeakerVersion` | `i64` |
+| 112 | `spectrumPictureVersion` | `i64` |
+| 113 | `firmwareBeta` | `i64` |
+| 114 | `waveformVersion` | `i64` |
+| 115 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2676,7 +2824,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (38 properties)
+**RadioModel** (49 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2718,6 +2866,17 @@ An enum property lists the values its domain allows.
 | 35 | `rxFilter0LowPassReason` | `utf8` | outbound |  |
 | 36 | `rxFilter0LowPassSlice` | `i64` | outbound |  |
 | 37 | `diversityState` | `utf8` | outbound |  |
+| 38 | `radioSpeakerVolume` | `i64` | bidirectional |  |
+| 39 | `radioSpeakerMuted` | `bool` | bidirectional |  |
+| 40 | `speakerAmplifierMode` | `i64` | bidirectional |  |
+| 41 | `radioSpeakerAvailability` | `i64` | outbound |  |
+| 42 | `speakerAmplifierAvailable` | `bool` | outbound |  |
+| 43 | `coreSpeakerVolume` | `i64` | bidirectional |  |
+| 44 | `coreSpeakerMuted` | `bool` | bidirectional |  |
+| 45 | `coreSpeakerDevice` | `utf8` | bidirectional |  |
+| 46 | `coreSpeakerDevices` | `utf8` | outbound |  |
+| 47 | `coreSpeakerState` | `utf8` | outbound |  |
+| 48 | `coreSpeakerDetails` | `utf8` | bidirectional |  |
 
 **RfKitModel** (30 properties)
 
@@ -2754,6 +2913,37 @@ An enum property lists the values its domain allows.
 | 28 | `bandFollowAddress` | `utf8` | outbound |  |
 | 29 | `bandFollowPort` | `i64` | outbound |  |
 
+**RotorModel** (26 properties)
+
+| Ordinal | Property | Wire kind | Direction | Enum values |
+| --- | --- | --- | --- | --- |
+| 0 | `connectionPhase` | `enum` | outbound | 0, 1, 2, 3, 4, 5, 6, 7 |
+| 1 | `connectionError` | `utf8` | outbound |  |
+| 2 | `driver` | `enum` | outbound | 0, 1, 2, 3, 4 |
+| 3 | `label` | `utf8` | outbound |  |
+| 4 | `serialPort` | `utf8` | outbound |  |
+| 5 | `baud` | `i64` | outbound |  |
+| 6 | `host` | `utf8` | outbound |  |
+| 7 | `port` | `i64` | outbound |  |
+| 8 | `serialPorts` | `utf8` | outbound |  |
+| 9 | `axes` | `enum` | outbound | 0, 1 |
+| 10 | `rangeDeg` | `i64` | outbound |  |
+| 11 | `endStop` | `enum` | outbound | 0, 1, 2 |
+| 12 | `spanPositionDeg` | `f64` | outbound |  |
+| 13 | `travelDeg` | `f64` | outbound |  |
+| 14 | `routeKnown` | `bool` | outbound |  |
+| 15 | `offsetDeg` | `f64` | outbound |  |
+| 16 | `hamlibModel` | `i64` | outbound |  |
+| 17 | `rotctldAvailable` | `bool` | outbound |  |
+| 18 | `positionFresh` | `bool` | outbound |  |
+| 19 | `azimuthDeg` | `f64` | outbound |  |
+| 20 | `elevationDeg` | `f64` | outbound |  |
+| 21 | `targetAzimuthDeg` | `f64` | outbound |  |
+| 22 | `targetElevationDeg` | `f64` | outbound |  |
+| 23 | `motion` | `enum` | outbound | 0, 1, 2 |
+| 24 | `presets` | `utf8` | outbound |  |
+| 25 | `fault` | `utf8` | outbound |  |
+
 **SetupDescription** (12 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
@@ -2771,7 +2961,7 @@ An enum property lists the values its domain allows.
 | 10 | `revision` | `i64` | outbound |  |
 | 11 | `pa` | `utf8` | outbound |  |
 
-**SliceAccess** (8 properties)
+**SliceAccess** (9 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2783,6 +2973,7 @@ An enum property lists the values its domain allows.
 | 5 | `activeRxDeviceIds` | `utf8` | outbound |  |
 | 6 | `txSelected` | `bool` | outbound |  |
 | 7 | `onAir` | `bool` | outbound |  |
+| 8 | `receiverHolderDeviceId` | `utf8` | outbound |  |
 
 **SliceMarker** (14 properties)
 
@@ -2795,7 +2986,7 @@ An enum property lists the values its domain allows.
 | 4 | `ownerKind` | `utf8` | outbound |  |
 | 5 | `ownerAway` | `bool` | outbound |  |
 | 6 | `frequency` | `f64` | outbound |  |
-| 7 | `dspMode` | `enum` | outbound | 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 |
+| 7 | `dspMode` | `enum` | outbound | 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 |
 | 8 | `filterLow` | `i64` | outbound |  |
 | 9 | `filterHigh` | `i64` | outbound |  |
 | 10 | `txSlice` | `bool` | outbound |  |
@@ -2809,7 +3000,7 @@ An enum property lists the values its domain allows.
 | --- | --- | --- | --- | --- |
 | 0 | `outputRoute` | `enum` | bidirectional | 0, 1 |
 | 1 | `frequency` | `f64` | bidirectional |  |
-| 2 | `dspMode` | `enum` | bidirectional | 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 |
+| 2 | `dspMode` | `enum` | bidirectional | 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 |
 | 3 | `filterLow` | `i64` | bidirectional |  |
 | 4 | `filterHigh` | `i64` | bidirectional |  |
 | 5 | `agcMode` | `enum` | bidirectional | 0, 1, 2, 3, 4, 5 |
@@ -2977,6 +3168,18 @@ An enum property lists the values its domain allows.
 | 8 | `freedvReporterState` | `utf8` | outbound |  |
 | 9 | `freedvReporterText` | `utf8` | outbound |  |
 | 10 | `freedvReporterHidden` | `bool` | outbound |  |
+
+**StationCatModel** (7 properties)
+
+| Ordinal | Property | Wire kind | Direction | Enum values |
+| --- | --- | --- | --- | --- |
+| 0 | `global` | `utf8` | outbound |  |
+| 1 | `channel1` | `utf8` | outbound |  |
+| 2 | `channel2` | `utf8` | outbound |  |
+| 3 | `channel3` | `utf8` | outbound |  |
+| 4 | `channel4` | `utf8` | outbound |  |
+| 5 | `platform` | `utf8` | outbound |  |
+| 6 | `lastTest` | `utf8` | outbound |  |
 
 **StationCatalog** (2 properties)
 
@@ -3172,7 +3375,7 @@ An enum property lists the values its domain allows.
 | 87 | `txEqCurve` | `utf8` | outbound |  |
 | 88 | `cfcProfile` | `utf8` | outbound |  |
 
-**TransmitState** (44 properties)
+**TransmitState** (50 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -3220,6 +3423,12 @@ An enum property lists the values its domain allows.
 | 41 | `cfcGainDb` | `f64` | outbound |  |
 | 42 | `alcGainDb` | `f64` | outbound |  |
 | 43 | `alcGroupDb` | `f64` | outbound |  |
+| 44 | `micPeakDb` | `f64` | outbound |  |
+| 45 | `alcPeakDb` | `f64` | outbound |  |
+| 46 | `compressionPeakDb` | `f64` | outbound |  |
+| 47 | `eqPeakDb` | `f64` | outbound |  |
+| 48 | `levelerPeakDb` | `f64` | outbound |  |
+| 49 | `cfcPeakDb` | `f64` | outbound |  |
 
 **TunerModel** (21 properties)
 
@@ -3270,8 +3479,10 @@ destroyed during the session.
 | `amplifier` | `AmplifierModel` |
 | `rfkit` | `RfKitModel` |
 | `stationTci` | `StationTciModel` |
+| `stationCat` | `StationCatModel` |
 | `accessoryData` | `AccessoryDataModel` |
 | `accessorySettings` | `AccessorySettingsModel` |
+| `rotor` | `RotorModel` |
 | `devices` | `StationDevicesFacade` |
 | `connectedDevices` | `ConnectedDevicesFacade` |
 | `txState` | `TransmitState` |
@@ -3478,7 +3689,27 @@ Notes on the keys:
     cannot read. They are never in the LAN announcement or Bonjour
     (section 14), never sent to the rendezvous, never logged, and nothing
     unauthenticated asks for them. A device keeps them with the paired
-    Core and dials them as direct rungs (section 21.1).
+    Core and dials them as direct rungs (section 21.1). **Keeping and
+    clearing** (JJ, 2026-10-16). Each well-formed list replaces the one the
+    device kept for that Core. The explicit empty list, `{"addresses":[]}`
+    with no entries at all, clears the addresses the device kept from the
+    Core's list: the Core re-reads its interfaces every 5 s, so a momentary
+    gap heals within 5 s for a device still connected, while a kept dead
+    address (an IPv6 address after IPv6 is turned off on the Core, say)
+    costs every reconnect. Anything else leaves the kept list as it is:
+    text that is not JSON, a value that is not an object, an `addresses`
+    that is missing or not an array, and an array that had entries none of
+    which the device can dial, since that is not the Core's own empty
+    answer. When an accepted list, empty or not, no longer names an
+    address the last one named, that address also leaves the addresses the
+    device proved the Core answers at (where it last reached it, section
+    21.1), and stops being the one tried first, so no reconnect dials it
+    again. The one exception is the address the current session is on: it
+    stays, and stays counted as the Core's, until an accepted list arrives
+    on a session somewhere else, which drops it then. The phone never
+    removes the last address it reached the Core at. Addresses the device
+    proved that the Core never named stay. Every identity and sign-in check
+    that guards keeping the list guards clearing it too.
 - **`connectedDevices`** (iPhone app plan Task 71;
   `ConnectedDevicesFacade`): who is on the Core, the list a device's
   Devices page reads for "Connected now". Sent only at agreed minor 11 to
@@ -3554,6 +3785,8 @@ Notes on the keys:
   At `txReadingsVersion` 3, `eqDb`, `levelerDb`, `levelerGainDb`, `cfcDb`,
   `cfcGainDb`, `alcGainDb` and `alcGroupDb` (f64) follow
   `reflectedAdcVolts`.
+  At `txReadingsVersion` 4, `micPeakDb`, `alcPeakDb`, `compressionPeakDb`,
+  `eqPeakDb`, `levelerPeakDb` and `cfcPeakDb` (f64) follow `alcGroupDb`.
 - **`vax`** (iPhone app plan Task 25, R-IOS-18; `StationVax`,
   `vaxVersion` 1): the VAX channels of the computer the Core runs on, as its
   VAX applet shows them (`VaxApplet.cpp`). Sent only at agreed minor 11 to a
@@ -3881,7 +4114,17 @@ Notes on the keys:
   JSON array of every joined device's id, the controller first, then in
   join order); `activeRxDeviceIds` (utf8, a JSON array of the devices
   whose active receive slice this is); `txSelected` (the marker's
-  `txSlice` rule, ruling 5.4a); `onAir` (the slice is transmitting now).
+  `txSlice` rule, ruling 5.4a); `onAir` (the slice is transmitting now);
+  `receiverHolderDeviceId` (the id, as `connectedDevices` names it, of the
+  device that anchors the receiver the slice is on (section 7.5), `""`
+  when the slice has no receiver or nobody anchors it, `station` for the
+  Core's own operating position). The receiver's C-Tune pin is that
+  device's, so the desktop's remote window shows the pin held for any other
+  and does not send `requestStreamCtunPinned`. A phone that reads this
+  property can do the same; the current phone kit ignores it.
+  It was added after `sliceAccessVersion` 3
+  without a new version: a client reads properties by name, and one sent
+  no value takes the anchor as unknown and asks as before.
 - **A change of owner** (a device adopting slices nobody owned, a slice
   passing to the station for a device that left, a held slice returning,
   a take or a release) reaches each session as `object.destroy` of the
@@ -3951,6 +4194,49 @@ Notes on the keys:
   never sends them shows the WIDE reason alone. They are optional: a
   chain's filter state is shown once its mode, effective state, band and
   reason have arrived, with or without them.
+- **The radio speaker at the Core (`radio`).** `radioSpeakerVolume` (int,
+  0 to 100), `radioSpeakerMuted` (bool) and `speakerAmplifierMode` (int:
+  0 Normal, 1 Off while transmitting, 2 Always off), bidirectional, are the
+  level and mute of the receive audio the Core sends to its radio's own
+  speaker output and the radio's speaker amplifier choice. They are the
+  first writable `radio` properties. A write lands through the Core's own
+  setters, which clamp it, and is saved on the Core for its radio (per
+  radio, under `hardware/<mac>/RadioSpeaker/`); every other window and the
+  phone follow. `radioSpeakerAvailability` (int, outbound only: 0 no radio,
+  1 available, 2 available but the radio needs its audio add-on board, the
+  Hermes Lite 2) and `speakerAmplifierAvailable` (bool, outbound only: the
+  amplifier can be switched on this radio) are the Core's reports; a raw
+  write of either is refused. All five are sent only to a peer that
+  declared `radioSpeaker` 1 (section 6.2), and declared after every other
+  `radio` property so no earlier ordinal moves.
+- **The Core speaker (`radio`).** The Core's own sound card output, which
+  plays the Core's receive audio on the Core box. `coreSpeakerVolume` (int,
+  0 to 100; 50 when none was ever saved) and `coreSpeakerMuted` (bool),
+  bidirectional, are the Core's master level and mute; they act on the
+  Core's sound card alone, never on the audio the Core sends a window, the
+  phone, TCI or the radio. `coreSpeakerDevice` (utf8, bidirectional) is the
+  card chosen, as compact JSON `{"id":"Device,0","name":"USB Audio
+  Device"}`; `{"id":"","name":""}` is the Core's default card and
+  `{"id":"(none)","name":""}` no card. `coreSpeakerDetails` (utf8,
+  bidirectional) is `{"bufferFrames":128,"delayMs":0,"sampleRate":48000,
+  "negotiated":"...","delayNowMs":12.5}`: a write sets the buffer, the
+  delay setting (0 automatic) and the sample rate to a value Setup offers,
+  and a value it does not offer is left as it was; `negotiated` (the format
+  the card opened with) and `delayNowMs` (the delay now, -1 when silent)
+  are the Core's. `coreSpeakerDevices` (utf8, outbound only) lists the
+  Core's cards, `[{"id":"...","name":"...","state":"present"}]`, with
+  `state` one of `present`, `notConnected` (a chosen card that is gone) and
+  `inUse`. `coreSpeakerState` (utf8, outbound only) is
+  `{"state":"playing","playing":"...","chosen":"...","desktop":false}`, with
+  `state` one of `playing`, `notConnected`, `inUse`, `noCard` and
+  `waitingForPick` (a Core box that starts into a desktop and has no card
+  picked opens none until a window picks one; `desktop` says the box does).
+  Keys come in any order, and a value with a key missing or extra is
+  ignored. A write lands through the Core's own setters and is saved on the
+  Core (`audio/Master/` and `audio/Speakers/`); every other window and the
+  phone follow. A raw write of the two reports is refused. All six are sent
+  only to a peer that declared `coreSpeaker` 1 (section 6.2), and declared
+  after every other `radio` property so no earlier ordinal moves.
 
 #### The TX EQ curve (`txEqCurve`)
 
@@ -4384,6 +4670,19 @@ requester's own slice, a C-Tune centre change or pin and a slice's band
 change follow the receiver rules of section 7.5, and a sample-rate change
 the shared-setting rules of section 7.6.
 
+**How a sentence names a device.** The reasons and notices of sections
+7.3, 7.5 and 7.6 that name a device take its words from one rule: the
+device's name as `connectedDevices` numbers it; for a device with no
+name, the plain word for its kind ("a phone", "a tablet", "a computer");
+"another device" for one the Core no longer knows; and "the Core" for a
+slice nobody owns and for the Core's own operating position on a Core no
+desktop hosts (a hosting desktop has a name and is named by it). Where the
+words start the sentence, the Core's own take a capital ("The Core took
+the receiver your slice A was on."); a name is the operator's own word and
+is never changed. Two sentences of section 7.6 name a device by its short
+name instead (the on-air refusal and the antenna that stays), and the
+transmit notices of section 18 name the holder by their own rules.
+
 **Waiting for you to confirm** (iPhone app plan Task 74; the
 several-devices design, section 7.3). A write that would disturb another
 device, from a device with `sessionHolderVersion` 1, is not applied. Its
@@ -4593,7 +4892,11 @@ panadapter shows <anchor's name>'s receiver. Its C-Tune setting is
 <anchor's name>'s.", or while the anchor is not connected "This
 panadapter shows the receiver of <anchor's name>, which is not connected
 now. Its C-Tune setting stays with <anchor's name> until it is back or
-its three minutes are up.".
+its three minutes are up.". The desktop's remote window with
+`sliceAccessVersion` 1 or later reads the anchor of each slice's receiver
+from `receiverHolderDeviceId` on its `access:<id>` (section 7.1), shows the
+pin held with these words, and does not ask. A phone that reads this
+property can do the same; the current phone kit ignores it.
 A pin lasts through its anchor's link dropping and its coming back as the
 same device (its `streamCtunPinned` is as it left it); it ends when the
 anchor leaves for good (`session.leave`, a token window's end, the end of
@@ -5181,8 +5484,9 @@ subscribe, page, group, label, kind, default}` and, by `kind`, either
 
 - `settingsKey`: the desktop's settings key for pan 0 (`null` for
   Decimation, which the desktop keeps in its engines, not its settings).
-- `scope`: `station` for the Core's own settings (`DisplayFftSize`,
-  `DisplayFftWindow`, `DisplayHzPerBinTarget`, `DisplaySpectrumFps`), which
+- `scope`: `station` for the Core's own settings (`DisplayFftSizingMode`,
+  `DisplayFftSize`, `DisplayHzPerBinTarget`, `DisplayFftWindow`,
+  `DisplaySpectrumFps`), which
   a device reads and writes with `settings.write` (section 8); `device` for
   each device's own value, which it keeps per pan and sends in its spectrum
   subscription.
@@ -5198,23 +5502,54 @@ subscribe, page, group, label, kind, default}` and, by `kind`, either
 - `kind`: `choice` (a list; `value` is what is stored and sent), or
   `slider` (a range). A slider with `options` steps through them in order:
   the FFT Size slider's seven sizes, 4096 to 262144, each a power of two.
+  An option's `value` is a number on every control but Sizing, whose
+  setting holds a word: its three values and its `default` are text
+  (`Auto`, `HzPerBin`, `Fixed`).
 - `default`: the value the desktop applies when nothing is stored.
-- The Hz/bin Target adds `offValue` 0 and `offLabel` `Off`: the control
-  shows Off at 0.
+- The Hz/bin Target adds `offValue` 0 and `offLabel` `Off`, and
+  `rememberedKey`, the station setting that holds the last target chosen
+  (`DisplayHzPerBinLastTarget`).
+
+Sizing says which control sets the FFT size (pill design D38): `Auto`, the
+zoom picks it; `HzPerBin`, it follows Hz/bin Target; `Fixed`, it is Size. A
+device that draws Sizing lets Size be changed in `Fixed` only and Hz/bin
+Target in `HzPerBin` only, as the desktop does and as Setup description
+version 28 says with `enabledWhen`. It writes the mode first and the target
+second: into `HzPerBin`, the mode and then a target above 0 (the value under
+`rememberedKey` when that is above 0); out of it, the mode and then the
+target's `offValue`. The Core keeps `rememberedKey` level with every target
+above 0 a device writes and tells every device. With the mode never written,
+it is read from the target: above 0 is `HzPerBin`, anything else `Auto`.
+
+The stored `DisplayHzPerBinTarget` is 0 in `Auto` and `Fixed`, which is why
+the entry keeps a minimum of 0 that reads Off: the catalog is not fitted to
+a version, and a device built before Sizing shows the control as it always
+has. That device cannot read the Sizing entry (it reads an option's `value`
+as a number) and leaves it out, keeping the rest; its Hz/bin Target still
+works, since the Core moves the mode on a target write that comes without
+one (above 0 sets `HzPerBin`; 0 sets `Auto` from `HzPerBin`). A device that
+draws Sizing shows targets from one `step` up and takes a grayed control's
+number from `rememberedKey`.
 
 | Control | Key | Scope | Kind and range | Default |
 | --- | --- | --- | --- | --- |
+| Sizing | `DisplayFftSizingMode` | station | Auto, Hz/bin, Fixed (`Auto`, `HzPerBin`, `Fixed`) | `Auto` |
 | Size | `DisplayFftSize` | station | slider over 4096, 8192, ..., 262144 | 4096 |
+| Hz/bin Target | `DisplayHzPerBinTarget` | station | 0 to 200 step 0.5, 2 places, `Hz/bin`, 0 is Off; remembered in `DisplayHzPerBinLastTarget` | 0 |
 | Window | `DisplayFftWindow` | station | Rectangular, Blackman-Harris 4T, Hann, Flat-Top, Hamming, Kaiser, Blackman-Harris 7T (0 to 6) | 1 |
-| Hz/bin Target | `DisplayHzPerBinTarget` | station | 0 to 200 step 0.5, 2 places, `Hz/bin`, 0 is Off | 0 |
 | FPS | `DisplaySpectrumFps` | station | 10 to 60 step 1, `fps` | 30 |
 | Spectrum Detector | `DisplaySpectrumDetector` | device | Peak, Rosenfell, Average, Sample, RMS (0 to 4) | 0 |
 | Spectrum Averaging | `DisplaySpectrumAveraging` | device | None, Recursive, Time Window, Log Recursive (0 to 3) | 3 |
-| Spectrum Avg Time | `DisplaySpectrumAverageTimeMs` | device | 10 to 9999 step 10, `ms` | 30 |
+| Spectrum Avg Time | `DisplaySpectrumAverageTimeMs` | device | 1 to 9999 step 1, `ms` | 30 |
 | Decimation | none | device | 1 to 16 step 1 | 1 |
 | WF Detector | `DisplayWaterfallDetector` | device | Peak, Rosenfell, Average, Sample (0 to 3) | 0 |
 | WF Averaging | `DisplayWaterfallAveraging` | device | None, Recursive, Time Window, Log Recursive (0 to 3) | 0 |
-| WF Avg Time | `DisplayWaterfallAverageTimeMs` | device | 10 to 9999 step 10, `ms` | 120 |
+| WF Avg Time | `DisplayWaterfallAverageTimeMs` | device | 1 to 9999 step 1, `ms` | 120 |
+
+The two averaging times ran from 10 in steps of 10 until Setup description
+version 28; a Core from before it lists that range and refuses a time below
+10 in a display request, so a device reads the range from the catalog it is
+given, never from a constant of its own.
 
 `binWidth` is `{label, decimals}`, the readout beside the FFT size: `Bin
 Width (Hz)`, the pan's sample rate over its FFT size, to 3 places (the
@@ -5236,6 +5571,8 @@ Hz/bin target holds the bin width at or below the target at any zoom
 (`pixels` and `spanHz` are the subscription's own). The width the pan gets
 is the sample rate over the size the Core grants (its spectrum context's
 `grantedFftSize`), which may be less than asked.
+
+> Correction 2026-10-10: the per-pixel planner rule above is out of date. A remote pan's FFT size now comes from the same rule a local pan uses (`ControlRanges::planAutoZoomFft`); pan width in pixels no longer changes it.
 
 `offered` is the Core's (iPhone app plan Task 25, D41). It starts from
 the unbuilt features list the desktop hides by (`UnbuiltFeatureList.h`:
@@ -5266,7 +5603,7 @@ the Core keeps:
 
 | Stream | Capacity | Record |
 | --- | --- | --- |
-| `spots` | 500 | One spot the Core holds (its SpotModel: the station sources' spots, and FreeDV Reporter's once the Core runs it), `id` its index: `timeUtc` (string, ISO 8601 UTC), `frequencyHz` (number, whole Hz), `call`, `mode`, `source` (the source's label: `Cluster`, `RBN`, `POTA`, `PSK`, `FreeDV`), `spotter`, `comment` (strings), `band` (number, the Band as the catalogue's `bands` numbers it: 11 for GEN, 27 for 2 m; a peer without `band2mVersion` 1 reads 11 for 2 m, section 6.1), `dxccColour` (string, `#rrggbb`, empty when the Core does not colour it) and `dxccPriority` (number: 4 a new DXCC entity, 3 a new band, 2 a new mode, 1 worked before, 0 not known or colouring off); with `recordStreamVersion` 2, `resolvedMode` (number, the slice's `dspMode` value 0 to 13 a click on the spot selects, as the desktop resolves it: `CWU` 4 or `CWL` 3 for CW by the 10 MHz rule, `USB` 1, `LSB` 0, `DIGU` 7, `DIGL` 9, `AM` 6, `SAM` 10, `FM` 5 (NFM too), `RADE_U` 12 or `RADE_L` 13 for a FreeDV spot; absent when the resolver has none: the spot or its comment names a mode it does not map, or names none and the spot is below 1.8 MHz or in a band's digital segment, whose inferred `DIGU` the resolver's table does not map) |
+| `spots` | 500 | One spot the Core holds (its SpotModel: the station sources' spots, and FreeDV Reporter's once the Core runs it), `id` its index: `timeUtc` (string, ISO 8601 UTC), `frequencyHz` (number, whole Hz), `call`, `mode`, `source` (the source's label: `Cluster`, `RBN`, `POTA`, `PSK`, `FreeDV`), `spotter`, `comment` (strings), `band` (number, the Band as the catalogue's `bands` numbers it: 11 for GEN, 27 for 2 m; a peer without `band2mVersion` 1 reads 11 for 2 m, section 6.1), `dxccColour` (string, `#rrggbb`, empty when the Core does not colour it) and `dxccPriority` (number: 4 a new DXCC entity, 3 a new band, 2 a new mode, 1 worked before, 0 not known or colouring off); `bearingDeg` (number, the short-path great-circle bearing in degrees from the Core's grid square to the spot's cty.dat position, 0 to under 360 to one decimal, -1 when not known: no grid square, one that cannot be read, or a call cty.dat cannot place; never 0 for not known; sent by a Core of this build whatever the window advertises, and read by a window only when the Core advertises `remoteRotorControlVersion` 1, docs/architecture/2026-10-07-remote-rotor-control-v1.md); with `recordStreamVersion` 2, `resolvedMode` (number, the slice's `dspMode` value 0 to 13 a click on the spot selects, as the desktop resolves it: `CWU` 4 or `CWL` 3 for CW by the 10 MHz rule, `USB` 1, `LSB` 0, `DIGU` 7, `DIGL` 9, `AM` 6, `SAM` 10, `FM` 5 (NFM too), `RADE_U` 12 or `RADE_L` 13 for a FreeDV spot; absent when the resolver has none: the spot or its comment names a mode it does not map, or names none and the spot is below 1.8 MHz or in a band's digital segment, whose inferred `DIGU` the resolver's table does not map) |
 | `spotConsole:<source>` | 200 | One console line of a station source (`dxCluster`, `rbn`, `pota`, `pskReporter`, and with `stationFreedvVersion` 1 `freedvReporter`), `id` a rising number: `line` (string). A command typed from any device shows as `> <command>` |
 | `freedvStations` | 1000 | With `stationFreedvVersion` 1: one station FreeDV Reporter lists, as the Core hears it, `id` its FreeDV Reporter session id: the FreeDV Reporter dialog's 14 columns, `callsign`, `gridSquare` (strings), `distanceKm` and `headingDeg` (numbers, from the Core's own grid square; 0 with `headingCardinal` empty while either grid square is not known), `headingCardinal` (string, `N` to `NNW`), `version` (string), `frequencyHz` (number, whole Hz, 0 not known), `txMode` (string), `status` (string: `Active`, `TX` or `RX Only`), `userMessage` (string), `lastTxUtc` (string, ISO 8601 UTC, empty when never), `lastRxCallsign`, `lastRxMode` (strings), `snrDb` (number, -99 not known) and `lastUpdateUtc` (string, ISO 8601 UTC, empty when not known); then `transmitting` (boolean), `receivingFrom` (string: whom its latest receive report heard, the last callsign it named, while that report stands; empty once a frequency change clears it), `messageChangedAtMs` (number, the Core's clock in ms since the epoch when `userMessage` last changed, 0 never) and `lastRxUtc` (string, ISO 8601 UTC, when its latest receive report came, empty when none stands); with `stationFreedvVersion` 2, `band` (number, the Band as the `spots` record numbers it: 0 160 m, 1 80 m, 2 60 m, 3 40 m, 4 30 m, 5 20 m, 6 17 m, 7 15 m, 8 12 m, 9 10 m, 10 6 m, 11 GEN for a frequency outside those bands, 12 WWV within 5 kHz of 2.5, 5, 10, 15, 20 or 25 MHz, 27 2 m (144 to 148 MHz; a peer without `band2mVersion` 1 reads 11, section 6.1); each band's edges belong to it; absent while `frequencyHz` is 0). The list starts again (a reset) each time the Core's connection to FreeDV Reporter connects or ends |
 | `coreLog` | 200 | With `supportBundleVersion` 1: one line of the Core's log as its log file has it (`[HH:mm:ss.zzz] INF: text`, addresses already shortened), `id` its number in the Core's log (rising): `line` (string). Keys, tokens and pairing codes are removed as the support bundle removes them. The Core reads its log every 250 ms while a peer follows the stream, and only then; its first backlog is the newest lines at the first subscribe |
@@ -5398,12 +5735,15 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 2. prefix | `radios/` | operatorLocal |
 | 2. prefix | `ConnectionTargets/` | operatorLocal |
 | 2. prefix | `RemoteVax/` | operatorLocal |
+| 2. prefix | `RemoteRigctld/` | operatorLocal |
 | 2. prefix | `SpotCollector` | operatorLocal |
 | 2. prefix | `Wsjtx` | operatorLocal |
 | 3. whole key | `DisplayFftSize` | station |
 | 3. whole key | `DisplayFftWindow` | station |
 | 3. whole key | `DisplayHzPerBinTarget` | station |
 | 3. whole key | `DisplaySpectrumFps` | station |
+| 3. whole key | `DisplayFftSizingMode` | station |
+| 3. whole key | `DisplayHzPerBinLastTarget` | station |
 | 3. whole key | `DisplayTxFftSize` | station |
 | 3. whole key | `DisplayTxWindowType` | station |
 | 3. whole key | `DisplayTxPanDetector` | station |
@@ -5766,9 +6106,21 @@ letter, controllerDeviceId}`) in its `values` (section 7.5).
 | `setStationTciOptions` | `emulateExpertSdr3` bool, `emulateSunSdr2Pro` bool, `cwluBecomesCw` bool, `sendInitialState` bool | `stationTciVersion` | 2 | 11 |
 | `disconnectStationTciClient` | `id` utf8 | `stationTciVersion` | 2 | 11 |
 | `setStationTciSettings` | `rateLimitMs` i64 (optional), `cwBecomesCwuAbove10mhz` bool (optional), `iqSwap` bool (optional), `alwaysStreamIq` bool (optional), `audioBlockSamples` i64 (optional), `txChannel` i64 (optional), `rxSensorIntervalMs` i64 (optional), `txSensorIntervalMs` i64 (optional), `forgetRx2VfoBOnDisconnect` bool (optional), `useRx1VfoaForRx2Vfoa` bool (optional), `copyRx2VfobToVfoa` bool (optional) | `stationTciSettingsVersion` | 1 | 11 |
+| `setStationCatChannel` | `channel` i64, `config` utf8 | `stationCatVersion` | 1 | 11 |
+| `setStationCatGlobal` | `config` utf8 | `stationCatVersion` | 1 | 11 |
+| `testStationCatCommand` | `requestId` i64, `channel` i64, `command` utf8 | `stationCatVersion` | 1 | 11 |
+| `refreshStationCatDevices` | none | `stationCatVersion` | 1 | 11 |
 | `setTxInterlockPolicy` | `mode` i64, `graceMs` i64, `swrGateEnabled` bool, `swrGateMax` f64 | `accessoryDataVersion` | 1 | 11 |
 | `setPgxlPowerCap` | `enabled` bool, `watts` i64 | `accessoryDataVersion` | 1 | 11 |
 | `clearAccessoryFaults` | `device` utf8 | `accessoryDataVersion` | 1 | 11 |
+| `setRotorTarget` | `azimuthDeg` f64, `elevationDeg` f64 | `remoteRotorControlVersion` | 1 | 11 |
+| `turnRotorToCall` | `call` utf8, `longPath` bool | `remoteRotorControlVersion` | 1 | 11 |
+| `stopRotor` | none | `remoteRotorControlVersion` | 1 | 11 |
+| `nudgeRotor` | `direction` enum, `active` bool | `remoteRotorControlVersion` | 1 | 11 |
+| `configureRotor` | `driver` enum, `serialPort` utf8, `baud` i64, `host` utf8, `port` i64, `hamlibModel` i64, `axes` enum, `endStop` enum, `rangeDeg` i64, `offsetDeg` f64 | `remoteRotorControlVersion` | 1 | 11 |
+| `disconnectRotor` | none | `remoteRotorControlVersion` | 1 | 11 |
+| `setRotorPresets` | `presets` utf8 | `remoteRotorControlVersion` | 1 | 11 |
+| `refreshRotorPorts` | none | `remoteRotorControlVersion` | 1 | 11 |
 | `requestIoBoardProbe` | none | `radioHardwareVersion` | 2 | 11 |
 | `setAlexRxAntenna` | `band` i64, `antenna` i64, `rxOnly` bool | `radioHardwareVersion` | 3 | 11 |
 | `setAlexRxAntennaForRadio` | `mac` utf8, `band` i64, `antenna` i64, `rxOnly` bool | `radioAntennaRowsVersion` | 1 | 11 |
@@ -6289,6 +6641,18 @@ These command groups need a sentence beyond the table:
   again when it stops."); the first three also while the Core is not
   connected to the amp. The reasons are in the remote accessory control
   document.
+- **The rotor** (`remoteRotorControlVersion` 1). `setRotorTarget`,
+  `turnRotorToCall`, `stopRotor`, `nudgeRotor`, `configureRotor`,
+  `disconnectRotor`, `setRotorPresets` and `refreshRotorPorts` go to the Core's rotor
+  controller, from a peer at agreed minor 11 on a Core that advertises the
+  capability (otherwise "Update this app to turn the rotor on this Core."
+  or "This Core does not control a rotor. Updating the Core may help.").
+  `accepted` means the command left for the rotor; where it points arrives
+  on the read-only `rotor` object. None keys anything or switches an RF
+  path, so the rotor turns while the radio is on the air, and none is a
+  shared setting. A session ending ends the turn button it was holding.
+  The arguments and reasons are in
+  [remote rotor control version 1](2026-10-07-remote-rotor-control-v1.md).
 - **The Tune Power slider.** `setTunePowerForTxBand` (`watts`, 0 to 100,
   0 to 99 on a Hermes Lite 2) does what the TX applet's Tune Power slider
   does in a local window: it sets the tune power for the band the Core
@@ -6612,9 +6976,10 @@ Client to station:
 | `monitor-audio` | `txMonitorAudioVersion` | `connectionId`, `op`, `revision`, `route` | none | none |
 | `receiver-audio` | `receiverAudioVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision`, `sliceId` | none | none |
 | `replace` | `mediaReplaceVersion` | `connectionId`, `op`, `replaces` | `mediaDirectVersion` with mediaDirectVersion | none |
-| `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `mediaRelayRoutingVersion` with mediaRelayRoutingVersion; `mediaTunnelVersion` with mediaTunnelVersion; `miniDisplayVersion` with miniDisplayVersion; `receiverAudioVersion` with receiverAudioVersion; `remoteIqVersion` with remoteIqVersion; `remoteTxVersion` with remoteTxVersion; `txDisplayVersion` with txDisplayVersion; `txMonitorAudioVersion` with txMonitorAudioVersion | none |
+| `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `mediaRelayRoutingVersion` with mediaRelayRoutingVersion; `mediaTunnelVersion` with mediaTunnelVersion; `miniDisplayVersion` with miniDisplayVersion; `receiverAudioVersion` with receiverAudioVersion; `remoteIqVersion` with remoteIqVersion; `remoteTxVersion` with remoteTxVersion; `spectrumPictureVersion` with spectrumPictureVersion; `txDisplayVersion` with txDisplayVersion; `txMonitorAudioVersion` with txMonitorAudioVersion; `waveformVersion` with waveformVersion | none |
 | `subscribe` | `remoteMediaVersion` | `centreHz`, `connectionId`, `endpointId`, `fftSize`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `pixels`, `revision`, `sliceId`, `spanHz`, `tier`, `trace`, `waterfall`, `wideSpanFactor`, `windowType` | `activePeakHold` with displayExtrasVersion; `averageTimeMs` with displayExtrasVersion; `calibrationOffsetDb` with displayExtrasVersion; `decimation` with spectrumGrantVersion; `displayRole` with miniDisplayVersion; `duplex` with txDisplayVersion; `extendedView` with remoteWidebandDisplayVersion; `noiseFloor` with displayExtrasVersion; `normalize` with displayExtrasVersion; `peakBlobs` with displayExtrasVersion; `txMaxDbm` with txDisplayVersion; `txMinDbm` with txDisplayVersion; `waterfallAverageTimeMs` with displayExtrasVersion; `waterfallLevels` with displayExtrasVersion | `activePeakHold`: {enabled, fallDbPerSec, holdMs, onTx} or {enabled, fallDbPerSec, holdMs}; `noiseFloor`: {enabled, fastAttack, shiftDb} or {enabled, shiftDb}; `peakBlobs`: {count, fallDbPerSec, holdMs, insideOnly}; `trace`: {averageAlpha, averageMode, detector}; `waterfall`: {averageAlpha, averageMode, detector}; `waterfallLevels`: {highDbm, lowDbm, mode, offsetDb} |
 | `unsubscribe` | `remoteMediaVersion` | `connectionId`, `endpointId`, `op` | `revision` with remoteDisplayBudgetVersion | none |
+| `waveform-stream` | `waveformVersion` | `connectionId`, `enabled`, `kind`, `op`, `revision`, `sliceId` | none | none |
 
 Station to client:
 
@@ -6624,7 +6989,7 @@ Station to client:
 | `audio-context` | `remoteMediaVersion` | `connectionId`, `enabled`, `firstSequence`, `firstTimestamp`, `generation`, `op`, `revision`, `ssrc` | `encoder` with enabled=true, remoteAudioStatusVersion; `opusBitrateRefusal` with audioProfileVersion, audioQualityVersion, opusBitrateRefused, remoteAudioStatusVersion; `profile` with audioProfileVersion, remoteAudioStatusVersion; `profileRefusal` with audioProfileVersion, profile=opus, profileRefused, remoteAudioStatusVersion; `reason` with enabled=false, remoteAudioStatusVersion | `encoder`: {audioBandwidthHz, channels, codec, frameSamples, sampleRate, targetBitrate} or {bitsPerSample, channels, codec, frameSamples, payloadType, sampleRate} |
 | `candidate` | `remoteMediaVersion` | `candidate`, `connectionId`, `mid`, `op` | none | none |
 | `clock-echo` | `audioClockVersion` | `capturedNs`, `connectionId`, `generation`, `id`, `op`, `rtpTimestamp`, `t0`, `t1`, `t2` | none | none |
-| `context` | `remoteMediaVersion` | `centreHz`, `connectionId`, `contextGeneration`, `endpointId`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `revision`, `sampleRateHz`, `sourceCentreHz`, `sourceStream`, `spanHz`, `traceSamples`, `waterfallSamples`, `wideCentreHz`, `wideSamples`, `wideSpanHz` | `grantedFftSize` with spectrumGrantVersion; `grantedPixels` with spectrumGrantVersion; `grantedTier` with spectrumGrantVersion; `limit` with spectrumGrantVersion; `requestedPixels` with spectrumGrantVersion; `transmit` with spectrumGrantVersion, txDisplayVersion; `wideband` with remoteWidebandDisplayVersion | `wideband`: {active, adcRateHz, available, filterChainIndex, geometryRateBasis, highHz, levelReference, lowHz, physicalAdcIndex, sourceGeneration, version} or {active, available, version} |
+| `context` | `remoteMediaVersion` | `centreHz`, `connectionId`, `contextGeneration`, `endpointId`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `revision`, `sampleRateHz`, `sourceCentreHz`, `sourceStream`, `spanHz`, `traceSamples`, `waterfallSamples`, `wideCentreHz`, `wideSamples`, `wideSpanHz` | `grantedFftSize` with spectrumGrantVersion; `grantedPixels` with spectrumGrantVersion; `grantedTier` with spectrumGrantVersion; `limit` with spectrumGrantVersion; `pictureGeneration` with spectrumGrantVersion, spectrumPictureVersion; `requestedPixels` with spectrumGrantVersion; `transmit` with spectrumGrantVersion, txDisplayVersion; `wideband` with remoteWidebandDisplayVersion | `wideband`: {active, adcRateHz, available, filterChainIndex, geometryRateBasis, highHz, levelReference, lowHz, physicalAdcIndex, sourceGeneration, version} or {active, available, version} |
 | `description` | `remoteMediaVersion` | `connectionId`, `op`, `sdp`, `type` | none | none |
 | `headphones-audio-context` | `headphonesMixVersion` | `connectionId`, `enabled`, `firstSequence`, `firstTimestamp`, `generation`, `op`, `profile`, `revision`, `ssrc` | `encoder` with enabled=true; `profileRefusal` with profile=opus, profileRefused; `reason` with enabled=false | `encoder`: {audioBandwidthHz, channels, codec, frameSamples, sampleRate, targetBitrate} or {bitsPerSample, channels, codec, frameSamples, payloadType, sampleRate} |
 | `iq-stream-context` | `remoteIqVersion` | `connectionId`, `enabled`, `generation`, `op`, `reason`, `revision`, `sampleRateHz`, `sliceId` | none | none |
@@ -6633,6 +6998,7 @@ Station to client:
 | `receiver-audio-context` | `receiverAudioVersion` | `connectionId`, `enabled`, `firstSequence`, `firstTimestamp`, `generation`, `op`, `profile`, `revision`, `sliceId`, `ssrc` | `encoder` with enabled=true; `profileRefusal` with profile=opus, profileRefused; `reason` with enabled=false | `encoder`: {audioBandwidthHz, channels, codec, frameSamples, sampleRate, targetBitrate} or {bitsPerSample, channels, codec, frameSamples, payloadType, sampleRate} |
 | `rejected` | `remoteMediaVersion` | `connectionId`, `endpointId`, `op`, `reason`, `revision` | none | none |
 | `replace` | `mediaReplaceVersion` | `connectionId`, `op`, `replaces` | none | none |
+| `waveform-stream-context` | `waveformVersion` | `availability`, `connectionId`, `deliveryGeneration`, `enabled`, `kind`, `op`, `reason`, `revision`, `sampleRateHz`, `sliceId`, `sourceGeneration` | none | none |
 
 <!-- /surface -->
 
@@ -8350,6 +8716,7 @@ is refused as any outbound property's is.
 | `compressionDb` | The COMP reading (f64, dB; parity Task 33 follow-up, `txReadingsVersion` 1), as the Core's own Compression meters show it: Thetis's reading, the transmit channel's `TXA_COMP_AV` floored at -30 dB (console.cs:46979, dsp.cs:1013-1014 [v2.10.3.15]), so -30 with the speech processor off; -400, no reading, while the Core has no transmit channel. Read with the other meters |
 | `forwardRawPowerWatts`, `forwardAdcVolts`, `reflectedAdcVolts` | Core-scaled raw forward power (W) and forward/reverse ADC voltage (V), f64, `txReadingsVersion` 2. The Core calls the same `PaTelemetryScaling` functions as native PA Values with its current radio model, on the existing PA sample/meter cadence and radio change. All three are outbound only and reset with the session |
 | `eqDb`, `levelerDb`, `levelerGainDb`, `cfcDb`, `cfcGainDb`, `alcGainDb`, `alcGroupDb` | The seven stage readings a local window's container meters show (f64, dB; A9, `txReadingsVersion` 3), each Thetis's reading as its MOX branch works it from the transmit channel (console.cs:46971-46986 [v2.10.3.15]): EQ and Leveler `TXA_EQ_AV` and `TXA_LVLR_AV` floored at -30 dB, Leveler gain `TXA_LVLR_GAIN` negated and floored at 0, CFC `TXA_CFC_AV` floored at -30, CFC gain `TXA_CFC_GAIN` floored at 0, ALC gain `TXA_ALC_GAIN` plus 3 floored at -195, and ALC group `TXA_ALC_PK` floored at -30 plus `TXA_ALC_GAIN` plus 3 floored at 0. -400, no reading, while the Core has no transmit channel. Read and sent with the other meters, and reset with the session |
+| `micPeakDb`, `alcPeakDb`, `compressionPeakDb`, `eqPeakDb`, `levelerPeakDb`, `cfcPeakDb` | The six peak readings a local window's container meter bars show as their main value, beside the average (f64, dB; `txReadingsVersion` 4), each Thetis's reading as its MOX branch works it from the transmit channel (console.cs:46970-46983 [v2.10.3.15]): MIC peak and ALC peak `TXA_MIC_PK` and `TXA_ALC_PK` floored at -195 dB, and COMP, EQ, Leveler and CFC peak `TXA_COMP_PK`, `TXA_EQ_PK`, `TXA_LVLR_PK` and `TXA_CFC_PK` floored at -30. -400, no reading, while the Core has no transmit channel. Read and sent with the other meters, and reset with the session |
 
 The AM Mod Monitor's readings (peaks, holds, carrier, lamps and envelope
 trace) are not `txState` properties: they travel as the `txAmModulation`
@@ -8377,7 +8744,11 @@ meters and the Phone/CW compression gauge read). On a Core below
 `txReadingsVersion` 1 Compression shows no reading with "This Core does not
 send this reading. Updating the Core may help." Each container meter bound
 to a reading `txState` does not carry (EQ, Leveler, Leveler Gain, CFC, CFC
-Gain, ALC Gain, ALC Group) shows no reading with its reason, never 0.
+Gain, ALC Gain, ALC Group below `txReadingsVersion` 3; MIC, ALC, COMP, EQ,
+Leveler and CFC peak below 4) shows no reading with its reason, never 0.
+From 4 a bar's peak reads `micPeakDb`, `alcPeakDb`, `compressionPeakDb`,
+`eqPeakDb`, `levelerPeakDb` or `cfcPeakDb`, as a local window's reads its
+own transmit channel's.
 
 **PA Values in a remote window** reads `forwardPowerWatts`,
 `reflectedPowerWatts` and `swr` for its power rows and `forwardAdcRaw`

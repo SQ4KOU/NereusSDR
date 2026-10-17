@@ -26,6 +26,7 @@
 #include "core/session/PureSignalSessionFacade.h"
 #include "gui/DspAssetDialog.h"
 #include "gui/HGauge.h"
+#include "gui/PureSignalInstruments.h"
 #include "gui/applets/PureSignalApplet.h"
 #include "gui/applets/TxApplet.h"
 #include "models/PureSignalSettings.h"
@@ -132,6 +133,34 @@ private slots:
         QVERIFY(automatic->isChecked());
     }
 
+    void lateBindReflectsDesiredAndActualStateWithoutEcho()
+    {
+        RemotePs3Harness harness;
+        harness.radio.pureSignalSettings()->initializeAutoCalPreference(true);
+        QVERIFY(harness.facade->applyRemoteProperty("twoToneOn", true));
+        PureSignalApplet applet(&harness.radio);
+        auto* automatic = button(applet, "PsAppletAutoCalBtn");
+        auto* twoTone = button(applet, "PsAppletTwoToneBtn");
+        QVERIFY(automatic && twoTone);
+        QVERIFY(automatic->isChecked());
+        QVERIFY(twoTone->isChecked());
+        QCOMPARE(harness.requests.size(), 0);
+        automatic->click();
+        QCOMPARE(harness.requests.size(), 1);
+        QCOMPARE(harness.requests.last().action, Ps3Action::OffReset);
+        applet.syncFromModel();
+        QVERIFY(automatic->isChecked()); // Desired state has not changed at the station.
+        QCOMPARE(harness.requests.size(), 1); // Model echo submitted no action.
+        harness.radio.pureSignalSettings()->initializeAutoCalPreference(false);
+        QVERIFY(!automatic->isChecked());
+        QVERIFY(harness.facade->applyRemoteProperty("twoToneOn", false));
+        QVERIFY(!twoTone->isChecked());
+        QCOMPARE(harness.requests.size(), 1);
+        harness.facade->resetSession();
+        QVERIFY(!button(applet, "PsAppletSaveBtn")->isEnabled());
+        QCOMPARE(applet.findChild<QLabel*>("PsAppletCorrectionState")->text(), QStringLiteral("Unavailable"));
+    }
+
     void pureSignalApplet_consumesPs3StatusSemantics()
     {
         RemotePs3Harness harness;
@@ -154,41 +183,30 @@ private slots:
         });
         QVERIFY(harness.facade->applyRemoteProperty("statusJson", status));
 
-        auto* feedback = applet.findChild<HGauge*>(
-            QStringLiteral("PsAppletFeedbackGauge"));
-        auto* correction = applet.findChild<HGauge*>(
-            QStringLiteral("PsAppletCorrectionGauge"));
-        auto* iterations = applet.findChild<QLabel*>(
-            QStringLiteral("PsAppletIterationsLabel"));
-        auto* feedbackLabel = applet.findChild<QLabel*>(
-            QStringLiteral("PsAppletFeedbackDbLabel"));
-        QVERIFY(feedback && correction && iterations && feedbackLabel);
-        QVERIFY(qAbs(feedback->value() - 150.0 * 100.0 / 255.0) < 0.1);
-        QCOMPARE(correction->value(), 100.0);
-        QVERIFY(!correction->isUnavailable());
-        auto* correctionLabel = applet.findChild<QLabel*>("PsAppletCorrectionDbLabel");
-        QVERIFY(correctionLabel);
-        QCOMPARE(correctionLabel->text(), QStringLiteral("Correction: Applied"));
+        auto* feedback = static_cast<PureSignalFeedbackMeter*>(applet.findChild<QWidget*>("PsAppletFeedbackMeter"));
+        auto* correction = applet.findChild<QLabel*>("PsAppletCorrectionState");
+        auto* successes = applet.findChild<QLabel*>("PsAppletSuccessfulCalibrations");
+        auto* attempts = applet.findChild<QLabel*>("PsAppletCalibrationAttempts");
+        auto* feedbackLabel = applet.findChild<QLabel*>("PsAppletFeedbackLevel");
+        QVERIFY(feedback && correction && successes && attempts && feedbackLabel);
+        QCOMPARE(feedback->level(), 150);
+        QVERIFY(feedback->available());
+        QCOMPARE(correction->text(), QStringLiteral("● Applied"));
         // Scalar telemetry remains available without an added gain/phase display.
         QCOMPARE(harness.facade->statusSnapshot().correctionGainAtPeak, 0.8125);
-        QCOMPARE(iterations->text(), QStringLiteral("Calibrations: 7 / 9 attempts"));
-        QCOMPARE(feedbackLabel->text(), QStringLiteral("Feedback: 150 (raw)"));
+        QVERIFY(successes->text().contains(QStringLiteral("7")));
+        QVERIFY(attempts->text().contains(QStringLiteral("9")));
+        QVERIFY(feedbackLabel->text().contains(QStringLiteral("150")));
         QVERIFY(button(applet, "PsAppletSaveBtn")->isEnabled());
-
-        for (const char* name : {"PsAppletCalLed", "PsAppletRunLed", "PsAppletFbkLed"}) {
-            auto* led = applet.findChild<QLabel*>(QString::fromLatin1(name));
-            QVERIFY(led);
-            QVERIFY(led->styleSheet().contains(QStringLiteral("#20c060")));
-        }
+        QVERIFY(applet.findChild<QLabel*>("PsAppletActivity")->text().contains(QStringLiteral("Collect")));
     }
 
     void correctionStatusDoesNotDependOnOptionalGainTelemetry()
     {
         RemotePs3Harness harness;
         PureSignalApplet applet(&harness.radio);
-        auto* correction = applet.findChild<HGauge*>("PsAppletCorrectionGauge");
-        auto* label = applet.findChild<QLabel*>("PsAppletCorrectionDbLabel");
-        QVERIFY(correction && label);
+        auto* correction = applet.findChild<QLabel*>("PsAppletCorrectionState");
+        QVERIFY(correction);
         const QString legacy = statusJson([](QJsonObject& object) {
             object["feedbackLevel"] = 144;
             object["correctionsApplied"] = true;
@@ -202,10 +220,8 @@ private slots:
         QVERIFY(harness.facade->applyRemoteProperty("statusJson", legacy));
         QVERIFY(harness.facade->statusSnapshot().correctionsApplied);
         QVERIFY(!harness.facade->statusSnapshot().correctionSummaryValid);
-        QVERIFY(!correction->isUnavailable());
-        QCOMPARE(correction->value(), 100.0);
-        QCOMPARE(label->text(), QStringLiteral("Correction: Applied"));
-        QVERIFY(!label->text().contains("0.6121"));
+        QCOMPARE(correction->text(), QStringLiteral("● Applied"));
+        QVERIFY(!correction->text().contains("0.6121"));
         const QString invalid = statusJson([](QJsonObject& object) {
             object["correctionsApplied"] = true;
             object["correctionSummaryValid"] = true;
@@ -218,9 +234,7 @@ private slots:
         QVERIFY(harness.facade->applyRemoteProperty("statusJson", invalid));
         QVERIFY(!harness.facade->statusSnapshot().correctionSummaryValid);
         QVERIFY(!harness.facade->statusSnapshot().pairedInputValid);
-        QVERIFY(!correction->isUnavailable());
-        QCOMPARE(correction->value(), 100.0);
-        QCOMPARE(label->text(), QStringLiteral("Correction: Applied"));
+        QCOMPARE(correction->text(), QStringLiteral("● Applied"));
     }
 
     void pureSignalApplet_isReadOnlyWithoutRemoteActuationPermission()
@@ -265,6 +279,8 @@ private slots:
         QSignalSpy pureSignalOpen(
             &pureSignal, &PureSignalApplet::openPureSignalDialogRequested);
         QSignalSpy txOpen(&tx, &TxApplet::openPureSignalDialogRequested);
+        QVERIFY(pureSignalOpen.isValid());
+        QVERIFY(txOpen.isValid());
         auto* calibrate = button(pureSignal, "PsAppletCalibrateBtn");
         auto* psa = button(tx, "TxAppletPsaBtn");
         emit calibrate->customContextMenuRequested(QPoint{});

@@ -19,6 +19,9 @@
 //                        receive slice this is
 //   6 txSelected         bool
 //   7 onAir              bool
+//   8 receiverHolderDeviceId utf8, the device holding the receiver the
+//                        slice is on (ruling 6.3); empty when nobody does,
+//                        and absent from a Core that does not send it
 //
 // It also marks each slice this window holds but does not control as a
 // read-only listener (SliceModel::setReadOnlyListener), with the Core's own
@@ -40,6 +43,11 @@
 //               sliceAccessVersion 3 lets its own slice be taken. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-10-12: receiverHolderDeviceId and receiverHeldReason(): whose
+//               the C-Tune setting of a slice's receiver is, so a window
+//               does not ask for a pin the Core refuses. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/NereusCoreExport.h"
@@ -74,6 +82,10 @@ public:
         QStringList activeRx;
         bool txSelected;
         bool onAir;
+        /// The device holding the receiver the slice is on (ruling 6.3),
+        /// as the Core names ids; empty when nobody holds it, when the
+        /// slice has no receiver, or when the Core does not send it.
+        QString receiverHolderDeviceId;
     };
 
     /// `radio` is the window's model, whose slices are marked read-only;
@@ -121,6 +133,12 @@ public:
     /// (SliceAccessPolicy's listener refusal, StationServer::
     /// listenerChangeReason).
     QString listenerReason(int sliceId) const;
+    /// Ruling 6.3: the C-Tune setting of a receiver is its holder's. The
+    /// Core's words for a pin this window may not set on the receiver the
+    /// slice is on (the pin refusal of StationServer::
+    /// handleReceiverCommand), or empty when the receiver is this window's,
+    /// nobody's, or its holder is not known (a Core that does not send it).
+    QString receiverHeldReason(int sliceId) const;
 
     /// Marks every slice of the model again from the entries held now (a
     /// slice with no entry is not read-only).
@@ -132,6 +150,9 @@ signals:
 
 private:
     void markSlice(int sliceId);
+    /// Who holds a slice or a receiver, as the Core names it in a refusal
+    /// (StationServer::sliceHolderWords).
+    QString holderWords(const QString& deviceId) const;
     static QStringList parseIds(const QString& json);
 
     QPointer<RadioModel> m_radio;

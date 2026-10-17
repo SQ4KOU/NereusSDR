@@ -9,6 +9,19 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Shared accessory display readings and independent legal
+//                 marker / display scale by J.J. Boyd (KG4VCF),
+//                 AI-assisted via OpenAI Codex.
+//   2026-10-08 - Workspace preview only: a reading consumer's cached
+//                 readings are replayed to that consumer alone (a callback,
+//                 not readingUpdated), and cachedReading() seeds inert
+//                 previews. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-08 - Task 5b (workspace visual review): addReadingConsumer /
+//                 removeReadingConsumer, so a Longpath needle or bar gets
+//                 readings for its own context on the same timer frame,
+//                 and rxSourceChanged when the slice behind it changes.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-10-04 — Selected RX source identity and RX-only presentation reset by
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-01  J.J. Boyd / KG4VCF. Resolve remote Max Bin by the slice
@@ -60,6 +73,10 @@
 //                 (setRemoteTxStageReadingsAvailable); a Core below it
 //                 names the reason. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-10-10 - The six transmit peak meters from a Core at
+//                 txReadingsVersion 4 (setRemoteTxPeakReadingsAvailable); a
+//                 Core below it names the reason. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -104,11 +121,14 @@ mw0lge@grange-lane.co.uk
 
 #include "core/WdspTypes.h"
 #include "MeterItem.h"
+#include "gui/NereusGuiExport.h"
+#include "core/audio/WaveformSnapshot.h"
 #include <QElapsedTimer>
 #include <QJsonObject>
 #include <QHash>
 
 #include <functional>  // std::function for setRxOffsetSource (RXOffset port)
+#include <optional>
 
 #include <QObject>
 #include <QPointer>
@@ -122,6 +142,7 @@ class RxChannel;
 class TxChannel;
 class MeterWidget;
 class RadioStatus;
+class MainPowerMeter;
 class SMeterWidget;
 class WdspEngine;
 class RadioModel;
@@ -188,10 +209,21 @@ namespace MeterBinding {
     constexpr int RotatorEle     = 301;  // Elevation (0-90)
 }
 
-class MeterPoller : public QObject {
+struct WaveformContextRequest {
+    QJsonObject context;
+    WaveformKind kind;
+};
+class NEREUS_GUI_EXPORT MeterPoller : public QObject {
     Q_OBJECT
 
 public:
+    void setWaveformSource(std::function<WaveformSnapshotPtr(const QJsonObject&, WaveformKind)> source) {
+        m_waveformSource = std::move(source);
+    }
+    void setWaveformDemandSource(std::function<void(const QList<WaveformContextRequest>&)> source) {
+        m_waveformDemandSource = std::move(source);
+    }
+    void copyCachedWaveforms(MeterWidget* widget, const QJsonObject& context) const;
     explicit MeterPoller(QObject* parent = nullptr);
     ~MeterPoller() override;
 
@@ -284,6 +316,12 @@ public:
     // as a local window's get its own transmit channel's; while false they
     // show remoteTxMeterNotSentText.
     void setRemoteTxStageReadingsAvailable(std::function<bool()> available);
+    // Whether the Core sends the six peak readings (txReadingsVersion 4:
+    // `txState`'s micPeakDb .. cfcPeakDb). While true the
+    // remoteTxPeakBindingsNotSent bindings get them while transmitting, as
+    // a local window's get its own transmit channel's; while false (and
+    // with no hook set) they show remoteTxMeterNotSentText.
+    void setRemoteTxPeakReadingsAvailable(std::function<bool()> available);
     // R-R3-32 (remote-window parity Task 6): the model whose
     // paReadings() feed the HwVolts, HwAmps and HwTemperature bindings on
     // every poll, in a local window (this radio) and a remote one (the
@@ -313,6 +351,21 @@ public:
     // otherwise the JSON source identity is resolved only by the GUI adapter.
     // A changed context clears old input/history before same-context replay.
     void setTargetContext(MeterWidget* widget, const QJsonObject& context);
+    // Workspace preview (Task 5b): a reader that is not a MeterWidget (a
+    // Longpath needle or bar) gets readings for its own context. The
+    // context and its bindings join the poll set on the same timer frame
+    // as the targets; readings arrive through readingUpdated. Registering
+    // replays the cached readings for the context to `replay` alone, so a
+    // sibling on the same context keeps its value and peak. Registering an
+    // owner again replaces its context and bindings. The owner's
+    // destruction removes it, and a context nobody uses leaves the poll set.
+    void addReadingConsumer(QObject* owner, const QJsonObject& context, const QList<int>& bindings,
+                            const std::function<void(int, double)>& replay = {});
+    // The value copyCachedReadings would seed a target with for one
+    // binding of a context; empty for a binding it does not seed. Reads
+    // only the cache: nothing is registered or polled.
+    std::optional<double> cachedReading(const QJsonObject& context, int binding) const;
+    void removeReadingConsumer(QObject* owner);
     void setSMeterContext(const QJsonObject& context) { m_sMeterContext = context; }
     SMeterWidget* smeterForTest() const;
     // One cached-source lookup per context/binding per existing timer frame.
@@ -340,6 +393,7 @@ public:
     // should use these setters when changing global units or PA rating.
     void setUnitMode(MeterItem::MeterUnit unit);
     void rescalePowerMeters(int watts);
+    void setMainPowerMeter(MainPowerMeter* meter);
     static const QList<int>& remoteTxPeakBindingsNotSent();
 
     // ── Polling interval (Task 3.1, MultimeterPage wire-up) ──────────────────
@@ -394,6 +448,7 @@ public:
     void setRxOffsetSource(std::function<double()> source);
 
 signals:
+    void waveformFrameAdvanced(qint64 monotonicMs);
     void frameAdvanced(qint64 monotonicMs);
     void bindingAvailabilityChanged(int bindingId, const QString& reason);
     void bindingSupportChanged(int bindingId, MeterItem::BindingSupport support);
@@ -405,6 +460,11 @@ signals:
     /// (bindingId is a MeterBinding Tx* id), for controls outside a meter
     /// container: the Phone/CW applet's compression gauge.
     void txMeterReading(int bindingId, double value);
+    /// Task 5b: the slice or stream behind a reading consumer's context
+    /// changed (a follow-selected context switched slice). Consumers drop
+    /// their reading history and peak, as a target does (resetRxSource).
+    /// Emitted before the new source's first reading on the same frame.
+    void rxSourceChanged(const QJsonObject& context);
 
 public:
     /// R-R3-21: the Compression reading Thetis shows for a raw TXA_COMP_AV
@@ -429,11 +489,18 @@ public slots:
     void setInTx(bool isTx);
 
 private slots:
+    void pollWaveforms();
     void poll();
 
 private slots:
 
 private:
+    QByteArray waveformKey(const QJsonObject& context, WaveformKind kind) const;
+    bool eventFilter(QObject* watched, QEvent* event) override;
+    QTimer m_waveformTimer;
+    QHash<QByteArray, WaveformSnapshotPtr> m_waveformCache;
+    std::function<WaveformSnapshotPtr(const QJsonObject&, WaveformKind)> m_waveformSource;
+    std::function<void(const QList<WaveformContextRequest>&)> m_waveformDemandSource;
     // ── TX poll helper ────────────────────────────────────────────────────────
     // Reads the 4 WDSP TX meters gated for 3M-1a and pushes them to all
     // registered MeterWidget targets.
@@ -448,6 +515,7 @@ public:
     void setMmioEndpointSourceForTest(std::function<MmioEndpoint*(const QUuid&)> source) { m_mmioEndpointLookup = std::move(source); }
     void setMonotonicSourceForTest(std::function<qint64()> source) { m_monotonicSource = std::move(source); }
     int targetCountForTest() const { return m_targets.size(); }
+    int readingConsumerCountForTest() const { return int(m_readingConsumers.size()); }
     // Test seam: what pollTxMeters() does when every WDSP meter reads
     // `rawValue`.
     void handOutTxReadingForTest(int bindingId, double rawValue)
@@ -504,6 +572,17 @@ private:
     void invalidateTxAudioReadings();
     void rememberPresentation(const MeterWidget* widget);
     QHash<MeterWidget*, QJsonObject> m_targetContexts;
+    // Task 5b: non-MeterWidget readers (addReadingConsumer).
+    struct ReadingConsumer {
+        QJsonObject context;
+        QList<int> bindings;
+        QMetaObject::Connection destroyed;
+    };
+    QHash<QObject*, ReadingConsumer> m_readingConsumers;
+    // Last resolved source identity per consumer-only context key.
+    QHash<QByteArray, QByteArray> m_consumerIdentities;
+    void synchronizeConsumerSources();
+    bool contextInUse(const QJsonObject& context) const;
     QHash<QByteArray, QHash<int, double>> m_contextReadings;
     QHash<QByteArray, QJsonObject> m_knownContexts;
     QHash<int, double> m_globalReadings;
@@ -519,6 +598,8 @@ private:
     std::function<qint64()> m_monotonicSource;
     MeterItem::MeterUnit m_unitMode{MeterItem::MeterUnit::dBm};
     int m_powerScale{0};
+    QPointer<MainPowerMeter> m_mainPowerMeter;
+    void applyMainPowerScale(MeterWidget* target = nullptr) const;
     QMetaObject::Connection m_rxDestroyed, m_txDestroyed, m_paDestroyed, m_statusDestroyed;
     QVector<QMetaObject::Connection> m_remoteConnections;
     QTimer m_timer;
@@ -587,6 +668,10 @@ private:
     std::function<bool()> m_remoteTxStageReadingsAvailable;
     bool m_remoteTxStageReadingsShown{false};
     bool remoteTxStageReadingsAvailable() const;
+    // The Core sends the six peak readings (txReadingsVersion 4).
+    std::function<bool()> m_remoteTxPeakReadingsAvailable;
+    bool m_remoteTxPeakReadingsShown{false};
+    bool remoteTxPeakReadingsAvailable() const;
 };
 
 } // namespace NereusSDR

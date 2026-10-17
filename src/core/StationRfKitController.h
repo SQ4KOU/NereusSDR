@@ -4,9 +4,13 @@
 // 2026-09-25: R-R3-49 (parity Task 10): setOperate, setAntenna, setTciMode
 // and showSavedEndpoint for a window. J.J. Boyd (KG4VCF), AI-assisted via
 // Anthropic Claude Code.
+// 2026-10-11: StationAccessoryAdmission: a desktop window that shares its
+// accessories uses the device at the typed address, as it did before.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #pragma once
 
 #include "core/Rf2ksConnection.h"
+#include "core/StationAccessoryAdmission.h"
 #include "models/RfKitModel.h"
 #include <QPointer>
 #include <QSet>
@@ -38,7 +42,9 @@ class StationRfKitController final : public QObject {
     Q_OBJECT
 public:
     StationRfKitController(Rf2ksConnection* connection, RfKitModel* model,
-                           QObject* parent = nullptr);
+                           QObject* parent = nullptr,
+                           StationAccessoryAdmission admission
+                               = StationAccessoryAdmission::Identified);
     ~StationRfKitController() override;
 
     /// A radio's saved address becomes the current scope: the previous

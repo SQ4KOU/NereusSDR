@@ -48,8 +48,10 @@
 #include "core/HpsdrModel.h"
 #include "core/SampleRateCatalog.h"
 #include "core/session/StationCatalog.h"
+#include "core/settings/SettingsScope.h"
 #include "models/RadioModel.h"
 #define private public
+#include "gui/DisplayFftReadout.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/setup/DisplaySetupPages.h"
 #undef private
@@ -168,11 +170,17 @@ private slots:
                               QStringLiteral("Hann"), QStringLiteral("Flat-Top"),
                               QStringLiteral("Hamming"), QStringLiteral("Kaiser"),
                               QStringLiteral("Blackman-Harris 7T")}));
-        QCOMPARE(page.m_hzPerBinTargetSpin->minimum(), 0.0);
+        // FFT sizing mode (design D38): the target is a bin width from one
+        // step up; "Off" is the Sizing choice above it, no longer a value.
+        QCOMPARE(page.m_hzPerBinTargetSpin->minimum(), 0.5);
         QCOMPARE(page.m_hzPerBinTargetSpin->maximum(), 200.0);
         QCOMPARE(page.m_hzPerBinTargetSpin->singleStep(), 0.5);
         QCOMPARE(page.m_hzPerBinTargetSpin->decimals(), 2);
-        QCOMPARE(page.m_hzPerBinTargetSpin->specialValueText(), QStringLiteral("Off"));
+        QCOMPARE(page.m_hzPerBinTargetSpin->specialValueText(), QString());
+        QCOMPARE(comboItems(page.m_fftSizingCombo),
+                 (QStringList{QStringLiteral("Auto"), QStringLiteral("Hz/bin"),
+                              QStringLiteral("Fixed")}));
+        QCOMPARE(groupTitle(page.m_fftSizingCombo), QStringLiteral("Fast Fourier Transform"));
         QCOMPARE(page.m_hzPerBinTargetSpin->suffix(), QStringLiteral(" Hz/bin"));
         QCOMPARE(page.m_fpSlider->minimum(), 10);
         QCOMPARE(page.m_fpSlider->maximum(), 60);
@@ -187,9 +195,11 @@ private slots:
                  (QStringList{QStringLiteral("None"), QStringLiteral("Recursive"),
                               QStringLiteral("Time Window"), QStringLiteral("Log Recursive")}));
         QCOMPARE(formLabel(page.m_spectrumAveragingCombo), QStringLiteral("Spectrum Averaging"));
-        QCOMPARE(page.m_averagingTimeSpin->minimum(), 10);
+        // Thetis's udDisplayAVGTime: 1 to 9999 in steps of 1.
+        QCOMPARE(page.m_averagingTimeSpin->minimum(), 1);
         QCOMPARE(page.m_averagingTimeSpin->maximum(), 9999);
-        QCOMPARE(page.m_averagingTimeSpin->singleStep(), 10);
+        QCOMPARE(page.m_averagingTimeSpin->singleStep(), 1);
+        QCOMPARE(page.m_averagingTimeSpin->suffix(), QStringLiteral(" ms"));
         QCOMPARE(formLabel(page.m_averagingTimeSpin), QStringLiteral("Spectrum Avg Time"));
         QCOMPARE(page.m_decimationSpin->minimum(), 1);
         QCOMPARE(page.m_decimationSpin->maximum(), 16);
@@ -204,27 +214,44 @@ private slots:
                  (QStringList{QStringLiteral("None"), QStringLiteral("Recursive"),
                               QStringLiteral("Time Window"), QStringLiteral("Log Recursive")}));
         QCOMPARE(formLabel(wf.m_waterfallAveragingCombo), QStringLiteral("WF Averaging"));
-        QCOMPARE(wf.m_waterfallAvgTimeSpin->minimum(), 10);
+        // Thetis's udDisplayAVTimeWF: 1 to 9999 in steps of 1.
+        QCOMPARE(wf.m_waterfallAvgTimeSpin->minimum(), 1);
         QCOMPARE(wf.m_waterfallAvgTimeSpin->maximum(), 9999);
-        QCOMPARE(wf.m_waterfallAvgTimeSpin->singleStep(), 10);
+        QCOMPARE(wf.m_waterfallAvgTimeSpin->singleStep(), 1);
+        QCOMPARE(wf.m_waterfallAvgTimeSpin->suffix(), QStringLiteral(" ms"));
         QCOMPARE(formLabel(wf.m_waterfallAvgTimeSpin), QStringLiteral("WF Avg Time"));
         QCOMPARE(groupTitle(wf.m_waterfallAvgTimeSpin), QStringLiteral("Display"));
         QCOMPARE(page.pageTitle(), QStringLiteral("Spectrum Defaults"));
         QCOMPARE(wf.pageTitle(), QStringLiteral("Waterfall Defaults"));
 
-        // Nothing stored: 4096 points, Blackman-Harris 4T, Off, 30 fps.
+        // Nothing stored: Auto sizing, 4096 points, Blackman-Harris 4T,
+        // 30 fps. The grayed target has none remembered and nothing running
+        // to take one from, so it shows the coarsest.
+        QCOMPARE(page.m_fftSizingCombo->currentText(), QStringLiteral("Auto"));
         QCOMPARE(page.m_fftSizeSlider->value(), 0);
         QCOMPARE(page.m_windowCombo->currentIndex(), 1);
-        QCOMPARE(page.m_hzPerBinTargetSpin->value(), 0.0);
+        QVERIFY(!page.m_hzPerBinTargetSpin->isEnabled());
+        QCOMPARE(page.m_hzPerBinTargetSpin->value(), 200.0);
         QCOMPARE(page.m_fpSlider->value(), 30);
         QCOMPARE(page.m_fftSizeReadout->text(), QStringLiteral("4096"));
 
         // What it writes: 4096 x 2^position, the window's index, the target
         // and the rate, as before.
         auto& settings = AppSettings::instance();
+        // The slider sets the size in the Fixed sizing mode (design D38).
+        page.m_fftSizingCombo->setCurrentIndex(page.m_fftSizingCombo->findText(
+            QStringLiteral("Fixed")));
+        QCOMPARE(settings.value(QStringLiteral("DisplayFftSizingMode")).toString(),
+                 QStringLiteral("Fixed"));
+        QVERIFY(page.m_fftSizeSlider->isEnabled());
         // From the stored 0, every other position, then back to 0.
+        // Display pill plan Task 20 (D22): the slider writes as its handle
+        // is let go, so each position is a drag (it was setValue, which now
+        // waits for the keyboard delay).
         for (int position : {1, 2, 3, 4, 5, 6, 0}) {
-            page.m_fftSizeSlider->setValue(position);
+            page.m_fftSizeSlider->setSliderDown(true);
+            page.m_fftSizeSlider->setSliderPosition(position);
+            page.m_fftSizeSlider->setSliderDown(false);
             QCOMPARE(settings.value(QStringLiteral("DisplayFftSize")).toString(),
                      QString::number(4096 << position));
             QCOMPARE(page.m_fftSizeReadout->text(), QString::number(4096 << position));
@@ -232,6 +259,10 @@ private slots:
         page.m_windowCombo->setCurrentIndex(6);
         QCOMPARE(settings.value(QStringLiteral("DisplayFftWindow")).toString(),
                  QStringLiteral("6"));
+        // The target sets the size in the Hz/bin sizing mode.
+        page.m_fftSizingCombo->setCurrentIndex(page.m_fftSizingCombo->findText(
+            QStringLiteral("Hz/bin")));
+        QVERIFY(page.m_hzPerBinTargetSpin->isEnabled());
         page.m_hzPerBinTargetSpin->setValue(2.5);
         QCOMPARE(settings.value(QStringLiteral("DisplayHzPerBinTarget")).toString(),
                  QStringLiteral("2.5"));
@@ -258,7 +289,7 @@ private slots:
         QCOMPARE(QSet<QString>(displayKeys.cbegin(), displayKeys.cend()),
                  (QSet<QString>{QStringLiteral("controls"), QStringLiteral("binWidth"),
                                 QStringLiteral("fftPlan")}));
-        QCOMPARE(display.value(QStringLiteral("controls")).toArray().size(), 11);
+        QCOMPARE(display.value(QStringLiteral("controls")).toArray().size(), 12);
 
         RadioModel remote(RadioModel::Role::Remote);
         SpectrumWidget widget;
@@ -275,6 +306,51 @@ private slots:
         const QString spectrum = page.pageTitle();
         const QString waterfall = wf.pageTitle();
 
+        // Sizing (design D38): the list's three choices in its order, each
+        // option's value the word the page stores for it, the default the
+        // choice a page opens on with nothing stored.
+        const QJsonObject sizing = control(display, spectrum, QStringLiteral("Sizing"));
+        QCOMPARE(sizing.value(QStringLiteral("settingsKey")).toString(),
+                 QStringLiteral("DisplayFftSizingMode"));
+        QCOMPARE(sizing.value(QStringLiteral("scope")).toString(), QStringLiteral("station"));
+        QCOMPARE(sizing.value(QStringLiteral("kind")).toString(), QStringLiteral("choice"));
+        QCOMPARE(sizing.value(QStringLiteral("subscribe")).toString(), QStringLiteral("fftSize"));
+        QCOMPARE(sizing.value(QStringLiteral("label")).toString(),
+                 page.m_fftSizingCombo->accessibleName());
+        QCOMPARE(sizing.value(QStringLiteral("group")).toString(),
+                 groupTitle(page.m_fftSizingCombo));
+        const QJsonArray sizingOptions = sizing.value(QStringLiteral("options")).toArray();
+        QStringList sizingLabels;
+        for (const QJsonValue& option : sizingOptions) {
+            sizingLabels << option.toObject().value(QStringLiteral("label")).toString();
+        }
+        QCOMPARE(sizingLabels, comboItems(page.m_fftSizingCombo));
+        QCOMPARE(sizing.value(QStringLiteral("default")),
+                 sizingOptions.at(page.m_fftSizingCombo->currentIndex()).toObject()
+                     .value(QStringLiteral("value")));
+        QCOMPARE(sizing.value(QStringLiteral("default")), QJsonValue(QStringLiteral("Auto")));
+        QCOMPARE(sizingOptions.size(), int(std::size(kDisplayFftSizingChoices)));
+        // Last to first, ending on the default, so every choice is a change.
+        for (int index = int(sizingOptions.size()) - 1; index >= 0; --index) {
+            page.m_fftSizingCombo->setCurrentIndex(index);
+            QCOMPARE(AppSettings::instance().value(QStringLiteral("DisplayFftSizingMode")).toString(),
+                     sizingOptions.at(index).toObject().value(QStringLiteral("value")).toString());
+            QCOMPARE(sizingOptions.at(index).toObject().value(QStringLiteral("label")).toString(),
+                     QString::fromLatin1(kDisplayFftSizingChoices[index].label));
+        }
+        // It leads the group, as on the page: Sizing, Size, Hz/bin Target,
+        // Window.
+        QStringList fftGroupLabels;
+        for (const QJsonValue& value : display.value(QStringLiteral("controls")).toArray()) {
+            if (value.toObject().value(QStringLiteral("group")).toString()
+                == groupTitle(page.m_fftSizingCombo)) {
+                fftGroupLabels << value.toObject().value(QStringLiteral("label")).toString();
+            }
+        }
+        QCOMPARE(fftGroupLabels, (QStringList{QStringLiteral("Sizing"), QStringLiteral("Size"),
+                                              QStringLiteral("Hz/bin Target"),
+                                              QStringLiteral("Window")}));
+
         // Size: the slider's seven positions, as the sizes it writes.
         const QJsonObject size = control(display, spectrum, QStringLiteral("Size"));
         QCOMPARE(size.value(QStringLiteral("settingsKey")).toString(),
@@ -284,10 +360,16 @@ private slots:
         QCOMPARE(size.value(QStringLiteral("group")).toString(), groupTitle(page.m_fftSizeSlider));
         const QJsonArray sizes = size.value(QStringLiteral("options")).toArray();
         QCOMPARE(sizes.size(), page.m_fftSizeSlider->maximum() - page.m_fftSizeSlider->minimum() + 1);
+        // The slider sets the size while Sizing is Fixed.
+        page.m_fftSizingCombo->setCurrentIndex(page.m_fftSizingCombo->findText(
+            QStringLiteral("Fixed")));
         // Downwards from the top, so each position moves the slider.
         for (int position = page.m_fftSizeSlider->maximum();
              position >= page.m_fftSizeSlider->minimum(); --position) {
-            page.m_fftSizeSlider->setValue(position);
+            // A drag: the slider writes as its handle is let go (Task 20).
+            page.m_fftSizeSlider->setSliderDown(true);
+            page.m_fftSizeSlider->setSliderPosition(position);
+            page.m_fftSizeSlider->setSliderDown(false);
             const QJsonObject option = sizes.at(position).toObject();
             QCOMPARE(QString::number(option.value(QStringLiteral("value")).toInt()),
                      AppSettings::instance().value(QStringLiteral("DisplayFftSize")).toString());
@@ -312,7 +394,35 @@ private slots:
         const QJsonObject target = control(display, spectrum, QStringLiteral("Hz/bin Target"));
         QCOMPARE(target.value(QStringLiteral("settingsKey")).toString(),
                  QStringLiteral("DisplayHzPerBinTarget"));
-        QCOMPARE(target.value(QStringLiteral("min")).toDouble(), page.m_hzPerBinTargetSpin->minimum());
+        // The entry describes the stored key, which holds a target while
+        // Sizing is Hz/bin and the off value otherwise (design D39). The
+        // page shows the two apart: the box is the targets (the entry's
+        // range above its off value, so from one step up) and the Sizing
+        // list says whether one is in force. So the off value and the
+        // default are what the page stores under the other two choices,
+        // and the remembered key is where the page keeps the last target.
+        const double offValue = target.value(QStringLiteral("offValue")).toDouble();
+        QCOMPARE(target.value(QStringLiteral("min")).toDouble(), offValue);
+        QCOMPARE(target.value(QStringLiteral("default")).toDouble(), offValue);
+        QCOMPARE(target.value(QStringLiteral("offLabel")).toString(), QStringLiteral("Off"));
+        QCOMPARE(offValue + target.value(QStringLiteral("step")).toDouble(),
+                 page.m_hzPerBinTargetSpin->minimum());
+        const QString rememberedKey = target.value(QStringLiteral("rememberedKey")).toString();
+        QCOMPARE(rememberedKey, QStringLiteral("DisplayHzPerBinLastTarget"));
+        QCOMPARE(classifySettingsKey(rememberedKey), SettingsScope::Station);
+        page.m_fftSizingCombo->setCurrentIndex(page.m_fftSizingCombo->findText(
+            QStringLiteral("Hz/bin")));
+        page.m_hzPerBinTargetSpin->setValue(12.5);
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("DisplayHzPerBinTarget")).toDouble(),
+                 12.5);
+        QCOMPARE(AppSettings::instance().value(rememberedKey).toDouble(), 12.5);
+        for (const char* other : {"Fixed", "Auto"}) {
+            page.m_fftSizingCombo->setCurrentIndex(page.m_fftSizingCombo->findText(
+                QString::fromLatin1(other)));
+            QCOMPARE(AppSettings::instance().value(QStringLiteral("DisplayHzPerBinTarget"))
+                         .toDouble(), offValue);
+            QCOMPARE(AppSettings::instance().value(rememberedKey).toDouble(), 12.5);
+        }
         QCOMPARE(target.value(QStringLiteral("max")).toDouble(), page.m_hzPerBinTargetSpin->maximum());
         QCOMPARE(target.value(QStringLiteral("step")).toDouble(),
                  page.m_hzPerBinTargetSpin->singleStep());
@@ -320,12 +430,6 @@ private slots:
                  page.m_hzPerBinTargetSpin->decimals());
         QCOMPARE(QStringLiteral(" ") + target.value(QStringLiteral("unit")).toString(),
                  page.m_hzPerBinTargetSpin->suffix());
-        QCOMPARE(target.value(QStringLiteral("offLabel")).toString(),
-                 page.m_hzPerBinTargetSpin->specialValueText());
-        QCOMPARE(target.value(QStringLiteral("offValue")).toDouble(),
-                 page.m_hzPerBinTargetSpin->minimum());
-        QCOMPARE(target.value(QStringLiteral("default")).toDouble(),
-                 page.m_hzPerBinTargetSpin->value());
 
         // FPS.
         const QJsonObject fps = control(display, spectrum, QStringLiteral("FPS"));
@@ -339,7 +443,7 @@ private slots:
                  page.m_fpSpin->suffix());
         QCOMPARE(fps.value(QStringLiteral("group")).toString(), groupTitle(page.m_fpSlider));
 
-        // The four station keys are the Core's; the rest are each device's,
+        // The five station keys are the Core's; the rest are each device's,
         // sent in its subscription.
         int station = 0;
         for (const QJsonValue& value : display.value(QStringLiteral("controls")).toArray()) {
@@ -351,7 +455,7 @@ private slots:
             }
             QVERIFY(!entry.value(QStringLiteral("subscribe")).toString().isEmpty());
         }
-        QCOMPARE(station, 4);
+        QCOMPARE(station, 5);
 
         // The choices and times each device keeps: as the pages draw them,
         // defaults as a new SpectrumWidget holds them.

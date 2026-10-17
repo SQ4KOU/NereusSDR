@@ -34,6 +34,16 @@
 //               Anthropic Claude Code.
 //   2026-10-01: Control logging lane: rttMs(). Logging only. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10: R-AUD-SEND: audioRtpSink(), sendRtp() with this peer's
+//               checks from any thread. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
+//   2026-10-15: setTxReceiptHook, given to each start's
+//               transport before it starts, for the remote transmit cut
+//               guard. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-15: Display send thread: displaySink(), the display and raw
+//               I/Q sends with this peer's checks from any thread. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/MediaPeer.h"
@@ -50,6 +60,8 @@
 #include <QUuid>
 
 #include <initializer_list>
+#include <memory>
+#include <mutex>
 #include <utility>
 
 namespace NereusSDR {
@@ -140,8 +152,126 @@ quint32 rtpSsrc(const QByteArray& packet)
 
 } // namespace
 
+// R-AUD-SEND: sendRtp() from any thread, with this peer's own checks (it is
+// started, the packet's SSRC is one it declared) before the transport's.
+// start() and stop() publish what the checks read, holding the lock only to
+// copy; a send holds it throughout, so none is inside the transport once
+// stop() has published. One object for the peer's whole life.
+class MediaPeerRtpSink final : public MediaRtpSink {
+public:
+    struct State {
+        std::shared_ptr<MediaRtpSink> transport;   // null: not started
+        quint32 audioSsrc = 0;
+        QList<quint32> receiverAudioSsrcs;
+        quint32 headphonesAudioSsrc = 0;
+    };
+
+    void publish(State state)
+    {
+        {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            std::swap(m_state, state);
+        }
+    }
+
+    RtpSendResult sendRtp(const QByteArray& packet) override
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_state.transport) {
+            // Not started, or stopped: nothing is asked of a transport.
+            return RtpSendResult::NotReady;
+        }
+        if (packet.size() < IMediaTransport::kMinRawRtpBytes
+            || packet.size() > IMediaTransport::kMaxRawRtpBytes) {
+            return RtpSendResult::Refused;
+        }
+        const quint32 ssrc = rtpSsrc(packet);
+        if (ssrc == 0
+            || !(ssrc == m_state.audioSsrc || m_state.receiverAudioSsrcs.contains(ssrc)
+                 || ssrc == m_state.headphonesAudioSsrc)) {
+            return RtpSendResult::Refused;
+        }
+        return m_state.transport->sendRtp(packet);
+    }
+
+private:
+    std::mutex m_mutex;
+    State m_state;
+};
+
+// Display send thread: the display and raw I/Q sends from any thread, with
+// this peer's own checks (it is started, the message fits) before the
+// transport's; ready() is also whether this peer reported ready. start(),
+// the ready report and stop() publish what the checks read, holding the
+// lock only to copy; a send holds it throughout, so none is inside the
+// transport once stop() has published. One object for the peer's whole life.
+class MediaPeerDisplaySink final : public MediaDisplaySink {
+public:
+    struct State {
+        std::shared_ptr<MediaDisplaySink> transport;   // null: not started
+        bool peerReady = false;
+    };
+
+    void publish(State state)
+    {
+        {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            std::swap(m_state, state);
+        }
+    }
+
+    bool ready() const override
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        return m_state.transport && m_state.peerReady && m_state.transport->ready();
+    }
+
+    IMediaTransport::DisplaySendResult submitDisplay(const QByteArray& message) override
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_state.transport || message.isEmpty()
+            || message.size() > IMediaTransport::kMaxDisplayMessageBytes) {
+            return IMediaTransport::DisplaySendResult::Refused;
+        }
+        return m_state.transport->submitDisplay(message);
+    }
+
+    bool displayBusy() const override
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        return m_state.transport && m_state.transport->displayBusy();
+    }
+
+    IMediaTransport::DisplaySendResult submitIq(const QByteArray& message) override
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_state.transport || message.isEmpty()
+            || message.size() > IMediaTransport::kMaxIqMessageBytes) {
+            return IMediaTransport::DisplaySendResult::Refused;
+        }
+        return m_state.transport->submitIq(message);
+    }
+
+    bool iqBusy() const override
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        return m_state.transport && m_state.transport->iqBusy();
+    }
+
+private:
+    mutable std::mutex m_mutex;
+    State m_state;
+};
+
 struct MediaPeer::Private {
     TransportFactory factory;
+    const std::shared_ptr<MediaPeerRtpSink> rtpSink = std::make_shared<MediaPeerRtpSink>();
+    // Whether the started transport gave rtpSink somewhere to send.
+    bool transportHasAudioRtpSink = false;
+    // Display send thread: the same for the display and raw I/Q sends.
+    const std::shared_ptr<MediaPeerDisplaySink> displaySink =
+        std::make_shared<MediaPeerDisplaySink>();
+    std::shared_ptr<MediaDisplaySink> transportDisplaySink;
     // Task 28: the session's ICE settings through the service.
     std::optional<IceConfiguration> ice;
     QPointer<IMediaTransport> transport;
@@ -158,6 +288,9 @@ struct MediaPeer::Private {
     quint64 generation = 0;
     // TX mic thread: the microphone line's sink, installed on each start.
     IMediaTransport::MicPacketSink micSink;
+    // Remote transmit cut off the main thread: the "tx" receipt hook, given
+    // to each start's transport.
+    IMediaTransport::TxReceiptHook txReceiptHook;
     int remoteCandidateControls = 0;
     int localCandidateControls = 0;
     bool started = false;
@@ -189,7 +322,7 @@ MediaPeer::~MediaPeer()
 bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
                       int audioTargetBitrate, bool offerLosslessAudio,
                       bool receiverAudioStreams, bool headphonesMixStream, bool micLine,
-                      bool iqChannel)
+                      bool iqChannel, bool waveformChannel)
 {
     d->startRefusal = StartRefusal::None;
     if (d->started || !isCanonicalConnectionId(connectionId)) {
@@ -220,6 +353,10 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
     ++d->generation;
     const quint64 generation = d->generation;
     d->transport = transport;
+    // Before the transport starts, so its first "tx" message is reported.
+    if (d->txReceiptHook) {
+        transport->setTxReceiptHook(d->txReceiptHook);
+    }
     d->connectionId = connectionId;
     d->role = role;
     d->audioSsrc = audioSsrcForConnection(connectionId);
@@ -234,6 +371,15 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
     d->pendingCandidates.clear();
     d->ready = false;
     d->started = true;
+    // R-AUD-SEND: this start's checks, for a send from another thread.
+    const std::shared_ptr<MediaRtpSink> transportSink = transport->audioRtpSink();
+    d->transportHasAudioRtpSink = transportSink != nullptr;
+    d->rtpSink->publish({transportSink, d->audioSsrc, d->receiverAudioSsrcs,
+                         d->headphonesAudioSsrc});
+    // Display send thread: this start's display and raw I/Q sends, not
+    // ready until the peer reports ready.
+    d->transportDisplaySink = transport->displaySink();
+    d->displaySink->publish({d->transportDisplaySink, false});
 
     QPointer<MediaPeer> self(this);
     QPointer<IMediaTransport> guardedTransport(transport);
@@ -308,6 +454,25 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
                 }
                 emit self->displayReceived(message);
             });
+    connect(transport, &IMediaTransport::waveformReceived, this,
+            [self, isCurrentGeneration](const QByteArray& message) {
+                if (isCurrentGeneration() && !message.isEmpty()
+                    && message.size() <= IMediaTransport::kMaxWaveformMessageBytes) {
+                    emit self->waveformReceived(message);
+                }
+            });
+    connect(transport, &IMediaTransport::waveformErrorOccurred, this,
+            [self, isCurrentGeneration](const QString& reason) {
+                if (isCurrentGeneration()) { emit self->waveformErrorOccurred(reason); }
+            });
+    connect(transport, &IMediaTransport::waveformDropped, this,
+            [self, isCurrentGeneration](quint64 packets) {
+                if (isCurrentGeneration()) { emit self->waveformDropped(packets); }
+            });
+    connect(transport, &IMediaTransport::waveformWritable, this,
+            [self, isCurrentGeneration] {
+                if (isCurrentGeneration()) { emit self->waveformWritable(); }
+            });
     connect(transport, &IMediaTransport::iqReceived, this,
             [self, isCurrentGeneration](const QByteArray& message) {
                 if (isCurrentGeneration() && !message.isEmpty()
@@ -368,6 +533,7 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
                     return;
                 }
                 self->d->ready = true;
+                self->d->displaySink->publish({self->d->transportDisplaySink, true});
                 emit self->ready();
             });
     connect(transport, &IMediaTransport::closed, this,
@@ -414,6 +580,7 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
     options.micAudioSsrc = d->micAudioSsrc;
     options.txChannel = d->micAudioSsrc != 0;
     options.iqChannel = iqChannel;
+    options.waveformChannel = waveformChannel;
     options.ice = d->ice;
     const bool backendStarted = transport->start(options);
     if (!self) {
@@ -442,6 +609,15 @@ bool MediaPeer::setMicPacketSink(IMediaTransport::MicPacketSink sink)
 {
     d->micSink = std::move(sink);
     return installMicSink();
+}
+
+bool MediaPeer::setTxReceiptHook(IMediaTransport::TxReceiptHook hook)
+{
+    d->txReceiptHook = std::move(hook);
+    if (!d->transport) {
+        return false;
+    }
+    return d->transport->setTxReceiptHook(d->txReceiptHook);
 }
 
 bool MediaPeer::installMicSink()
@@ -519,6 +695,11 @@ void MediaPeer::stopInternal(bool notify)
     ++d->generation;
     d->started = false;
     d->ready = false;
+    // R-AUD-SEND: no send from another thread passes this peer from here.
+    d->rtpSink->publish({});
+    d->transportHasAudioRtpSink = false;
+    d->displaySink->publish({});
+    d->transportDisplaySink.reset();
     d->remoteDescriptionAccepted = false;
     d->remoteCandidateControls = 0;
     d->localCandidateControls = 0;
@@ -660,6 +841,21 @@ bool MediaPeer::iqBusy() const
     return d->started && d->transport && d->transport->iqBusy();
 }
 
+IMediaTransport::DisplaySendResult MediaPeer::submitWaveform(const QByteArray& message)
+{
+    if (!d->started || !d->transport || message.isEmpty()
+        || message.size() > IMediaTransport::kMaxWaveformMessageBytes) {
+        return IMediaTransport::DisplaySendResult::Refused;
+    }
+    return d->transport->submitWaveform(message);
+}
+
+bool MediaPeer::waveformBusy() const
+{
+    return d->started && d->transport && d->transport->waveformBusy();
+}
+
+
 bool MediaPeer::displayBusy() const
 {
     return d->started && d->transport && d->transport->displayBusy();
@@ -672,6 +868,26 @@ bool MediaPeer::sendRtp(const QByteArray& packet)
         && packet.size() <= IMediaTransport::kMaxRawRtpBytes
         && isDeclaredAudioSsrc(rtpSsrc(packet))
         && d->transport->sendRtp(packet);
+}
+
+std::shared_ptr<MediaRtpSink> MediaPeer::audioRtpSink() const
+{
+    return d->rtpSink;
+}
+
+bool MediaPeer::transportHasAudioRtpSink() const
+{
+    return d->transportHasAudioRtpSink;
+}
+
+std::shared_ptr<MediaDisplaySink> MediaPeer::displaySink() const
+{
+    return d->displaySink;
+}
+
+bool MediaPeer::transportHasDisplaySink() const
+{
+    return d->transportDisplaySink != nullptr;
 }
 
 bool MediaPeer::sendMicRtp(const QByteArray& packet)

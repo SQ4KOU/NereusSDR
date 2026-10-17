@@ -10,14 +10,28 @@
 //   1. Construction in all 5 scenarios.
 //   2. Scenario A Apply-suggested emits payload + Accepted.
 //   3. Scenario A/B Skip / Continue-without-VAX — no payload, Accepted.
-//   4. Scenario A Customize — openSetupAudioPage("VAX") emitted, Rejected.
+//   4. Scenario A Customize: openSetupAudioPage("Digital modes") emitted, Rejected.
 //   5. Scenario B Install-URL — openInstallUrl carries the vendor URL.
 //   6. Escape key — Rejected, no signals.
 //   7. Scenario C/D Got-it — no payload, Accepted.
+//   8. Native audio plan Task 18 (R-AUD-03, R-AUD-06): over an engine on
+//      fake backends, a cable added while the dialog is open turns "no
+//      cables" into the suggested bindings and its removal turns it back;
+//      Scenario E lists a cable added live as new; "Rescan now" rescans
+//      the older drivers and lists what they found.
+//
+// Modification history (NereusSDR):
+//   2026-10-09 - native audio plan Task 18 (R-AUD-03, R-AUD-06): the
+//                render-end payloads and the live and Rescan now cases.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - the header badge (R-AUD-03): the "new cables" notice names
+//                the system it runs on. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 
+#include <QDir>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QPair>
@@ -25,30 +39,93 @@
 #include <QSignalSpy>
 #include <QVector>
 
+#include "core/AudioEngine.h"
+#include "core/audio/CaptureProtocol.h"
+#include "core/audio/IAudioDeviceCatalog.h"
 #include "core/audio/VirtualCableDetector.h"
 #include "gui/VaxFirstRunDialog.h"
+
+#include "fakes/FakeAudioEngineBackend.h"
+
+#include <memory>
 
 using namespace NereusSDR;
 
 namespace {
 
-// Shared detection payload for Scenarios A and E. 4 VB-Audio cables,
-// input + output sides each. The dialog only surfaces input-side rows.
+const QString kCableA = QStringLiteral("CABLE-A Input (VB-Audio Virtual Cable)");
+const QString kCableC = QStringLiteral("CABLE-C Input (VB-Audio Virtual Cable)");
+const QString kCableD = QStringLiteral("CABLE-D Input (VB-Audio Virtual Cable)");
+
+AudioDeviceInfo playback(AudioBackendId backend, const QString& id, const QString& name)
+{
+    AudioDeviceInfo info;
+    info.backend = backend;
+    info.direction = AudioDeviceDirection::Output;
+    info.id = id;
+    info.name = name;
+    info.channelCount = 2;
+    return info;
+}
+
+// An engine on a fake Windows audio backend and fake older drivers, with
+// no device opened and no helper started.
+struct EngineRig {
+    std::shared_ptr<FakeAudioEngineBackend> native =
+        std::make_shared<FakeAudioEngineBackend>(AudioBackendId::Wasapi);
+    std::shared_ptr<FakeAudioEngineBackend> older =
+        std::make_shared<FakeAudioEngineBackend>(AudioBackendId::PortAudio);
+    std::unique_ptr<AudioEngine> engine = std::make_unique<AudioEngine>();
+
+    EngineRig()
+    {
+        older->setTakesStereoMix(false);
+        native->setDevices({playback(AudioBackendId::Wasapi, QStringLiteral("spk-uid"),
+                                     QStringLiteral("Desk speakers"))});
+    }
+
+    void start()
+    {
+        CaptureSupervisor::Options options;
+        options.program = QDir::temp().absoluteFilePath(QStringLiteral("no-such-capture-helper"));
+        engine->setCaptureSupervisorOptionsForTest(options);
+        engine->setVaxOutputsAllowed(false);
+        engine->setAudioBackendsForTest({native, older});
+        engine->start();
+        QVERIFY(engine->catalogue() != nullptr);
+    }
+};
+
+QStringList renderEnds(const VaxFirstRunDialog& dlg)
+{
+    QStringList out;
+    for (const DetectedCable& c : dlg.detectedForTest()) {
+        if (!c.isInput) {
+            out << c.deviceName;
+        }
+    }
+    return out;
+}
+
+// Shared detection payload for Scenarios A and E. VB-Audio cables as
+// Windows lists them: "CABLE-x Input" is the playback (render) end VAX
+// writes to (isInput false), "CABLE-x Output" the recording end apps read
+// (isInput true). The dialog only surfaces render-end rows.
 QVector<DetectedCable> windowsCablesPayload()
 {
     QVector<DetectedCable> v;
     v.push_back({VirtualCableProduct::VbCableA,
                  QStringLiteral("CABLE-A Input (VB-Audio Virtual Cable)"),
-                 true, 0});
+                 false, 0});
     v.push_back({VirtualCableProduct::VbCableA,
                  QStringLiteral("CABLE-A Output (VB-Audio Virtual Cable)"),
-                 false, 0});
+                 true, 0});
     v.push_back({VirtualCableProduct::VbCableB,
                  QStringLiteral("CABLE-B Input (VB-Audio Virtual Cable)"),
-                 true, 0});
+                 false, 0});
     v.push_back({VirtualCableProduct::VbCableC,
                  QStringLiteral("CABLE-C Input (VB-Audio Virtual Cable)"),
-                 true, 0});
+                 false, 0});
     return v;
 }
 
@@ -57,10 +134,10 @@ QVector<DetectedCable> rescanNewCablesPayload()
     QVector<DetectedCable> v;
     v.push_back({VirtualCableProduct::VbCableC,
                  QStringLiteral("CABLE-C Input (VB-Audio Virtual Cable)"),
-                 true, 0});
+                 false, 0});
     v.push_back({VirtualCableProduct::VbCableD,
                  QStringLiteral("CABLE-D Input (VB-Audio Virtual Cable)"),
-                 true, 0});
+                 false, 0});
     return v;
 }
 
@@ -177,7 +254,7 @@ private slots:
         QCOMPARE(dlg.result(), static_cast<int>(QDialog::Accepted));
     }
 
-    // ── 4. Customize (Scenario A) — openSetupAudioPage("VAX") + Rejected ──
+    // ── 4. Customize (Scenario A): openSetupAudioPage("Digital modes") + Rejected ──
     void customizeEmitsOpenSetupAndRejects()
     {
         VaxFirstRunDialog dlg(FirstRunScenario::WindowsCablesFound,
@@ -193,7 +270,7 @@ private slots:
         QTest::mouseClick(customizeBtn, Qt::LeftButton);
 
         QCOMPARE(openSetupSpy.count(), 1);
-        QCOMPARE(openSetupSpy.at(0).at(0).toString(), QStringLiteral("VAX"));
+        QCOMPARE(openSetupSpy.at(0).at(0).toString(), QStringLiteral("Digital modes"));
         QCOMPARE(applySpy.count(), 0);
         QCOMPARE(dlg.result(), static_cast<int>(QDialog::Rejected));
     }
@@ -307,7 +384,7 @@ private slots:
         QVector<DetectedCable> payload;
         payload.push_back({VirtualCableProduct::VbCable,
                            QStringLiteral("A & B <C>"),
-                           /*isInput=*/true, 0});
+                           /*isInput=*/false, 0});
         VaxFirstRunDialog dlg(FirstRunScenario::WindowsCablesFound, payload);
 
         const auto labels = dlg.findChildren<QLabel*>();
@@ -377,6 +454,136 @@ private slots:
         QVERIFY2(sawAllReady,
                  "Expected MacNative body to claim 'All 4 VAX channels are"
                  " ready to use' when all 4 HAL devices were detected");
+    }
+
+    // ── 12. R-AUD-03: a cable added while open shows, no Rescan ───────
+    void liveCableAddAndRemove_scenarioB()
+    {
+        EngineRig rig;
+        rig.start();
+        VaxFirstRunDialog dlg(FirstRunScenario::WindowsNoCables, {});
+        dlg.setAudioEngine(rig.engine.get());
+        QCOMPARE(dlg.scenarioForTest(), FirstRunScenario::WindowsNoCables);
+        QVERIFY(dlg.findChild<QPushButton*>(QStringLiteral("btnApplySuggested")) == nullptr);
+
+        rig.native->addDevice(playback(AudioBackendId::Wasapi, QStringLiteral("cable-a-uid"), kCableA));
+        rig.native->postNotice(AudioNotice::DevicesChanged);
+        QTRY_COMPARE_WITH_TIMEOUT(dlg.scenarioForTest(), FirstRunScenario::WindowsCablesFound, 1000);
+        QCOMPARE(renderEnds(dlg), QStringList{kCableA});
+        QCOMPARE(dlg.suggestedBindingsForTest().size(), 1);
+        QCOMPARE(dlg.suggestedBindingsForTest().at(0).second, kCableA);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            dlg.findChild<QPushButton*>(QStringLiteral("btnApplySuggested")) != nullptr, 1000);
+
+        rig.native->removeDevice(QStringLiteral("cable-a-uid"), AudioDeviceDirection::Output);
+        rig.native->postNotice(AudioNotice::DevicesChanged);
+        QTRY_COMPARE_WITH_TIMEOUT(dlg.scenarioForTest(), FirstRunScenario::WindowsNoCables, 1000);
+        QVERIFY(dlg.detectedForTest().isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(
+            dlg.findChild<QPushButton*>(QStringLiteral("btnApplySuggested")) == nullptr, 1000);
+        QVERIFY(dlg.findChild<QPushButton*>(QStringLiteral("btnRescanNow")) != nullptr);
+    }
+
+    // ── 13. R-AUD-03: Scenario E lists a cable added live as new ──────
+    void liveCableAdd_scenarioE()
+    {
+        EngineRig rig;
+        rig.native->addDevice(playback(AudioBackendId::Wasapi, QStringLiteral("cable-a-uid"), kCableA));
+        rig.native->addDevice(playback(AudioBackendId::Wasapi, QStringLiteral("cable-c-uid"), kCableC));
+        rig.start();
+        // CABLE-C is the new one; CABLE-A was there before.
+        QVector<DetectedCable> given;
+        given.push_back({VirtualCableProduct::VbCableC, kCableC, false, 0});
+        VaxFirstRunDialog dlg(FirstRunScenario::RescanNewCables, given);
+        dlg.setAudioEngine(rig.engine.get());
+        QCOMPARE(renderEnds(dlg), QStringList{kCableC});
+
+        rig.native->addDevice(playback(AudioBackendId::Wasapi, QStringLiteral("cable-d-uid"), kCableD));
+        rig.native->postNotice(AudioNotice::DevicesChanged);
+        QTRY_COMPARE_WITH_TIMEOUT(renderEnds(dlg), (QStringList{kCableC, kCableD}), 1000);
+        QCOMPARE(dlg.scenarioForTest(), FirstRunScenario::RescanNewCables);
+        QCOMPARE(dlg.suggestedBindingsForTest().size(), 2);
+    }
+
+    // ── 14. R-AUD-06: "Rescan now" rescans the older drivers ───────────
+    void rescanNowRescansOlderDrivers_scenarioB()
+    {
+        EngineRig rig;
+        rig.start();
+        VaxFirstRunDialog dlg(FirstRunScenario::WindowsNoCables, {});
+        dlg.setAudioEngine(rig.engine.get());
+
+        // The older drivers see a cable only once they list again.
+        rig.older->addDevice(playback(AudioBackendId::PortAudio, QStringLiteral("pa-cable-a"), kCableA));
+        QSignalSpy rescanned(rig.engine->catalogue(), &IAudioDeviceCatalog::olderDriversRescanned);
+        auto* rescan = dlg.findChild<QPushButton*>(QStringLiteral("btnRescanNow"));
+        QVERIFY(rescan != nullptr);
+        QTest::mouseClick(rescan, Qt::LeftButton);
+        // The rescan runs off the GUI thread; the catalogue says when.
+        QVERIFY(rescanned.count() == 1 || rescanned.wait(2000));
+        QCOMPARE(rig.older->rescanCount(), 1);
+        QCOMPARE(rig.native->rescanCount(), 0);
+        QTRY_COMPARE_WITH_TIMEOUT(dlg.scenarioForTest(), FirstRunScenario::WindowsCablesFound, 1000);
+        QCOMPARE(renderEnds(dlg), QStringList{kCableA});
+        QCOMPARE(dlg.suggestedBindingsForTest().at(0).second, kCableA);
+    }
+
+    // ── 15. R-AUD-03: the header badge names the system ────────────────
+    void systemBadgeTextNamesEachSystem()
+    {
+        QCOMPARE(VaxFirstRunDialog::systemBadgeText(SoundSystemLine::System::Mac),
+                 QStringLiteral("MACOS"));
+        QCOMPARE(VaxFirstRunDialog::systemBadgeText(SoundSystemLine::System::Linux),
+                 QStringLiteral("LINUX"));
+        QCOMPARE(VaxFirstRunDialog::systemBadgeText(SoundSystemLine::System::Windows),
+                 QStringLiteral("WINDOWS"));
+    }
+
+    // The "new cables" notice opens on every system (the Digital modes
+    // page's Rescan offers a new third-party cable on a Mac as on Windows),
+    // so its badge names the one this build runs on. It said WINDOWS on a
+    // Mac and on Linux.
+    void rescanNoticeBadgeNamesThisSystem()
+    {
+#if defined(Q_OS_MAC)
+        const QString here = QStringLiteral("MACOS");
+#elif defined(Q_OS_WIN)
+        const QString here = QStringLiteral("WINDOWS");
+#else
+        const QString here = QStringLiteral("LINUX");
+#endif
+        VaxFirstRunDialog dlg(FirstRunScenario::RescanNewCables, rescanNewCablesPayload());
+        auto* badge = dlg.findChild<QLabel*>(QStringLiteral("platformBadge"));
+        QVERIFY(badge != nullptr);
+        QCOMPARE(badge->text(), here);
+    }
+
+    // The first-run dialogs are each one system's own and keep its name.
+    void firstRunBadgesNameTheirOwnSystem_data()
+    {
+        QTest::addColumn<int>("scenarioInt");
+        QTest::addColumn<QString>("badge");
+        QTest::newRow("windows-cables") << static_cast<int>(FirstRunScenario::WindowsCablesFound)
+                                        << QStringLiteral("WINDOWS");
+        QTest::newRow("windows-none") << static_cast<int>(FirstRunScenario::WindowsNoCables)
+                                      << QStringLiteral("WINDOWS");
+        QTest::newRow("mac") << static_cast<int>(FirstRunScenario::MacNative)
+                             << QStringLiteral("MACOS");
+        QTest::newRow("linux") << static_cast<int>(FirstRunScenario::LinuxNative)
+                               << QStringLiteral("LINUX");
+    }
+    void firstRunBadgesNameTheirOwnSystem()
+    {
+        QFETCH(int, scenarioInt);
+        QFETCH(QString, badge);
+        const auto scenario = static_cast<FirstRunScenario>(scenarioInt);
+        const QVector<DetectedCable> payload =
+            scenario == FirstRunScenario::WindowsCablesFound ? windowsCablesPayload()
+                                                             : QVector<DetectedCable>{};
+        VaxFirstRunDialog dlg(scenario, payload);
+        auto* label = dlg.findChild<QLabel*>(QStringLiteral("platformBadge"));
+        QVERIFY(label != nullptr);
+        QCOMPARE(label->text(), badge);
     }
 };
 

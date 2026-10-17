@@ -22,6 +22,9 @@
 //   2026-09-25 - Receiver and transmit gaps plan, Task 5: an offline save's
 //                 top sample rate is the chosen protocol's. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-12 - The verified line shows the radio's second firmware number
+//                 where it reported one. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 /*  frmAddCustomRadio.cs
@@ -663,7 +666,7 @@ void AddCustomRadioDialog::onProbeClicked()
                     .arg(name)
                     .arg(QString::fromUtf8(BoardCapsTable::forBoard(
                         m_probedInfo.boardType).displayName))
-                    .arg(m_probedInfo.firmwareVersion)
+                    .arg(m_probedInfo.firmwareText())
                     .arg(m_probedInfo.macAddress));
                 m_probeButton->setText(QStringLiteral("Probe again"));
             });

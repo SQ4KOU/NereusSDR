@@ -1,4 +1,134 @@
-// no-port-check: NereusSDR-original — parser + dispatch shells ported from
+// =================================================================
+// src/core/TciProtocol.cpp  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis source:
+//   Project Files/Source/Console/console.cs, original licence included below
+//   Project Files/Source/Console/TCIServer.cs, original licence included below
+//
+// Modification history (NereusSDR):
+//   2026-10-14 - Live TX dial visibility by J.J. Boyd (KG4VCF),
+//                AI-assisted via Claude Code: the init burst's TX dial rule
+//                moves into announcesTxSlice / txFrequencyFor, which the
+//                live tune and TX handoff paths share.
+//   2026-10-14 - Desktop-host TX dial correction by J.J. Boyd (KG4VCF),
+//                AI-assisted via Claude Code: the initial TX dial reads the
+//                bound slice only when it is one of this client's mapped
+//                receivers, so another device's slice never leaks.
+//   2026-10-14 - Initial TX dial correction by J.J. Boyd (KG4VCF),
+//                AI-assisted via OpenAI Codex: read the arbiter-bound slice
+//                for late clients, preserving RX and separate XIT state.
+//   2026-10-12 - Dynamic receiver availability correction by J.J. Boyd
+//                (KG4VCF), AI-assisted via OpenAI Codex: exact mapped slice
+//                existence gates initial/query and live RX/TX availability.
+//   2026-10-12 — Transmit receiver state adaptation by J.J. Boyd
+//                (KG4VCF), with AI-assisted transformation via Anthropic
+//                Claude Code; attribution remediation via OpenAI Codex.
+// =================================================================
+
+// --- From console.cs ---
+//=================================================================
+// console.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems 
+// Copyright (C) 2010-2020  Doug Wigley
+// Credit is given to Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font.
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Modifications to support the Behringer Midi controllers
+// by Chris Codella, W2PA, May 2017.  Indicated by //-W2PA comment lines. 
+// Modifications for using the new database import function.  W2PA, 29 May 2017
+// Support QSK, possible with Protocol-2 firmware v1.7 (Orion-MkI and Orion-MkII), and later.  W2PA, 5 April 2019 
+// Modfied heavily - Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+// ApacheLabs G2E support added throughout Thetis in various files, all changes marked  //N1GP G2E added
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+//
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Final modifictions by MW0LGE Richard Samphire - 19th April 2026
+// Nothing further added by him after this date, and his repo is now in archive https://github.com/ramdor/Thetis
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
+
+//
+
+// --- From TCIServer.cs ---
+/*  TCIServer.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2020-2026 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+//
+
+// Historical attribution context: NereusSDR-original — parser + dispatch shells ported from
 // Thetis TCIServer.cs:4900-5197 [v2.10.3.13]. Handler bodies are stubs;
 // Phase 5+ adds individual cases via the matrix runner.
 
@@ -54,6 +184,10 @@
 //   2026-09-29 - Level Cal: calibration_ex carries the meter and display
 //                calibration and goes to apps when either changes. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-12 - transmitReceiverNow: the receiver whose slice transmits,
+//                for the trx and tune lines (Thetis's VFOBTX choice); the
+//                init burst names it. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 
 #include "TciProtocol.h"
 #include <QSet>
@@ -198,7 +332,7 @@ QString TciProtocol::handleCommand(const QString& command)
                                         && args.size() == *query
                                         && kVacantReceiverQueries.contains(name);
             if (m_receiverSliceMap && query != kQueryArgs.cend() && ok
-                && m_receiverSliceMap(rx) < 0 && !vacantAnswered) {
+                && !receiverAvailableNow(rx) && !vacantAnswered) {
                 return {};
             }
             // A vfo set can name one receiver and write another's slice
@@ -360,9 +494,12 @@ void TciProtocol::enqueueLocalBroadcast(const QString& frame)
 // buildInitialRadioStateLines).
 void TciProtocol::enqueueLocalBroadcastVfo(int rxIndex, qint64 hz, bool isTxBound)
 {
+    const int sliceId = rxIndex;
     rxIndex = sliceReceiver(rxIndex);
     if (rxIndex < 0 || rxIndex >= kExposedReceiverCount) {
-        if (isTxBound) { enqueueLocalBroadcastTxFrequency(hz); }
+        // A slice this client has no receiver for keeps its dial off the
+        // wire even while it holds TX (announcesTxSlice).
+        if (isTxBound && announcesTxSlice(sliceId)) { enqueueLocalBroadcastTxFrequency(hz); }
         return;
     }
     // Task 12 (R-R3-49): if then vfo for each channel, both on the VFO gate.
@@ -639,7 +776,7 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     // lines whose value does not come from receiver 1's slice are still
     // sent: rx_enable, rx_nf_enable (global), calibration_ex, split_enable,
     // tx_enable, rx_channel_enable, trx, tune and iq_stop.
-    const bool rx1Vacant = m_receiverSliceMap && m_receiverSliceMap(1) < 0;
+    const bool rx1Vacant = m_receiverSliceMap && !receiverAvailableNow(1);
 
     // Helper: read a qint64 RadioModel accessor via QMetaObject::invokeMethod.
     // Mirrors the query-path pattern at handleVfoCommand below (line ~1140).
@@ -677,18 +814,22 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     //       else if (chkVFOATX.Checked)   tx_freq = VFOAFreq;
     //   }
     //
-    // NereusSDR architectural divergence (deferred to Phase 3F multi-pan):
-    //   * VFOBTX and VFOATX checkboxes are not modeled yet
-    //   * VFOASubFreq (Thetis VFO B of RX1, used as sub-RX VFO in split) is
-    //     not modeled -- NereusSDR slice model has one freq per slice
-    //   * VFOSplit is per-slice (split(rx)) rather than radio-global like
-    //     Thetis's chkVFOSplit
-    //
-    // In the !rx2Enabled case with no VFOBTX, Thetis's TXFreq reduces to
-    // VFOAFreq exactly, matching readVfoHz(0, 0).  With RX2 on (receiver 1
-    // has a slice) the burst still reports receiver 0's VFO: the
-    // VFOBTX / VFOATX / split paths above need that state on RadioModel.
-    const qint64 txFreqHz   = rx1FreqHz;
+    // NereusSDR selects transmit through the arbiter's bound slice, which
+    // may be an internal slice beyond the two exposed TCI receivers. Thetis
+    // TXFreq above is the selected dial, without XIT; XIT enable/offset are
+    // sent separately (TCIServer.cs:2587-2594 [v2.10.3.15]). Keep the legacy
+    // RX1 fallback for synthetic models and an unresolved transmit binding.
+    // With a receiver map (desktop-host mode) this client sees only its
+    // mapped slices; a bound slice this client has no receiver for never
+    // has its dial announced, and RX1 is used instead (txFrequencyFor,
+    // shared with the live paths).
+    qint64 txFreqHz = rx1FreqHz;
+    if (const auto* radio = qobject_cast<const RadioModel*>(m_radio)) {
+        if (const SliceModel* txSlice = radio->txBoundSlice()) {
+            txFreqHz = txFrequencyFor(txSlice->sliceIndex(),
+                                      static_cast<qint64>(txSlice->frequency()));
+        }
+    }
     // Derive the band label from the TX frequency. Thetis reads
     // consoleThreadSafe.TXBand directly; NereusSDR derives via
     // Band::bandFromFrequency (IARU Region 2 lookup) + bandLabel ("20m"
@@ -1129,13 +1270,19 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     }
 
     // From Thetis TCIServer.cs:2385-2389 [v2.10.3.13]
-    lines << buildModulationLine(0, modeUpper[0]);
-    if (!rx1Vacant) { lines << buildModulationLine(1, modeUpper[1]); }
+    // A missing dynamic slice has no mode. Do not put an incomplete
+    // modulation message (or an empty frame) in the initial burst.
+    if ((!m_receiverSliceMap || receiverAvailableNow(0)) && !modeUpper[0].isEmpty()) {
+        lines << buildModulationLine(0, modeUpper[0]);
+    }
+    if (!rx1Vacant && !modeUpper[1].isEmpty()) {
+        lines << buildModulationLine(1, modeUpper[1]);
+    }
     lines << buildRxFilterBandLine(0, filterLow[0], filterHigh[0]);
     if (!rx1Vacant) { lines << buildRxFilterBandLine(1, filterLow[1], filterHigh[1]); }
 
     // From Thetis TCIServer.cs:2391-2392 [v2.10.3.13]
-    lines << buildRxEnableLine(0, !mox);
+    lines << buildRxEnableLine(0, receiverAvailableNow(0) && !mox);
     lines << buildRxEnableLine(1, bRX2Enabled && !mox);
 
     // From Thetis TCIServer.cs:2394-2403 [v2.10.3.13]
@@ -1238,21 +1385,24 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     lines << buildSplitEnableLine(0, split[0]);
     lines << buildSplitEnableLine(1, bRX2Enabled && split[1]);
     // R-R3-42 / R-R3-25: neither receiver can transmit from a remote window.
-    lines << buildTxEnableLine(0, !transmitRefused() && !mox);
+    lines << buildTxEnableLine(0, receiverAvailableNow(0) && !transmitRefused() && !mox);
     lines << buildTxEnableLine(1, !transmitRefused() && bRX2Enabled && !mox);
 
     // From Thetis TCIServer.cs:2478-2481 [v2.10.3.13]
-    lines << buildRxChannelEnableLine(0, 0, true);
+    lines << buildRxChannelEnableLine(0, 0, receiverAvailableNow(0));
     lines << buildRxChannelEnableLine(0, 1, false);  // GetSubRX(1) placeholder
     lines << buildRxChannelEnableLine(1, 0, bRX2Enabled);
     // no sub rx on rx2
     lines << buildRxChannelEnableLine(1, 1, false);
 
     // From Thetis TCIServer.cs:2483-2487 [v2.10.3.13]
-    lines << buildTrxLine(0, mox && !(false && bRX2Enabled));
-    lines << buildTrxLine(1, mox && (false && bRX2Enabled));
-    lines << buildTuneLine(0, tune && !(false && bRX2Enabled));
-    lines << buildTuneLine(1, tune && (false && bRX2Enabled));
+    // VFOBTX && bRX2Enabled is receiver 1 transmitting
+    // (transmitReceiverNow).
+    const bool vfoBTx = transmitReceiverNow() == 1;
+    lines << buildTrxLine(0, mox && !vfoBTx);
+    lines << buildTrxLine(1, mox && vfoBTx);
+    lines << buildTuneLine(0, tune && !vfoBTx);
+    lines << buildTuneLine(1, tune && vfoBTx);
 
     // From Thetis TCIServer.cs:2489-2497 [v2.10.3.13]
     lines << buildIqStopLine(0);
@@ -1398,12 +1548,23 @@ bool TciProtocol::useRx1VfoaForRx2VfoaSetting()
 // options never took effect on the Core's own server.
 bool TciProtocol::rx2EnabledNow() const
 {
-    if (m_receiverSliceMap) {
-        return m_receiverSliceMap(1) >= 0;
-    }
+    return receiverAvailableNow(1);
+}
+
+// NereusSDR adaptation of Thetis TCIServer.cs:2515-2516; 4617-4628
+// [v2.10.3.15]: Thetis's RX1 always exists; either dynamic slice here may
+// be absent. Never use receiverSlice's vacant-map fallback for existence.
+bool TciProtocol::receiverAvailableNow(int receiver) const
+{
+    if (receiver < 0 || receiver >= kExposedReceiverCount) { return false; }
+    const int sliceId = m_receiverSliceMap ? m_receiverSliceMap(receiver) : receiver;
+    if (sliceId < 0) { return false; }
     if (const auto* radio = qobject_cast<const RadioModel*>(m_radio)) {
-        return radio->sliceById(1) != nullptr;
+        return radio->sliceById(sliceId) != nullptr;
     }
+    // Synthetic radios have no slice roster: preserve their RX0 convention
+    // and their explicit RX2Enabled flag.
+    if (receiver == 0) { return true; }
     bool on = false;
     if (radioHas(m_radio, "rx2Enabled()")) {
         QMetaObject::invokeMethod(m_radio, "rx2Enabled",
@@ -1411,6 +1572,31 @@ bool TciProtocol::rx2EnabledNow() const
                                   Q_RETURN_ARG(bool, on));
     }
     return on;
+}
+
+// The receiver that transmits, zero-based.
+// From Thetis console.cs:29728 [v2.10.3.15]:
+//   if (bOldMox != tx) MoxChangeHandlers?.Invoke(rx2_enabled && VFOBTX ? 2 : 1, bOldMox, tx); // MW0LGE_21a
+// MW0LGE_21a [original inline comment from console.cs:29728]
+// and console.cs:30208 [v2.10.3.15]:
+//   if (oldTune != _tuning) TuneChangedHandlers?.Invoke(RX2Enabled && VFOBTX ? 2 : 1, oldTune, _tuning);
+// Thetis's VFOBTX is receiver 1's slice carrying the transmit flag here:
+// with a receiver map (desktop hosting) the map's receiver 1, and without
+// one slice 1. The flag is read from the slice, not from TxSliceArbiter: a
+// remote window's arbiter binds nothing (the Core chooses the slice), and
+// the Core's choice arrives as the slice's flag. A test radio that is not a
+// RadioModel transmits on receiver 0.
+int TciProtocol::transmitReceiverNow() const
+{
+    if (!rx2EnabledNow()) {
+        return 0;
+    }
+    const auto* radio = qobject_cast<const RadioModel*>(m_radio);
+    if (!radio) {
+        return 0;
+    }
+    const SliceModel* second = radio->sliceById(m_receiverSliceMap ? m_receiverSliceMap(1) : 1);
+    return second && second->isTxSlice() ? 1 : 0;
 }
 
 // The receiver whose slice vfo:rx,chan reads and writes, and which of
@@ -1468,6 +1654,13 @@ QString TciProtocol::buildTxFrequencyThetisLine(qint64 hz, const QString& band,
 // MW0LGE_22b mods are uppercase on the sun, replicate
 QString TciProtocol::buildModulationLine(int rx, const QString& modeUpper)
 {
+    // NereusSDR: deleted slices have no mode. Like Thetis sendMode
+    // (TCIServer.cs:2183 [v2.10.3.15], FIRST/LAST), send nothing in that
+    // state. WSJT-X expects a mode argument and crashes on an empty one.
+    //MW0LGE  [original inline comment from TCIServer.cs:2154]
+    if (modeUpper.isEmpty()) {
+        return {};
+    }
     return QStringLiteral("modulation:%1,%2;").arg(rx).arg(modeUpper);
 }
 
@@ -1882,6 +2075,21 @@ int TciProtocol::sliceReceiver(int sliceId) const
     return -1;
 }
 
+// Desktop hosting: a client with a receiver map sees only its mapped
+// slices, so a bound slice it has no receiver for (another device's, or the
+// station's own beyond the map) never has its dial announced. No map: any
+// bound slice is announced. One rule for the init burst and the live paths.
+bool TciProtocol::announcesTxSlice(int sliceId) const
+{
+    if (sliceId < 0) { return false; }
+    return !m_receiverSliceMap || sliceReceiver(sliceId) >= 0;
+}
+
+qint64 TciProtocol::txFrequencyFor(int boundSliceId, qint64 boundHz) const
+{
+    return announcesTxSlice(boundSliceId) ? boundHz : readVfoHzForRx(0, 0);
+}
+
 void TciProtocol::resetDispatchCounters()
 {
     m_setDispatchCount = 0;
@@ -2098,12 +2306,17 @@ QString TciProtocol::handleVfoCommand(const QStringList& args)
         return {};
     }
 
+    // NereusSDR: an absent named receiver cannot read or set an alias.
+    if ((m_receiverSliceMap || qobject_cast<const RadioModel*>(m_radio))
+        && !receiverAvailableNow(rx)) { return {}; }
     const bool vfoaUseRx2 = useRx1VfoaForRx2VfoaSetting() && rx2EnabledNow();
     // The receiver and slice VFO this rx/chan reads and writes
     // (vfoTarget). handleCommand's ownership gate checks the same
     // receiver, so a set it lets through writes only a slice it allowed.
     const VfoTarget target = vfoTarget(rx, chan);
     const int targetRx = target.rx;
+    if ((m_receiverSliceMap || qobject_cast<const RadioModel*>(m_radio))
+        && !receiverAvailableNow(targetRx)) { return {}; }
 
     if (args.size() >= 3) {
         // 3-arg set path.
@@ -2282,7 +2495,9 @@ QString TciProtocol::handleModulationCommand(const QStringList& args)
     }
     bool ok = false;
     const int rx = args.at(0).trimmed().toInt(&ok);
-    if (!ok) {
+    if (!ok || rx < 0 || rx >= kExposedReceiverCount
+        || ((m_receiverSliceMap || qobject_cast<const RadioModel*>(m_radio))
+            && !receiverAvailableNow(rx))) {
         return {};
     }
 
@@ -2293,7 +2508,7 @@ QString TciProtocol::handleModulationCommand(const QStringList& args)
         QMetaObject::invokeMethod(m_radio, "mode", Qt::DirectConnection,
                                   Q_RETURN_ARG(QString, currentMode),
                                   Q_ARG(int, receiverSlice(rx)));
-        return QStringLiteral("modulation:%1,%2;").arg(rx).arg(currentMode.toUpper());
+        return buildModulationLine(rx, currentMode.toUpper());
     }
 
     if (args.size() >= 2) {
@@ -2371,14 +2586,17 @@ QString TciProtocol::handleModulationCommand(const QStringList& args)
         // R-R3-42: in a remote window, answer with the mode the slice holds
         // now (see handleVfoCommand); the Core's answer follows through the
         // slice's mode broadcast.
+        QString held;
+        QMetaObject::invokeMethod(m_radio, "mode", Qt::DirectConnection,
+                                  Q_RETURN_ARG(QString, held),
+                                  Q_ARG(int, receiverSlice(rx)));
+        // A setter silently ignores a deleted slice. Do not acknowledge
+        // a mode change that never happened, including after removal.
+        if (held.isEmpty()) {
+            return {};
+        }
         if (m_remoteWindow) {
-            QString held;
-            QMetaObject::invokeMethod(m_radio, "mode", Qt::DirectConnection,
-                                      Q_RETURN_ARG(QString, held),
-                                      Q_ARG(int, receiverSlice(rx)));
-            if (!held.isEmpty()) {
-                modeOut = held.toUpper();
-            }
+            modeOut = held.toUpper();
         }
         // MW0LGE_22b mods are uppcase on the sun, replicate
         // From Thetis TCIServer.cs:2155 [v2.10.3.13] — sendMode format string.
@@ -3626,7 +3844,7 @@ QString TciProtocol::handleRxEnableCommand(const QStringList& args)
         bool mox = false;
         QMetaObject::invokeMethod(m_radio, "mox", Qt::DirectConnection,
                                   Q_RETURN_ARG(bool, mox));
-        return buildRxEnableLine(rx, rx == 0 ? !mox : rx2EnabledNow() && !mox);
+        return buildRxEnableLine(rx, receiverAvailableNow(rx) && !mox);
     }
 
     // From Thetis TCIServer.cs:4603-4616 [v2.10.3.15]: set path. A receiver
@@ -3661,7 +3879,7 @@ bool TciProtocol::rxChannelEnabledNow(int rx, int chan) const
     //get
     if (rx == 0) {
         // GetSubRX(1): NereusSDR has no sub receiver.
-        return chan == 0;
+        return chan == 0 && receiverAvailableNow(0);
     }
     if (rx == 1) {
         //just return rx2 state as no subrx
@@ -3692,7 +3910,12 @@ QString TciProtocol::handleRxChannelEnableCommand(const QStringList& args)
     const bool enabled = value == QStringLiteral("true");
 
     // The slice this set names. Receiver 1 has one only while RX2 is on.
-    const bool hasSlice = rx == 0 || (rx == 1 && rx2EnabledNow());
+    const bool hasSlice = receiverAvailableNow(rx);
+    // A dynamic receiver cannot acknowledge enabling a channel it lacks.
+    // Preserve the existing authoritative reply pattern for refused writes.
+    if (!hasSlice && rx >= 0 && rx < kExposedReceiverCount) {
+        return buildRxChannelEnableLine(rx, chan, false);
+    }
     if (hasSlice && m_sliceWriteGate && !m_sliceWriteGate(receiverSlice(rx))) {
         return buildRxChannelEnableLine(rx, chan, rxChannelEnabledNow(rx, chan));
     }

@@ -85,12 +85,12 @@ public struct SMeterState: Equatable, Sendable {
         let style: SMeterScale.Style = settings.face == .classic ? .classic : .vintage
         let sMeter = meters?.sMeter
         let receiveScale = sMeter.map { SMeterScale.receive($0, style: style) }
-        let transmitScale = SMeterScale.transmit(settings.txMode, power: meters?.rfPower, style: style)
+        let transmitScale = SMeterScale.transmit(settings.txMode, power: meters?.rfPower, style: style, rule: readings.meterRule)
         if readings.transmitting {
             let mode = settings.txMode
             let value = readings.value(for: mode)
             let right = Self.transmitText(value, mode: mode, style: style)
-            return SMeterDisplay(needle: value.map { SMeterScale.transmitFraction($0, mode: mode, power: meters?.rfPower) } ?? 0,
+            return SMeterDisplay(needle: value.map { SMeterScale.transmitFraction($0, mode: mode, power: meters?.rfPower, rule: readings.meterRule) } ?? 0,
                                  transmitting: true, caption: mode.label, left: "TX", right: right,
                                  peakMarker: nil, holdLine: nil, receiveScale: receiveScale,
                                  transmitScale: transmitScale, title: mode.title, legend: mode.legend,
@@ -142,10 +142,9 @@ public struct SMeterState: Equatable, Sendable {
     static func transmitText(_ value: Double?, mode: SMeterTxMode, style: SMeterScale.Style) -> String {
         switch mode {
         case .power:
-            return value.map { String(format: "%.0f W", $0) } ?? "-- W"
+            return MeterReadout.power(value)
         case .swr:
-            let text = value.map { String(format: "%.1f", $0) } ?? "--"
-            return style == .vintage ? "\(text) : 1" : text
+            return MeterReadout.swr(value)
         case .level, .compression:
             return value.map { String(format: "%.0f dB", $0) } ?? "-- dB"
         }

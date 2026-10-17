@@ -50,6 +50,14 @@ private slots:
         QCOMPARE(ch.lastWdspTxModeForTest(), DSPMode::LSB);
     }
 
+    void experimentalModesMapToSsb() {
+        TxChannel ch(kTxChannelId);
+        ch.setTxMode(static_cast<DSPMode>(14));
+        QCOMPARE(ch.lastWdspTxModeForTest(), DSPMode::USB);
+        ch.setTxMode(static_cast<DSPMode>(15));
+        QCOMPARE(ch.lastWdspTxModeForTest(), DSPMode::LSB);
+    }
+
     void usbPassesThroughUnchanged() {
         TxChannel ch(kTxChannelId);
         ch.setTxMode(DSPMode::USB);

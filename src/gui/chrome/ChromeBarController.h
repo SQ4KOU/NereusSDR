@@ -12,6 +12,7 @@
 #include <QVector>
 
 #include "gui/chrome/ChromeFoldPlan.h"
+#include "gui/NereusGuiExport.h"
 
 class QWidget;
 
@@ -42,7 +43,7 @@ namespace NereusSDR {
 ///     input, not a live read, so it cannot introduce the
 ///     measure-mutate-measure oscillation this whole design exists to
 ///     remove: it only changes when a caller explicitly says so.
-class ChromeBarController : public QObject {
+class NEREUS_GUI_EXPORT ChromeBarController : public QObject {
     Q_OBJECT
 
 public:

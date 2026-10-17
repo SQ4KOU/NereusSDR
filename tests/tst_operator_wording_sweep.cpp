@@ -216,6 +216,20 @@ const QRegularExpression& developerWording()
     return pattern;
 }
 
+// An internal class name in user text: a CamelCase identifier of two or more
+// words whose last word is a class role (TciSensorManager, RadioModel,
+// WdspEngine). Product names such as NereusSDR or ExpertSDR3 end in no role
+// word, so they pass.
+const QRegularExpression& internalClassName()
+{
+    static const QRegularExpression pattern(QStringLiteral(
+        "\\b[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*?)?"
+        "(?:Manager|Model|Engine|Controller|Server|Service|Handler|Worker|Router|Registry"
+        "|Factory|Parser|Bridge|Sink|Store|Poller|Dialog|Widget|Applet|Page|Toast"
+        "|Connection|Session|Tracker|Monitor|Policy)\\b"));
+    return pattern;
+}
+
 // The first piece of developer wording in `text`, an em dash included, or an
 // empty string.
 QString developerWordingIn(const QString& text)
@@ -430,12 +444,13 @@ QList<QPair<QString, QString>> allSetupDescriptionText()
 // it. Beyond setupInternalNameIn()'s upstream names, a tooltip may not name
 // a member (m_x, _x) or a settings key (PGXL_TxInterlockGraceMs). The
 // product's term list is not applied here: the desktop's own words for its
-// DSP, TCI and audio settings are checked by the slots that own them. Two
+// DSP, TCI and audio settings are checked by the slots that own them. Three
 // phrases name Thetis as a product the operator knows, not as a source.
 QString desktopInternalNameIn(const QString& text)
 {
     static const QStringList productPhrases{
-        QStringLiteral("a skin made for Thetis"), QStringLiteral("to Thetis defaults")};
+        QStringLiteral("a skin made for Thetis"), QStringLiteral("to Thetis defaults"),
+        QStringLiteral("Thetis PTY")};
     QString rest = text;
     for (const QString& phrase : productPhrases) {
         rest.replace(phrase, QStringLiteral(" "));
@@ -672,7 +687,7 @@ private slots:
         for (Fault fault : {Fault::SpeakerOpenFailed, Fault::SpeakerTimingUnavailable,
                             Fault::SpeakerCallbackTooLarge, Fault::SpeakerStalled,
                             Fault::SpeakerWriteFailed, Fault::DecoderUnavailable,
-                            Fault::NoPackets,
+                            Fault::SpeakerFormatUnsupported, Fault::NoPackets,
                             Fault::DecodeFailed, Fault::ClockBuffer}) {
             QVERIFY(OperatorWording::isPlain(remoteAudioProblemText(fault)));
         }
@@ -1807,10 +1822,11 @@ private slots:
                                      "Applied by TxInterlockPolicy::evaluateTxRequest.",
                                      "Persisted as PGXL_TxInterlockGraceMs.",
                                      "Default gray, mirroring Thetis m_bDX2_Gray.",
-                                     "Full implementation in Task 2.5."}) {
+                                     "Full implementation in Task 2.5.",
+                                     "Thetis PTY uses CATParser.cs."}) {
             QVERIFY2(!desktopInternalNameIn(QLatin1String(internal)).isEmpty(), internal);
         }
-        for (const char* plain : {"Import a skin made for Thetis",
+        for (const char* plain : {"Import a skin made for Thetis", "Enable Thetis PTY for CAT1.",
                                   "Reset all OC matrix pin assignments and pin actions to Thetis defaults",
                                   "Default 6 dB/s.", "RX-only antenna", "Buffer Size (IQcomp)"}) {
             QVERIFY2(desktopInternalNameIn(QLatin1String(plain)).isEmpty(), plain);
@@ -1846,6 +1862,44 @@ private slots:
         }
         QVERIFY2(files > 100, qPrintable(QString::number(files)));
         QVERIFY2(tooltips > 800, qPrintable(QString::number(tooltips)));
+        QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
+    }
+
+    // No translated string names an internal class. The TCI Server page's
+    // Sensors note once ended "(TciSensorManager aggregation)."; every tr()
+    // literal under src/ is read for a CamelCase name that ends in a class
+    // role word (Manager, Model, Engine and the like).
+    void trStringsNameNoInternalClass()
+    {
+        // The rule is not vacuous: the old note and other class names fail it.
+        for (const char* internal :
+             {"Effective rate is the minimum across all subscribed clients "
+              "(TciSensorManager aggregation).",
+              "Handled by RadioModel.", "Read from the WdspEngine.",
+              "Sent through StationTciServer.", "See SliceRouter for details."}) {
+            QVERIFY2(internalClassName().match(QLatin1String(internal)).hasMatch(), internal);
+        }
+        for (const char* plain : {"NereusSDR", "PowerSDR", "WSJT-X", "ExpertSDR3 protocol",
+                                  "MacBook Pro", "Hermes Lite 2", "Model:", "Server"}) {
+            QVERIFY2(!internalClassName().match(QLatin1String(plain)).hasMatch(), plain);
+        }
+
+        QStringList failures;
+        int strings = 0;
+        QDirIterator it(sourcePath("src"), {QStringLiteral("*.cpp")}, QDir::Files,
+                        QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString path = it.next();
+            const QString file = QDir(QStringLiteral(NEREUS_SOURCE_DIR)).relativeFilePath(path);
+            for (const QString& text : trLiterals(codeWithoutComments(path))) {
+                ++strings;
+                const QRegularExpressionMatch match = internalClassName().match(text);
+                if (match.hasMatch()) {
+                    failures << QStringLiteral("%1 [%2]: %3").arg(file, match.captured(0), text);
+                }
+            }
+        }
+        QVERIFY2(strings > 1500, qPrintable(QString::number(strings)));
         QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
     }
 };

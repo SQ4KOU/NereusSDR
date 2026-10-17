@@ -8,6 +8,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-14 Preserve saved TX intent until roster restoration completes.
+//              J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-05-26 Created in C++20/Qt6 for NereusSDR by J.J. Boyd (KG4VCF),
 //              with AI-assisted transformation via Anthropic Claude Code.
 //   2026-09-25 iPhone app plan Task 34 (R-IOS-03; remote design section
@@ -146,14 +148,26 @@ public:
 
     /// Set the MAC address used as the per-radio AppSettings scope key for
     /// save()/load(). When unset (empty), save()/load() are no-ops.
-    void setMacAddress(const QString& mac) { m_mac = mac; }
+    void setMacAddress(const QString& mac) {
+        if (m_mac != mac) {
+            cancelRestore();
+            m_mac = mac;
+        }
+    }
 
     /// Restore the persisted stable slice ID for the current MAC. The legacy
     /// positional key is migrated once when no stable-ID key exists.
+    /// A missing stable ID waits for finishRestore(), while the live binding
+    /// continues to follow the slice flags. Accepted handoffs supersede it.
     void load();
 
+    /// End roster restoration after admission/population, even if additions
+    /// were refused. Apply the saved choice once if eligible; otherwise keep
+    /// the live fallback. Later ordinary additions never replay the choice.
+    void finishRestore();
+
     /// Persist the current stable ID under hardware/<mac>/TxBoundSliceId.
-    /// No-op if MAC unset.
+    /// No-op if MAC unset or an unresolved saved choice still awaits the roster.
     void save();
 
     /// Re-establish the single-TX invariant against the current slice list.
@@ -179,7 +193,7 @@ public:
 
     /// Slice control plan Task 7: the last slice closed, so there is no
     /// slice to transmit on. Unlike syncToSliceList() on an empty list
-    /// (which keeps a restored id for the first slice to come), this drops
+    /// (which keeps pending restore intent for roster completion), this drops
     /// the binding and any waiting move, and announces the change with a
     /// new id of -1. Never keys. Keyed, it unkeys first: through the
     /// unkey gate when one is set, the -1 following once the radio is in
@@ -206,6 +220,7 @@ private:
     /// Moves the flag to `target` (the handoff's last step).
     void flipTo(SliceModel* target);
     SliceModel* sliceWithId(int sliceId) const;
+    void cancelRestore();
 
 signals:
     /// Emitted after handoff completes. oldId may be -1 on initial bind.
@@ -220,6 +235,8 @@ signals:
 
 private:
     int                       m_txBoundSliceId {-1};
+    int                       m_restoredSliceId {-1}; // intent until roster admission ends
+    quint64                   m_restoreRevision {0}; // invalidates reentrant finalization
     MoxController*            m_mox {nullptr};
     QVector<SliceModel*>*     m_slices {nullptr};  // non-owning pointer to RadioModel's list
     QString                   m_mac;               // per-radio AppSettings scope key

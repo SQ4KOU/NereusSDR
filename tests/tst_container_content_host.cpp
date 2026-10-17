@@ -1,5 +1,8 @@
 // no-port-check: NereusSDR-original mixed host integration invariants.
 // Modification history (NereusSDR):
+//   2026-10-16 - An unavailable applet is grayed with its reason, never
+//                 hidden, by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-10-04 — Cover safe legacy rounding and unsafe integer boundaries by
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-02 — Mixed container ownership, persistence and source routing by
@@ -10,6 +13,8 @@
 #include <QScopeGuard>
 #include <QAction>
 #include <QLabel>
+#include <QPushButton>
+#include <QGridLayout>
 #include <limits>
 #include "gui/meters/MeterItem.h"
 #include "core/AppSettings.h"
@@ -23,6 +28,7 @@
 #include "gui/containers/ContainerSourceAdapter.h"
 #include "gui/applets/AppletPanelWidget.h"
 #include "gui/applets/AppletVisibilityController.h"
+#include "gui/applets/AppletWidget.h"
 #include "gui/meters/MeterPoller.h"
 #include "gui/meters/MeterWidget.h"
 #include "gui/meters/presets/BarPresetItem.h"
@@ -30,6 +36,41 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 using namespace NereusSDR;
+namespace {
+// An applet with the root column every station applet has.
+class ProbeApplet : public AppletWidget {
+public:
+    explicit ProbeApplet(QWidget* parent) : AppletWidget(nullptr, parent)
+    {
+        auto* root = new QVBoxLayout(this);
+        root->addWidget(new QPushButton(QStringLiteral("Operate"), this));
+    }
+    QString appletId() const override { return QStringLiteral("probe"); }
+    QString appletTitle() const override { return QStringLiteral("Probe"); }
+    void syncFromModel() override {}
+};
+// An applet with a title bar over a box layout, a grid layout, or none.
+class LayoutApplet : public AppletWidget {
+public:
+    LayoutApplet(const QString& kind, QWidget* parent) : AppletWidget(nullptr, parent)
+    {
+        if (kind == QStringLiteral("box")) {
+            auto* root = new QVBoxLayout(this);
+            root->addWidget(appletTitleBar(QStringLiteral("Layout")));
+            root->addWidget(new QPushButton(QStringLiteral("Operate"), this));
+        } else if (kind == QStringLiteral("grid")) {
+            auto* root = new QGridLayout(this);
+            root->addWidget(new QPushButton(QStringLiteral("Operate"), this), 0, 0);
+            root->addWidget(new QPushButton(QStringLiteral("Tune"), this), 0, 1);
+        } else {
+            (new QPushButton(QStringLiteral("Operate"), this))->setGeometry(0, 40, 80, 22);
+        }
+    }
+    QString appletId() const override { return QStringLiteral("layout"); }
+    QString appletTitle() const override { return QStringLiteral("Layout"); }
+    void syncFromModel() override {}
+};
+} // namespace
 class TstContainerContentHost : public QObject {
     Q_OBJECT
 private slots:
@@ -149,7 +190,8 @@ private slots:
         QCOMPARE(host.entryRows()[4].widget.data(), widget);
         registry.setAvailable("applet:rx", false); host.reconcile(d);
         QCOMPARE(host.entryRows()[4].widget.data(), widget);
-        QVERIFY(widget->isHidden()); QVERIFY(d.contents[4].visible);
+        // Disabled, never hidden (2026-10-16).
+        QVERIFY(!widget->isHidden()); QVERIFY(!widget->isEnabled()); QVERIFY(d.contents[4].visible);
         registry.setAvailable("applet:rx", true); host.reconcile(d);
         QCOMPARE(registry.singletonView("applet:rx"), widget);
     }
@@ -355,6 +397,179 @@ private slots:
         QVERIFY(!ContainerSourceAdapter::slice(&model,{{"sessionId","elsewhere"},{"sliceId",23}},first,"station"));
         MeterPoller poller; QSignalSpy frames(&poller,&MeterPoller::frameAdvanced); poller.start();
         QTRY_VERIFY_WITH_TIMEOUT(frames.count()>0,500); poller.stop();
+    }
+    // Disabled, never hidden (2026-10-16): an applet whose feature is off
+    // (Power Genius, Tuner Genius, RF-Kit, RADE) is shown grayed with its
+    // reason, as the Rotor applet grays itself, in a column and on a free
+    // canvas alike. An entry the operator hid stays hidden.
+    void unavailableAppletIsGrayedWithItsReason_data()
+    {
+        QTest::addColumn<int>("layout");
+        QTest::newRow("column") << int(ContentLayout::VerticalStack);
+        QTest::newRow("free canvas") << int(ContentLayout::FreeCanvas);
+    }
+    void unavailableAppletIsGrayedWithItsReason()
+    {
+        QFETCH(int, layout);
+        ContainerContentRegistry registry;
+        QWidget owner;
+        auto* applet = new ProbeApplet(&owner);
+        registry.attachSingleton("applet:amp", applet);
+        ContainerContentHost host(registry);
+        host.resize(400, 400);
+        host.show();
+        ContainerDocument d; d.id = "main"; d.layout = ContentLayout(layout);
+        auto entry = registry.makeEntry("applet:amp"); entry.id = "amp";
+        if (d.layout == ContentLayout::FreeCanvas) { entry.setFreeCanvasRect(QRectF(0, 0, 300, 200)); }
+        d.contents = {entry};
+        const QString reason = QStringLiteral("Turn on 4O3A in Setup to use the Power Genius.");
+        const auto shown = [&] {
+            return d.layout == ContentLayout::FreeCanvas
+                ? applet->property("freeCanvasEffectiveVisible").toBool() && !applet->isHidden()
+                : !applet->isHidden();
+        };
+        registry.setAvailable("applet:amp", false, reason);
+        host.reconcile(d);
+        QCOMPARE(host.entryRows()[0].widget.data(), applet);
+        QVERIFY2(shown(), "an unavailable applet stays on the screen");
+        QVERIFY(!applet->isEnabled());
+        QCOMPARE(applet->unavailableReason(), reason);
+        auto* label = applet->findChild<QLabel*>(QStringLiteral("appletUnavailableReason"));
+        QVERIFY(label != nullptr);
+        QCOMPARE(label->text(), reason);
+        QVERIFY(label->isVisibleTo(applet));
+
+        registry.setAvailable("applet:amp", true);
+        host.reconcile(d);
+        QVERIFY(shown());
+        QVERIFY(applet->isEnabled());
+        QVERIFY(applet->unavailableReason().isEmpty());
+        QVERIFY(!label->isVisibleTo(applet));
+
+        registry.setAvailable("applet:amp", false, reason);
+        d.contents[0].visible = false;
+        host.reconcile(d);
+        QVERIFY2(!shown(), "an entry the operator hid stays hidden");
+    }
+    // The reason stands in for a grayed view's tooltip only while it is
+    // grayed: available again, the view's own tooltip comes back.
+    void grayingKeepsTheViewsOwnToolTip_data()
+    {
+        QTest::addColumn<bool>("isApplet");
+        QTest::newRow("applet") << true;
+        QTest::newRow("plain view") << false;
+    }
+    void grayingKeepsTheViewsOwnToolTip()
+    {
+        QFETCH(bool, isApplet);
+        ContainerContentRegistry registry;
+        QWidget owner;
+        QWidget* view = isApplet ? static_cast<QWidget*>(new ProbeApplet(&owner)) : new QWidget(&owner);
+        view->setToolTip(QStringLiteral("Its own tip"));
+        registry.attachSingleton("applet:amp", view);
+        ContainerContentHost host(registry);
+        host.resize(400, 400);
+        host.show();
+        ContainerDocument d; d.id = "main"; d.layout = ContentLayout::VerticalStack;
+        auto entry = registry.makeEntry("applet:amp"); entry.id = "amp";
+        d.contents = {entry};
+        const QString reason = QStringLiteral("Turn on 4O3A in Setup to use the Power Genius.");
+        registry.setAvailable("applet:amp", false, reason);
+        host.reconcile(d);
+        QVERIFY(!view->isEnabled());
+        QCOMPARE(view->toolTip(), reason);
+        // Reconciled again while unavailable, its own tip is still kept.
+        host.reconcile(d);
+        QCOMPARE(view->toolTip(), reason);
+
+        registry.setAvailable("applet:amp", true);
+        host.reconcile(d);
+        QVERIFY(view->isEnabled());
+        QCOMPARE(view->toolTip(), QStringLiteral("Its own tip"));
+    }
+    // The reason line is placed whatever layout the applet has: under its
+    // title bar in a box layout, in a grid's next row, and across the top
+    // (kept as wide as the applet) with no layout at all.
+    void reasonLineIsPlacedWhateverTheLayout_data()
+    {
+        QTest::addColumn<QString>("kind");
+        QTest::newRow("box") << QStringLiteral("box");
+        QTest::newRow("grid") << QStringLiteral("grid");
+        QTest::newRow("none") << QStringLiteral("none");
+    }
+    void reasonLineIsPlacedWhateverTheLayout()
+    {
+        QFETCH(QString, kind);
+        QWidget owner;
+        auto* applet = new LayoutApplet(kind, &owner);
+        applet->resize(300, 160);
+        owner.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&owner));
+        applet->setUnavailableReason(QStringLiteral("Switch the active slice to a RADE mode to use RADE."));
+        auto* label = applet->findChild<QLabel*>(QStringLiteral("appletUnavailableReason"));
+        QVERIFY(label != nullptr);
+        QVERIFY(label->isVisibleTo(applet));
+        if (kind == QStringLiteral("none")) {
+            QVERIFY(applet->layout() == nullptr);
+            QCOMPARE(label->geometry().topLeft(), QPoint(0, 0));
+            QCOMPARE(label->width(), applet->width());
+            QVERIFY(label->height() > 0);
+            applet->resize(420, 160);
+            QCOMPARE(label->width(), 420);
+        } else {
+            const int index = applet->layout()->indexOf(label);
+            QVERIFY2(index >= 0, "the reason line is in the applet's layout");
+            if (kind == QStringLiteral("box")) {
+                QCOMPARE(index, 1);
+            }
+            QTRY_VERIFY(label->width() > 0);
+            QVERIFY(label->geometry().top() > 0 || kind == QStringLiteral("grid"));
+        }
+        applet->setUnavailableReason(QString());
+        QVERIFY(!label->isVisibleTo(applet));
+    }
+    // Containers > Hidden lists every container that is off the screen for
+    // its own flags, as effectiveVisible judges them: hidden on receive
+    // (or on transmit while transmitting) and hidden by a macro too. Its
+    // entry shows the container again.
+    void hiddenMenuListsReceiveAndMacroHiddenContainers()
+    {
+        QTemporaryDir dir; AppSettings settings(dir.filePath("settings.xml"));
+        ContainerWorkspaceStore store(settings); ContainerContentRegistry registry;
+        QWidget dock; QSplitter splitter; ContainerManager manager(&dock, &splitter);
+        manager.setWorkspaceAdapter(&store, &registry);
+        const auto container = [](const QString& id) {
+            ContainerDocument c; c.id = id; c.name = id; c.layout = ContentLayout::VerticalStack;
+            c.dockMode = DockMode::OverlayDocked; c.geometry = QRect(10, 10, 200, 120);
+            return c;
+        };
+        WorkspaceDocument d; d.mainContainerId = "main";
+        ContainerDocument rx = container("rx"); rx.config["showOnRx"] = false;
+        ContainerDocument macro = container("macro"); macro.config["hiddenByMacro"] = true;
+        ContainerDocument tx = container("tx"); tx.config["showOnTx"] = false;
+        d.containers = {container("main"), rx, macro, tx};
+        QCOMPARE(manager.commitWorkspace(d, 0).status, CommitStatus::Saved);
+        const auto hiddenContainers = [&manager] {
+            QStringList ids;
+            for (const auto& item : manager.hiddenItems()) {
+                if (item.entryId.isEmpty()) { ids.append(item.containerId); }
+            }
+            return ids;
+        };
+        QCOMPARE(hiddenContainers(), (QStringList{"rx", "macro"}));
+        manager.setTransmitting(true);
+        QCOMPARE(hiddenContainers(), (QStringList{"macro", "tx"}));
+        manager.setTransmitting(false);
+
+        QVERIFY(manager.showHiddenContainer("rx"));
+        QVERIFY(manager.showHiddenContainer("macro"));
+        QCOMPARE(hiddenContainers(), QStringList{});
+        for (const auto& c : store.snapshot().containers) {
+            QVERIFY2(c.config.value("showOnRx").toBool(true), qPrintable(c.id));
+            QVERIFY2(!c.config.value("hiddenByMacro").toBool(false), qPrintable(c.id));
+        }
+        // Shown on receive: its transmit choice is the operator's still.
+        QVERIFY(!store.snapshot().containers[3].config.value("showOnTx").toBool(true));
     }
 };
 QTEST_MAIN(TstContainerContentHost)

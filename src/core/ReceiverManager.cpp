@@ -27,6 +27,10 @@
 //   2026-09-30 - reset() drops a held batch and ends batching. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //                 NereusSDR-original.
+//   2026-10-14 - Complete routing-map synchronization and publish control
+//                 snapshots after unlocking, including callback-safe retunes.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//                 NereusSDR-original synchronization logic.
 // =================================================================
 
 //=================================================================
@@ -102,7 +106,26 @@ ReceiverManager::~ReceiverManager() = default;
 
 void ReceiverManager::setMaxReceivers(int max)
 {
+    QMutexLocker locker(&m_routingMutex);
     m_maxReceivers = qBound(1, max, 7);
+}
+
+int ReceiverManager::maxReceivers() const
+{
+    QMutexLocker locker(&m_routingMutex);
+    return m_maxReceivers;
+}
+
+void ReceiverManager::setDdcFrequencyLocked(bool locked)
+{
+    QMutexLocker locker(&m_routingMutex);
+    m_ddcFreqLocked = locked;
+}
+
+bool ReceiverManager::ddcFrequencyLocked() const
+{
+    QMutexLocker locker(&m_routingMutex);
+    return m_ddcFreqLocked;
 }
 
 int ReceiverManager::createReceiver()
@@ -129,6 +152,7 @@ int ReceiverManager::createReceiver()
 
 void ReceiverManager::destroyReceiver(int receiverIndex)
 {
+    const QPointer<ReceiverManager> self(this);
     QMutexLocker locker(&m_routingMutex);
     if (!m_receivers.contains(receiverIndex)) {
         return;
@@ -137,8 +161,14 @@ void ReceiverManager::destroyReceiver(int receiverIndex)
     bool wasActive = m_receivers[receiverIndex].active;
     m_receivers.remove(receiverIndex);
 
+    HardwareMappingSnapshot snapshot;
     if (wasActive) {
-        rebuildHardwareMapping();
+        snapshot = rebuildHardwareMapping();
+    }
+    locker.unlock();
+    if (wasActive) {
+        publishHardwareMapping(snapshot);
+        if (!self) { return; }
     }
 
     qCDebug(lcReceiver) << "Destroyed receiver" << receiverIndex;
@@ -147,6 +177,7 @@ void ReceiverManager::destroyReceiver(int receiverIndex)
 
 void ReceiverManager::reset()
 {
+    const QPointer<ReceiverManager> self(this);
     QMutexLocker locker(&m_routingMutex);
     const int priorCount = m_receivers.size();
     const QList<int> indices = m_receivers.keys();
@@ -183,14 +214,19 @@ void ReceiverManager::reset()
         m_heldIq.clear();
     }
 
+    locker.unlock();
     for (int idx : indices) {
         emit receiverDestroyed(idx);
+        if (!self) { return; }
     }
 
     if (priorCount > 0) {
         emit activeReceiverCountChanged(0);
+        if (!self) { return; }
         emit hardwareSlotsChanged(0);
+        if (!self) { return; }
         emit hardwareReceiverCountChanged(0);
+        if (!self) { return; }
     }
 
     qCDebug(lcReceiver) << "ReceiverManager reset;" << priorCount << "receivers dropped";
@@ -199,6 +235,7 @@ void ReceiverManager::reset()
 void ReceiverManager::activateReceiver(int receiverIndex)
 {
     const QPointer<ReceiverManager> self(this);
+    QMutexLocker locker(&m_routingMutex);
     if (!m_receivers.contains(receiverIndex)) {
         return;
     }
@@ -207,7 +244,9 @@ void ReceiverManager::activateReceiver(int receiverIndex)
     }
 
     m_receivers[receiverIndex].active = true;
-    rebuildHardwareMapping();
+    const HardwareMappingSnapshot snapshot = rebuildHardwareMapping();
+    locker.unlock();
+    publishHardwareMapping(snapshot);
     if (!self) { return; }
 
     qCDebug(lcReceiver) << "Activated receiver" << receiverIndex;
@@ -217,6 +256,7 @@ void ReceiverManager::activateReceiver(int receiverIndex)
 void ReceiverManager::deactivateReceiver(int receiverIndex)
 {
     const QPointer<ReceiverManager> self(this);
+    QMutexLocker locker(&m_routingMutex);
     if (!m_receivers.contains(receiverIndex)) {
         return;
     }
@@ -225,7 +265,9 @@ void ReceiverManager::deactivateReceiver(int receiverIndex)
     }
 
     m_receivers[receiverIndex].active = false;
-    rebuildHardwareMapping();
+    const HardwareMappingSnapshot snapshot = rebuildHardwareMapping();
+    locker.unlock();
+    publishHardwareMapping(snapshot);
     if (!self) { return; }
 
     qCDebug(lcReceiver) << "Deactivated receiver" << receiverIndex;
@@ -234,6 +276,7 @@ void ReceiverManager::deactivateReceiver(int receiverIndex)
 
 int ReceiverManager::activeReceiverCount() const
 {
+    QMutexLocker locker(&m_routingMutex);
     int count = 0;
     for (auto it = m_receivers.constBegin(); it != m_receivers.constEnd(); ++it) {
         if (it->active) {
@@ -245,6 +288,7 @@ int ReceiverManager::activeReceiverCount() const
 
 bool ReceiverManager::isReceiverActive(int receiverIndex) const
 {
+    QMutexLocker locker(&m_routingMutex);
     auto it = m_receivers.constFind(receiverIndex);
     if (it != m_receivers.constEnd()) {
         return it->active;
@@ -254,29 +298,42 @@ bool ReceiverManager::isReceiverActive(int receiverIndex) const
 
 ReceiverConfig ReceiverManager::receiverConfig(int receiverIndex) const
 {
+    QMutexLocker locker(&m_routingMutex);
     return m_receivers.value(receiverIndex, kInvalidConfig);
 }
 
 void ReceiverManager::setReceiverFrequency(int receiverIndex, quint64 frequencyHz)
 {
+    const QPointer<ReceiverManager> self(this);
+    QMutexLocker locker(&m_routingMutex);
     if (!m_receivers.contains(receiverIndex)) {
         return;
     }
 
     m_receivers[receiverIndex].frequencyHz = frequencyHz;
+    locker.unlock();
     emit receiverFrequencyChanged(receiverIndex, frequencyHz);
+    if (!self) { return; }
 
     // If active, notify the hardware — unless DDC is locked (CTUN mode,
     // MainWindow manages DDC frequency directly)
-    if (!m_ddcFreqLocked
-        && m_receivers[receiverIndex].active
-        && m_receivers[receiverIndex].hardwareRx >= 0) {
-        emit hardwareFrequencyChanged(m_receivers[receiverIndex].hardwareRx, frequencyHz);
+    // The logical callback may remove/remap the receiver or change CTUN.
+    // Revalidate without operator[] so removal cannot insert a ghost entry.
+    // A nested retune supersedes this call before its hardware notification.
+    locker.relock();
+    const auto it = m_receivers.constFind(receiverIndex);
+    if (m_ddcFreqLocked || it == m_receivers.constEnd()
+        || it->frequencyHz != frequencyHz || !it->active || it->hardwareRx < 0) {
+        return;
     }
+    const int hardwareRx = it->hardwareRx;
+    locker.unlock();
+    emit hardwareFrequencyChanged(hardwareRx, frequencyHz);
 }
 
 void ReceiverManager::forceHardwareFrequency(int receiverIndex, quint64 frequencyHz)
 {
+    QMutexLocker locker(&m_routingMutex);
     if (!m_receivers.contains(receiverIndex)) {
         return;
     }
@@ -296,12 +353,15 @@ void ReceiverManager::forceHardwareFrequency(int receiverIndex, quint64 frequenc
     m_receivers[receiverIndex].frequencyHz = frequencyHz;
 
     if (m_receivers[receiverIndex].active && m_receivers[receiverIndex].hardwareRx >= 0) {
-        emit hardwareFrequencyChanged(m_receivers[receiverIndex].hardwareRx, frequencyHz);
+        const int hardwareRx = m_receivers[receiverIndex].hardwareRx;
+        locker.unlock();
+        emit hardwareFrequencyChanged(hardwareRx, frequencyHz);
     }
 }
 
 void ReceiverManager::setReceiverSampleRate(int receiverIndex, int sampleRate)
 {
+    QMutexLocker locker(&m_routingMutex);
     if (!m_receivers.contains(receiverIndex)) {
         return;
     }
@@ -328,8 +388,9 @@ void ReceiverManager::applyDdcMapping(const std::array<int, 5>& mapping, quint32
         it->active = active;
     }
     if (!changed) { return; }
+    const HardwareMappingSnapshot snapshot = rebuildHardwareMapping();
     locker.unlock();
-    rebuildHardwareMapping();
+    publishHardwareMapping(snapshot);
     if (!self) { return; }
     for (int st : deactivated) {
         emit receiverDeactivated(st);
@@ -343,6 +404,8 @@ void ReceiverManager::applyDdcMapping(const std::array<int, 5>& mapping, quint32
 
 void ReceiverManager::setDdcMapping(int receiverIndex, int ddcIndex)
 {
+    const QPointer<ReceiverManager> self(this);
+    QMutexLocker locker(&m_routingMutex);
     if (!m_receivers.contains(receiverIndex)) {
         return;
     }
@@ -366,14 +429,22 @@ void ReceiverManager::setDdcMapping(int receiverIndex, int ddcIndex)
     }
 
     m_receivers[receiverIndex].ddcIndex = ddcIndex;
-    if (m_receivers[receiverIndex].active) {
-        rebuildHardwareMapping();
+    const bool active = m_receivers[receiverIndex].active;
+    HardwareMappingSnapshot snapshot;
+    if (active) {
+        snapshot = rebuildHardwareMapping();
+    }
+    locker.unlock();
+    if (active) {
+        publishHardwareMapping(snapshot);
+        if (!self) { return; }
     }
     qCDebug(lcReceiver) << "Receiver" << receiverIndex << "mapped to DDC" << ddcIndex;
 }
 
 int ReceiverManager::ddcIndex(int receiverIndex) const
 {
+    QMutexLocker locker(&m_routingMutex);
     auto it = m_receivers.constFind(receiverIndex);
     if (it != m_receivers.constEnd()) {
         return it->hardwareRx;
@@ -383,6 +454,7 @@ int ReceiverManager::ddcIndex(int receiverIndex) const
 
 void ReceiverManager::setAdcForReceiver(int receiverIndex, int adcIndex)
 {
+    QMutexLocker locker(&m_routingMutex);
     if (!m_receivers.contains(receiverIndex)) {
         return;
     }
@@ -507,10 +579,9 @@ void ReceiverManager::flushHeldIq(QVector<HeldIqBatch>& batches)
     batches.clear();
 }
 
-void ReceiverManager::rebuildHardwareMapping()
+ReceiverManager::HardwareMappingSnapshot ReceiverManager::rebuildHardwareMapping()
 {
-    const QPointer<ReceiverManager> self(this);
-    QMutexLocker locker(&m_routingMutex);
+    HardwareMappingSnapshot snapshot;
     m_hwToLogical.clear();
 
     // Assign hardware DDC indices to active receivers.
@@ -518,44 +589,46 @@ void ReceiverManager::rebuildHardwareMapping()
     // use that. Otherwise fall back to sequential assignment.
     // From Thetis console.cs:8216 UpdateDDCs — DDC mapping is board-dependent.
     int nextAutoHw = 0;
-    int count = 0;
-    quint32 slotMask = 0;
     for (auto it = m_receivers.begin(); it != m_receivers.end(); ++it) {
         if (it->active) {
             int hwIdx = (it->ddcIndex >= 0) ? it->ddcIndex : nextAutoHw++;
             it->hardwareRx = hwIdx;
             m_hwToLogical.insert(hwIdx, it->receiverIndex);
-            ++count;
+            ++snapshot.count;
             if (hwIdx >= 0 && hwIdx < 32) {
-                slotMask |= (1u << hwIdx);
+                snapshot.slotMask |= (1u << hwIdx);
             }
         } else {
             it->hardwareRx = -1;
         }
     }
 
-    qCDebug(lcReceiver) << "Hardware mapping rebuilt:" << count << "active receivers";
+    qCDebug(lcReceiver) << "Hardware mapping rebuilt:" << snapshot.count << "active receivers";
 
-    QList<QPair<int, quint64>> frequencies;
     for (auto it = m_receivers.constBegin(); it != m_receivers.constEnd(); ++it) {
         if (it->active && it->hardwareRx >= 0) {
-            frequencies.append({it->hardwareRx, it->frequencyHz});
+            snapshot.frequencies.append({it->hardwareRx, it->frequencyHz});
         }
     }
-    locker.unlock();
-    emit activeReceiverCountChanged(count);
+    return snapshot;
+}
+
+void ReceiverManager::publishHardwareMapping(const HardwareMappingSnapshot& snapshot)
+{
+    const QPointer<ReceiverManager> self(this);
+    emit activeReceiverCountChanged(snapshot.count);
     if (!self) { return; }
     // Slots first, then the count: a Protocol 1 connection sizes the frame
     // from both, and seeing the slots first means the count arrives against
     // the slot set it belongs to (Phase 3F section 16.3.2).
-    emit hardwareSlotsChanged(slotMask);
+    emit hardwareSlotsChanged(snapshot.slotMask);
     if (!self) { return; }
-    emit hardwareReceiverCountChanged(count);
+    emit hardwareReceiverCountChanged(snapshot.count);
     if (!self) { return; }
 
     // Re-emit the frequencies of this mapping, without a live-map iterator
     // or member-mutex scope spanning a synchronous notification.
-    for (const auto& frequency : frequencies) {
+    for (const auto& frequency : snapshot.frequencies) {
         emit hardwareFrequencyChanged(frequency.first, frequency.second);
         if (!self) { return; }
     }

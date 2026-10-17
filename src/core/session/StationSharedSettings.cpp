@@ -113,6 +113,17 @@
 //   2026-09-29: slice control plan Task 10: requesters are read through
 //               peerFor, so the station device is one. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-12: the older window's refusal and the notice of a changed
+//               setting name a device by its words (sliceHolderWords): on
+//               a Core no desktop hosts the Core's own position was named
+//               with nothing. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-10-15: the antennaKept notice names a device with no name by its
+//               words (sliceHolderWords): on a Core no desktop hosts the
+//               Core's own position was left out of it. The older window's
+//               refusal drops a check for an empty name sliceHolderWords
+//               never returns. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1602,8 +1613,11 @@ bool StationServer::handleSharedSetting(SessionTransport* transport, const Sessi
         // An older window gets the refusal only (section 7.3, D59).
         QStringList names;
         for (const DisturbanceCheck::Affected& a : connected) {
-            const QString name = planDevice(a.device).name;
-            if (!name.isEmpty() && !names.contains(name)) {
+            // By its words (sliceHolderWords), so a device with no name is
+            // still named: the Core's own position on a Core no desktop
+            // hosts.
+            const QString name = sliceHolderWords(a.device);
+            if (!names.contains(name)) {
                 names.append(name);
             }
         }
@@ -1930,7 +1944,8 @@ void StationServer::tellSettingChanged(const QList<DisturbanceCheck::Affected>& 
                                        const QHash<int, QJsonObject>& sliceWords,
                                        const QJsonObject& change, const QByteArray& by)
 {
-    const QString byName = planDevice(by).name;
+    // Who changed it, as a sentence starts with it (sliceHolderWords).
+    const QString byName = sliceHolderWords(by, WordsPlace::SentenceStart);
     for (const DisturbanceCheck::Affected& a : affected) {
         QJsonArray slices;
         QStringList moved;
@@ -1986,9 +2001,13 @@ void StationServer::onReceiveAntennaKept(int sliceId, const QString& antenna,
     }
     QStringList names;
     for (const QByteArray& listener : listeners) {
+        // A name reads as it did, its short form first; a device with none
+        // takes its words from sliceHolderWords, so the Core's own position
+        // on a Core no desktop hosts is named ("the Core") and not left out.
         const ReceiverPlanner::DeviceInfo info = planDevice(listener);
-        const QString name = info.shortName.isEmpty() ? info.name : info.shortName;
-        if (!name.isEmpty() && !names.contains(name)) {
+        const QString name =
+            info.shortName.isEmpty() ? sliceHolderWords(listener) : info.shortName;
+        if (!names.contains(name)) {
             names.append(name);
         }
     }

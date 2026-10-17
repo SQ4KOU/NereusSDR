@@ -83,6 +83,20 @@ upstream notice and records J.J. Boyd's AI-assisted modification history.
 The causal poll-worker regression exercises retained finished agents,
 interrupt-only waiting, normal close and last-agent destruction.
 
+The desktop and the Core also apply
+`cmake/patches/libjuice-0004-dual-stack-owns-ipv4-port-on-macos.patch`
+(2026-10-16), which the copy under `ios/` does not carry. It changes
+`src/udp.c`. On macOS a dual-stack socket (IPv6 wildcard with
+`IPV6_V6ONLY` off) could bind a port another program already held as an
+IPv4-only socket, and IPv4 datagrams to that port then went to the other
+program, so a data channel never opened. Under `__APPLE__` only, the
+IPv4 wildcard port is now held first and the dual-stack socket binds
+onto it. Linux already refuses the colliding bind (checked 2026-10-16 on
+Linux 6.12); Windows was not checked, and both are unchanged. Upstream
+libjuice (v1.7.4 and master on 2026-10-16) has the same `src/udp.c` and
+no option for this. The notice and the MPL-2.0 terms are kept as for the
+other patches; `tests/tst_juice_dual_stack_port.cpp` holds it.
+
 ## Build wiring
 
 `Package.swift` builds the C target `CJuice` with the defines its CMake

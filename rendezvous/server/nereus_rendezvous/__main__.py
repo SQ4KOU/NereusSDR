@@ -43,7 +43,14 @@ async def run(config_path: str) -> int:
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except NotImplementedError:
+            # Windows event loops do not implement add_signal_handler().
+            signal.signal(
+                sig,
+                lambda _signum, _frame: loop.call_soon_threadsafe(stop.set),
+            )
     await stop.wait()
     log.info("stopping")
     await transport.stop(servers, service)

@@ -31,6 +31,7 @@
 #include "gui/meters/MeterWidget.h"
 #include "gui/meters/MeterPoller.h"
 #include "gui/meters/presets/BarPresetItem.h"
+#include "NativeWindowFrames.h"
 using namespace NereusSDR;
 namespace {
 void gesture(QWidget* handle,QPoint delta,bool cancel=false) {
@@ -153,8 +154,9 @@ private slots:
         gesture(grip,{120,60},true);QCOMPARE(store.snapshot(),moved);QCOMPARE(host->meterSurfaces()[0],stable.data());
         auto* resize=host->findChild<QWidget*>("freeCanvasResize_"+applet.id);QVERIFY(resize);gesture(resize,{23,17});
         QCOMPARE(native->size(),QSize(503,117));QCOMPARE(registry.singletonView("applet:rx"),borrowed.data());
-        registry.setAvailable("applet:rx",false);QVERIFY(native->isHidden());QCOMPARE(registry.singletonView("applet:rx"),borrowed.data());
-        registry.setAvailable("applet:rx",true);QVERIFY(!native->isHidden());QCOMPARE(poller.targetCountForTest(),2);
+        // Disabled, never hidden (2026-10-16): unavailable, it is grayed in place.
+        registry.setAvailable("applet:rx",false);QVERIFY(!native->isHidden());QVERIFY(!native->isEnabled());QCOMPARE(registry.singletonView("applet:rx"),borrowed.data());
+        registry.setAvailable("applet:rx",true);QVERIFY(!native->isHidden());QVERIFY(native->isEnabled());QCOMPARE(poller.targetCountForTest(),2);
         auto locked=store.snapshot();locked.containers[0].locked=true;QCOMPARE(manager.commitWorkspace(locked,locked.revision).status,CommitStatus::Saved);
         const auto lockedSaved=store.snapshot();gesture(grip,{20,20});QCOMPARE(store.snapshot(),lockedSaved);
         QCOMPARE(host->captureDocument().contents[0].freeCanvasRect(),lockedSaved.containers[0].contents[0].freeCanvasRect());
@@ -249,7 +251,7 @@ private slots:
         const QString capture=qEnvironmentVariable("CANVAS_CAPTURE_DIR");if(!capture.isEmpty()) {QVERIFY(QDir().mkpath(capture));}
         for(auto* meter:meters) {
 #ifdef NEREUS_GPU_SPECTRUM
-            QSignalSpy frames(meter,&QRhiWidget::frameSubmitted);meter->update();QTRY_VERIFY_WITH_TIMEOUT(frames.count()>0,3000);const QImage image=meter->grabFramebuffer();
+            QSignalSpy frames(meter,&QRhiWidget::frameSubmitted);NEREUS_VERIFY_FRAME(NativeWindowFrames::requestFrame(*meter,frames,3000));const QImage image=meter->grabFramebuffer();
 #else
             meter->update();QCoreApplication::processEvents();const QImage image=meter->grab().toImage();
 #endif

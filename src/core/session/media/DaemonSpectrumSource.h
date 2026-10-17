@@ -5,9 +5,17 @@
 // no-port-check: NereusSDR-original.  A daemon-owned, explicit spectrum
 // producer.  It intentionally contains no endpoint, reducer, codec or
 // transport policy.
+//
+// Modification history (NereusSDR):
+//   2026-10-15: Display send thread: setFrameWake(), a published frame
+//               wakes the display thread instead of queueing frameAvailable
+//               to the main thread; currentGeneration(), so a frame held
+//               for the main thread is dropped after a retune. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/spectrum/FftEnginePool.h"
+#include "core/NereusCoreExport.h"
 
 #include <QMap>
 #include <QObject>
@@ -16,7 +24,9 @@
 #include <QVector>
 
 #include <atomic>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 
 class FFTEngine;
@@ -44,8 +54,32 @@ struct DaemonSpectrumSourceConfig {
     int decimation{1};
 };
 
+/// What DaemonSpectrumSource::update() does with a change of the center alone.
+/// R-DISP-RETUNE: `Restart` is the default and what every caller that
+/// measures gets (the auto-AGC noise floor, level calibration): the source
+/// restarts and its input history is emptied, so no frame under the new
+/// center holds a sample from before the move. `Relabel` is the display's
+/// choice: the running source takes the new center as a label and carries
+/// on, and for up to one FFT length its frames mix samples from both sides
+/// of the move.
+enum class DaemonSpectrumCenterMove {
+    Restart,
+    Relabel,
+};
+
+/// What DaemonSpectrumSource::update() did to a source it accepted.
+/// R-DISP-RETUNE: `relabeled` is true when only the center changed and the
+/// running source took it as a new label, without a restart; what it
+/// published under `fromGeneration` is then continued by `toGeneration`.
+/// Otherwise the source restarted and `toGeneration` continues nothing.
+struct DaemonSpectrumSourceUpdate {
+    bool relabeled{false};
+    quint64 fromGeneration{0};
+    quint64 toGeneration{0};
+};
+
 /// A complete, unreduced FFT frame.  `generation` changes on every accepted
-/// activate/update so consumers can discard a previous frequency context.
+/// activate/update so consumers can tell a previous frequency context.
 /// `producedAtNs` is a monotonic producer timestamp, not wall-clock time.
 struct DaemonSpectrumFrame {
     MediaSourceKey source;
@@ -62,9 +96,14 @@ struct DaemonSpectrumFrame {
     /// values; binsDbmValid is false when it rejected the frame.
     QVector<float> binsDbm;
     bool binsDbmValid{false};
+    /// Set by DaemonSpectrumSource::takeLatest(): how many frames before
+    /// this one the engine put in the source's one-frame slot and replaced
+    /// there with nobody having taken them. Frames the source discarded
+    /// itself (a retune, a restart) are not among them.
+    quint32 replacedBefore{0};
 };
 
-class DaemonSpectrumSource final : public QObject {
+class NEREUS_CORE_EXPORT DaemonSpectrumSource final : public QObject {
     Q_OBJECT
 public:
     explicit DaemonSpectrumSource(QObject* parent = nullptr);
@@ -82,10 +121,28 @@ public:
                   const DaemonSpectrumSourceConfig& config);
 
     /// Applies a validated source context and increments its generation.
-    /// A changed RF/FFT context drops queued input and resets the engine's
-    /// overlap history before the new generation accepts I/Q.
+    ///
+    /// R-DISP-RETUNE: when the caller passes DaemonSpectrumCenterMove::Relabel,
+    /// the center is the only field that differs and the source is running,
+    /// the source is relabeled, not restarted. It stays
+    /// active, queued I/Q and the engine's overlap history are kept, nothing
+    /// is counted as dropped, and the next frame is published on the normal
+    /// cadence with the new center and generation. A frame published before
+    /// the call and not yet taken is discarded, so no consumer is handed the
+    /// old center after the move.
+    ///
+    /// Any other change (sample rate, FFT size, window, decimation, bin
+    /// target, queue size, frame rate), and every change under the default
+    /// DaemonSpectrumCenterMove::Restart, restarts the source: it accepts no
+    /// I/Q until its engine has taken the configuration, and a changed
+    /// center, sample rate, FFT size, window or decimation drops queued
+    /// input and the engine's overlap history first.
+    ///
+    /// `result`, when given, says which of the two happened.
     bool update(const MediaSourceKey& key,
-                const DaemonSpectrumSourceConfig& config);
+                const DaemonSpectrumSourceConfig& config,
+                DaemonSpectrumCenterMove centerMove = DaemonSpectrumCenterMove::Restart,
+                DaemonSpectrumSourceUpdate* result = nullptr);
 
     /// Changes only the engine's output frame rate and whether transforms
     /// follow it. Both set how far the FFT window advances between frames,
@@ -94,6 +151,18 @@ public:
     /// Returns false for an unknown key or a rate outside 1..60.
     bool updateFrameRate(const MediaSourceKey& key, int fps,
                          bool transformsFollowFrameRate = false);
+
+    /// A MOX edge: every active source's queued I/Q is discarded and the
+    /// source is marked for an input reset through the discontinuity path a
+    /// dropped packet uses, so each engine clears its own input history on
+    /// its own worker thread before it takes the first samples after the
+    /// edge. No generation changes and no consumer's context is renewed.
+    /// Owner thread only.
+    void resetInputHistoryAll();
+    /// Input resets the source's engine has made on its worker thread for a
+    /// discontinuity (a dropped packet or resetInputHistoryAll). 0 for an
+    /// unknown source.
+    quint64 inputHistoryResets(const MediaSourceKey& key) const;
 
     /// Stops a single source tier and releases its engine. Safe for an
     /// unknown key.  The other tier for the same stream remains active.
@@ -118,6 +187,10 @@ public:
         int maxPendingIqFloats{0};
     };
     InputQueueDiagnostics inputQueueDiagnostics(const MediaSourceKey& key) const;
+    /// The generation the source's frames carry now, 0 for an unknown key.
+    /// Display send thread: a frame taken before an update() is no longer
+    /// of it.
+    quint64 currentGeneration(const MediaSourceKey& key) const;
     /// The decimation the source's engine runs at (FFTEngine::decimation),
     /// 0 for an unknown source.
     int engineDecimation(const MediaSourceKey& key) const;
@@ -125,6 +198,17 @@ public:
     /// Returns and clears the one latest frame slot for key.  A slow consumer
     /// can therefore miss frames but cannot cause an output-frame backlog.
     std::optional<DaemonSpectrumFrame> takeLatest(const MediaSourceKey& key);
+
+    /// Display send thread: who is told that a frame waits, in place of the
+    /// queued frameAvailable. While one is set, every frame an engine
+    /// publishes calls `wake` on that engine's thread, outside the frame
+    /// lock, and queues no frameAvailable; the woken side takes the frames
+    /// with takeLatest(). Empty (the default), frameAvailable is queued as
+    /// before; a frame published while a wake was set is not announced
+    /// then, so whoever clears the wake takes the waiting frames itself.
+    /// The owner's thread. When it returns, no engine thread is still
+    /// inside the wake it replaced.
+    void setFrameWake(std::function<void()> wake);
 
     /// Test and non-RadioModel ingress.  Real daemon production uses
     /// RadioModel::rawIqDataForStream.  This is queued to the engine thread
@@ -134,8 +218,9 @@ public:
 
     /// Test seam: publishes one frame for an active source as its engine
     /// would, stamped `producedAtNs` instead of the clock, with every bin at
-    /// `binLinear`, and emits frameAvailable now rather than queued. Lets a
-    /// test drive the source's cadence itself. False for an unknown source
+    /// `binLinear`, and emits frameAvailable now rather than queued (or,
+    /// with a frame wake set, calls the wake). Lets a test drive the
+    /// source's cadence itself. False for an unknown source
     /// or one whose engine has not yet taken its configuration.
     bool publishFrameForTest(const MediaSourceKey& key, qint64 producedAtNs,
                              float binLinear = 1.0e-6f);
@@ -144,6 +229,10 @@ public:
     /// can drive a shaped spectrum on a clock of its own.
     bool publishFrameForTest(const MediaSourceKey& key, qint64 producedAtNs,
                              const QVector<float>& binsLinear);
+
+    /// Test seam: whether a published frame waits in key's latest-frame
+    /// slot, not yet taken.
+    bool frameWaitingForTest(const MediaSourceKey& key) const;
 
     /// The producer clock: steady_clock nanoseconds since its epoch, the
     /// clock every DaemonSpectrumFrame::producedAtNs (and so each display
@@ -178,12 +267,16 @@ private:
                               const DaemonSpectrumSourceConfig& config);
     static bool inputHistoryIsCompatible(const DaemonSpectrumSourceConfig& before,
                                          const DaemonSpectrumSourceConfig& after);
+    static bool onlyCenterDiffers(const DaemonSpectrumSourceConfig& before,
+                                  const DaemonSpectrumSourceConfig& after);
     static void applyEngineConfig(FFTEngine* engine,
                                   const DaemonSpectrumSourceConfig& config);
     static void enqueueIq(FFTEngine* engine,
                           const QSharedPointer<FrameState>& state,
                           const QVector<float>& interleavedIq);
 
+    static void drainInput(FFTEngine* engine,
+                           const QSharedPointer<FrameState>& state);
     void attachRadioIq(SourceEntry& entry);
     void queueConfiguredActivation(SourceEntry& entry,
                                    const DaemonSpectrumSourceConfig& config,
@@ -195,7 +288,15 @@ private:
                       double windowEnb,
                       double dbmOffset);
 
+    /// Calls the wake, when one is set, for a frame just published, or
+    /// says there is none. Engine threads and the owner's.
+    bool callFrameWake();
+
     QPointer<RadioModel> m_radioModel;
+    // Display send thread: setFrameWake()'s wake. The mutex is held while
+    // the wake is called, so replacing it waits for a call under way.
+    std::mutex m_frameWakeMutex;
+    std::function<void()> m_frameWake;
     std::unique_ptr<FftEnginePool> m_pool;
     QMap<MediaSourceKey, SourceEntry> m_sources;
     quint64 m_nextGeneration{0};

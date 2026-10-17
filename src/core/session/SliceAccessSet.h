@@ -31,6 +31,12 @@
 //   6 txSelected         bool, the marker's txSlice (ruling 5.4a): the
 //                        transmit slice while its controller holds transmit
 //   7 onAir              bool, the slice is transmitting now
+//   8 receiverHolderDeviceId utf8, the device that holds the receiver the
+//                        slice is on (SliceOwnership::anchorOf, ruling
+//                        6.3: the receiver's C-Tune setting is its), as
+//                        connectedDevices names it ("" for nobody or no
+//                        receiver; "station" for the Core's own operating
+//                        position)
 //
 // SliceAccessSet keeps one object per slice of a RadioModel, watched in the
 // Core's StateMirror under its key, and says when one is made or goes. Its
@@ -47,9 +53,15 @@
 //   2026-09-28: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), slice control and shared listening plan Task 4,
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-12: receiverHolderDeviceId: each entry names the holder of the
+//               receiver its slice is on, so a window does not ask for a
+//               C-Tune pin the Core refuses (ruling 6.3). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/MirrorSchema.h"
+#include "core/NereusCoreExport.h"
 
 #include <QByteArray>
 #include <QHash>
@@ -65,7 +77,7 @@ namespace NereusSDR {
 class RadioModel;
 class StateMirror;
 
-class SliceAccess : public QObject {
+class NEREUS_CORE_EXPORT SliceAccess : public QObject {
     Q_OBJECT
     Q_PROPERTY(int sliceId READ sliceId CONSTANT)
     Q_PROPERTY(qint64 incarnation READ incarnation CONSTANT)
@@ -75,6 +87,8 @@ class SliceAccess : public QObject {
     Q_PROPERTY(QString activeRxDeviceIds READ activeRxDeviceIds NOTIFY activeRxDeviceIdsChanged)
     Q_PROPERTY(bool txSelected READ txSelected NOTIFY txSelectedChanged)
     Q_PROPERTY(bool onAir READ onAir NOTIFY onAirChanged)
+    Q_PROPERTY(QString receiverHolderDeviceId READ receiverHolderDeviceId
+               NOTIFY receiverHolderDeviceIdChanged)
 
 public:
     /// Everything but the id and the incarnation, as the wire names it.
@@ -85,6 +99,10 @@ public:
         QString activeRxDeviceIds = QStringLiteral("[]");
         bool txSelected = false;
         bool onAir = false;
+        /// Ruling 6.3: the device holding the receiver the slice is on (its
+        /// anchor), whose the receiver's C-Tune setting is. Empty when the
+        /// slice has no receiver or nobody holds it.
+        QString receiverHolderDeviceId;
     };
 
     SliceAccess(int sliceId, qint64 incarnation, QObject* parent = nullptr);
@@ -97,6 +115,7 @@ public:
     QString activeRxDeviceIds() const { return m_fields.activeRxDeviceIds; }
     bool txSelected() const { return m_fields.txSelected; }
     bool onAir() const { return m_fields.onAir; }
+    QString receiverHolderDeviceId() const { return m_fields.receiverHolderDeviceId; }
 
     Fields fields() const { return m_fields; }
     /// Each property that differs is changed and announced.
@@ -109,6 +128,7 @@ signals:
     void activeRxDeviceIdsChanged();
     void txSelectedChanged();
     void onAirChanged();
+    void receiverHolderDeviceIdChanged();
 
 private:
     int m_sliceId = -1;
@@ -116,7 +136,7 @@ private:
     Fields m_fields;
 };
 
-class SliceAccessSet : public QObject {
+class NEREUS_CORE_EXPORT SliceAccessSet : public QObject {
     Q_OBJECT
 
 public:

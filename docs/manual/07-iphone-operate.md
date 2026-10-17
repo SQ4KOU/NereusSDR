@@ -25,7 +25,7 @@ Tap the link chip for connection and performance details under **Tools**. It is 
 | Sound speaker | Local audio route/mute controls | This phone; speaker icon indicates mute and its panel stays over the band |
 | Slice button | Chooses the next active slice | Changes which slice the RX panel and Modes controls edit |
 | Pan 1 | Band picker, add slice/notch, extended view | Core-described band and slice operations; unavailable items explain why |
-| Display | Spectrum, waterfall, display extras and CTUN | Many presentation controls are this phone's Pan 1 state; FFT and Hz/bin controls change Core display settings for all devices |
+| Display | Spectrum, waterfall, display extras and CTUN | Many presentation controls are this phone's Pan 1 state; Sizing, FFT size and Hz/bin change Core display settings for all devices, and Sizing (Auto, Hz/bin, or Fixed) says which of the other two can be changed |
 | TX panel | Quick transmit controls and status | Transmit belongs to the Core/radio; the panel reports refusals and active transmitter |
 | PTT | Toggles this phone's software transmit request | Core/radio state; red **TX** plus timer while keyed, and refusal text when rejected |
 
@@ -89,6 +89,12 @@ Tap **Sound** from the band toolbar to open its popover without leaving the band
 2. Under **Microphone**, choose **iPhone microphone** or **AirPods microphone**. The iPhone microphone keeps AirPods audio playback at full quality; choosing the AirPods microphone makes iOS use phone-call quality in both directions.
 3. Under **While you transmit**, **Mute the band while you talk** controls local band playback during transmit. The transmit monitor (MON) plays through headphones only so the speaker cannot feed back into the microphone.
 4. If headphones are removed during listening, playback pauses and the band shows an audio notice. When ready to play aloud, tap that notice to resume on the phone speaker. Once playback is running, reconnect/select headphones in **Sound** and verify their route and audible output. Reconnecting a device or selecting its route alone leaves the paused playback waiting for the notice action.
+
+The **Sound** panel also carries two shared speakers, each with a slider and a mute switch. **Radio speaker** (**Mute radio speaker**) is the radio's own speaker output. **Core speaker** (**Mute Core speaker**) is the speaker at the Core computer, with a cyan slider. Both belong to the Core, not to this phone: a change reaches every window and device, and **Mute this phone** does not touch them. The **Core speaker** section appears only while the Core is playing on a sound card; with no card, or while the Core waits for a pick, it is left out and **Play the band through** follows **Radio speaker** directly. If the card you chose at the Core is missing and the Core plays on its default meanwhile, the section stays, and an amber note says **<card> is not connected at the Core. Playing on the Core's default, <default card>, until it comes back.** (or **is in use by another program at the Core**); with no other card it is left out. An older Core greys the section with **This Core can't set its speaker from here. Update the Core.**, and with no Core connection it reads **Connect to the Core to change these.** Choose the card itself on the desktop, in [Play the Core speaker](08-shared-core.md#play-the-core-speaker).
+
+[![iPhone Sound panel with Mute this phone, Radio speaker, Core speaker and Play the band through](images/iphone-sound-core-speaker.png)](images/iphone-sound-core-speaker.png)
+
+*Sound panel in a native simulator rendering with scripted Core state: Radio speaker at 40, Core speaker at 60 and an AirPods route selected. The values are not recommended settings and no audio played.*
 
 The route and microphone are this phone's settings. The **Modes > Audio > SPEAKERS/PHONES** buttons instead select playback on the Core's own outputs. Check which control you are changing before troubleshooting silence.
 

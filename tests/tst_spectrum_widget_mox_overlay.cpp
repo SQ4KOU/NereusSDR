@@ -14,8 +14,20 @@
 //
 // No pixel-diff — visual verification is deferred until the GPU-path render
 // loop is unit-testable.  State accessors confirm the slot set the field.
+//
+// Display pill plan Task 1 (2026-10-10): a pan's own value lives in
+// "<base>_<N>", pan 0 included, the bare key is the Setup default, and a
+// save writes a pan's key only when the value differs from what the pan
+// inherits. Three cases read pan 0's value back from the bare key and were
+// rewritten to read "<base>_0": txGrid_changes_share_the_computer_pair,
+// keyed_save_leaves_the_receive_bandwidth_alone (which also saved the ship
+// default span, now not written at all, so it uses another span) and
+// duplex_keeps_the_receive_span_under_the_transmit_grid. What each one
+// guards is unchanged. The store is cleared around every case, since one
+// case's "_0" key would otherwise be the next case's override.
 
 #include <QtTest/QtTest>
+#include <memory>
 
 #include "gui/SpectrumWidget.h"
 #include "core/AppSettings.h"
@@ -27,6 +39,8 @@ class TestSpectrumWidgetMoxOverlay : public QObject
     Q_OBJECT
 
 private slots:
+    void init()    { AppSettings::instance().clear(); }
+    void cleanup() { AppSettings::instance().clear(); }
     void overlay_disabledByDefault();
     void setMoxOverlay_trueStoresState();
     void setMoxOverlay_falseStoresState();
@@ -34,7 +48,11 @@ private slots:
     void setTxAttenuatorOffsetDb_storesValue();
     void setTxFilterVisible_storesState();
     void grids_are_independent_across_mox();
-    void txGrid_keys_are_per_pan();
+    void txGrid_changes_share_the_computer_pair();
+    void transmitScaleMigratesHistoricMasterAndRetiresCanonicalPanKeys();
+    void keyedScaleUpdatesEveryPanAndSurvivesAnInactivePansSave();
+    void sharedTransmitApiPreservesReceiveAndNativeStorageBounds();
+    void newerTransmitEditWinsReentrantNotificationAndRetiredPeer();
     void no_pointer_path_tunes_while_keyed();
     void keyed_save_leaves_the_receive_bandwidth_alone();
     void txGrid_load_accepts_what_the_drag_can_produce();
@@ -160,36 +178,135 @@ void TestSpectrumWidgetMoxOverlay::grids_are_independent_across_mox()
 // every save while holding its own copy. Only the transmitting pan's copy
 // ever changes, so the next save from any OTHER pan put the startup value
 // back and the operator's drag silently reverted. Fails on the bare-key
-// version: pan 1's save lands on pan 0's key.
-void TestSpectrumWidgetMoxOverlay::txGrid_keys_are_per_pan()
+// version: pan 1's save lands on pan 0's key. Pan 0's own key is
+// "DisplayTxGridRefLevel_0"; the bare key is the Setup default and no pan's
+// save writes it.
+void TestSpectrumWidgetMoxOverlay::transmitScaleMigratesHistoricMasterAndRetiresCanonicalPanKeys()
 {
-    auto& s = AppSettings::instance();
+    auto& settings = AppSettings::instance();
+    settings.setValue(QStringLiteral("DisplayTxGridRefLevel"), QStringLiteral("12"));
+    settings.setValue(QStringLiteral("DisplayTxGridDynamicRange"), QStringLiteral("80"));
+    settings.setValue(QStringLiteral("DisplayTxGridRefLevel_0"), QStringLiteral("-10"));
+    settings.setValue(QStringLiteral("DisplayTxGridDynamicRange_0"), QStringLiteral("150"));
+    settings.setValue(QStringLiteral("DisplayTxGridRefLevel_7"), QStringLiteral("-20"));
+    settings.setValue(QStringLiteral("DisplayTxGridRefLevel_backup"), QStringLiteral("17"));
+    SpectrumWidget pan;
+    pan.loadSettings();
+    QCOMPARE(pan.transmitRefLevel(), 12.0f);
+    QCOMPARE(pan.transmitDynamicRange(), 80.0f);
+    QVERIFY(!settings.contains(QStringLiteral("DisplayTxGridRefLevel_0")));
+    QVERIFY(!settings.contains(QStringLiteral("DisplayTxGridDynamicRange_0")));
+    QVERIFY(!settings.contains(QStringLiteral("DisplayTxGridRefLevel_7")));
+    QCOMPARE(settings.value(QStringLiteral("DisplayTxGridRefLevel_backup")).toString(), QStringLiteral("17"));
+}
 
+void TestSpectrumWidgetMoxOverlay::keyedScaleUpdatesEveryPanAndSurvivesAnInactivePansSave()
+{
+    SpectrumWidget first;
+    SpectrumWidget second;
+    second.setPanIndex(1);
+    first.loadSettings();
+    second.loadSettings();
+    const float receiveMax = first.refLevel();
+    const float receiveRange = first.dynamicRange();
+    first.setMoxOverlay(true);
+    first.setDbmRange(-68.0f, 12.0f);
+    first.saveSettingsForTest();
+    QCOMPARE(second.transmitRefLevel(), 12.0f);
+    QCOMPARE(second.transmitDynamicRange(), 80.0f);
+    second.saveSettingsForTest();
+    QCOMPARE(AppSettings::instance().value(QStringLiteral("DisplayTxGridRefLevel")).toFloat(), 12.0f);
+    QCOMPARE(AppSettings::instance().value(QStringLiteral("DisplayTxGridDynamicRange")).toFloat(), 80.0f);
+    first.setMoxOverlay(false);
+    QCOMPARE(first.refLevel(), receiveMax);
+    QCOMPARE(first.dynamicRange(), receiveRange);
+    SpectrumWidget restarted;
+    restarted.setPanIndex(7);
+    restarted.loadSettings();
+    QCOMPARE(restarted.transmitRefLevel(), 12.0f);
+    QCOMPARE(restarted.transmitDynamicRange(), 80.0f);
+}
+
+void TestSpectrumWidgetMoxOverlay::sharedTransmitApiPreservesReceiveAndNativeStorageBounds()
+{
+    SpectrumWidget first;
+    SpectrumWidget second;
+    first.setDbmRange(-120.0f, -40.0f);
+    second.setDbmRange(-110.0f, -30.0f);
+    first.setTransmitDbmRange(-200.0f, 200.0f);
+    QCOMPARE(first.transmitRefLevel(), 200.0f);
+    QCOMPARE(first.transmitDynamicRange(), 200.0f); // no 400 dB storage range
+    QCOMPARE(second.transmitRefLevel(), 200.0f);
+    QCOMPARE(second.transmitDynamicRange(), 200.0f);
+    QCOMPARE(first.refLevel(), -40.0f);
+    QCOMPARE(first.dynamicRange(), 80.0f);
+    QCOMPARE(second.refLevel(), -30.0f);
+    QCOMPARE(second.dynamicRange(), 80.0f);
+    second.setMoxOverlay(true);
+    QCOMPARE(second.refLevel(), 200.0f);
+    QCOMPARE(second.dynamicRange(), 200.0f);
+    second.setMoxOverlay(false);
+    QCOMPARE(second.refLevel(), -30.0f);
+    QCOMPARE(second.dynamicRange(), 80.0f);
+    first.setTransmitDbmRange(20.0f, 20.0f);
+    QCOMPARE(first.transmitDynamicRange(), 10.0f);
+    QCOMPARE(second.transmitDynamicRange(), 10.0f);
+    QVERIFY(!first.perPanDisplayKeyBases().contains(QStringLiteral("DisplayTxGridRefLevel")));
+    QVERIFY(!first.resettablePanDisplayKeyBases().contains(QStringLiteral("DisplayTxGridDynamicRange")));
+}
+
+void TestSpectrumWidgetMoxOverlay::newerTransmitEditWinsReentrantNotificationAndRetiredPeer()
+{
+    SpectrumWidget first;
+    auto retired = std::make_unique<SpectrumWidget>();
+    SpectrumWidget survivor;
+    bool reentered = false;
+    connect(&first, &SpectrumWidget::displaySettingChanged, &first,
+        [&](const QString& key) {
+            if (key != QStringLiteral("DisplayTxGridRefLevel") || reentered) { return; }
+            reentered = true;
+            retired.reset(); // a remaining fan-out recipient can disappear
+            survivor.setTransmitDbmRange(-90.0f, 10.0f);
+        });
+    first.setTransmitDbmRange(-68.0f, 12.0f);
+    QVERIFY(reentered);
+    QVERIFY(!retired);
+    QCOMPARE(first.transmitRefLevel(), 10.0f);
+    QCOMPARE(first.transmitDynamicRange(), 100.0f);
+    QCOMPARE(survivor.transmitRefLevel(), 10.0f);
+    QCOMPARE(survivor.transmitDynamicRange(), 100.0f);
+    QCOMPARE(AppSettings::instance().value(QStringLiteral("DisplayTxGridRefLevel")).toFloat(), 10.0f);
+    QCOMPARE(AppSettings::instance().value(QStringLiteral("DisplayTxGridDynamicRange")).toFloat(), 100.0f);
+}
+
+// Approved rebuild: one computer TX pair replaces the old per-pan workaround.
+void TestSpectrumWidgetMoxOverlay::txGrid_changes_share_the_computer_pair()
+{
+    auto& settings = AppSettings::instance();
     SpectrumWidget pan0;
     pan0.setPanIndex(0);
     pan0.setMoxOverlay(true);
-    pan0.setDbmRange(-70.0f, 10.0f);     // pan 0's transmit grid
+    pan0.setDbmRange(-70.0f, 10.0f);
     pan0.saveSettingsForTest();
-
-    const QString pan0Ref =
-        s.value(QStringLiteral("DisplayTxGridRefLevel"), QString()).toString();
-    QVERIFY2(!pan0Ref.isEmpty(), "pan 0 did not write a transmit grid at all");
+    QCOMPARE(settings.value(QStringLiteral("DisplayTxGridRefLevel")).toFloat(), 10.0f);
+    QCOMPARE(settings.value(QStringLiteral("DisplayTxGridDynamicRange")).toFloat(), 80.0f);
 
     SpectrumWidget pan1;
     pan1.setPanIndex(1);
     pan1.setMoxOverlay(true);
-    pan1.setDbmRange(-100.0f, -20.0f);   // a visibly different one
+    QCOMPARE(pan1.refLevel(), 10.0f); // newly opened pan reads the same pair
+    pan1.setDbmRange(-100.0f, -20.0f);
     pan1.saveSettingsForTest();
-
-    // Pan 1 wrote its own key...
-    QCOMPARE(s.value(QStringLiteral("DisplayTxGridRefLevel_1"), QString())
-                 .toString().toFloat(),
-             -20.0f);
-    // ...and left pan 0's alone. This is the assertion the bare-key version
-    // cannot pass.
-    QCOMPARE(s.value(QStringLiteral("DisplayTxGridRefLevel"), QString())
-                 .toString(),
-             pan0Ref);
+    QCOMPARE(settings.value(QStringLiteral("DisplayTxGridRefLevel")).toFloat(), -20.0f);
+    QCOMPARE(pan0.transmitRefLevel(), -20.0f);
+    QCOMPARE(pan0.transmitDynamicRange(), 80.0f);
+    pan0.saveSettingsForTest();
+    QCOMPARE(settings.value(QStringLiteral("DisplayTxGridRefLevel")).toFloat(), -20.0f);
+    for (const QString& base : {QStringLiteral("DisplayTxGridRefLevel"),
+                                QStringLiteral("DisplayTxGridDynamicRange")}) {
+        QVERIFY(!settings.contains(base + QStringLiteral("_0")));
+        QVERIFY(!settings.contains(base + QStringLiteral("_1")));
+    }
 }
 
 // Not one pointer path may move the radio while this pan is keyed.
@@ -236,19 +353,19 @@ void TestSpectrumWidgetMoxOverlay::keyed_save_leaves_the_receive_bandwidth_alone
 
     SpectrumWidget w;
     w.setPanIndex(0);
-    w.setFrequencyRange(14200000.0, 192000.0);   // the receive span
+    w.setFrequencyRange(14200000.0, 96000.0);    // the receive span
     w.saveSettingsForTest();
     const QString rxStored =
-        s.value(QStringLiteral("DisplayBandwidth"), QString()).toString();
-    QCOMPARE(rxStored.toFloat(), 192000.0f);
+        s.value(QStringLiteral("DisplayBandwidth_0"), QString()).toString();
+    QCOMPARE(rxStored.toFloat(), 96000.0f);
 
     w.setMoxOverlay(true);
     w.setFrequencyRange(14200000.0, 8000.0);     // a transmit span
     w.saveSettingsForTest();
 
-    QCOMPARE(s.value(QStringLiteral("DisplayBandwidth"), QString())
+    QCOMPARE(s.value(QStringLiteral("DisplayBandwidth_0"), QString())
                  .toString().toFloat(),
-             192000.0f);
+             96000.0f);
 }
 
 // The loader's bounds are the drag's bounds.
@@ -320,7 +437,7 @@ void TestSpectrumWidgetMoxOverlay::duplex_keeps_the_receive_span_under_the_trans
     // A zoom while keyed with DUP on is the receive view's, and saved as it.
     w.setFrequencyRange(14200000.0, 96000.0);
     w.saveSettingsForTest();
-    QCOMPARE(s.value(QStringLiteral("DisplayBandwidth"), QString()).toString().toFloat(),
+    QCOMPARE(s.value(QStringLiteral("DisplayBandwidth_0"), QString()).toString().toFloat(),
              96000.0f);
     // DUP off while keyed: the transmit span loads; on again: the receive
     // span comes back.

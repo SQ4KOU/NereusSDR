@@ -100,12 +100,15 @@ public final class PairedStationStore: @unchecked Sendable {
     }
 
     /// Keeps the list of addresses the Core with this identity key sent in
-    /// `devices`' `coreAddresses`, replacing the last; an empty one changes
-    /// nothing (``PairedStation/keepCoreAddresses(_:)``). Returns the
-    /// updated Core, or nil when no paired Core has the key.
+    /// `devices`' `coreAddresses`, replacing the last; an empty one clears
+    /// the ones the Core's list named, and a named address either drops
+    /// leaves the reached ones too, but for `inUse`, the address this
+    /// session is on (``PairedStation/keepCoreAddresses(_:inUse:)``).
+    /// Returns the updated Core, or nil when no paired Core has the key.
     @discardableResult
-    public func recordCoreAddresses(identityKey: Data, _ addresses: [StationEndpoint]) throws -> PairedStation? {
-        try update(identityKey: identityKey) { $0.keepCoreAddresses(addresses) }
+    public func recordCoreAddresses(identityKey: Data, _ addresses: [StationEndpoint],
+                                    inUse: StationEndpoint? = nil) throws -> PairedStation? {
+        try update(identityKey: identityKey) { $0.keepCoreAddresses(addresses, inUse: inUse) }
     }
 
     /// Keeps the global addresses the Core with this identity key was just

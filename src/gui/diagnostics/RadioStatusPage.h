@@ -20,6 +20,9 @@
 //                Core's HL2 link in a remote window and said so;
 //                unavailable, never 0, when absent. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-12 - Refresh the identity readout on model changes, including
+//                the second firmware number. J.J. Boyd (KG4VCF),
+//                AI-assisted via OpenAI Codex.
 // =================================================================
 
 #pragma once
@@ -57,6 +60,7 @@ public:
     explicit RadioStatusPage(RadioModel* model = nullptr, QWidget* parent = nullptr);
 
 private slots:
+    void refreshRadioIdentity();
     void onPaTemperatureChanged(double celsius);
     void onPaCurrentChanged(double amps);
     // R-R3-32 / R-R3-46 (parity Task 6): the PA card from

@@ -1684,9 +1684,9 @@
               "applies": "live",
               "choices": [
                 "Zero",
-                "Sample && Hold",
+                "Sample & Hold",
                 "Mean-Hold",
-                "Hold && Sample",
+                "Hold & Sample",
                 "Linear Interpolate"
               ]
             }

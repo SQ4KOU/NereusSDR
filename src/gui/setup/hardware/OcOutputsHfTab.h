@@ -28,6 +28,8 @@
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - setN2adrHintVisible. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/setup.designer.cs header (lines 1-50) ===
@@ -169,6 +171,10 @@ public:
     // changes while transmitting; closed only in a remote window whose Core
     // does not take them.
     void setPinActionsPermitted(bool permitted, const QString& reason);
+    // The "N2ADR Filter (HL2)" pointer to the HL2 I/O Board tab: shown on
+    // an HL2 only (HardwarePage passes caps.hasIoBoardHl2). Hidden until
+    // a board is known.
+    void setN2adrHintVisible(bool visible);
 
 private slots:
     void onMatrixChanged();
@@ -193,6 +199,7 @@ private:
     QPushButton* m_resetButton{nullptr};
     QCheckBox* m_pennyExtCtrl{nullptr};
     QCheckBox* m_allowHotSwitching{nullptr};
+    QLabel*    m_n2adrHint{nullptr};
 
     // RX / TX matrix grids: [per-band state slot][pinIdx 0-6] (Band.h:
     // 160m .. XVTR at their numbers, 2 m at 14)

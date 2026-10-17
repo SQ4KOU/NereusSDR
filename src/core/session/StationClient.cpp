@@ -9,6 +9,61 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-15  J.J. Boyd / KG4VCF  A refused property write that carries no
+//                                    value puts the Core's last value back
+//                                    on screen. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-10-15  J.J. Boyd / KG4VCF  PR 524 review: the service dial's log
+//                                    line says when the ICE pair is not
+//                                    known yet, and logs the rank it gives
+//                                    it once; setPathRankForTest().
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-15  J.J. Boyd / KG4VCF  A session through the service whose ICE
+//                                    pair is not known yet ranks as relayed,
+//                                    so its better-path searches retry ICE;
+//                                    the heartbeat keeps the direct interval
+//                                    until the pair is known. AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-10-15  J.J. Boyd / KG4VCF  A canceled path race says why in its
+//                                    log line. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-10-15  J.J. Boyd / KG4VCF  sessionIceConfiguration() returns a
+//                                    test's stand-in first
+//                                    (setSessionIceConfigurationForTest).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-14  J.J. Boyd / KG4VCF  Retire remote transmit state when a
+//                                    session ends even if its capability was
+//                                    already unavailable. AI-assisted via
+//                                    OpenAI Codex.
+//   2026-10-12 — J.J. Boyd (KG4VCF), gate experimental RADE V2 opt-in;
+//                AI-assisted implementation via OpenAI Codex.
+//   2026-10-12  J.J. Boyd / KG4VCF  The radio's second firmware number: the
+//                                    hello declares firmwareBeta.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-11  J.J. Boyd / KG4VCF  R-DISP-RETUNE (third wave): the hello
+//                                    declares spectrumPicture.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-10  J.J. Boyd / KG4VCF  Core speaker: its properties left out
+//                                    by a host with no speaker of its own
+//                                    are not counted as schema skew.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-09  J.J. Boyd / KG4VCF  Core speaker: the hello declares
+//                                    coreSpeaker 1; radio's Core speaker
+//                                    level, mute, device and details apply
+//                                    through their setters and go back to
+//                                    the Core, its devices and state apply
+//                                    as the Core sent them;
+//                                    coreSpeakerAvailable (native audio
+//                                    plan Task 21, R-AUD-25). AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-10-06  J.J. Boyd / KG4VCF  Radio speaker: the hello declares
+//                                    radioSpeaker 1; radio's RADIO level,
+//                                    mute and amplifier choice apply
+//                                    through their setters and go back to
+//                                    the Core, the two reports apply as the
+//                                    Core sent them; radioSpeakerAvailable
+//                                    (R-SPK-06, R-SPK-13, R-SPK-14).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-10-04: Qt 6.4 WebSocket error-signal compatibility. J.J. Boyd
 //               (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-30  J.J. Boyd / KG4VCF  Fix wave GUI-I6: a Tune Power change
@@ -480,6 +535,35 @@
 //               tune this window asked for (RemoteTransmitClient), so TUNE
 //               and its keepalives do not stay on. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-10-07: CAT setup from a connected desktop: declares stationCat 1,
+//               registers `stationCat` when offered and sends the four CAT
+//               commands. J.J. Boyd (KG4VCF). AI tooling: Claude Code.
+//   2026-10-07: requestCatLog follows the Core's `catLog` stream (again
+//               after each snapshot) and hands its records to RadioModel;
+//               the window's line limit as backlog; the CAT tester's reply
+//               from its result. J.J. Boyd (KG4VCF). AI tooling: Claude Code.
+//   2026-10-08: Rotor control plan Task 4b: the `rotor` object mirrored
+//               from a Core that offers remoteRotorControlVersion 1, and
+//               the seven rotor requests. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
+//   2026-10-08: Rotor control plan Task 7: a refused rotor setup, presets
+//               or disconnect goes the accessory way ("rotor"), so the
+//               Rotor Setup page shows it and anywhere else a notice does.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08: Rotor control plan Task 8: the turn commands too
+//               (setRotorTarget, turnRotorToCall, stopRotor, nudgeRotor),
+//               so no rotor refusal reads as a slice error. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08: Final review I3: requestRefreshRotorPorts. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10: txPeakReadingsAvailable (txReadingsVersion 4). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-13: Route PS two-tone through the transmit keepalive tracker,
+//               preserving PS wire/result phases. J.J. Boyd (KG4VCF),
+//               AI-assisted via OpenAI Codex.
+//   2026-10-12: a held change is logged as a confirmation request rather
+//               than a refusal. J.J. Boyd (KG4VCF), AI-assisted via
+//               OpenAI Codex.
 // =================================================================
 
 // 2026-10-01: Authenticated Core address inventory and reconnect learning.
@@ -528,7 +612,9 @@
 #include "models/NotchModel.h"
 #include "models/RfKitModel.h"
 #include "models/StationTciModel.h"
+#include "models/StationCatModel.h"
 #include "models/AccessoryDataModel.h"
+#include "models/RotorModel.h"
 #include "models/AccessorySettingsModel.h"
 
 #include <QAuthenticator>
@@ -873,6 +959,7 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // window transmits through the Core (link section 18.6), so its hello
     // says so and the Core answers with txPermitted and remoteTxVersion.
     m_declaredFeatures.insert(QByteArrayLiteral("remoteTx"), 1);
+    m_declaredFeatures.insert(QByteArrayLiteral("waveform"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("radioMic"), 2);
     m_declaredFeatures.insert(QByteArrayLiteral("audioQuality"), 1);
     // G-38: 2 adds Repair invalid settings (station.repairSettings).
@@ -890,6 +977,10 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // JJ's ruling of 2026-09-28: this window shows and changes the rest of
     // the Core's TCI server settings (stationTciSettingsVersion 1).
     m_declaredFeatures.insert(QByteArrayLiteral("stationTciSettings"), 1);
+    // CAT setup from a connected desktop: this window shows and sets up the
+    // Core's CAT (the `stationCat` object, the `catLog` stream and its four
+    // commands; stationCatVersion 1).
+    m_declaredFeatures.insert(QByteArrayLiteral("stationCat"), 1);
     // R-R3-46 / R-R3-11: this window shows and sets the other ADC's own
     // attenuator for the slices on it (stepAtt rx2AttenuationDb,
     // rx2SliceMask; adcAttenuatorVersion 1).
@@ -911,6 +1002,17 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // (radio's rxFilter0LowPassReason and rxFilter0LowPassSlice;
     // rxFilterLowPassVersion 1).
     m_declaredFeatures.insert(QByteArrayLiteral("rxFilterLowPass"), 1);
+    // Radio speaker (R-SPK-14): the header's RADIO group and Setup show and
+    // change the Core's radio speaker (radio's radioSpeakerVolume,
+    // radioSpeakerMuted, speakerAmplifierMode and the two reports;
+    // radioSpeakerVersion 1).
+    m_declaredFeatures.insert(QByteArrayLiteral("radioSpeaker"), 1);
+    // Core speaker (native audio plan Task 21): Setup's Core speaker card
+    // shows and changes the Core's own sound card output (radio's
+    // coreSpeakerVolume, coreSpeakerMuted, coreSpeakerDevice,
+    // coreSpeakerDevices, coreSpeakerState and coreSpeakerDetails;
+    // coreSpeakerVersion 1).
+    m_declaredFeatures.insert(QByteArrayLiteral("coreSpeaker"), 1);
     // PA on-air gate re-review, Important C: the PA pages open and lock
     // the row the Core holds on the air (paTransmitBandVersion 1).
     m_declaredFeatures.insert(QByteArrayLiteral("paTransmitBand"), 1);
@@ -938,10 +1040,22 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
                                    {}, true);
     });
     m_declaredFeatures.insert(QByteArrayLiteral("miniDisplay"), 1);
+    // R-DISP-RETUNE: this client reads the picture a spectrum context
+    // continues, when the Core states it.
+    m_declaredFeatures.insert(QByteArrayLiteral("spectrumPicture"), 1);
+    // This client words the firmware release of the Core's radio with its
+    // second number, when the Core sends it (the model reads it from the
+    // capabilities).
+    m_declaredFeatures.insert(QByteArrayLiteral("firmwareBeta"), 1);
     // Each transmit verb goes out as the same command three times (the
     // copies rule); the Core acts on the first and answers every copy.
     m_remoteTransmit = new RemoteTransmitClient(
         [this](const QByteArray& verb, const QList<MirrorUpdate>& arguments) -> quint32 {
+            if (verb == "ps3.twoTone") {
+                // PS's asynchronous stop handler refuses a same-ID copy
+                // while pending. Preserve its existing single submission.
+                return invokeCommand(verb, arguments);
+            }
             if (!remoteTransmitAvailable()) {
                 return 0;
             }
@@ -1426,10 +1540,19 @@ void StationClient::dialThroughService()
             emit connectionAttemptChanged();
         }
         qCInfo(lcStationClient) << "Connected to the Core through the remote access service"
-                                << (path && path->viaLoopbackShim() ? "(web relay)"
-                                    : path && path->relayed()       ? "(relayed)"
-                                                                    : "(direct)");
+                                << (!path                     ? "(ICE pair not known yet)"
+                                    : path->viaLoopbackShim() ? "(web relay)"
+                                    : path->relayed()         ? "(relayed)"
+                                                              : "(direct)");
         m_pathRank = PathRacer::rankForPath(path);
+        m_pathPairUnknown = !path;
+        if (m_pathPairUnknown) {
+            // Outside race mode no better-path search runs (scheduleUpgrade).
+            qCInfo(lcStationClient).noquote()
+                << (m_raceMode ? "ICE pair not known yet; ranked as relayed so a better-path "
+                                 "search retries ICE"
+                               : "ICE pair not known yet; ranked as relayed until it is known");
+        }
         // Trusted by the identity key alone: the hello's binding is checked
         // against the certificate the Core presented in DTLS before
         // anything is sent (handleHello()).
@@ -1458,6 +1581,9 @@ void StationClient::dialThroughService()
 
 std::optional<IceConfiguration> StationClient::sessionIceConfiguration() const
 {
+    if (m_sessionIceForTest) {
+        return m_sessionIceForTest;
+    }
     const auto* transport = qobject_cast<const DataChannelTransport*>(this->transport());
     if (transport != nullptr) {
         return transport->mediaIceConfiguration();
@@ -2071,6 +2197,10 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     m_capabilities.displayBudget.reset();
     m_capabilities.displayBudgetReason.reset();
     m_capabilities.remotePs3DisplaySubscribed = false;
+    m_capabilitiesThisSession = false;
+    if (m_radioModel) { m_radioModel->setStationRadeV2Enabled(false); }
+    m_capabilities.radioSpeakerVersion = 0;
+    m_capabilities.coreSpeakerVersion = 0;
 
     // These three describe THIS session. Carrying them across a reconnect
     // would let a difference the station has since fixed keep showing up
@@ -2218,6 +2348,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     if (!m_sessionActive) {
         return;  // already reported for this attach
     }
+    const quint32 retiringEpoch = m_sessionEpoch;
     // Retire the operation now, but notify only as this teardown returns.
     // A completion handler may destroy this client or reconnect it. Emitting
     // before clearing mirrors/proxy/coalescer let that new session inherit
@@ -2250,7 +2381,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         PathRacer* racer = m_upgradeRacer;
         m_upgradeRacer = nullptr;
         racer->disconnect(this);
-        racer->cancel();
+        racer->cancel(QStringLiteral("the session ended"));
         racer->deleteLater();
     }
     // iPhone app plan Task 27: an address still being tried ended here (the
@@ -2271,6 +2402,8 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
 
     m_capabilities.coreBuildInfo.reset();
     m_signedInWithDeviceKey = false;
+    m_capabilitiesThisSession = false;
+    if (m_radioModel) { m_radioModel->setStationRadeV2Enabled(false); }
     m_capabilities.radioAntennaRowsVersion = 0;
     m_capabilities.band2mVersion = 0;
     m_enrolledDeviceKey = false;
@@ -2297,7 +2430,10 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     m_coreValues.clear();
     // Desktop remote transmit: the Core unkeys this device when the link
     // drops and never keys it again by itself; nothing of it is kept.
-    refreshRemoteTransmit();
+    if (m_remoteTransmit != nullptr) {
+        m_remoteTransmit->retireSession();
+        if (!watchSelf || m_sessionEpoch != retiringEpoch || m_sessionActive) { return; }
+    }
     if (m_radioModel) {
         m_radioModel->dspAssets()->resetSession();
         m_radioModel->dspAssets()->setRemoteNr3ModelsSupported(false);
@@ -2455,6 +2591,8 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         m_radioModel->clearStationBandOutputs();
         m_radioModel->clearStationAlexLpf();
         m_radioModel->clearStationLevelCal();
+        m_radioModel->clearStationRadioSpeaker();
+        m_radioModel->clearStationCoreSpeaker();
         for (SliceModel* slice : m_radioModel->slices()) {
             slice->setStationAutoAgcNoiseFloor(slice->stationAutoAgcNoiseFloorDbm(), false,
                                               slice->stationAutoAgcNoiseFloorGeneration());
@@ -2567,8 +2705,8 @@ int StationClient::effectiveHeartbeatIntervalMs() const
     if (m_heartbeatIntervalMs <= 0) {
         return m_heartbeatIntervalMs;
     }
-    const bool relayed = m_pathRank == PathRacer::ServiceRelayed || m_pathRank == PathRacer::Floor
-        || m_mediaTunnelInUse;
+    const bool relayed = (m_pathRank == PathRacer::ServiceRelayed && !m_pathPairUnknown)
+        || m_pathRank == PathRacer::Floor || m_mediaTunnelInUse;
     return relayed ? std::min(m_heartbeatIntervalMs, kRelayedHeartbeatIntervalMs)
                    : m_heartbeatIntervalMs;
 }
@@ -2925,6 +3063,16 @@ void StationClient::onTransportText(const QByteArray& wire)
                 subscribe(QStringLiteral("tciClients"), StationTciModel::kClientsCapacity);
             }
         }
+        // CAT setup from a connected desktop: the CAT log window's lines,
+        // with the Core's recent ones (the window shows each line once).
+        if (m_sessionPurpose == SessionPurpose::Ordinary && m_catLogWanted
+            && stationCatAvailable()) {
+            invokeCommand("records.subscribe",
+                          {MirrorUpdate{0, "stream", MirrorWireKind::Utf8,
+                                        QVariant(QStringLiteral("catLog"))},
+                           MirrorUpdate{0, "backlog", MirrorWireKind::Int64,
+                                        QVariant(static_cast<qlonglong>(m_catLogBacklog))}});
+        }
         // Parity Task 22 (R-R3-49): the Core's log follows again for the
         // viewers that hold it, and the support controls learn the session.
         if (!m_radioModel.isNull()) {
@@ -3046,6 +3194,13 @@ void StationClient::onTransportText(const QByteArray& wire)
                     emit cfcCompressionReceived(
                         bins, static_cast<qint64>(u.fields.value(QStringLiteral("atMs")).toDouble()));
                 }
+            }
+            break;
+        }
+        // CAT setup from a connected desktop: the CAT log window's lines.
+        if (message.recordBatch.stream == QLatin1String("catLog")) {
+            if (stationCatAvailable() && !m_radioModel.isNull()) {
+                m_radioModel->applyStationRecordBatch(message.recordBatch);
             }
             break;
         }
@@ -3512,6 +3667,7 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         }
     }
     m_capabilities = incoming;
+    m_capabilitiesThisSession = true;
     if (m_settingsBackupExport && m_capabilities.settingsBackupVersion < 1) {
         finishSettingsBackupExport(false, QStringLiteral("The Core stopped offering settings export."),
                                    {}, true);
@@ -3589,6 +3745,11 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         [self](Ps3Action action, const QVariantMap& arguments) -> quint32 {
         if (!self || !self->propertyResultsAvailable() || self->m_capabilities.psAlgorithmVersion != 3) {
             return 0;
+        }
+        if (action == Ps3Action::SetTwoTone
+            && PureSignalSessionFacade::argumentsFit(action, arguments)) {
+            return self->m_remoteTransmit->requestPureSignalTwoTone(
+                arguments.value(QStringLiteral("enabled")).toBool());
         }
         const auto values = dspCommandValues(arguments);
         return values ? self->invokeCommand(PureSignalSessionFacade::actionVerb(action), *values) : 0;
@@ -3791,6 +3952,10 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         { "stationTci", m_radioModel->stationTciModel(),
           m_agreedMinor >= kRadioIdentitySessionProtocolMinor
               && m_capabilities.stationTciVersion >= 1 },
+        // CAT setup from a connected desktop: the Core's CAT.
+        { "stationCat", m_radioModel->stationCatModel(),
+          m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+              && m_capabilities.stationCatVersion >= 1 },
         // R-R3-47 / R-R3-22: the Core's accessory records and settings.
         { "accessoryData", m_radioModel->accessoryDataModel(),
           m_agreedMinor >= kRadioIdentitySessionProtocolMinor
@@ -3800,6 +3965,10 @@ void StationClient::handleCapabilities(const SessionMessage& message)
           m_agreedMinor >= kRadioIdentitySessionProtocolMinor
               && (m_capabilities.remotePgxlControlVersion >= 3
                   || m_capabilities.remoteTgxlControlVersion >= 1) },
+        // Rotor control plan Task 4b: the Core's rotor.
+        { "rotor", m_radioModel->rotorModel(),
+          m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+              && m_capabilities.remoteRotorControlVersion >= 1 },
     };
     for (const auto& accessory : accessories) {
         const QByteArray key(accessory.key);
@@ -4073,6 +4242,13 @@ void StationClient::compareSchema(const QByteArray& className,
                 && m_declaredFeatures.value(QByteArray(gate->feature)) < gate->minVersion) {
                 continue;
             }
+            // The Core speaker's properties come only from a Core that has
+            // its own speaker (StationServer::peerGetsCoreSpeaker). A
+            // desktop that hosts a station leaves them out for every
+            // window, so their absence is that host's answer, not skew.
+            if (gate != nullptr && qstrcmp(gate->feature, "coreSpeaker") == 0) {
+                continue;
+            }
             m_schemaOnlyLocal.insert(skewKey(className, name));
             ++onlyLocal;
         }
@@ -4231,6 +4407,19 @@ void StationClient::reconcileSlicesAgainstStation()
     }
 }
 
+void StationClient::handleRadeCatalogue(const QList<MirrorUpdate>& updates)
+{
+    if (!m_sessionActive || !m_authenticated || !m_radioModel) { return; }
+    for (const MirrorUpdate& update : updates) {
+        if (update.name != QByteArrayLiteral("json")) { continue; }
+        const QJsonDocument document = QJsonDocument::fromJson(update.value.toString().toUtf8());
+        const QJsonValue enabled = document.object().value(QStringLiteral("radeV2Enabled"));
+        // Older catalogues can list IDs 14/15 without implementing this gate.
+        // Only an explicit boolean true is authority to offer new V2 choices.
+        m_radioModel->setStationRadeV2Enabled(enabled.isBool() && enabled.toBool());
+    }
+}
+
 void StationClient::handleAudioCatalogue(const QList<MirrorUpdate>& updates)
 {
     // The authenticated snapshot precedes handshakeComplete. Admit its
@@ -4269,6 +4458,7 @@ void StationClient::handleObjectCreate(const SessionMessage& message)
 {
     if (message.objectKey == QByteArrayLiteral("catalog")) {
         m_pendingStationSchemas.remove(message.className);
+        handleRadeCatalogue(message.updates);
         handleAudioCatalogue(message.updates);
         return;
     }
@@ -4331,6 +4521,7 @@ void StationClient::handleObjectDestroy(const SessionMessage& message)
 void StationClient::handleDelta(const SessionMessage& message)
 {
     if (message.objectKey == QByteArrayLiteral("catalog")) {
+        handleRadeCatalogue(message.updates);
         handleAudioCatalogue(message.updates);
         return;
     }
@@ -4406,6 +4597,18 @@ void StationClient::handlePropertyResult(const SessionMessage& message)
         pending->remove(result.property);
         if (result.hasValue) {
             acceptedValues.append(result.value);
+        } else if (!result.accepted) {
+            // Step persistence lane (2026-10-15): a refusal that carries no
+            // value (another device's slice, ruling 5.9) left the refused
+            // edit on screen while the Core kept its own. The Core changed
+            // nothing, so its last value here is what it holds: show that.
+            const auto core = m_coreValues.constFind(message.objectKey);
+            if (core != m_coreValues.cend()) {
+                const auto value = core->constFind(result.property);
+                if (value != core->cend()) {
+                    acceptedValues.append(*value);
+                }
+            }
         }
         currentResults.append(result);
     }
@@ -4885,6 +5088,16 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
         if (m_radioModel->applyStationLevelCalValue(propertyName, native)) {
             return true;
         }
+        // Radio speaker (radioSpeakerVersion 1): the two reports, read-only
+        // on the wire, set as the Core sent them.
+        if (m_radioModel->applyStationRadioSpeakerValue(propertyName, native)) {
+            return true;
+        }
+        // Core speaker (coreSpeakerVersion 1): its devices and state,
+        // read-only on the wire, set as the Core sent them.
+        if (m_radioModel->applyStationCoreSpeakerValue(propertyName, native)) {
+            return true;
+        }
         return m_radioModel->applyStationFilterValue(propertyName, native);
     }
     if (className == "PureSignalSessionFacade") {
@@ -4958,6 +5171,12 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
         auto* tci = qobject_cast<StationTciModel*>(target);
         return tci != nullptr && tci->applyStationValue(propertyName, native);
     }
+    // CAT setup from a connected desktop: a plain state apply; the Core's
+    // CAT changes only by command.
+    if (className == "StationCatModel") {
+        auto* cat = qobject_cast<StationCatModel*>(target);
+        return cat != nullptr && cat->applyStationValue(propertyName, native);
+    }
     // R-R3-47 / R-R3-22: a plain state apply; changes only by command.
     if (className == "AccessoryDataModel") {
         auto* data = qobject_cast<AccessoryDataModel*>(target);
@@ -4967,6 +5186,12 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
     if (className == "AccessorySettingsModel") {
         auto* settings = qobject_cast<AccessorySettingsModel*>(target);
         return settings != nullptr && settings->applyStationValue(propertyName, native);
+    }
+    // Rotor control plan Task 4b: a plain state apply; changes only by
+    // command.
+    if (className == "RotorModel") {
+        auto* rotor = qobject_cast<RotorLink::RotorModel*>(target);
+        return rotor != nullptr && rotor->applyStationValue(propertyName, native);
     }
     if (className != "SliceModel") {
         return false;
@@ -5261,14 +5486,22 @@ MirrorUpdate doubleArgument(const QByteArray& name, double value)
     return MirrorUpdate{ 0, name, MirrorWireKind::Float64, QVariant(value) };
 }
 
+// Rotor control plan Task 4b: an enum argument, its wire number.
+MirrorUpdate enumArgument(const QByteArray& name, int value)
+{
+    return MirrorUpdate{ 0, name, MirrorWireKind::Enum,
+                         QVariant(static_cast<qlonglong>(value)) };
+}
+
 // R-R3-47 / R-R3-22: the amp's and tuner's own settings verbs, whose
 // refusals the Advanced pages show (RadioModel::accessoryRequestRefused).
 // L1 (R-R3-47, R-R3-22, R-R3-48): what an accessory request the Core
 // refused was about, for RadioModel::accessoryRequestRefused; empty for
 // every other verb. "pgxl" and "tgxl" (the amp's and tuner's connection,
 // output limit and own settings), "rfkit", "interlock", "tci" (the
-// station TCI server), "4o3a" (the 4O3A switch) and, for a fault history,
-// the device it names ("faults" for any other).
+// station TCI server), "cat" (the Core's CAT), "4o3a" (the 4O3A switch),
+// "rotor" (the rotor's setup and presets; rotor plan Task 7) and, for a
+// fault history, the device it names ("faults" for any other).
 QString accessoryRefusalDevice(const QByteArray& verb, const QString& faultsDevice)
 {
     if (verb == "setPgxlName" || verb == "setPgxlHardware" || verb == "setPgxlNetwork"
@@ -5300,8 +5533,20 @@ QString accessoryRefusalDevice(const QByteArray& verb, const QString& faultsDevi
         || verb == "setStationTciSettings" || verb == "disconnectStationTciClient") {
         return QStringLiteral("tci");
     }
+    // CAT setup from a connected desktop: the Core's CAT ("cat").
+    if (verb == "setStationCatChannel" || verb == "setStationCatGlobal"
+        || verb == "testStationCatCommand" || verb == "refreshStationCatDevices") {
+        return QStringLiteral("cat");
+    }
     if (verb == "setFourO3AEnabled") {
         return QStringLiteral("4o3a");
+    }
+    // Rotor control plan Tasks 7 and 8: every rotor command.
+    if (verb == "configureRotor" || verb == "setRotorPresets" || verb == "disconnectRotor"
+        || verb == "refreshRotorPorts"
+        || verb == "setRotorTarget" || verb == "turnRotorToCall" || verb == "stopRotor"
+        || verb == "nudgeRotor") {
+        return QStringLiteral("rotor");
     }
     if (verb == "clearAccessoryFaults") {
         if (faultsDevice == QLatin1String("pgxl") || faultsDevice == QLatin1String("tgxl")
@@ -5793,6 +6038,32 @@ bool StationClient::rx2PreampModeAvailable() const
     return radioHardwareAvailable(12);
 }
 
+bool StationClient::radioSpeakerAvailable() const
+{
+    // Not stationLinkReady(): the snapshot applies the Core's values through
+    // the setters before the handshake completes, and they must land.
+    return m_sessionActive && m_authenticated && m_capabilities.radioSpeakerVersion >= 1;
+}
+
+bool StationClient::radioSpeakerNeedsNewerCore() const
+{
+    return m_sessionActive && m_authenticated && m_capabilitiesThisSession
+           && m_capabilities.radioSpeakerVersion < 1;
+}
+
+bool StationClient::coreSpeakerAvailable() const
+{
+    // As radioSpeakerAvailable: the snapshot's values land through the
+    // setters before the handshake completes.
+    return m_sessionActive && m_authenticated && m_capabilities.coreSpeakerVersion >= 1;
+}
+
+bool StationClient::coreSpeakerNeedsNewerCore() const
+{
+    return m_sessionActive && m_authenticated && m_capabilitiesThisSession
+           && m_capabilities.coreSpeakerVersion < 1;
+}
+
 StationClient::CommandOutcome StationClient::requestStartLevelCalibration(float levelDbm,
                                                                           double frequencyHz,
                                                                           int sliceId)
@@ -5903,6 +6174,11 @@ bool StationClient::txReadingsAvailable() const
 bool StationClient::txStageReadingsAvailable() const
 {
     return txReadingsAvailable() && m_capabilities.txReadingsVersion >= 3;
+}
+
+bool StationClient::txPeakReadingsAvailable() const
+{
+    return txReadingsAvailable() && m_capabilities.txReadingsVersion >= 4;
 }
 
 void StationClient::setCfcCompressionWanted(bool wanted)
@@ -6620,6 +6896,75 @@ StationClient::CommandOutcome StationClient::requestStationTciOptions(bool emula
                        QStringLiteral("the Core's TCI server settings"));
 }
 
+bool StationClient::stationCatAvailable() const
+{
+    // CAT setup from a connected desktop: a Core that told this window
+    // stationCatVersion 1 (it declares stationCat).
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.stationCatVersion >= 1;
+}
+
+StationClient::CommandOutcome StationClient::requestStationCatChannel(int channel,
+                                                                      const QString& configJson)
+{
+    if (!stationCatAvailable()) {
+        return { false, stationCatUnavailableReason() };
+    }
+    return sendCommand("setStationCatChannel", -1,
+                       { intArgument("channel", channel), stringArgument("config", configJson) },
+                       QStringLiteral("the Core's CAT channel"));
+}
+
+StationClient::CommandOutcome StationClient::requestStationCatGlobal(const QString& configJson)
+{
+    if (!stationCatAvailable()) {
+        return { false, stationCatUnavailableReason() };
+    }
+    return sendCommand("setStationCatGlobal", -1, { stringArgument("config", configJson) },
+                       QStringLiteral("the Core's CAT settings"));
+}
+
+StationClient::CommandOutcome StationClient::requestStationCatTest(qint64 requestId, int channel,
+                                                                   const QString& command)
+{
+    if (!stationCatAvailable()) {
+        return { false, stationCatUnavailableReason() };
+    }
+    return sendCommand("testStationCatCommand", -1,
+                       { MirrorUpdate{ 0, QByteArrayLiteral("requestId"), MirrorWireKind::Int64,
+                                       QVariant(static_cast<qlonglong>(requestId)) },
+                         intArgument("channel", channel), stringArgument("command", command) },
+                       QStringLiteral("the Core's CAT test command"));
+}
+
+void StationClient::requestCatLog(bool follow, int backlog)
+{
+    // Kept across sessions: each snapshot subscribes again while wanted.
+    const bool was = m_catLogWanted;
+    m_catLogWanted = follow;
+    m_catLogBacklog = follow ? qMax(0, backlog) : 0;
+    if (!stationCatAvailable() || (!follow && !was)) {
+        return;
+    }
+    QList<MirrorUpdate> arguments{
+        MirrorUpdate{0, "stream", MirrorWireKind::Utf8, QVariant(QStringLiteral("catLog"))}};
+    if (follow) {
+        // The Core's recent lines, then what happens while it is open.
+        arguments.append(MirrorUpdate{0, "backlog", MirrorWireKind::Int64,
+                                      QVariant(static_cast<qlonglong>(m_catLogBacklog))});
+    }
+    invokeCommand(follow ? "records.subscribe" : "records.unsubscribe", arguments);
+}
+
+StationClient::CommandOutcome StationClient::requestStationCatRefreshDevices()
+{
+    if (!stationCatAvailable()) {
+        return { false, stationCatUnavailableReason() };
+    }
+    return sendCommand("refreshStationCatDevices", -1, {},
+                       QStringLiteral("the Core's serial ports"));
+}
+
 bool StationClient::stationTciSettingsAvailable() const
 {
     // JJ's ruling of 2026-09-28: a Core that told this window
@@ -6687,6 +7032,93 @@ StationClient::CommandOutcome StationClient::requestClearAccessoryFaults(const Q
     }
     return sendCommand("clearAccessoryFaults", -1, { stringArgument("device", device) },
                        QStringLiteral("the fault history"));
+}
+
+// Rotor control plan Task 4b (remoteRotorControlVersion 1): the Core's
+// rotor. A Core that did not offer it is not asked; the window says why.
+StationClient::CommandOutcome StationClient::requestRotorTarget(double azimuthDeg,
+                                                                double elevationDeg)
+{
+    if (!rotorControlAvailable()) {
+        return IStationLink::requestRotorTarget(azimuthDeg, elevationDeg);
+    }
+    return sendCommand("setRotorTarget", -1,
+                       { doubleArgument("azimuthDeg", azimuthDeg),
+                         doubleArgument("elevationDeg", elevationDeg) },
+                       QStringLiteral("the rotor"));
+}
+
+StationClient::CommandOutcome StationClient::requestTurnRotorToCall(const QString& call,
+                                                                    bool longPath)
+{
+    if (!rotorControlAvailable()) {
+        return IStationLink::requestTurnRotorToCall(call, longPath);
+    }
+    return sendCommand("turnRotorToCall", -1,
+                       { stringArgument("call", call), boolArgument("longPath", longPath) },
+                       QStringLiteral("the rotor"));
+}
+
+StationClient::CommandOutcome StationClient::requestStopRotor()
+{
+    if (!rotorControlAvailable()) {
+        return IStationLink::requestStopRotor();
+    }
+    return sendCommand("stopRotor", -1, {}, QStringLiteral("the rotor"));
+}
+
+StationClient::CommandOutcome StationClient::requestNudgeRotor(int direction, bool active)
+{
+    if (!rotorControlAvailable()) {
+        return IStationLink::requestNudgeRotor(direction, active);
+    }
+    return sendCommand("nudgeRotor", -1,
+                       { enumArgument("direction", direction), boolArgument("active", active) },
+                       QStringLiteral("the rotor"));
+}
+
+StationClient::CommandOutcome StationClient::requestConfigureRotor(
+    int driver, const QString& serialPort, int baud, const QString& host, int port,
+    int hamlibModel, int axes, int endStop, int rangeDeg, double offsetDeg)
+{
+    if (!rotorControlAvailable()) {
+        return IStationLink::requestConfigureRotor(driver, serialPort, baud, host, port,
+                                                   hamlibModel, axes, endStop, rangeDeg,
+                                                   offsetDeg);
+    }
+    return sendCommand("configureRotor", -1,
+                       { enumArgument("driver", driver), stringArgument("serialPort", serialPort),
+                         intArgument("baud", baud), stringArgument("host", host),
+                         intArgument("port", port), intArgument("hamlibModel", hamlibModel),
+                         enumArgument("axes", axes), enumArgument("endStop", endStop),
+                         intArgument("rangeDeg", rangeDeg),
+                         doubleArgument("offsetDeg", offsetDeg) },
+                       QStringLiteral("the rotor setup"));
+}
+
+StationClient::CommandOutcome StationClient::requestDisconnectRotor()
+{
+    if (!rotorControlAvailable()) {
+        return IStationLink::requestDisconnectRotor();
+    }
+    return sendCommand("disconnectRotor", -1, {}, QStringLiteral("the rotor"));
+}
+
+StationClient::CommandOutcome StationClient::requestRefreshRotorPorts()
+{
+    if (!rotorControlAvailable()) {
+        return IStationLink::requestRefreshRotorPorts();
+    }
+    return sendCommand("refreshRotorPorts", -1, {}, QStringLiteral("the rotor setup"));
+}
+
+StationClient::CommandOutcome StationClient::requestRotorPresets(const QString& presets)
+{
+    if (!rotorControlAvailable()) {
+        return IStationLink::requestRotorPresets(presets);
+    }
+    return sendCommand("setRotorPresets", -1, { stringArgument("presets", presets) },
+                       QStringLiteral("the rotor presets"));
 }
 
 // R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
@@ -7477,11 +7909,24 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         handleSettingsHygieneResult(message);
         return;
     }
+    // iPhone app plan Task 78 (the several-devices design, section 7.3): a
+    // change held for a question is answered "Waiting for you to confirm."
+    // with `phase` `needsConfirmation`; the question follows. It is not a
+    // refusal to show, so it takes none of the refusal routes below.
+    bool awaiting = false;
+    for (const MirrorUpdate& value : message.updates) {
+        if (value.name == "phase"
+            && value.value.toString() == QStringLiteral("needsConfirmation")) {
+            awaiting = !message.accepted;
+        }
+    }
     // R-R3-21: the app shows a refusal in user words (OperatorReasonText),
     // so the Core's own text is kept here, each time, as it arrived.
+    // A change held for confirmation is logged as a question, not a refusal.
     if (!message.accepted) {
         qCInfo(lcStationClient).noquote()
-            << "Station refused" << QString::fromUtf8(message.commandVerb)
+            << (awaiting ? "Station asks before" : "Station refused")
+            << QString::fromUtf8(message.commandVerb)
             << "command" << message.commandId << ":" << message.reason;
     }
     // Desktop remote transmit: the transmit verbs' answers (every copy's)
@@ -7499,17 +7944,6 @@ void StationClient::handleCommandResult(const SessionMessage& message)
             onPathTicket(message);
         }
         return;
-    }
-    // iPhone app plan Task 78 (the several-devices design, section 7.3): a
-    // change held for a question is answered "Waiting for you to confirm."
-    // with `phase` `needsConfirmation`; the question follows. It is not a
-    // refusal to show, so it takes none of the refusal routes below.
-    bool awaiting = false;
-    for (const MirrorUpdate& value : message.updates) {
-        if (value.name == "phase"
-            && value.value.toString() == QStringLiteral("needsConfirmation")) {
-            awaiting = !message.accepted;
-        }
     }
     // Slice control plan Task 5: the four slice access verbs are answered
     // where the window's several-devices refusals are shown; Task 14b adds
@@ -7567,6 +8001,14 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         || message.commandVerb == "records.unsubscribe") {
         m_pendingCommands.remove(message.commandId);
         return;
+    }
+    if (message.commandVerb == "ps3.twoTone" && m_remoteTransmit != nullptr) {
+        const QPointer<StationClient> self(this);
+        const quint32 epoch = m_sessionEpoch;
+        m_remoteTransmit->commandFinished(message.commandId, message.commandVerb,
+                                          message.accepted, message.reason, message.updates);
+        if (!self || m_sessionEpoch != epoch || !m_sessionActive) { return; }
+        // Continue through the PS facade's phase/operation-result path below.
     }
     if (message.commandVerb == "tx.key" || message.commandVerb == "tx.unkey"
         || message.commandVerb == "tx.tune" || message.commandVerb == "tx.tunerTune"
@@ -7844,6 +8286,20 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         }
         if (!self) { return; }
     }
+    // CAT setup from a connected desktop: the tester's reply comes in its
+    // result, to the window that sent it, before the result itself.
+    if (pending.verb == "testStationCatCommand" && message.accepted
+        && !m_radioModel.isNull()) {
+        QString reply;
+        for (const MirrorUpdate& value : message.updates) {
+            if (value.name == "reply" && value.kind == MirrorWireKind::Utf8) {
+                reply = value.value.toString();
+            }
+        }
+        const QPointer<StationClient> self(this);
+        m_radioModel->reportStationCatTestReply(message.commandId, reply);
+        if (!self) { return; }
+    }
     // R-R3-22 fix wave: every result by its id, so a sender (the amp
     // applets, the TCI switch) clears its own pending request and shows
     // only its own refusal; it also ends a page's claim on an accepted
@@ -7959,6 +8415,12 @@ bool StationClient::accessoryDataAvailable() const
 {
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.accessoryDataVersion >= 1;
+}
+
+bool StationClient::rotorControlAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remoteRotorControlVersion >= 1;
 }
 
 bool StationClient::pgxlDeviceSettingsAvailable() const
@@ -8291,7 +8753,13 @@ QString StationClient::transmitHolderText() const
                    : QStringLiteral("Transmit is changing hands.");
     }
     if (tx.holderDeviceId().isEmpty()) {
-        return {};
+        // Nobody holds transmit. MOX and TUNE take it as they key
+        // (TransmitHolder::askKey); a program's key never does, and until
+        // 2026-10-12 nothing on screen said so or offered the take.
+        return transmitTakeAvailable()
+                   ? QStringLiteral("No device has transmit. MOX and TUNE take it here. A "
+                                    "program needs Take transmit first.")
+                   : QString();
     }
     const QString self = thisDeviceWireId();
     if (!self.isEmpty() && tx.holderDeviceId() == self) {
@@ -8380,6 +8848,11 @@ bool StationClient::transmitHeldElsewhere() const
 {
     return transmitTakeAvailable() && !m_transmitState->holderDeviceId().isEmpty()
         && !holdsTransmitHere();
+}
+
+bool StationClient::transmitTakeOffered() const
+{
+    return transmitTakeAvailable() && !holdsTransmitHere();
 }
 
 quint32 StationClient::requestTakeTransmit(bool shown, qint64 holderEpoch, bool shownKeyed)
@@ -8631,6 +9104,7 @@ void StationClient::startRace()
     m_raceWinnerLine = -1;
     m_raceLines.clear();
     m_pathRank = -1;
+    m_pathPairUnknown = false;
     PathRacer* racer = newRacer(/*upgrade=*/false);
     m_racer = racer;
     connect(racer, &PathRacer::linesChanged, this, [this, racer] {
@@ -8659,14 +9133,14 @@ void StationClient::stopRace()
         PathRacer* racer = m_racer;
         m_racer = nullptr;
         racer->disconnect(this);
-        racer->cancel();
+        racer->cancel(QStringLiteral("stopped"));
         racer->deleteLater();
     }
     if (m_upgradeRacer) {
         PathRacer* racer = m_upgradeRacer;
         m_upgradeRacer = nullptr;
         racer->disconnect(this);
-        racer->cancel();
+        racer->cancel(QStringLiteral("stopped"));
         racer->deleteLater();
     }
     m_upgradeTimer->stop();
@@ -8741,6 +9215,9 @@ void StationClient::adoptRaceWinner(const PathRacer::Ready& ready)
     }
     m_raceWinnerUrl = ready.url;
     m_pathRank = ready.rank;
+    // The rendezvous rung names a pair not known yet a service path.
+    m_pathPairUnknown = ready.rank == PathRacer::ServiceRelayed
+        && ready.kind == PathRacer::PathKind::Service;
     m_pinRequired = false;
     m_transportOpened = true;
     SessionTransport* transport = ready.transport;
@@ -8832,7 +9309,9 @@ void StationClient::refreshPathRank()
         return;
     }
     const int rank = PathRacer::rankForPath(path);
-    if (rank == m_pathRank) {
+    const bool wasUnknown = m_pathPairUnknown;
+    m_pathPairUnknown = false;
+    if (rank == m_pathRank && !wasUnknown) {
         return;
     }
     qCInfo(lcStationClient) << "The connection through the service settled on rank" << rank;
@@ -9016,6 +9495,7 @@ void StationClient::onPathTicket(const SessionMessage& result)
             m_serviceIce = leavingIce;
         }
         m_pathRank = rank;
+        m_pathPairUnknown = rank == PathRacer::ServiceRelayed && kind == PathRacer::PathKind::Service;
         ++m_pathSwitches;
         if (url.isValid()) {
             m_connectedUrl = url;

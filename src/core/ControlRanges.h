@@ -61,12 +61,25 @@
 //               slot table the catalogue's `noiseReduction` key reads
 //               (R-IOS-06, R-IOS-27). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-10-10: planAutoZoomFft and largestPlannedFftSize, the one FFT
+//               sizing rule a local and a remote pan share (R-DSP-30,
+//               R-DSP-31, R-DSP-59). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-10-11: The FFT sizing mode (Auto, Hz/bin, Fixed): its key and
+//               tokens, the rule that reads it, and planDisplayFft, the
+//               one planner every reader uses (R-DSP-62, R-DSP-63).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 // =================================================================
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <span>
+#include <string_view>
 
 namespace NereusSDR::ControlRanges {
 
@@ -125,9 +138,9 @@ inline constexpr int kAmsqThreshMinDb = -160;
 inline constexpr int kAmsqThreshMaxDb = 0;
 inline constexpr int kAmsqThreshStepDb = 1;
 
-// FM squelch, Setup > DSP > FM's threshold slider, in dB (SliceModel
-// fmsqThresh; RxChannel::setFmsqThresh converts it for WDSP). The page
-// uses the AM slider's range.
+// FM squelch, Setup > DSP > FM's threshold slider (SliceModel fmsqThresh):
+// the slider position, -160 to 0, which RxChannel::fmsqThresholdForWdsp
+// maps to the WDSP threshold. The page uses the AM slider's range.
 inline constexpr int kFmsqThreshMinDb = -160;
 inline constexpr int kFmsqThreshMaxDb = 0;
 inline constexpr int kFmsqThreshStepDb = 1;
@@ -223,6 +236,14 @@ constexpr int displayFftSizePosition(int fftSize) noexcept
     return position;
 }
 
+/// Whether `fftSize` is one of the slider's seven sizes. A stored
+/// DisplayFftSize that is not is replaced by the default when it is read
+/// (MainWindow::refreshFftPoolConfig), so the key and the engines agree.
+constexpr bool isDisplayFftSize(int fftSize) noexcept
+{
+    return displayFftSizeAt(displayFftSizePosition(fftSize)) == fftSize;
+}
+
 // The Bin Width (Hz) readout beside the slider: sample rate / FFT size, to
 // three places:
 // From Thetis Project Files/Source/Console/setup.cs:16192-16193 [v2.10.3.15]
@@ -231,12 +252,237 @@ constexpr int displayFftSizePosition(int fftSize) noexcept
 inline constexpr const char* kDisplayBinWidthLabel = "Bin Width (Hz)";
 inline constexpr int kDisplayBinWidthDecimals = 3;
 
-// The FFT sizes a pan's request rounds to (a remote window's plannedFftSize,
-// src/gui/RemoteMediaController.cpp): the smallest power of two from 1024 up
+// The FFT sizes a pan's plan rounds to (planAutoZoomFft below, and a remote
+// window's stored size, src/gui/RemoteMediaController.cpp): the smallest power of two from 1024 up
 // that reaches the wanted size, at most FFTEngine::maximumFftSize() (262144).
 // NereusSDR-native.
 inline constexpr int kDisplayFftPlanMinSize = 1024;
 inline constexpr int kDisplayFftPlanMaxSize = 262144;
+
+// How far a zoom (or the Hz/bin target) grows a pan's FFT, on a local pan
+// (MainWindow's bandwidthChangeRequested auto-zoom) and a remote pan
+// (RemoteMediaController's plannedFftSize) alike: a time per transform, the
+// same at every sample rate. NereusSDR-native (JJ's ruling, 2026-10-09;
+// supersedes the fixed 65536 cap of 2026-05-08).
+//
+// Auto-zoom keeps about `baseline` points on screen at every zoom
+// (size = baseline * rate / span), so the time per transform at a given zoom
+// (size / rate = baseline / span) does not depend on the rate. A fixed point
+// count therefore cut in at a different zoom on every rate: 65536 is 0.68 s
+// at 96 kHz but 43 ms at 1.536 MHz, where a deep zoom went blocky from a
+// 96 kHz-wide view. A time limit gives the same deep-zoom look at every rate,
+// with the engine maximum (kDisplayFftPlanMaxSize) on top. The longer buffer
+// fill on a replan at deep zoom on high rates is accepted. Users who want
+// larger FFTs pick them on the slider; auto-zoom won't push above the cap
+// unless the slider already did.
+//
+//   48 kHz 32768, 96 kHz 65536, 192 kHz 131072 (0.68 s each),
+//   384 kHz 262144 (0.68 s), 768 kHz 262144 (0.34 s), 1.536 MHz 262144 (0.17 s)
+inline constexpr double kAutoZoomMaxTransformSeconds = 0.7;
+
+// The largest FFT size a zoom grows to at `sampleRateHz`: the largest power
+// of two <= sampleRateHz * kAutoZoomMaxTransformSeconds, clamped to
+// [kDisplayFftPlanMinSize, kDisplayFftPlanMaxSize]. A rate that is not
+// finite or not positive gives kDisplayFftPlanMinSize; both callers return
+// early on such rates before asking.
+constexpr int autoZoomMaxFftSize(double sampleRateHz) noexcept
+{
+    // !(x > 0) is also true for NaN; the upper test rejects infinity
+    // (std::isfinite is not constexpr in C++20).
+    if (!(sampleRateHz > 0.0)
+        || !(sampleRateHz <= std::numeric_limits<double>::max())) {
+        return kDisplayFftPlanMinSize;
+    }
+    const double limit = sampleRateHz * kAutoZoomMaxTransformSeconds;
+    int size = kDisplayFftPlanMinSize;
+    while (size < kDisplayFftPlanMaxSize && double(size) * 2.0 <= limit) {
+        size *= 2;
+    }
+    return size;
+}
+
+// The FFT size a zoom asks for: `desiredPow2` (the power of two the zoom or
+// Hz/bin target wants) floored at the user's `baseline` (the slider's choice
+// is always honoured) and capped at autoZoomMaxFftSize(sampleRateHz). When
+// the baseline is above the cap (the user picked a larger size), the
+// baseline wins and a zoom does not grow past it.
+constexpr int autoZoomFftSize(int desiredPow2, int baseline, double sampleRateHz) noexcept
+{
+    return std::min(std::max(desiredPow2, baseline),
+                    std::max(baseline, autoZoomMaxFftSize(sampleRateHz)));
+}
+
+/// The FFT size one pan plans, and whether the Hz/bin target set it.
+struct AutoZoomPlan {
+    int size;
+    bool hzPerBinInCharge;
+};
+
+// The one sizing rule, for a local pan and a remote pan alike
+// (NereusSDR-native). The points wanted are `baseline` x rate / span, so a
+// zoom keeps about `baseline` points across the pan; when the Hz/bin target
+// is on (above 0) they are rate / target instead. That is rounded up to a
+// power of two (kDisplayFftPlanMinSize to kDisplayFftPlanMaxSize) and passed
+// through autoZoomFftSize: floored at `baseline`, capped at about 0.7 s per
+// transform. The pan's width in pixels is not an input.
+//
+// `hzPerBinInCharge` is true when the target is on and the size it gave is
+// above the baseline. A rate or span that is not finite or not positive
+// gives {baseline, false}. The local pan's hysteresis is the caller's.
+constexpr AutoZoomPlan planAutoZoomFft(int baseline, double sampleRateHz, double spanHz,
+                                       double hzPerBinTarget) noexcept
+{
+    // !(x > 0) is also true for NaN; the upper test rejects infinity
+    // (std::isfinite is not constexpr in C++20).
+    constexpr double kLargest = std::numeric_limits<double>::max();
+    if (!(sampleRateHz > 0.0) || !(sampleRateHz <= kLargest)
+        || !(spanHz > 0.0) || !(spanHz <= kLargest)) {
+        return {baseline, false};
+    }
+    const bool targetOn = hzPerBinTarget > 0.0;
+    const double desired = targetOn ? sampleRateHz / hzPerBinTarget
+                                    : double(baseline) * sampleRateHz / spanHz;
+    int desiredPow2 = kDisplayFftPlanMinSize;
+    while (desiredPow2 < kDisplayFftPlanMaxSize && double(desiredPow2) < desired) {
+        desiredPow2 *= 2;
+    }
+    const int size = autoZoomFftSize(desiredPow2, baseline, sampleRateHz);
+    return {size, targetOn && size > baseline};
+}
+
+/// The largest size among `plans` (pans that share a stream run one FFT),
+/// `baseline` when there are none.
+constexpr int largestPlannedFftSize(std::span<const AutoZoomPlan> plans, int baseline) noexcept
+{
+    if (plans.empty()) {
+        return baseline;
+    }
+    int largest = plans.front().size;
+    for (const AutoZoomPlan& plan : plans) {
+        largest = std::max(largest, plan.size);
+    }
+    return largest;
+}
+
+// ── FFT sizing mode (design D38 to D43; R-DSP-62, R-DSP-63) ─────────────────
+//
+// NereusSDR, based on Thetis: Fixed is Thetis's own behavior, where the FFT
+// Size slider is the only writer of the size and a zoom changes only the
+// analyzer's span clip, never the size:
+// From Thetis Project Files/Source/Console/setup.cs:16189 [v2.10.3.15]
+//   (the slider writes FFTSize = 4096 * 2^position)
+// From Thetis Project Files/Source/Console/HPSDR/specHPSDR.cs:420-429 [v2.10.3.15]
+//   (ZoomSlider's setter calls initAnalyzer(); the FFT size is not touched)
+// Auto and Hz/bin are NereusSDR's own (Thetis has no automatic sizing and
+// no Hz/bin target), kept because a zoom on a wide DDC goes blocky without
+// them. Exactly one control sets the running size in each mode.
+enum class DisplayFftSizingMode {
+    Auto,      ///< the zoom plan, from kDisplayFftSizeDefault; the stored size plays no part
+    HzPerBin,  ///< the Hz/bin target plan, floored at kDisplayFftSizeDefault
+    Fixed,     ///< exactly the stored DisplayFftSize; zoom and span never change it
+};
+// Station scope (SettingsScope.cpp), like DisplayFftSize. The stored value is
+// one of the three tokens below.
+inline constexpr const char* kDisplayFftSizingModeKey = "DisplayFftSizingMode";
+inline constexpr const char* kDisplayFftSizingModeAutoToken = "Auto";
+inline constexpr const char* kDisplayFftSizingModeHzPerBinToken = "HzPerBin";
+inline constexpr const char* kDisplayFftSizingModeFixedToken = "Fixed";
+inline constexpr DisplayFftSizingMode kDisplayFftSizingModeDefault = DisplayFftSizingMode::Auto;
+// The last Hz/bin target chosen, so leaving and re-entering Hz/bin restores
+// it (station scope). DisplayHzPerBinTarget itself holds the target only
+// while the mode is HzPerBin and 0 otherwise, which is what it means to a
+// window or phone that does not know the mode (design D39).
+inline constexpr const char* kDisplayHzPerBinLastTargetKey = "DisplayHzPerBinLastTarget";
+
+// The control's label and its three choices in the order they are shown,
+// as the station catalog lists them (the Display pill and Setup draw the
+// same words, gui/DisplayFftReadout.h; tst_display_catalogue holds the two
+// together).
+inline constexpr const char* kDisplayFftSizingLabel = "Sizing";
+struct DisplayFftSizingItem {
+    DisplayFftSizingMode mode;
+    const char* label;
+};
+inline constexpr std::array<DisplayFftSizingItem, 3> kDisplayFftSizingItems{{
+    {DisplayFftSizingMode::Auto, "Auto"},
+    {DisplayFftSizingMode::HzPerBin, "Hz/bin"},
+    {DisplayFftSizingMode::Fixed, "Fixed"},
+}};
+
+/// The stored token of `mode`.
+constexpr const char* displayFftSizingModeToken(DisplayFftSizingMode mode) noexcept
+{
+    switch (mode) {
+    case DisplayFftSizingMode::HzPerBin: return kDisplayFftSizingModeHzPerBinToken;
+    case DisplayFftSizingMode::Fixed:    return kDisplayFftSizingModeFixedToken;
+    case DisplayFftSizingMode::Auto:     break;
+    }
+    return kDisplayFftSizingModeAutoToken;
+}
+
+// The mode in force, from the stored DisplayFftSizingMode token and the
+// stored DisplayHzPerBinTarget. Every reader uses this one rule, on read; no
+// settings migration writes it back (design D40):
+//  - "Fixed" is Fixed;
+//  - "Auto" is Auto;
+//  - "HzPerBin" is HzPerBin while the target is above 0, and Auto without
+//    one, so the mode read is always the one that runs;
+//  - a key that is absent (an empty token) or holds anything else is the
+//    upgrade case: a target above 0 gives HzPerBin, anything else Auto.
+constexpr DisplayFftSizingMode displayFftSizingModeOnRead(std::string_view storedToken,
+                                                          double hzPerBinTarget) noexcept
+{
+    // !(x > 0) is also true for NaN.
+    const bool targetOn = hzPerBinTarget > 0.0
+        && hzPerBinTarget <= std::numeric_limits<double>::max();
+    if (storedToken == kDisplayFftSizingModeFixedToken) {
+        return DisplayFftSizingMode::Fixed;
+    }
+    if (storedToken == kDisplayFftSizingModeAutoToken) {
+        return DisplayFftSizingMode::Auto;
+    }
+    return targetOn ? DisplayFftSizingMode::HzPerBin : DisplayFftSizingMode::Auto;
+}
+
+/// The size `mode`'s own control chose, before any zoom: the stored
+/// DisplayFftSize in Fixed (the default when it is not one of the seven),
+/// kDisplayFftSizeDefault in Auto and HzPerBin. It is the plan's floor, the
+/// size a plain "wide" request asks a Core for, and the size the FFT size
+/// offset belongs to (FFTEngine::setFftSizeBaseline).
+constexpr int displayFftSizingBaseline(DisplayFftSizingMode mode, int storedSize) noexcept
+{
+    if (mode == DisplayFftSizingMode::Fixed && isDisplayFftSize(storedSize)) {
+        return storedSize;
+    }
+    return kDisplayFftSizeDefault;
+}
+
+// The one planner (design D42): the FFT size a pan plans in `mode`, for a
+// local pan, a remote pan, Setup's readouts and the pill's readout alike,
+// with a Swift twin on the phone.
+//  - Auto: planAutoZoomFft from kDisplayFftSizeDefault with no target.
+//  - HzPerBin: planAutoZoomFft from kDisplayFftSizeDefault with the target;
+//    a target that is not above 0 plans as Auto does.
+//  - Fixed: exactly `storedSize` (displayFftSizingBaseline), whatever the
+//    rate and span, with no cap. The caller applies no hysteresis to it.
+// `storedSize` (the stored DisplayFftSize) is read in Fixed only.
+// `hzPerBinInCharge` is true only in HzPerBin, when the target's size is
+// above the default.
+constexpr AutoZoomPlan planDisplayFft(DisplayFftSizingMode mode, int storedSize,
+                                      double sampleRateHz, double spanHz,
+                                      double hzPerBinTarget) noexcept
+{
+    const int baseline = displayFftSizingBaseline(mode, storedSize);
+    switch (mode) {
+    case DisplayFftSizingMode::Fixed:
+        return {baseline, false};
+    case DisplayFftSizingMode::HzPerBin:
+        return planAutoZoomFft(baseline, sampleRateHz, spanHz, hzPerBinTarget);
+    case DisplayFftSizingMode::Auto:
+        break;
+    }
+    return planAutoZoomFft(baseline, sampleRateHz, spanHz, 0.0);
+}
 
 // FFT window: the "Window" combo, in Thetis's order, each item's value its
 // WindowFunction (WDSP analyzer.c's case order):
@@ -270,6 +516,62 @@ inline constexpr int kDisplayHzPerBinTargetDecimals = 2;
 inline constexpr double kDisplayHzPerBinTargetDefault = 0.0;
 inline constexpr const char* kDisplayHzPerBinTargetOffLabel = "Off";
 inline constexpr const char* kDisplayHzPerBinTargetUnit = "Hz/bin";
+
+/// The Hz/bin target that entering Hz/bin starts from when none is
+/// remembered (design D39): the bin width running now, up to the
+/// control's step and inside its range, so entering changes nothing until
+/// the control moves. Up, not down: a target below the bin width running
+/// asks for more points than run now, and the next power of two is twice
+/// the size (23.4375 Hz at 192 kHz and 8192 points: 23.5 plans 8192 again,
+/// 23.0 would plan 16384). A bin width that is not above 0 gives the
+/// control's maximum, the coarsest. `binWidthHz` is sample rate /
+/// (decimation x FFT size).
+inline double hzPerBinTargetForBinWidth(double binWidthHz) noexcept
+{
+    // !(x > 0) is also true for NaN.
+    if (!(binWidthHz > 0.0) || !std::isfinite(binWidthHz)) {
+        return kDisplayHzPerBinTargetMax;
+    }
+    return std::clamp(std::ceil(binWidthHz / kDisplayHzPerBinTargetStep)
+                          * kDisplayHzPerBinTargetStep,
+                      kDisplayHzPerBinTargetStep, kDisplayHzPerBinTargetMax);
+}
+
+// Trace line width, in pixels, set in tenths of a pixel by the Display
+// pill's Line row and Setup's Line Width row.
+// NereusSDR, based on Thetis: the maximum and step are udDisplayLineWidth's
+// (Minimum 0.0, Maximum 5.0, Increment 0.1). The minimum here is 0.1, not
+// Thetis's 0.0, because a zero-width trace is invisible.
+// From Thetis setup.designer.cs:53016-53043 [v2.10.3.15]
+inline constexpr int kDisplayLineWidthTenthsPerPx = 10;
+inline constexpr int kDisplayLineWidthMinTenths = 1;
+inline constexpr int kDisplayLineWidthMaxTenths = 50;
+// The width a pan and Setup start at: udDisplayLineWidth's Value, 1.0.
+// It was 1.5 while the GPU path drew every trace one device pixel wide;
+// that path now draws the width it is given, and 1.5 looked heavier than
+// the line it replaced. A stored width is read as stored.
+// From Thetis setup.designer.cs:53039-53043 [v2.10.3.15]
+inline constexpr double kDisplayLineWidthDefaultPx = 1.0;
+
+// A line width in pixels as the tenths the controls count, held to the
+// range above. Anything that is not a number at or above the minimum
+// (a stored 0, a negative, a NaN) is the minimum.
+inline int displayLineWidthTenths(double px)
+{
+    const double tenths = px * kDisplayLineWidthTenthsPerPx;
+    if (!(tenths >= kDisplayLineWidthMinTenths)) {
+        return kDisplayLineWidthMinTenths;
+    }
+    if (tenths >= kDisplayLineWidthMaxTenths) {
+        return kDisplayLineWidthMaxTenths;
+    }
+    return static_cast<int>(tenths + 0.5);
+}
+
+inline double displayLineWidthPx(int tenths)
+{
+    return static_cast<double>(tenths) / kDisplayLineWidthTenthsPerPx;
+}
 
 // FPS: the Rendering group's frame-rate slider. NereusSDR-native range and
 // default (10 to 60, 30); Thetis's udDisplayFPS spans 1 to 144 and starts
@@ -316,14 +618,32 @@ inline constexpr int kDisplaySpectrumAveragingDefault = 3;
 // Spectrum Avg Time, in ms. Thetis's udDisplayAVGTime starts at 30:
 // From Thetis Project Files/Source/Console/setup.designer.cs:35019-35023 [v2.10.3.15]
 //   this.udDisplayAVGTime.Value = new decimal(new int[] { 30, 0, 0, 0});
-// Its range is 1 to 9999 in steps of 1 (setup.designer.cs:34998-35013
-// [v2.10.3.15]); NereusSDR raises the floor to 10 ms and steps by 10.
+// Its range is 1 to 9999 in steps of 1, and so is the waterfall's
+// udDisplayAVTimeWF:
+// From Thetis Project Files/Source/Console/setup.designer.cs:34996-35023 [v2.10.3.15]
+//   this.udDisplayAVGTime.Increment = new decimal(new int[] { 1, 0, 0, 0});
+//   this.udDisplayAVGTime.Maximum = new decimal(new int[] { 9999, 0, 0, 0});
+//   this.udDisplayAVGTime.Minimum = new decimal(new int[] { 1, 0, 0, 0});
+// From Thetis Project Files/Source/Console/setup.designer.cs:34588-34616 [v2.10.3.15]
+//   this.udDisplayAVTimeWF.Increment = new decimal(new int[] { 1, 0, 0, 0});
+//   this.udDisplayAVTimeWF.Maximum = new decimal(new int[] { 9999, 0, 0, 0});
+//   this.udDisplayAVTimeWF.Minimum = new decimal(new int[] { 1, 0, 0, 0});
+// The desktop's two Setup boxes and the Display pill's two number boxes
+// take that range and step.
 inline constexpr const char* kDisplaySpectrumAvgTimeKey = "DisplaySpectrumAverageTimeMs";
 inline constexpr const char* kDisplaySpectrumAvgTimeLabel = "Spectrum Avg Time";
-inline constexpr int kDisplayAvgTimeMinMs = 10;
+inline constexpr int kDisplayAvgTimeMinMs = 1;
 inline constexpr int kDisplayAvgTimeMaxMs = 9999;
-inline constexpr int kDisplayAvgTimeStepMs = 10;
+inline constexpr int kDisplayAvgTimeStepMs = 1;
 inline constexpr int kDisplaySpectrumAvgTimeDefaultMs = 30;
+
+// The Display pill's two averaging time sliders stop at half a second, one
+// position per ms. NereusSDR choice: the values in use are about 30 to 120
+// ms, and past half a second the trace visibly lags. A longer time is
+// typed into the number box beside the slider, or into Setup.
+inline constexpr int kDisplayAvgTimePillMaxMs = 500;
+// What Page Up and Page Down move those sliders by. NereusSDR choice.
+inline constexpr int kDisplayAvgTimePillPageMs = 25;
 
 // Decimation matches Thetis by JJ's 2026-09-27 ruling: 1 to 16, step 1,
 // starting at 1 (setup.designer.cs:33828-33853 [v2.10.3.15]). The desktop

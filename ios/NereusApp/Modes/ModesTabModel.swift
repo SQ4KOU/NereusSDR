@@ -1,5 +1,6 @@
 // NereusSDR for iOS: the Modes tab's controls for the active slice: the Core's values in, each write to its owner
 // SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-NereusSDR-AppStore-permission
+// 2026-10-12: J.J. Boyd (KG4VCF), V2 opt-in/authority gate; AI-assisted via OpenAI Codex.
 
 import Combine
 import Foundation
@@ -416,6 +417,7 @@ final class ModesTabModel: ObservableObject {
     }
 
     func selectMode(_ id: Int) {
+        guard catalogFeed.catalog?.offeredModes.contains(where: { $0.id == id }) == true else { return }
         writeSlice(Property.dspMode, .enumeration(Int64(id)))
     }
 
@@ -1024,8 +1026,8 @@ final class ModesTabModel: ObservableObject {
 
         // The mode and the filter's edges.
         let mode = Self.whole(sliceValue(Property.dspMode))
-        set(\.modes, (catalog?.modes ?? []).map { Choice(id: $0.id, label: $0.label, lit: Int64($0.id) == mode) })
-        let label = catalog?.modes.first { Int64($0.id) == mode }?.label
+        set(\.modes, (catalog?.offeredModes ?? []).map { Choice(id: $0.id, label: $0.label, lit: Int64($0.id) == mode) })
+        let label = mode.flatMap { catalog?.modeDescription(Int($0))?.label }
         set(\.modeLabel, label)
         set(\.filterLowHz, Self.whole(sliceValue(Property.filterLow)))
         set(\.filterHighHz, Self.whole(sliceValue(Property.filterHigh)))

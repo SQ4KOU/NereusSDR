@@ -36,6 +36,31 @@
 //               least busy fast core, judged from the plan (JJ's ruling
 //               of 2026-09-30). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-10-10: radio connection and spectrum roles, from an evening of
+//               measuring on the Rock 5C with wide receivers (the numbers
+//               are in ThreadPlacement.cpp). The connection thread shares
+//               the DSP thread's core, both raised: neither runs longer
+//               than a millisecond at a stretch. Spectrum threads may use
+//               every fast core at normal priority and own none: held to
+//               one core they sat behind a receive worker's burst while
+//               holding a lock the connection thread needs. A receive
+//               worker left without a core shares the later receivers'
+//               fast cores instead of the slow ones. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-11: TransmitUse and setTransmitUse(): a transmit channel
+//               that is up only so VOX can hear the microphone comes
+//               after every receive worker. Seated as if keyed, its
+//               worker and pump held two of the Rock's four fast cores
+//               for as long as VOX was on. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-14: TxIqSender's comment names the P1 EP2 sender as well,
+//               which takes the same role. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-15: the connection thread shares the DSP thread's core only
+//               where slower cores run housekeeping; on equal cores it
+//               stays on the housekeeping cores. While transmitting,
+//               spectrum threads keep off the transmit roles' cores. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -85,8 +110,10 @@ enum class ThreadRole {
     DspThread,       ///< RxDspWorker's thread (fexchange2 for every slice)
     TxWorker,        ///< the transmit channel's WDSP worker
     TxWorkerThread,  ///< TxWorkerThread, the transmit audio pump
-    TxIqSender,      ///< the Protocol 2 transmit I/Q send thread
+    TxIqSender,      ///< the protocol's transmit send thread (P2 TX I/Q sender or P1 EP2 sender)
     RadeDecoder,     ///< a RADE slice's decoder thread (RadeRx<id>), per channel
+    ConnectionThread, ///< the radio connection thread (reads the radio's UDP)
+    SpectrumThread,  ///< a spectrum FFT thread, told apart by a number FftEnginePool gives each
 };
 
 /// Which signal processing threads are busy.
@@ -94,15 +121,26 @@ struct PlacementDemand {
     QList<int> rxChannels;        ///< active receive channels
     bool dspThread{false};
     bool txWorker{false};         ///< transmit channel active
+    /// The transmit channel runs only so VOX can hear the microphone, and
+    /// nothing is on the air. Read only with txWorker.
+    bool txListening{false};
     bool txWorkerThread{false};   ///< transmit pump running while transmitting
     bool txIqSender{false};       ///< transmit I/Q sender running while transmitting
     QList<int> radeDecoders;      ///< running RADE decoder threads, by channel, placed in this order
+    bool connectionThread{false}; ///< the radio connection thread is running
+    QList<int> spectrumThreads;   ///< running spectrum threads, by FftEnginePool's number
 };
 
 struct RoleAssignment {
     ThreadRole role{ThreadRole::RxWorker};
     int channel{-1};
-    int cpu{-1};                  ///< -1: runs with everything else
+    int cpu{-1};                  ///< its core; -1: it has none
+    /// With no core of its own: the signal processing cores it may use,
+    /// ascending. The kernel moves it between them. Empty with cpu -1: it
+    /// runs with everything else.
+    QList<int> shared{};
+    /// Runs at kDspNice where the system permits it.
+    bool raised{false};
 };
 
 /// The result of planThreadPlacement().
@@ -113,11 +151,18 @@ struct PlacementPlan {
     QList<int> housekeeping;      ///< cores for every other thread
     QList<RoleAssignment> assignments;
 
-    /// The dedicated core of a role, or -1 when it runs on housekeeping.
+    /// The dedicated core of a role, or -1 when it has none.
     int cpuFor(ThreadRole role, int channel = -1) const;
-    /// Every core given to a thread, ascending, each once (RADE decoders
-    /// share cores).
+    /// The signal processing cores a role may run on: its own core, or the
+    /// cores it shares. Empty when it runs on housekeeping.
+    QList<int> coresFor(ThreadRole role, int channel = -1) const;
+    /// True when the role runs at raised priority on those cores.
+    bool raisedFor(ThreadRole role, int channel = -1) const;
+    /// Every core given to a thread as its own, ascending, each once (RADE
+    /// decoders share cores).
     QList<int> signalCores() const;
+    /// True when a spectrum thread may run on `cpu`.
+    bool carriesSpectrum(int cpu) const;
 };
 
 /// Pure placement rule.
@@ -135,20 +180,66 @@ struct PlacementPlan {
 ///
 /// Dedicated cores go, in order, to the first active receive worker (lowest
 /// channel), the DSP thread, the transmit worker, the transmit pump, the
-/// transmit I/Q sender, then the other active receive workers (G-06). A
-/// role left without a core runs on the housekeeping cores.
+/// transmit I/Q sender, then the other active receive workers (G-06). Each
+/// runs at raised priority on its core.
 ///
-/// RADE decoders come after every other role and share a core rather
+/// That order is for transmitting. A transmit channel that runs only so
+/// VOX can hear the microphone (txListening) puts nothing on the air, and
+/// with VOX on it runs through every receive period: its three roles come
+/// after every receive worker and take the cores those leave.
+///
+/// Where slower cores run everything else, the radio connection thread
+/// shares the DSP thread's core, raised like it. It has the one hard
+/// deadline in the Core: the radio's packets wait
+/// in a socket buffer that holds a few milliseconds of wide receivers, and
+/// whatever does not fit is lost. Neither thread runs longer than a
+/// millisecond at a stretch, so neither keeps the other waiting, where a
+/// receive worker runs for tens of milliseconds and must share with
+/// neither. With no DSP thread the connection thread takes that core
+/// alone; with no core for the DSP thread both run on the housekeeping
+/// cores at normal priority. Where every core is equally fast it stays on
+/// the housekeeping cores at normal priority: it was measured only on the
+/// Rock 5C, and the Pi 4 (the Hermes Lite 2 bench) has fewer cores to
+/// share.
+///
+/// Where slower cores run everything else, a receive worker left without a
+/// core shares the cores of the later receive workers that have one, raised
+/// like them: a slower core costs a wide receiver more than twice the
+/// time. With no such core (transmit holding them, or too few), or where
+/// every core is equally fast, it runs on the housekeeping cores at normal
+/// priority, like any other role without a core. A transmit worker
+/// listening for VOX and left without a core shares the same cores the
+/// same way: it does as much work listening as transmitting.
+///
+/// Spectrum threads own no core. Where slower cores run everything else,
+/// they may use every signal processing core, at normal priority (while
+/// transmitting, every one the transmit roles leave), so they
+/// take the time signal processing leaves and the kernel moves them off a
+/// core a receive worker wants. They must not be held to one core: a
+/// receive worker's burst there (50 ms at 1,536,000) would keep a spectrum
+/// thread off the processor while it holds its event queue's lock, and the
+/// connection thread, which takes that lock to hand it samples, would wait
+/// the burst out and lose the radio's packets. Where all cores are equally
+/// fast they run on the housekeeping cores with everything else.
+///
+/// RADE decoders come after every role with a core and share one rather
 /// than own one, on the least busy signal processing core: first the core
 /// with the fewest decoders (they spread before any core takes a second),
-/// then the fewest roles of any kind (transmit roles included), then a
-/// core without a transmit role, then a core without the DSP thread, then
-/// the earlier core in signalPool
+/// then a core without the connection thread, then the fewest roles of any
+/// kind (transmit roles included), then a core without a transmit role,
+/// then a core without the DSP thread, then the earlier core in signalPool
 /// (fastest first). Decoders are placed in the order given, so a later one
 /// never moves an earlier one. Judged from the plan only: nothing moves on
 /// live load.
 PlacementPlan planThreadPlacement(const CpuTopology& topology,
                                   const PlacementDemand& demand);
+
+/// What a transmit channel is doing, for ThreadPlacement::setTransmitUse().
+enum class TransmitUse {
+    Stopped,       ///< the channel is off
+    Listening,     ///< running only so VOX can hear the microphone
+    Transmitting,  ///< keyed
+};
 
 /// The operating-system calls placement makes, behind an interface so tests
 /// can record them.
@@ -175,8 +266,8 @@ bool canRaiseCurrentThreadPriority(int nice);
 /// channels start and stop. Off (every call a no-op) until start() or
 /// startPriorityOnly(); the GUI never starts it.
 ///
-/// Placing: each busy role gets a core of its own, and raised priority
-/// while it has one. Priority only (placement off in nereusd.conf, or not
+/// Placing: each busy role gets the cores the plan gives it, and raised
+/// priority where the plan says so. Priority only (placement off in nereusd.conf, or not
 /// possible on this computer): no thread is moved, and each busy role gets
 /// raised priority, so signal processing never sits below spectrum and
 /// networking, which skip their own priority calls whenever this is on.
@@ -227,8 +318,13 @@ public:
     void deregisterCurrentThread();
 
     /// A channel started or stopped (RxWorker or TxWorker). Kept whether or
-    /// not its worker has registered yet.
+    /// not its worker has registered yet. A transmit channel reported here
+    /// as started is taken to be transmitting.
     void setChannelActive(ThreadRole role, int channel, bool active);
+
+    /// A transmit channel stopped, started to listen for VOX, or keyed.
+    /// Kept whether or not its worker has registered yet.
+    void setTransmitUse(int channel, TransmitUse use);
 
     /// A WDSP channel closed: forget its threads (their IDs can be reused)
     /// and its active state.
@@ -295,6 +391,7 @@ private:
     QList<Registered> m_threads;
     QMap<int, bool> m_activeRx;   // channel -> active
     QMap<int, bool> m_activeTx;   // channel -> active
+    QMap<int, bool> m_listeningTx;  // channel -> active only to listen for VOX
 };
 
 /// nereusd's startup call, on the main thread before any other thread

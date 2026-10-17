@@ -45,6 +45,7 @@ using NereusSDR::Test::P1FakeRadio;
 namespace {
 
 static std::atomic<int> g_crossThreadTimerWarnings{0};
+static std::atomic<int> g_dispatchTimeouts{0};
 static QtMessageHandler g_previousHandler = nullptr;
 
 static void captureHandler(QtMsgType type,
@@ -53,6 +54,9 @@ static void captureHandler(QtMsgType type,
 {
     if (msg.contains(QStringLiteral("Timers cannot be stopped from another thread"))) {
         g_crossThreadTimerWarnings.fetch_add(1);
+    }
+    if (msg.contains(QStringLiteral("disconnect dispatch timed out"))) {
+        g_dispatchTimeouts.fetch_add(1);
     }
     if (g_previousHandler) {
         g_previousHandler(type, ctx, msg);
@@ -75,6 +79,7 @@ private slots:
 
     void init() {
         g_crossThreadTimerWarnings.store(0);
+        g_dispatchTimeouts.store(0);
     }
 
     void workerThreadedConnectionTeardownEmitsNoCrossThreadWarning() {
@@ -147,6 +152,13 @@ private slots:
         // cross-thread timer warnings may be emitted at any point
         // during the sequence.
         QCOMPARE(g_crossThreadTimerWarnings.load(), 0);
+
+        // 2026-10-15: disconnect() must finish inside the helper's dispatch
+        // budget, not only before the forced quit's later waits. The P1 EP2
+        // sender's start once waited on a Core Audio query that took over
+        // 3 s on a loaded machine; the join in disconnect() waited with it,
+        // and the helper fell back to quit, and at over 4 s to terminate().
+        QCOMPARE(g_dispatchTimeouts.load(), 0);
     }
 };
 

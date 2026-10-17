@@ -10,8 +10,15 @@
 // Modification history (NereusSDR).
 // =================================================================
 
+// Modification history (NereusSDR):
+//   2026-10-12 - Apply the approved workspace-only 11 px text minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
 #include "gui/widgets/SpectrumStatusOverlay.h"
 #include "gui/StyleConstants.h"
+#include "gui/styles/WorkspacePalette.h"
+#include "gui/styles/WorkspacePreview.h"
+#include "gui/styles/WorkspaceStyle.h"
 
 #include <QFont>
 #include <QFontMetrics>
@@ -37,9 +44,9 @@ constexpr int kRightPad       = 4;
 // resolves "monospace" to its own face (DejaVu Sans Mono on Linux, a
 // proportional face on macOS), so the row measures every form in the font it
 // actually got rather than assuming a width per character.
-QFont remoteStatusFont()
+QFont remoteStatusFont(const QPaintDevice* device)
 {
-    return QFont(QStringLiteral("monospace"), 9);
+    return WorkspacePreview::readableFont(QFont(QStringLiteral("monospace"), 9), device);
 }
 
 } // namespace
@@ -139,8 +146,11 @@ QString SpectrumStatusOverlay::takeTransmitToolTip() const
     if (!m_takeOffered || m_txBound) {
         return {};
     }
-    const QString name = m_takeHolderName.isEmpty() ? QStringLiteral("Another device")
-                                                    : m_takeHolderName;
+    // No holder's name: nobody holds transmit.
+    if (m_takeHolderName.isEmpty()) {
+        return QStringLiteral("No device has transmit. Click TX to take transmit.");
+    }
+    const QString name = m_takeHolderName;
     return m_takeHolderOnAir
                ? QStringLiteral("%1 is on the air. Click TX to take transmit.").arg(name)
                : QStringLiteral("%1 has the transmitter. Click TX to take transmit.").arg(name);
@@ -229,7 +239,7 @@ int SpectrumStatusOverlay::remoteStatusRowWidth() const
 
 int SpectrumStatusOverlay::remoteStatusTextWidth(const QString& text) const
 {
-    const QFontMetricsF metrics(remoteStatusFont(), this);
+    const QFontMetricsF metrics(remoteStatusFont(this), this);
     return int(std::ceil(metrics.horizontalAdvance(text)));
 }
 
@@ -255,9 +265,18 @@ void SpectrumStatusOverlay::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
 
+    // Workspace preview: the same shapes in Glass and Depth roles. With
+    // the switch off pick() returns the legacy colour unchanged.
+    const bool workspaceLook = WorkspacePreview::enabled();
+    auto pick = [](const QColor& legacy, const char* role) {
+        return WorkspacePreview::roleColour(legacy, role);
+    };
+
     // Background panel: rgba(20, 30, 45, 240) with subtle border.
-    p.setBrush(QColor(20, 30, 45, 240));
-    p.setPen(QColor(Style::kBorderSubtle));
+    QColor panelBg = pick(QColor(20, 30, 45, 240), "panel");
+    panelBg.setAlpha(240);
+    p.setBrush(panelBg);
+    p.setPen(pick(QColor(Style::kBorderSubtle), "border-subtle"));
     p.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 3, 3);
 
     int x = kLeftMargin;
@@ -277,11 +296,18 @@ void SpectrumStatusOverlay::paintEvent(QPaintEvent*)
     // later. Only the painting is gone.
 
     // CH tag (always visible).
-    p.setBrush(QColor(0x1a, 0x2a, 0x3a));
-    p.setPen(QColor(0x30, 0x40, 0x50));
+    p.setBrush(pick(QColor(0x1a, 0x2a, 0x3a), "button"));
+    p.setPen(pick(QColor(0x30, 0x40, 0x50), "border"));
     p.drawRoundedRect(x, y + 1, kChTagWidth, 14, 2, 2);
-    p.setPen(QColor(Style::kTitleText));
-    p.setFont(QFont(QStringLiteral("monospace"), 9, QFont::Bold));
+    p.setPen(pick(QColor(Style::kTitleText), "title-text"));
+    if (workspaceLook) {
+        // A number: the workspace monospace chain at the same 9 pt.
+        QFont chFont = Workspace::monoFont(QFont(), Workspace::kFontCaption, QFont::Bold);
+        chFont.setPointSize(9); chFont = WorkspacePreview::readableFont(chFont, p.device());
+        p.setFont(chFont);
+    } else {
+        p.setFont(WorkspacePreview::readableFont(QFont(QStringLiteral("monospace"), 9, QFont::Bold), p.device()));
+    }
     p.drawText(QRect(x, y + 1, kChTagWidth, 14), Qt::AlignCenter,
                QStringLiteral("CH %1").arg(m_chainIndex));
     x += kChTagWidth + kInterPillGap;
@@ -299,35 +325,41 @@ void SpectrumStatusOverlay::paintEvent(QPaintEvent*)
 
     if (m_txBound) {
         drawPill(QStringLiteral("TX"),
-                 QColor(0xcc, 0x22, 0x22), QColor(Qt::white),
-                 QColor(0xff, 0x44, 0x44));
+                 pick(QColor(0xcc, 0x22, 0x22), "danger-bg"),
+                 pick(QColor(Qt::white), "danger-text"),
+                 pick(QColor(0xff, 0x44, 0x44), "danger"));
     } else if (m_takeOffered) {
         // iPhone app plan Task 78: another device holds transmit; the pill
         // offers to take it. Outlined, not filled: this window is not on
         // the air. Red outline while the holder is.
-        drawPill(QStringLiteral("TAKE TX"), QColor(0x1a, 0x2a, 0x3a),
-                 m_takeHolderOnAir ? QColor(0xff, 0x80, 0x80) : QColor(0xc8, 0xd8, 0xe8),
-                 m_takeHolderOnAir ? QColor(0xff, 0x44, 0x44) : QColor(0x60, 0x78, 0x90));
+        drawPill(QStringLiteral("TAKE TX"), pick(QColor(0x1a, 0x2a, 0x3a), "button"),
+                 m_takeHolderOnAir ? pick(QColor(0xff, 0x80, 0x80), "danger-text")
+                                   : pick(QColor(0xc8, 0xd8, 0xe8), "text"),
+                 m_takeHolderOnAir ? pick(QColor(0xff, 0x44, 0x44), "danger")
+                                   : pick(QColor(0x60, 0x78, 0x90), "border-muted"));
     }
     if (m_wideBpf) {
         drawPill(QStringLiteral("WIDE"),
-                 QColor(0x60, 0x40, 0x00), QColor(0xff, 0xb8, 0x00),
-                 QColor(0x90, 0x60, 0x00));
+                 pick(QColor(0x60, 0x40, 0x00), "badge-warn-bg"),
+                 pick(QColor(0xff, 0xb8, 0x00), "measured"),
+                 pick(QColor(0x90, 0x60, 0x00), "measured-border"));
     }
     if (m_diversityActive) {
         drawPill(QStringLiteral("DIV"),
-                 QColor(0x00, 0x60, 0x40), QColor(0x00, 0xff, 0x88),
-                 QColor(0x00, 0xa0, 0x60));
+                 pick(QColor(0x00, 0x60, 0x40), "badge-ok-bg"),
+                 pick(QColor(0x00, 0xff, 0x88), "ok"),
+                 pick(QColor(0x00, 0xa0, 0x60), "ok-border"));
     }
     if (m_psPaused) {
         drawPill(QStringLiteral("PS HOLD"),
-                 QColor(0x60, 0x40, 0x00), QColor(0xff, 0xb8, 0x00),
-                 QColor(0x90, 0x60, 0x00));
+                 pick(QColor(0x60, 0x40, 0x00), "badge-warn-bg"),
+                 pick(QColor(0xff, 0xb8, 0x00), "measured"),
+                 pick(QColor(0x90, 0x60, 0x00), "measured-border"));
     }
 
     if (!m_remoteDisplayForms.isEmpty()) {
-        p.setFont(remoteStatusFont());
-        p.setPen(QColor(Style::kTitleText));
+        p.setFont(remoteStatusFont(p.device()));
+        p.setPen(pick(QColor(Style::kTitleText), "title-text"));
         p.drawText(remoteStatusRect(), Qt::AlignLeft | Qt::AlignVCenter,
                    visibleRemoteDisplayStatus());
     }

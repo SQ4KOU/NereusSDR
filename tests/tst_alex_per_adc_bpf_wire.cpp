@@ -94,6 +94,10 @@ constexpr quint32 kAlex0Bit9_5MHz  = 1u << 4;
 constexpr quint32 kAlex0Bit6_5MHz  = 1u << 5;
 constexpr quint32 kAlex0BitBypass  = 1u << 12;
 
+// What a receive bypass goes out as on the Anvelina Pro 3: the 160, 80, 40,
+// 20 and 12/10 m rows together (codec::alex::receiveBypassSelection).
+constexpr int kAnvelinaReceiveBypass = 0x10 | 0x08 | 0x04 | 0x01 | 0x02;
+
 // LPF bits live in the top half of the same register; the RX BPF work must
 // not disturb any of them.
 constexpr quint32 kAlexLpfMask =
@@ -680,6 +684,709 @@ private slots:
                  AlexController::BpfEffective::Filtered);
         QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0,
                  int(codec::alex::computeHpf(14.2)));
+
+        delete mock;
+    }
+
+    // ── One band name, two filters ───────────────────────────────────────
+    //
+    // WWV on 5 MHz and on 15 MHz share a band name but not a filter (the
+    // 2.1 to 5.5 MHz and 11 to 22 MHz rows), and so do two general-coverage
+    // slices either side of a row edge. The chain needs two selections at
+    // once, so it is a band difference like any other: it was taken for one
+    // band, and the higher slice was left behind the lower slice's filter.
+    void two_filters_under_one_band_name_are_a_band_difference_data()
+    {
+        QTest::addColumn<double>("lowHz");
+        QTest::addColumn<double>("highHz");
+        QTest::newRow("WWV 5 and 15 MHz")              << 5000000.0 << 15000000.0;
+        QTest::newRow("general coverage 6.1 and 11.8") << 6100000.0 << 11800000.0;
+    }
+    void two_filters_under_one_band_name_are_a_band_difference()
+    {
+        QFETCH(double, lowHz);
+        QFETCH(double, highHz);
+        QCOMPARE(bandFromFrequency(lowHz), bandFromFrequency(highHz));
+        QVERIFY(codec::alex::computeRxPreselector(lowHz / 1e6, HPSDRHW::Saturn)
+                != codec::alex::computeRxPreselector(highHz / 1e6, HPSDRHW::Saturn));
+
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        model.configureStreamPool(5, 5, 192000);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const int a = model.addSlice();
+        model.slices().at(a)->setFrequency(lowHz);
+        const int b = model.addSlice();
+        model.slices().at(b)->setFrequency(highHz);
+
+        QCOMPARE(model.alexController().adcState(0).effective,
+                 AlexController::BpfEffective::Bypass);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x20);
+
+        // Back inside one filter, the chain filters again.
+        model.slices().at(b)->setFrequency(lowHz + 20000.0);
+        QCOMPARE(model.alexController().adcState(0).effective,
+                 AlexController::BpfEffective::Filtered);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0,
+                 int(codec::alex::computeRxPreselector(lowHz / 1e6, HPSDRHW::Saturn)));
+
+        delete mock;
+    }
+
+    // Where the band filters combine (the Anvelina Pro 3, below), the same
+    // two slices get both filters and the chain stays filtered.
+    void two_filters_under_one_band_name_combine_on_the_anvelina()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.configureStreamPool(5, 5, 192000);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const int a = model.addSlice();
+        model.slices().at(a)->setFrequency(5000000.0);    // WWV, 2.1 to 5.5 MHz row
+        const int b = model.addSlice();
+        model.slices().at(b)->setFrequency(15000000.0);   // WWV, 11 to 22 MHz row
+
+        const AlexController::AlexAdcState& st = model.alexController().adcState(0);
+        QCOMPARE(st.effective, AlexController::BpfEffective::Filtered);
+        QCOMPARE(st.reasonText, QStringLiteral("WWV"));
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x08 | 0x01);
+
+        delete mock;
+    }
+
+    // ── Anvelina Pro 3: the band filters combine ─────────────────────────
+    //
+    // Measured on an Anvelina Pro 3 (J.J. Boyd, KG4VCF, 2026-10-11,
+    // firmware 22, Protocol 2) from the radio's own I/Q, receivers on 40 m
+    // and 20 m sharing input 1, dBFS rms for the two:
+    //   Alex0 receive half 0x1000 (bypass)            -99.2 / -99.8
+    //   0x0000 (nothing selected)                     -99.8 / -99.6
+    //   0x0010 (5.5 to 11 MHz filter)                 -53.0 / -94.7
+    //   0x0002 (11 to 22 MHz filter)                  -82.5 / -59.2
+    //   0x0012 (both filters)                         -53.5 / -59.4
+    // Bypass passes nothing on this radio, and both filters together give
+    // each receiver the level it has behind its own filter alone
+    // (codec::alex::combinesRxBandFilters).
+    void anvelina_two_bands_on_one_input_select_both_filters()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.configureStreamPool(5, 5, 192000);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const int a = model.addSlice();
+        model.slices().at(a)->setFrequency(7225600.0);    // 40 m
+        const int b = model.addSlice();
+        model.slices().at(b)->setFrequency(14200000.0);   // 20 m
+
+        const AlexController::AlexAdcState& st = model.alexController().adcState(0);
+        QCOMPARE(st.effective, AlexController::BpfEffective::Filtered);
+        QCOMPARE(st.reasonText, QStringLiteral("40m + 20m"));
+
+        QVERIFY(!mock->bpfCalls.isEmpty());
+        const int bits = mock->bpfCalls.last().hpfBitsAdc0;
+        QCOMPARE(bits, 0x04 | 0x01);   // the 5.5 to 11 MHz and 11 to 22 MHz rows
+
+        // On the wire: the word measured to pass both bands.
+        CodecContext ctx;
+        ctx.alexHpfBits = quint8(bits);
+        quint32 alex0 = 0, alex1 = 0;
+        composeAlexRegisters(ctx, &alex0, &alex1);
+        QCOMPARE(alex0 & 0xFFFFu, 0x0012u);
+
+        delete mock;
+    }
+
+    // Any two of the bank's six filters, in either slice order. One pair is
+    // not sent as it stands: the 6 m BPF/LNA with the 12/10 m row, where the
+    // BPF/LNA stays alone (anvelina_10m_row_stays_out_while_the_lna_is_in).
+    void anvelina_every_pair_of_filters_combines()
+    {
+        struct Row { double hz; int bits; };
+        // One frequency per row of the band-pass bank (AlexHpfEdges::
+        // thetisDefaults().bpf1, with the rows' selections in kRowBits).
+        static constexpr Row kRows[] = {
+            {1900000.0, 0x10}, {3800000.0, 0x08}, {7200000.0, 0x04},
+            {14200000.0, 0x01}, {28400000.0, 0x02}, {50200000.0, 0x40},
+        };
+
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.configureStreamPool(5, 5, 192000);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const int a = model.addSlice();
+        const int b = model.addSlice();
+        for (const Row& first : kRows) {
+            for (const Row& second : kRows) {
+                if (first.bits == second.bits) { continue; }
+                model.slices().at(a)->setFrequency(first.hz);
+                model.slices().at(b)->setFrequency(second.hz);
+                const QByteArray what = QStringLiteral("%1 + %2 Hz")
+                    .arg(first.hz, 0, 'f', 0).arg(second.hz, 0, 'f', 0).toUtf8();
+                QVERIFY2(model.alexController().adcState(0).effective
+                             == AlexController::BpfEffective::Filtered, what.constData());
+                int expected = first.bits | second.bits;
+                if (expected == (0x02 | 0x40)) { expected = 0x40; }
+                QVERIFY2(mock->bpfCalls.last().hpfBitsAdc0 == expected, what.constData());
+            }
+        }
+
+        delete mock;
+    }
+
+    // More than two: every slice's filter is selected, and bands behind one
+    // filter count once.
+    void anvelina_every_band_in_use_gets_its_filter()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.configureStreamPool(5, 5, 192000);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const double hz[] = {1900000.0, 3800000.0, 7200000.0, 14200000.0, 21200000.0};
+        int last = -1;
+        for (double f : hz) {
+            last = model.addSlice();
+            model.slices().at(last)->setFrequency(f);
+        }
+        // 160, 80, 40 m and the 11 to 22 MHz filter once for 20 m and 15 m.
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x10 | 0x08 | 0x04 | 0x01);
+        QCOMPARE(model.alexController().adcState(0).effective,
+                 AlexController::BpfEffective::Filtered);
+
+        // The 15 m slice to 10 m: five slices, five filters.
+        model.slices().at(last)->setFrequency(28400000.0);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x10 | 0x08 | 0x04 | 0x01 | 0x02);
+        QCOMPARE(model.alexController().adcState(0).effective,
+                 AlexController::BpfEffective::Filtered);
+
+        delete mock;
+    }
+
+    // A slice below the lowest filter has none of its own, so its selection
+    // is the bypass. That is left out while another slice has a filter: the
+    // bypass passes nothing, and added to two filters it cost them 3 to 5 dB
+    // (0x1012: -56.2 / -64.9 dBFS in the measurement above).
+    void anvelina_bypass_is_left_out_of_a_combined_selection()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.configureStreamPool(5, 5, 192000);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const int a = model.addSlice();
+        model.slices().at(a)->setFrequency(900000.0);     // below the 1.5 MHz row
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x20);
+        const int b = model.addSlice();
+        model.slices().at(b)->setFrequency(14200000.0);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x01);
+
+        delete mock;
+    }
+
+    // ── Anvelina Pro 3: the 6 m BPF/LNA on a shared input ───────────────
+    //
+    // Measured on the same radio and day, all 64 combinations of the six
+    // rows, twice (codec::alex::combineRxBandSelections). With the BPF/LNA
+    // and the 12/10 m row both selected the board was unstable: the 6 m
+    // receiver's level, steady at -80 dBFS with the BPF/LNA and any other
+    // row, was -78.4 with the 12/10 m row added (0x000C) and -41.4 with the
+    // 20 m row as well (0x000E). With the BPF/LNA in, the other rows pass
+    // their bands 8 to 21 dB lower. The maintainer's ruling of 2026-10-11:
+    // the BPF/LNA stays, every slice with a row sent hears, and the chain
+    // says what that costs.
+
+    // The rule itself, over every selection of the six rows and the bypass.
+    void combined_selection_never_holds_the_lna_with_the_10m_row()
+    {
+        using codec::alex::combineRxBandSelections;
+        static constexpr quint8 kRows   = 0x10 | 0x08 | 0x04 | 0x01 | 0x02 | 0x40;
+        static constexpr quint8 kBypass = 0x20;
+        for (int sel = 1; sel <= 0x7F; ++sel) {
+            const quint8 in = quint8(sel);
+            const quint8 rows = quint8(in & kRows);
+            const QByteArray what = QByteArray("selection 0x") + QByteArray::number(sel, 16);
+            const quint8 kept = combineRxBandSelections(in, /*lnaStays=*/true);
+            if (rows == 0) {
+                QVERIFY2(kept == kBypass, what.constData());   // the bypass alone
+                continue;
+            }
+            const bool both = (rows & 0x40) != 0 && (rows & 0x02) != 0;
+            QVERIFY2(kept == (both ? quint8(rows & ~0x02) : rows), what.constData());
+            QVERIFY2((kept & kBypass) == 0, what.constData());
+            // Where the BPF/LNA is taken out afterward (Disable 6m LNA on
+            // RX), every row goes on to the switch, the 12/10 m row with it.
+            QVERIFY2(combineRxBandSelections(in, /*lnaStays=*/false) == rows, what.constData());
+        }
+    }
+
+    // 80 m, 40 m and 6 m on one input: all three rows go out, 6 m with its
+    // BPF/LNA (Alex0's receive half 0x0038, a word from the sweep), and the
+    // chain says the HF slices read low.
+    void anvelina_six_meters_keeps_its_lna_beside_hf()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.configureStreamPool(5, 5, 192000);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const int a = model.addSlice();
+        model.slices().at(a)->setFrequency(3800000.0);    // 80 m
+        const int b = model.addSlice();
+        model.slices().at(b)->setFrequency(7200000.0);    // 40 m
+        const AlexController::AlexAdcState& st = model.alexController().adcState(0);
+        QCOMPARE(st.reasonText, QStringLiteral("80m + 40m"));
+        QVERIFY2(!st.lowPassReason.contains(QStringLiteral("BPF/LNA")),
+                 qPrintable(st.lowPassReason));
+
+        const int c = model.addSlice();
+        model.slices().at(c)->setFrequency(50200000.0);   // 6 m
+        const int bits = mock->bpfCalls.last().hpfBitsAdc0;
+        QCOMPARE(bits, 0x08 | 0x04 | 0x40);
+        CodecContext ctx;
+        ctx.alexHpfBits = quint8(bits);
+        quint32 alex0 = 0, alex1 = 0;
+        composeAlexRegisters(ctx, &alex0, &alex1);
+        QCOMPARE(alex0 & 0xFFFFu, 0x0038u);
+
+        QCOMPARE(st.effective, AlexController::BpfEffective::Filtered);
+        QCOMPARE(st.reasonText, QStringLiteral("80m + 40m + 6m (6m LNA in: HF reads low)"));
+        const auto letter = [&model](int id) { return model.slices().at(id)->sliceLetter(); };
+        QVERIFY2(st.lowPassReason.contains(
+                     QStringLiteral("The 6m BPF/LNA is in for slice %1 on 6m.").arg(letter(c))),
+                 qPrintable(st.lowPassReason));
+        QVERIFY2(st.lowPassReason.contains(
+                     QStringLiteral("The meters and panadapters of slices %1 on 80m and %2 on "
+                                    "40m read about 10 to 20 dB lower with it in.")
+                         .arg(letter(a)).arg(letter(b))),
+                 qPrintable(st.lowPassReason));
+        QVERIFY2(!st.lowPassReason.contains(QStringLiteral("12/10m BPF")),
+                 qPrintable(st.lowPassReason));
+
+        // The 6 m slice leaves for 20 m: the note and the sentences go.
+        model.slices().at(c)->setFrequency(14200000.0);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x08 | 0x04 | 0x01);
+        QCOMPARE(st.reasonText, QStringLiteral("80m + 40m + 20m"));
+        QVERIFY2(!st.lowPassReason.contains(QStringLiteral("BPF/LNA")),
+                 qPrintable(st.lowPassReason));
+
+        delete mock;
+    }
+
+    // 10 m and 6 m on one input: the 12/10 m row stays out while the BPF/LNA
+    // is in, and the chain names the slice left without its filter.
+    void anvelina_10m_row_stays_out_while_the_lna_is_in()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.configureStreamPool(5, 5, 192000);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const int a = model.addSlice();
+        model.slices().at(a)->setFrequency(28400000.0);   // 10 m
+        const int b = model.addSlice();
+        model.slices().at(b)->setFrequency(50200000.0);   // 6 m
+        const AlexController::AlexAdcState& st = model.alexController().adcState(0);
+        const auto letter = [&model](int id) { return model.slices().at(id)->sliceLetter(); };
+
+        int bits = mock->bpfCalls.last().hpfBitsAdc0;
+        QCOMPARE(bits, 0x40);
+        CodecContext ctx;
+        ctx.alexHpfBits = quint8(bits);
+        quint32 alex0 = 0, alex1 = 0;
+        composeAlexRegisters(ctx, &alex0, &alex1);
+        QCOMPARE(alex0 & 0xFFFFu, 0x0008u);   // the BPF/LNA alone, never 0x000C
+
+        QCOMPARE(st.effective, AlexController::BpfEffective::Filtered);
+        QCOMPARE(st.reasonText, QStringLiteral("10m + 6m (6m LNA in: 10m filter out)"));
+        QVERIFY2(st.lowPassReason.contains(
+                     QStringLiteral("The 6m BPF/LNA is in for slice %1 on 6m.").arg(letter(b))),
+                 qPrintable(st.lowPassReason));
+        QVERIFY2(st.lowPassReason.contains(
+                     QStringLiteral("The 12/10m BPF stays out with it, so slice %1 on 10m has "
+                                    "no filter and may hear little or nothing.").arg(letter(a))),
+                 qPrintable(st.lowPassReason));
+        QVERIFY2(!st.lowPassReason.contains(QStringLiteral("dB lower")),
+                 qPrintable(st.lowPassReason));
+
+        // A 40 m slice joins: its row goes out beside the BPF/LNA and reads low.
+        const int c = model.addSlice();
+        model.slices().at(c)->setFrequency(7200000.0);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x04 | 0x40);
+        QCOMPARE(st.reasonText,
+                 QStringLiteral("40m + 10m + 6m (6m LNA in: HF reads low, 10m filter out)"));
+        QVERIFY2(st.lowPassReason.contains(
+                     QStringLiteral("The meter and panadapter of slice %1 on 40m read about "
+                                    "10 to 20 dB lower with it in.").arg(letter(c))),
+                 qPrintable(st.lowPassReason));
+
+        // 12 m sits in the same row as 10 m.
+        model.slices().at(a)->setFrequency(24950000.0);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x04 | 0x40);
+        QCOMPARE(st.reasonText,
+                 QStringLiteral("40m + 12m + 6m (6m LNA in: HF reads low, 12m filter out)"));
+
+        // The 6 m slice goes to 20 m: the 12/10 m row is back.
+        model.slices().at(b)->setFrequency(14200000.0);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x04 | 0x01 | 0x02);
+        QCOMPARE(st.reasonText, QStringLiteral("40m + 20m + 12m"));
+        QVERIFY2(!st.lowPassReason.contains(QStringLiteral("BPF/LNA")),
+                 qPrintable(st.lowPassReason));
+
+        delete mock;
+    }
+
+    // Five slices on five bands, 6 m among them: the longest reason the
+    // chain can give, the low-pass hold's sentences and the BPF/LNA's. A
+    // remote window refuses a reason over 512 characters
+    // (RadioModel::applyStationFilterValue), so it has to fit.
+    void anvelina_longest_shared_input_reason_fits_a_remote_window()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.configureStreamPool(5, 5, 192000);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        for (const double hz : {1900000.0, 3800000.0, 7200000.0, 28400000.0, 50200000.0}) {
+            const int id = model.addSlice();
+            QVERIFY(id >= 0);
+            model.slices().at(id)->setFrequency(hz);
+        }
+        const AlexController::AlexAdcState& st = model.alexController().adcState(0);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x10 | 0x08 | 0x04 | 0x40);
+        QCOMPARE(st.reasonText,
+                 QStringLiteral("160m + 80m + 40m + 10m + 6m "
+                                "(6m LNA in: HF reads low, 10m filter out)"));
+        // All three of the BPF/LNA's sentences, after the low-pass hold's.
+        QVERIFY2(st.lowPassReason.contains(QStringLiteral("receive low-pass filter")),
+                 qPrintable(st.lowPassReason));
+        QVERIFY2(st.lowPassReason.contains(QStringLiteral("The 6m BPF/LNA is in for slice")),
+                 qPrintable(st.lowPassReason));
+        QVERIFY2(st.lowPassReason.contains(QStringLiteral("read about 10 to 20 dB lower")),
+                 qPrintable(st.lowPassReason));
+        QVERIFY2(st.lowPassReason.contains(QStringLiteral("The 12/10m BPF stays out")),
+                 qPrintable(st.lowPassReason));
+        QVERIFY2(st.lowPassReason.size() <= 512,
+                 qPrintable(QStringLiteral("%1 characters: %2")
+                                .arg(st.lowPassReason.size()).arg(st.lowPassReason)));
+
+        delete mock;
+    }
+
+    // The note and the sentences are about the combined selection, so they
+    // go when the operator's override or extended view takes its place.
+    void anvelina_lna_note_goes_with_an_override()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.configureStreamPool(5, 5, 192000);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const int a = model.addSlice();
+        model.slices().at(a)->setFrequency(7200000.0);    // 40 m
+        const int b = model.addSlice();
+        model.slices().at(b)->setFrequency(50200000.0);   // 6 m
+        const AlexController::AlexAdcState& st = model.alexController().adcState(0);
+        const QString note = QStringLiteral("40m + 6m (6m LNA in: HF reads low)");
+        const QString lna = QStringLiteral("6m BPF/LNA");
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x04 | 0x40);
+        QCOMPARE(st.reasonText, note);
+        QVERIFY2(st.lowPassReason.contains(lna), qPrintable(st.lowPassReason));
+
+        model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBypass);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, kAnvelinaReceiveBypass);
+        QCOMPARE(st.reasonText, QStringLiteral("BYPASS (operator override)"));
+        QVERIFY2(!st.lowPassReason.contains(lna), qPrintable(st.lowPassReason));
+
+        model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBand);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x04);
+        QVERIFY2(!st.reasonText.contains(QStringLiteral("LNA")), qPrintable(st.reasonText));
+        QVERIFY2(!st.lowPassReason.contains(lna), qPrintable(st.lowPassReason));
+
+        model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::Auto);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x04 | 0x40);
+        QCOMPARE(st.reasonText, note);
+        QVERIFY2(st.lowPassReason.contains(lna), qPrintable(st.lowPassReason));
+
+        model.alexControllerMutable().setWidebandActive(0, true);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, kAnvelinaReceiveBypass);
+        QVERIFY2(!st.lowPassReason.contains(lna), qPrintable(st.lowPassReason));
+        model.alexControllerMutable().setWidebandActive(0, false);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x04 | 0x40);
+        QCOMPARE(st.reasonText, note);
+        QVERIFY2(st.lowPassReason.contains(lna), qPrintable(st.lowPassReason));
+
+        delete mock;
+    }
+
+    // Input 2's board gets the same rule and says the same (the rows are
+    // the same on both chains: codec::alex::computeAlex2Hpf).
+    void anvelina_lna_rule_holds_on_the_second_input()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.configureStreamPool(5, 5, 192000);
+        P2CodecOrionMkII codec;
+        model.receiverManager()->setP2Codec(&codec);
+        model.setDdcContextForTest(/*mox*/false, /*ps*/false, /*diversity*/true);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const int a = model.addSlice();
+        model.slices().at(a)->setFrequency(28400000.0);
+        const int b = model.addSlice();
+        model.slices().at(b)->setFrequency(50200000.0);
+
+        const AlexRxBpf last = mock->bpfCalls.last();
+        QCOMPARE(last.hpfBitsAdc0, 0x40);
+        QCOMPARE(last.hpfBitsAdc1, 0x40);
+        const AlexController::AlexAdcState& st = model.alexController().adcState(1);
+        QCOMPARE(st.reasonText, QStringLiteral("10m + 6m (6m LNA in: 10m filter out)"));
+        QVERIFY2(st.lowPassReason.contains(QStringLiteral("The 12/10m BPF stays out")),
+                 qPrintable(st.lowPassReason));
+
+        delete mock;
+    }
+
+    // The operator's own choices keep their meaning. Force filter is one
+    // filter, the lowest slice's. Force bypass is still reported as the
+    // bypass, and goes out as the five ordinary band filters together
+    // (codec::alex::receiveBypassSelection): this radio's own bypass passes
+    // nothing.
+    void anvelina_operator_overrides_keep_their_meaning()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.configureStreamPool(5, 5, 192000);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const int a = model.addSlice();
+        model.slices().at(a)->setFrequency(7200000.0);
+        const int b = model.addSlice();
+        model.slices().at(b)->setFrequency(14200000.0);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x04 | 0x01);
+
+        model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBypass);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, kAnvelinaReceiveBypass);
+        QCOMPARE(model.alexController().adcState(0).effective,
+                 AlexController::BpfEffective::Bypass);
+
+        model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBand);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x04);
+
+        model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::Auto);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x04 | 0x01);
+
+        delete mock;
+    }
+
+    // ── Anvelina Pro 3: a receive bypass is the five band filters ────────
+    //
+    // Measured on the same radio and day, receivers on 20 m, 80 m and 40 m
+    // sharing input 1, noise floor in dBFS for the three:
+    //   Alex0 receive half 0x1000 (bypass)              -99.8 / -99.7 / -99.2
+    //   0x0000 (nothing selected)                       -99.4 / -99.9 / -99.6
+    //   each band's own filter alone                    -69.3 / -61.7 / -63.2
+    //   0x0076 (the 160, 80, 40, 20 and 12/10 m rows)   -69.5 / -61.8 / -63.7
+    //   0x0076 again, 20 s later                        -70.3 / -62.7 / -62.8
+    // So wherever a bypass would go out on receive, the five rows go out in
+    // its place (codec::alex::receiveBypassSelection).
+    void anvelina_force_bypass_sends_the_five_band_filters()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.configureStreamPool(5, 5, 192000);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const int a = model.addSlice();
+        model.slices().at(a)->setFrequency(7225600.0);
+        model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBypass);
+
+        const AlexController::AlexAdcState& st = model.alexController().adcState(0);
+        QCOMPARE(st.effective, AlexController::BpfEffective::Bypass);
+        const int bits = mock->bpfCalls.last().hpfBitsAdc0;
+        QCOMPARE(bits, 0x10 | 0x08 | 0x04 | 0x01 | 0x02);
+        QCOMPARE(bits, int(codec::alex::receiveBypassSelection(HPSDRModel::ANVELINAPRO3)));
+
+        // On the wire: the word measured, with neither the bypass (bit 12)
+        // nor the 6 m amplifier (bit 3) in it.
+        CodecContext ctx;
+        ctx.alexHpfBits = quint8(bits);
+        quint32 alex0 = 0, alex1 = 0;
+        composeAlexRegisters(ctx, &alex0, &alex1);
+        QCOMPARE(alex0 & 0xFFFFu, 0x0076u);
+
+        delete mock;
+    }
+
+    // Extended view (a pan wider than its receiver) locks the chain wide.
+    // It also comes and goes for a moment when a slice takes a new stream,
+    // which on this radio was a 188 ms dropout of every receiver on the
+    // input (bench log, 2026-10-11 21:08:38).
+    void anvelina_extended_view_sends_the_five_band_filters()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.configureStreamPool(5, 5, 192000);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const int a = model.addSlice();
+        model.slices().at(a)->setFrequency(7225600.0);
+        const int b = model.addSlice();
+        model.slices().at(b)->setFrequency(14200000.0);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x04 | 0x01);
+
+        model.alexControllerMutable().setWidebandActive(0, true);
+        QCOMPARE(model.alexController().adcState(0).effective,
+                 AlexController::BpfEffective::WidebandLocked);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, kAnvelinaReceiveBypass);
+
+        model.alexControllerMutable().setWidebandActive(0, false);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x04 | 0x01);
+
+        delete mock;
+    }
+
+    // Input 2's board takes the same word (the rows are the same on both
+    // chains: codec::alex::computeAlex2Hpf).
+    void anvelina_force_bypass_on_the_second_input_sends_the_five_band_filters()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.configureStreamPool(5, 5, 192000);
+        P2CodecOrionMkII codec;
+        model.receiverManager()->setP2Codec(&codec);
+        model.setDdcContextForTest(/*mox*/false, /*ps*/false, /*diversity*/true);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const int a = model.addSlice();
+        model.slices().at(a)->setFrequency(14200000.0);
+        const int b = model.addSlice();
+        model.slices().at(b)->setFrequency(7150000.0);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc1, 0x04 | 0x01);
+
+        model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBypass);
+        model.alexControllerMutable().setBpfMode(1, AlexController::BpfMode::ForceBypass);
+        const AlexRxBpf last = mock->bpfCalls.last();
+        QCOMPARE(last.hpfBitsAdc0, kAnvelinaReceiveBypass);
+        QCOMPARE(last.hpfBitsAdc1, kAnvelinaReceiveBypass);
+
+        delete mock;
+    }
+
+    // Under diversity both front ends take the same combined selection.
+    void anvelina_diversity_combines_both_chains_identically()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        model.configureStreamPool(5, 5, 192000);
+        P2CodecOrionMkII codec;
+        model.receiverManager()->setP2Codec(&codec);
+        model.setDdcContextForTest(/*mox*/false, /*ps*/false, /*diversity*/true);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const int a = model.addSlice();
+        model.slices().at(a)->setFrequency(14200000.0);
+        const int b = model.addSlice();
+        model.slices().at(b)->setFrequency(7150000.0);
+
+        QVERIFY(!mock->bpfCalls.isEmpty());
+        const AlexRxBpf last = mock->bpfCalls.last();
+        QCOMPARE(last.hpfBitsAdc0, 0x04 | 0x01);
+        QCOMPARE(last.hpfBitsAdc1, last.hpfBitsAdc0);
+
+        delete mock;
+    }
+
+    // Only the Anvelina Pro 3 has been measured. The other radios with the
+    // same band-pass bank keep the bypass, which passes signal on the
+    // ANAN-G2.
+    void other_band_pass_radios_still_bypass_on_two_bands_data()
+    {
+        QTest::addColumn<int>("hpsdrModel");
+        QTest::newRow("ANAN-7000DLE") << int(HPSDRModel::ANAN7000D);
+        QTest::newRow("ANAN-8000DLE") << int(HPSDRModel::ANAN8000D);
+        QTest::newRow("ANAN-G2")      << int(HPSDRModel::ANAN_G2);
+        QTest::newRow("ANAN-G2-1K")   << int(HPSDRModel::ANAN_G2_1K);
+        QTest::newRow("Orion MkII")   << int(HPSDRModel::ORIONMKII);
+    }
+    void other_band_pass_radios_still_bypass_on_two_bands()
+    {
+        QFETCH(int, hpsdrModel);
+        RadioModel model;
+        model.setHpsdrModelForTest(static_cast<HPSDRModel>(hpsdrModel));
+        model.configureStreamPool(5, 5, 192000);
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        DetachConnection detach{&model};
+
+        const int a = model.addSlice();
+        model.slices().at(a)->setFrequency(7225600.0);
+        const int b = model.addSlice();
+        model.slices().at(b)->setFrequency(14200000.0);
+
+        QCOMPARE(model.alexController().adcState(0).effective,
+                 AlexController::BpfEffective::Bypass);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x20);
+
+        // And so do Force bypass and extended view, on one band.
+        model.slices().at(b)->setFrequency(7150000.0);
+        QCOMPARE(model.alexController().adcState(0).effective,
+                 AlexController::BpfEffective::Filtered);
+        model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBypass);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x20);
+        model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::Auto);
+        QVERIFY(mock->bpfCalls.last().hpfBitsAdc0 != 0x20);
+        model.alexControllerMutable().setWidebandActive(0, true);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x20);
+        QCOMPARE(int(codec::alex::receiveBypassSelection(static_cast<HPSDRModel>(hpsdrModel))),
+                 0x20);
+        model.alexControllerMutable().setWidebandActive(0, false);
+
+        // 10 m and 6 m: the bypass as for any two bands, and nothing said
+        // of the 6 m BPF/LNA, which is the Anvelina's rule alone.
+        model.slices().at(a)->setFrequency(28400000.0);
+        model.slices().at(b)->setFrequency(50200000.0);
+        const AlexController::AlexAdcState& st = model.alexController().adcState(0);
+        QCOMPARE(st.effective, AlexController::BpfEffective::Bypass);
+        QCOMPARE(mock->bpfCalls.last().hpfBitsAdc0, 0x20);
+        QCOMPARE(st.reasonText, QStringLiteral("BYPASS (multi-band: 10m + 6m)"));
+        QVERIFY2(!st.lowPassReason.contains(QStringLiteral("BPF/LNA")),
+                 qPrintable(st.lowPassReason));
 
         delete mock;
     }

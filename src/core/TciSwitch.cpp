@@ -229,8 +229,12 @@ void TciSwitch::applyLocal()
     if (wanted && !m_local->isRunning()) {
         m_local->start(m_bind, m_port);
     } else if (!wanted && m_local->isRunning()) {
-        qCInfo(lcTci) << "The Core on this computer serves TCI here;"
-                      << "this window runs no TCI server of its own";
+        // Only when that is the reason: the switch going off stops the
+        // server too, and the server's own "stopped" line says so.
+        if (m_on) {
+            qCInfo(lcTci) << "The Core on this computer serves TCI here;"
+                          << "this window runs no TCI server of its own";
+        }
         m_local->stop();
     }
 #endif

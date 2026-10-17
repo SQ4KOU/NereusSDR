@@ -462,11 +462,22 @@ final class BandSubscriber: ObservableObject {
         let sizeSetting = Double(setting("DisplayFftSize")
                                  ?? Self.describedDefault(described, "DisplayFftSize") ?? Self.defaultFftSize)
         let pixels = session.pixels(band.requestedPixels)
-        // The Size setting is the floor; a deep zoom, or the Hz/bin target,
-        // asks for a finer engine of its own (link 7.4, `fftPlan`).
         let hzPerBin = settings.value("DisplayHzPerBinTarget").flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }
-        let planned = Self.fftPlan(described).plan(sampleRateHz: sampleRateHz, pixels: pixels, spanHz: view.spanHz,
+        let planned: (fftSize: Int, fine: Bool)
+        if described?.sizingControl != nil {
+            // The Core describes Sizing: the choice says who sets the size.
+            // Read by the rule every reader shares, so a Core that never
+            // wrote the choice plans as it runs.
+            let mode = StationCatalog.Display.FftSizing.onRead(
+                stored: settings.value(StationCatalog.Display.FftSizing.settingsKey), hzPerBinTarget: hzPerBin)
+            planned = Self.fftPlan(described).plan(mode: mode, storedSize: sizeSetting, sampleRateHz: sampleRateHz,
+                                                   pixels: pixels, spanHz: view.spanHz, hzPerBinTarget: hzPerBin)
+        } else {
+            // The Size setting is the floor; a deep zoom, or the Hz/bin target,
+            // asks for a finer engine of its own (link 7.4, `fftPlan`).
+            planned = Self.fftPlan(described).plan(sampleRateHz: sampleRateHz, pixels: pixels, spanHz: view.spanHz,
                                                    sizeSetting: sizeSetting, hzPerBinTarget: hzPerBin)
+        }
         let size = planned.fftSize
         let record = DisplayBinDiagnostic(stage: .plan, value: hzPerBin, fftSize: size, floorSize: sizeSetting,
                                           rateHz: sampleRateHz, spanHz: view.spanHz, pixels: pixels,
@@ -530,7 +541,8 @@ final class BandSubscriber: ObservableObject {
         let decimation = min(max(display.decimation, BandDisplaySettings.decimationRange.lowerBound),
                              BandDisplaySettings.decimationRange.upperBound)
         subscription.decimation = gates.decimation && decimation != 1 ? decimation : nil
-        var applied = display.applied(to: subscription, gates: gates)
+        var applied = display.applied(to: subscription, gates: gates,
+                                      averageTimeFloorMs: Self.averageTimeFloorMs(described))
         // The extended view goes only to a Core that offers it, and only on.
         applied.extendedView = gates.wideband && band.settings.extendedView ? true : nil
         // The transmit display's window from this phone's transmit grid and
@@ -569,6 +581,21 @@ final class BandSubscriber: ObservableObject {
             return defaultFftPlan
         }
         return plan
+    }
+
+    /// The least averaging time this Core offered: the larger of its two
+    /// averaging controls' least values, 10 ms where its catalog describes
+    /// neither. The Core's own controls are how the phone knows a Core that
+    /// averages from 1 ms from one that starts at 10.
+    static func averageTimeFloorMs(_ described: StationCatalog.Display?) -> Int {
+        let least = [CoreDisplayModel.Field.traceAverageTime, CoreDisplayModel.Field.waterfallAverageTime]
+            .map { described?.control(subscribe: $0)?.min }
+        let every = DisplayExtrasRequest.averageTimeRange
+        guard let trace = least[0], let waterfall = least[1], trace.isFinite, waterfall.isFinite else {
+            return every.lowerBound
+        }
+        let floor = max(trace, waterfall).rounded(.up)
+        return Int(min(max(floor, Double(DisplayExtrasRequest.leastAverageTimeMs)), Double(every.upperBound)))
     }
 
     /// The default the Core's catalogue gives the control that writes `key`.

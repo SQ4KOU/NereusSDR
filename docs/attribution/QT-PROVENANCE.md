@@ -23,3 +23,22 @@ surviving row objects and persistent indexes are not reset. Data-only refreshes
 retain their accessibility IDs. The native regression reproduces the actual
 ConnectionSelector removal after rebuilding native rows and draining its pool.
 JJ Boyd (KG4VCF), 2026-10-03, with OpenAI Codex assistance.
+
+src/gui/QtCocoaAccessibleTableCache.cpp studies the same qtbase v6.11.0 sources
+(reference only; no method bodies copied). It is the shared form of the repair
+above for item views whose rows change while the app runs: installed once on a
+view (or a combo's popup view), it invokes the public table-interface
+ModelReset handler on Qt 6.11.0 Cocoa, with accessibility active, before every
+row or column insert or removal the view's model announces. A row change after
+Cocoa expired the view's native rows otherwise dereferenced a deleted cell
+interface inside QAccessibleTable::modelChange (the Spot List crash: a spot
+from the Core arriving through SpotTableModel::addSpot). The item model,
+proxies, selection and persistent indexes are not reset. Views using it: the
+Spot List, FreeDV Reporter station table and message combo, ConnectionPanel
+radio table and model combo, LAN scan table, DSP asset table and model combos,
+notch, filter preset, transverter and needle calibration tables, HL2 I2C log,
+This Core model combo, microphone, TX and PA profile combos, RX1 sample rate
+combo and the antenna combos. The offscreen regressions delete the cell
+interfaces through the public QAccessible API, the same cache call the Cocoa
+bridge makes. JJ Boyd (KG4VCF), 2026-10-08, with Anthropic Claude Code
+assistance.

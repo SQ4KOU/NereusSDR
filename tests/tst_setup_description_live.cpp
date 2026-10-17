@@ -6,6 +6,17 @@
 // AI-assisted via Anthropic Claude Code.
 // 2026-10-04: restored TX profile watch coverage and Core-produced typed
 // fixture. J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+// 2026-10-06: the cap is 25 (Audio > Outputs' radio speaker rows); a
+// version 25 phone sets the radio speaker. J.J. Boyd (KG4VCF), AI-assisted
+// via Anthropic Claude Code.
+// 2026-10-09: two-tone leaves the TX profile watch and is excluded from it.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-10: txReadingsVersion is 4 (the six transmit peak readings).
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-10: the cap is 26 (Display's Waterfall Defaults level gates).
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-12: the negotiated cap is 29; Hardware remains frozen at 23.
+// J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 #include <QtTest>
 
 #include <algorithm>
@@ -82,22 +93,6 @@ const QList<TxProfileWatchField> kTxProfileWatchFields{
         {QStringLiteral("MonitorVolume")}},
     {"amCarrierLevel", MirrorWireKind::Int64,
         {QStringLiteral("AM_Carrier_Level")}},
-    {"twoToneFreq1", MirrorWireKind::Int64,
-        {QStringLiteral("TwoToneFreq1")}},
-    {"twoToneFreq2", MirrorWireKind::Int64,
-        {QStringLiteral("TwoToneFreq2")}},
-    {"twoToneLevel", MirrorWireKind::Float64,
-        {QStringLiteral("TwoToneLevel")}},
-    {"twoTonePower", MirrorWireKind::Int64,
-        {QStringLiteral("TwoTonePower")}},
-    {"twoToneFreq2Delay", MirrorWireKind::Int64,
-        {QStringLiteral("TwoToneFreq2Delay")}},
-    {"twoToneInvert", MirrorWireKind::Bool,
-        {QStringLiteral("TwoToneInvert")}},
-    {"twoTonePulsed", MirrorWireKind::Bool,
-        {QStringLiteral("TwoTonePulsed")}},
-    {"twoToneDrivePowerSource", MirrorWireKind::Enum,
-        {QStringLiteral("TwoToneDrivePowerOrigin")}},
     {"userDigOut", MirrorWireKind::Int64,
         {QStringLiteral("Mic_UserDigOut")}},
     {"txEqEnabled", MirrorWireKind::Bool,
@@ -250,9 +245,7 @@ QVariant txProfileEdit(const TxProfileWatchField& field,
     static const QHash<QByteArray, QVariant> edits{
         {"micGainDb", -3}, {"lineInBoost", -12.0}, {"voxThresholdDb", -30},
         {"voxHangTimeMs", 700}, {"antiVoxGainDb", 3}, {"monitorVolume", 0.625},
-        {"amCarrierLevel", 75}, {"twoToneFreq1", 900}, {"twoToneFreq2", 1700},
-        {"twoToneLevel", -9.0}, {"twoTonePower", 25}, {"twoToneFreq2Delay", 10},
-        {"twoToneDrivePowerSource", QVariant::fromValue(DrivePowerSource::TuneSlider)},
+        {"amCarrierLevel", 75},
         {"userDigOut", 5}, {"txEqPreamp", 5},
         {"txEqBandsJson", QStringLiteral("[-8,-12,-12,-1,1,4,9,12,-10,7]")},
         {"txEqFreqsJson", QStringLiteral("[50,63,125,250,500,1000,2000,4000,8000,14000]")},
@@ -376,10 +369,17 @@ private slots:
         QCOMPARE(watched.size(), kTxProfileWatchFields.size());
         // These are unavailable, ignored-on-load, global, or derived editor
         // views; none belongs in this ordinary saved-value watch contract.
+        // Two-tone is one Setup value, not profile content (Thetis TX
+        // profiles carry no two-tone fields, database.cs:4299
+        // AddTXProfileTable [v2.10.3.15]), so it never joins the watch.
         for (const QByteArray& excluded : {QByteArray("voxGainScalar"), QByteArray("micSource"),
                  QByteArray("lineInGain"), QByteArray("txEqNc"), QByteArray("txEqMp"),
                  QByteArray("txEqCtfmode"), QByteArray("txEqWintype"), QByteArray("cpdrOn"),
-                 QByteArray("txEqCurve"), QByteArray("cfcProfile")}) {
+                 QByteArray("txEqCurve"), QByteArray("cfcProfile"),
+                 QByteArray("twoToneFreq1"), QByteArray("twoToneFreq2"),
+                 QByteArray("twoToneLevel"), QByteArray("twoTonePower"),
+                 QByteArray("twoToneFreq2Delay"), QByteArray("twoToneInvert"),
+                 QByteArray("twoTonePulsed"), QByteArray("twoToneDrivePowerSource")}) {
             QVERIFY2(!watched.contains(excluded), excluded.constData());
         }
     }
@@ -572,7 +572,7 @@ private slots:
             QCOMPARE(savedStrings.size(), field.savedKeys.size());
             QVERIFY(manager->saveProfile("Edited", &tx));
             const QHash<QString, QVariant> captured = storedProfile("Edited");
-            QCOMPARE(captured.size(), 108);
+            QCOMPARE(captured.size(), 100);
             QJsonObject saved;
             for (int i = 0; i < field.savedKeys.size(); ++i) {
                 const QString key = field.savedKeys.at(i);
@@ -699,9 +699,10 @@ private slots:
     // reason; a version 15 phone keeps version 13's Hardware. Version 17
     // (the Alex-1 low-pass rows) keeps them, and version 18 (HL2 Options'
     // clock rows) opens the clock rows; version 23 (Calibration's Rx1 6m
-    // LNA row) is Hardware's cap; 24 (Audio > TX Input) is the
-    // description's own (21: CAT & Network's Forget row follows Duplicate;
-    // 22: DSP's RX buffer size lock).
+    // LNA row) is Hardware's cap; 27 (Appearance's Trace Color row) is
+    // followed by Display versions 28/29 (21: CAT & Network's Forget row follows
+    // Duplicate; 22: DSP's RX buffer size lock; 24: Audio > TX Input;
+    // 25: Audio > Outputs; 26: Display's Waterfall Defaults level gates).
     void pairedV16PhoneReadsHl2Options()
     {
         const auto hl2OptionsOf = [](const QJsonObject& hardware) {
@@ -718,7 +719,8 @@ private slots:
         // {declared, capability sent back, Hardware version the phone reads}
         const QList<std::tuple<int, int, int>> declarations{
             {16, 16, 16}, {17, 17, 17}, {18, 18, 18}, {19, 19, 18}, {20, 20, 18},
-            {21, 21, 18}, {22, 22, 18}, {23, 23, 23}, {24, 24, 23}, {99, 24, 23},
+            {21, 21, 18}, {22, 22, 18}, {23, 23, 23}, {24, 24, 23}, {25, 25, 23},
+            {26, 26, 23}, {27, 27, 23}, {28, 28, 23}, {29, 29, 23}, {99, 29, 23},
             {15, 15, 13}};
         for (const auto& [declared, granted, received] : declarations) {
             // One Core per phone: five phones are more than a Core's places.
@@ -871,6 +873,65 @@ private slots:
         QCOMPARE(olderRows.at(2).toObject().value("step"), QJsonValue(1));
         QCOMPARE(olderRows.at(2).toObject().value("min"), QJsonValue(-34));
         QVERIFY(!olderRows.at(2).toObject().contains("decimals"));
+    }
+
+    // Version 25 (R-SPK-23): a version 25 phone that declared radioSpeaker
+    // reads Audio's Outputs page and Microphone's title, and its volume
+    // reaches the Core's radio speaker; a version 24 phone reads version 24
+    // with TX Input's title and no Outputs page.
+    void pairedV25PhoneReadsAndSetsTheRadioSpeaker()
+    {
+        Core core;
+        Device current(QStringLiteral("Speaker V25 iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("Speaker V24 iPhone"), QStringLiteral("phone"));
+        core.pair(current);
+        core.pair(older);
+        QHash<QByteArray, int> v25 = kHolder;
+        v25.insert("setupDescription", 25);
+        v25.insert("radioSpeaker", 1);
+        QHash<QByteArray, int> v24 = kHolder;
+        v24.insert("setupDescription", 24);
+        auto* app = core.signIn(current, v25);
+        auto* olderApp = core.signIn(older, v24);
+        QVERIFY(admitted(app) && admitted(olderApp));
+        QCOMPARE(capability(app->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(25));
+        QCOMPARE(capability(app->received(), QStringLiteral("radioSpeakerVersion")),
+                 std::optional<qint64>(1));
+
+        const auto audioOf = [](LoopbackTransport* peer) {
+            return QJsonDocument::fromJson(latest(peer->received(), QStringLiteral("setup"),
+                                                  QStringLiteral("audio")).toString().toUtf8())
+                .object();
+        };
+        const auto pageOf = [](const QJsonObject& audio, const QString& id) {
+            for (const QJsonValue& page : audio.value("pages").toArray()) {
+                if (page.toObject().value("id") == QJsonValue(id)) { return page.toObject(); }
+            }
+            return QJsonObject{};
+        };
+        const QJsonObject audio = audioOf(app);
+        QCOMPARE(audio.value("version"), QJsonValue(25));
+        QCOMPARE(pageOf(audio, "audio.txInput").value("title"), QJsonValue("Microphone"));
+        const QJsonArray rows = pageOf(audio, "audio.outputs").value("sections").toArray()
+            .first().toObject().value("controls").toArray();
+        QCOMPARE(rows.size(), 3);
+        QCOMPARE(rows.at(0).toObject().value("binding"),
+                 QJsonValue(QJsonObject{{"property", QJsonObject{{"object", "radio"},
+                                                                 {"name", "radioSpeakerVolume"}}}}));
+        for (const QJsonValue& row : rows) {
+            QVERIFY(SetupDescriptionService::validateAudioV25Control(row.toObject()));
+        }
+
+        const QJsonObject olderAudio = audioOf(olderApp);
+        QCOMPARE(olderAudio.value("version"), QJsonValue(24));
+        QCOMPARE(pageOf(olderAudio, "audio.txInput").value("title"), QJsonValue("TX Input"));
+        QVERIFY(pageOf(olderAudio, "audio.outputs").isEmpty());
+
+        app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "radio", {MirrorUpdate{0, "radioSpeakerVolume", MirrorWireKind::Int64, qint64(27)}},
+            2501)));
+        QTRY_COMPARE(core.model->radioSpeakerVolume(), 27);
     }
 
     // Version 13 (R-R3-49, R-IOS-18): a paired phone reads PA and Hardware
@@ -2762,9 +2823,10 @@ private slots:
         features.insert("setupDescription", 1);
         LoopbackTransport* app = core.signIn(phone, features);
         QVERIFY(admitted(app));
-        // A9 (iPhone app plan Task 39): 3 adds the stage readings.
+        // A9 (iPhone app plan Task 39): 3 adds the stage readings; 4 the
+        // six peak readings.
         QCOMPARE(capability(app->received(), QStringLiteral("txReadingsVersion")),
-                 std::optional<qint64>(3));
+                 std::optional<qint64>(4));
         const QJsonObject pa = QJsonDocument::fromJson(latest(app->received(),
             QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
         QVERIFY(!pa.isEmpty());

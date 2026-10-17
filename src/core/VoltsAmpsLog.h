@@ -79,10 +79,11 @@
 #include <QString>
 
 #include <functional>
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
-class VoltsAmpsLog final : public QObject {
+class NEREUS_CORE_EXPORT VoltsAmpsLog final : public QObject {
     Q_OBJECT
 public:
     explicit VoltsAmpsLog(QObject* parent = nullptr);

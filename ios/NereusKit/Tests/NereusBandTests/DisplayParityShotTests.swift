@@ -142,8 +142,8 @@ import Testing
         let renderer = try BandRenderer(device: target.device)
         let image = try target.render(renderer, frame: frame, history: state.history, extras: state.frameExtras,
                                       overlays: overlays)
-        // The waterfall's top line was coloured after Color Gain and Black Level.
-        #expect(state.history.currentLevels.map { abs($0.lowDbm - (-116.6)) < 0.01 } == true)
+        // No full-source Clarity floor is sent, so the Core's seeded pair colours the top line unchanged.
+        #expect(state.history.currentLevels == .init(lowDbm: -125, highDbm: -65))
         #expect(image.width == Self.width)
         if let directory = ProcessInfo.processInfo.environment["NEREUS_PARITY_SHOTS"], !directory.isEmpty {
             let url = URL(fileURLWithPath: directory).appendingPathComponent("\(scene.name).png")

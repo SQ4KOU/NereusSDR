@@ -110,6 +110,24 @@ private slots:
         QCOMPARE(reloaded.bpfMode(0), AlexController::BpfMode::ForceBypass);
         QCOMPARE(reloaded.bpfMode(1), AlexController::BpfMode::ForceBand);
     }
+
+    // The Auto choice says what Auto does on the radio connected: on the
+    // Anvelina Pro 3 it selects every band's filter and never bypasses
+    // (codec::alex::combinesRxBandFilters).
+    void autoChoiceSaysWhatItDoesOnTheRadio()
+    {
+        const auto autoText = [](HPSDRModel hpsdrModel) {
+            RadioModel model;
+            model.setHpsdrModelForTest(hpsdrModel);
+            FilterPolicyDialog dialog(0, &model);
+            auto* autoBtn = dialog.findChild<QRadioButton*>(QStringLiteral("filterPolicyAuto"));
+            return autoBtn != nullptr ? autoBtn->text() : QString();
+        };
+        QCOMPARE(autoText(HPSDRModel::ANAN_G2),
+                 QStringLiteral("Auto - Filter when single-band, bypass when multi-band"));
+        QCOMPARE(autoText(HPSDRModel::ANVELINAPRO3),
+                 QStringLiteral("Auto - Filter every band in use"));
+    }
 };
 
 QTEST_MAIN(TstLocalFilterPolicyPersistence)

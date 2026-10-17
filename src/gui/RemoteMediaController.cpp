@@ -115,6 +115,14 @@
 //               chain; presented frames are checked against
 //               acceptedGeneration(). J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-10-11: R-DISP-RETUNE (third wave): the Core states the picture a
+//               context continues. The pan and the mini display decide by
+//               that value alone (their own moved-picture rules, the span
+//               asked and the frame kept by prediction are gone), a Core
+//               that states none is read by the rule before the moved
+//               picture, and a context of the picture shown that answers
+//               an earlier request is taken for drawing only (7b). J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-26: iPhone app plan Task 28 (R-IOS-16): the media connection of
 //               a session through the remote access service uses its ICE
 //               settings, and its connection stage the gathering bound
@@ -149,8 +157,10 @@
 #include "core/AppSettings.h"
 #include "core/AudioDeviceConfig.h"
 #include "core/AudioEngine.h"
+#include "core/WdspEngine.h"
 #include "core/Resampler.h"
 #include "core/audio/CaptureSupervisor.h"
+#include "core/audio/MicUplinkCollector.h"
 #include "core/session/PathRacer.h"
 #include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/RemoteAudioReceiver.h"
@@ -163,6 +173,7 @@
 #include "gui/PanClarityRegistry.h"
 #include "core/spectrum/SpectrumReducer.h"
 #include "core/ControlRanges.h"
+#include "core/DisplayFftSizing.h"
 #include "core/FFTEngine.h"
 #include "core/session/SliceAccessMirror.h"
 #include "core/session/StationClient.h"
@@ -175,6 +186,8 @@
 #include "gui/RemoteDisplayPresenter.h"
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/RemoteIqCodec.h"
+#include "core/session/media/WaveformCodec.h"
+#include <set>
 #include "core/session/media/RemoteSpectrumContext.h"
 #include "core/session/media/SpectrumEndpoint.h"
 #include "core/session/media/WidebandDisplayContext.h"
@@ -203,6 +216,7 @@
 #include <QUuid>
 #include <QtEndian>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <deque>
 #include <limits>
@@ -240,6 +254,11 @@ int connectStageMs(int connectDeadlineMs, bool throughService)
 // The audio status refresh, which runs only while a receiver runs or a
 // playback problem awaits recovery.
 constexpr int kAudioStatusRefreshMs = 250;
+// 2026-10-16: how long speakers asked for before this computer's first
+// device list is in wait for it with no problem shown. Past it the wait
+// shows as the speaker problem, with Retry; the window's own retry keeps
+// asking, and the list's arrival still asks at once.
+constexpr qint64 kSpeakerDeviceListWaitMs = 10'000;
 // R-R3-23: how often the lossless link trial samples playback. Its windows
 // are RemoteAudioLinkTrial::kWindowMs long; a 1 s sample closes each within
 // a second of its end.
@@ -251,7 +270,10 @@ constexpr std::size_t kMaxPendingClockProbes = 8;
 bool linkInterruption(RemoteAudioReceiver::Fault fault)
 {
     // R-R3-21: bursts, gaps and stalls no longer restart; the link trial
-    // reads them from the receiver's linkInterruptions instead.
+    // reads them from the receiver's linkInterruptions instead. Since
+    // 2026-10-16 (JJ) a playing stream restarts for no packets only after
+    // 2.5 s; a shorter quiet spell beyond the deepest hold counts in
+    // linkInterruptions instead, as the restart it used to cause did.
     return fault == RemoteAudioReceiver::Fault::NoPackets;
 }
 
@@ -476,6 +498,8 @@ struct DbmWindow {
 struct RequestInputs {
     std::optional<DbmWindow> dbmWindow;
     std::optional<int> decimation;
+    std::optional<double> viewCentreHz;
+    std::optional<double> viewSpanHz;
     // Parity Task 28: the transmit window, for a Core told txDisplayVersion.
     std::optional<DbmWindow> txDbmWindow;
     // Parity Task 31: display duplex, for a Core told txDisplayVersion 3.
@@ -485,12 +509,15 @@ struct RequestInputs {
     bool coreWaterfallLevels = false;
 };
 
-// Parity Task 17 follow-up (R-R3-01, R-R3-04): the headroom a waterfall
-// level set at run time (waterfall AGC, noise-floor AGC, Clarity) is given
-// in the dBm window, and twice it the slack the window keeps before it
-// narrows. Those levels move a little every line; the window follows them
-// only when they leave it or it is far wider than they need, so the Core
-// is not asked again at every line.
+// R-DISP-HOLD (was Parity Task 17 follow-up, R-R3-01, R-R3-04): the headroom
+// the dBm window keeps beyond what the pan needs, on each side, and twice it
+// the slack the window keeps before it narrows. The pan's scale (the grid
+// follower moves it 2 dB at a time) and the waterfall levels set at run time
+// (waterfall AGC, noise-floor AGC, Clarity, which move a little every line)
+// both move without the operator; the window follows them only when they
+// leave it or it is far wider than they need, so the Core is not asked again
+// for the same picture. The cost is 256 codec steps over a range 20 dB wider:
+// a 96 dB scale is coded in 0.45 dB steps instead of 0.38.
 constexpr double kRuntimeLevelHeadroomDb = 10.0;
 
 // How far below the pan's floor (or the stored low level, when lower) a
@@ -512,47 +539,8 @@ bool runtimeWaterfallLevels(const SpectrumWidget* widget)
     if (widget->coreWaterfallLevelsInUse()) {
         return widget->coreWaterfallLevels().has_value();
     }
-    return widget->clarityActive() || widget->wfAgcEnabled()
-        || widget->waterfallNFAGCEnabled();
-}
-
-// The waterfall levels the dBm window must hold: the stored levels while
-// they are what colours the waterfall; otherwise the levels in force now
-// (wfActiveLow/HighThreshold, which AGC and Clarity set) with headroom,
-// kept from `held` while they still fit it.
-// `panLowDbm` is the pan's own floor in the frame's values (liveDbmWindow).
-DbmWindow waterfallLevelsWindow(const SpectrumWidget* widget,
-                                const std::optional<DbmWindow>& held, double panLowDbm)
-{
-    const DbmWindow stored{double(widget->wfLowThreshold()), double(widget->wfHighThreshold())};
-    if (!runtimeWaterfallLevels(widget)) {
-        return stored;
-    }
-    // Core automatic levels and Clarity's floor come from the source
-    // before codec clamping. Only a local AGC following transported rows
-    // needs the reach cap to prevent clamped-floor feedback.
-    const auto coreLevels = widget->coreWaterfallLevelsInUse()
-        ? widget->coreWaterfallLevels() : std::nullopt;
-    double activeLow = coreLevels ? double(coreLevels->first)
-                                  : double(widget->wfActiveLowThreshold());
-    if (!coreLevels && !widget->clarityActive()) {
-        const double reach = std::floor(std::min(panLowDbm, stored.minDbm)
-                                        - kRuntimeLowLevelReachDb);
-        activeLow = std::max(activeLow, reach + kRuntimeLevelHeadroomDb);
-    }
-    const double high = coreLevels ? double(coreLevels->second)
-                                  : double(widget->wfActiveHighThreshold());
-    const double activeHigh = std::max(high, activeLow);
-    if (!std::isfinite(activeLow) || !std::isfinite(activeHigh)) {
-        return held.value_or(stored);
-    }
-    if (held && activeLow >= held->minDbm && activeHigh <= held->maxDbm
-        && held->minDbm >= activeLow - 2.0 * kRuntimeLevelHeadroomDb
-        && held->maxDbm <= activeHigh + 2.0 * kRuntimeLevelHeadroomDb) {
-        return *held;
-    }
-    return {std::floor(activeLow - kRuntimeLevelHeadroomDb),
-            std::ceil(activeHigh + kRuntimeLevelHeadroomDb)};
+    // NF-AGC is an option under AGC: alone it leaves the stored levels.
+    return widget->clarityActive() || widget->wfAgcEnabled();
 }
 
 // The pan's own floor, in the frame's un-normalised values.
@@ -562,25 +550,111 @@ double panLowDbm(const SpectrumWidget* widget, double binWidthHz)
         - double(widget->dynamicRange());
 }
 
-DbmWindow liveDbmWindow(const SpectrumWidget* widget, double binWidthHz,
-                        const DbmWindow& levels)
+// The waterfall levels the dBm window must hold: the stored levels while
+// they are what colours the waterfall; otherwise the levels in force now
+// (wfActiveLow/HighThreshold, which AGC and Clarity set). Empty when the
+// levels in force are not finite.
+// `panLow` is the pan's own floor in the frame's values (panLowDbm).
+std::optional<DbmWindow> neededWaterfallLevels(const SpectrumWidget* widget, double panLow)
+{
+    const DbmWindow stored{double(widget->wfLowThreshold()), double(widget->wfHighThreshold())};
+    if (!runtimeWaterfallLevels(widget)) {
+        return stored;
+    }
+    // Core automatic levels and Clarity's floor come from the source
+    // before codec clamping. Only a local AGC following transported rows
+    // needs the reach cap to prevent clamped-floor feedback. The cap is on
+    // the window's edge, so the level it allows stands one headroom above
+    // the reach.
+    const auto coreLevels = widget->coreWaterfallLevelsInUse()
+        ? widget->coreWaterfallLevels() : std::nullopt;
+    double activeLow = coreLevels ? double(coreLevels->first)
+                                  : double(widget->wfActiveLowThreshold());
+    if (!coreLevels && !widget->clarityActive()) {
+        const double reach = std::floor(std::min(panLow, stored.minDbm)
+                                        - kRuntimeLowLevelReachDb);
+        activeLow = std::max(activeLow, reach + kRuntimeLevelHeadroomDb);
+    }
+    const double high = coreLevels ? double(coreLevels->second)
+                                  : double(widget->wfActiveHighThreshold());
+    const double activeHigh = std::max(high, activeLow);
+    if (!std::isfinite(activeLow) || !std::isfinite(activeHigh)) {
+        return std::nullopt;
+    }
+    return DbmWindow{activeLow, activeHigh};
+}
+
+// R-DISP-HOLD: what the pan needs coded now: its own dBm range (the grid's
+// top down by its dynamic range, less the normalise shift) joined with the
+// waterfall levels in force, inside the link's limits. The waterfall's
+// levels colour the frame's values directly, so no colour may clip at the
+// window's edge. Empty when the pan's range is not finite, or when its
+// run-time levels are not: the held window then stays.
+std::optional<DbmWindow> neededDbmWindow(const SpectrumWidget* widget, double binWidthHz)
 {
     const double shift = normalizeShiftDb(widget->normalizeActive(), binWidthHz);
     const double panHigh = double(widget->refLevel()) - shift;
     const double panLow = panLowDbm(widget, binWidthHz);
-    // Parity Task 17 follow-up: the waterfall's levels colour the frame's
-    // values directly, so the window holds the levels in force (the run-time
-    // ones with waterfall AGC or Clarity), and no colour clips at its edge.
-    double low = std::min(panLow, levels.minDbm);
-    double high = std::max(panHigh, levels.maxDbm);
+    const std::optional<DbmWindow> levels = neededWaterfallLevels(widget, panLow);
+    if (!levels) {
+        return std::nullopt;
+    }
+    double low = std::min(panLow, levels->minDbm);
+    double high = std::max(panHigh, levels->maxDbm);
+    if (!std::isfinite(low) || !std::isfinite(high)) {
+        return std::nullopt;
+    }
+    low = std::clamp(low, kMinDbmLimit, kMaxDbmLimit - 1.0);
+    high = std::clamp(high, low + 1.0, kMaxDbmLimit);
+    return DbmWindow{low, high};
+}
+
+// The window a pan with nothing held and nothing finite to need asks for:
+// its own range with the stored waterfall levels, or the link's default.
+DbmWindow fallbackDbmWindow(const SpectrumWidget* widget, double binWidthHz)
+{
+    const double shift = normalizeShiftDb(widget->normalizeActive(), binWidthHz);
+    double low = std::min(panLowDbm(widget, binWidthHz), double(widget->wfLowThreshold()));
+    double high = std::max(double(widget->refLevel()) - shift,
+                           double(widget->wfHighThreshold()));
     if (!std::isfinite(low) || !std::isfinite(high)) {
         return {};
     }
     low = std::clamp(low, kMinDbmLimit, kMaxDbmLimit - 1.0);
     high = std::clamp(high, low + 1.0, kMaxDbmLimit);
-    // Whole tenths of a dB: a window that differs by less than that paints
-    // the same, and must not ask the Core again.
-    return {std::floor(low * 10.0) / 10.0, std::ceil(high * 10.0) / 10.0};
+    return {low, high};
+}
+
+// R-DISP-HOLD: the one hold rule for the dBm window a pan asks the Core
+// for. The held window stays while what the pan needs lies inside it and
+// neither held edge is more than twice the headroom outside what it needs.
+// Otherwise the window is what the pan needs widened by the headroom on
+// each side, its edges on whole dB, inside the link's limits. A pan with
+// nothing held takes that at once.
+//
+// The window cannot walk or alternate: a new window stands at least one
+// headroom outside the need on each side and less than a headroom and one
+// dB (the rounding), so the need has to travel a headroom less one dB at
+// one edge before the rule asks again.
+DbmWindow widenedDbmWindow(const DbmWindow& needed)
+{
+    return {std::max(std::floor(needed.minDbm - kRuntimeLevelHeadroomDb), kMinDbmLimit),
+            std::min(std::ceil(needed.maxDbm + kRuntimeLevelHeadroomDb), kMaxDbmLimit)};
+}
+
+DbmWindow heldDbmWindow(const SpectrumWidget* widget, double binWidthHz,
+                        const std::optional<DbmWindow>& held)
+{
+    const std::optional<DbmWindow> needed = neededDbmWindow(widget, binWidthHz);
+    if (!needed) {
+        return held ? *held : widenedDbmWindow(fallbackDbmWindow(widget, binWidthHz));
+    }
+    if (held && needed->minDbm >= held->minDbm && needed->maxDbm <= held->maxDbm
+        && held->minDbm >= needed->minDbm - 2.0 * kRuntimeLevelHeadroomDb
+        && held->maxDbm <= needed->maxDbm + 2.0 * kRuntimeLevelHeadroomDb) {
+        return *held;
+    }
+    return widenedDbmWindow(*needed);
 }
 
 int requestedFps()
@@ -591,32 +665,30 @@ int requestedFps()
                          .toString().toInt(), 60);
 }
 
-// The FFT size a pan asks for: the stored size, raised by a deep zoom or
-// the Hz/bin target. 0 when the pan cannot ask yet.
-int plannedFftSize(SpectrumWidget* widget, SliceModel* slice, int* baseSizeOut = nullptr)
+// The FFT size a pan asks for, from the station's sizing mode (design D38,
+// D42): 4096 raised by a deep zoom in Auto, the Hz/bin target's size in
+// Hz/bin, exactly the stored size in Fixed. 0 when the pan cannot ask yet.
+// `baseSizeOut` takes the size the mode's own control chose, which is what
+// the shared Wide engine runs: a request above it asks for its own tier.
+int plannedFftSize(SpectrumWidget* widget, SliceModel* slice, int* baseSizeOut = nullptr,
+                   std::optional<double> requestedSpanHz = std::nullopt)
 {
-    auto& settings = AppSettings::instance();
-    const int baseSize = fftSizeFor(settings.value(
-        QLatin1String(ControlRanges::kDisplayFftSizeKey),
-        QString::number(ControlRanges::kDisplayFftSizeDefault)).toString().toInt());
-    if (baseSizeOut) { *baseSizeOut = baseSize; }
-    const int pixels = qBound(1, widget->width() - widget->reservedRightEdgeWidth(),
-                             SpectrumEndpoint::kMaxPixels);
-    const double span = widget->bandwidth();
+    const DisplayFftSizing sizing = readDisplayFftSizing(AppSettings::instance());
+    if (baseSizeOut) { *baseSizeOut = sizing.baseline(); }
+    const double span = requestedSpanHz.value_or(widget->bandwidth());
     if (!std::isfinite(span) || span <= 0 || !std::isfinite(widget->centerFrequency())
         || slice->sampleRateHz() <= 0) {
         return 0;
     }
     // R-R3-08: a deep zoom requests its own tier; it cannot lengthen the
-    // shared Wide engine. Size is capped to the actual FFT engine limit.
-    double target = double(slice->sampleRateHz()) * pixels / span;
-    const double hzPerBin = settings.value(
-        QLatin1String(ControlRanges::kDisplayHzPerBinTargetKey),
-        QString::number(ControlRanges::kDisplayHzPerBinTargetDefault)).toString().toDouble();
-    if (std::isfinite(hzPerBin) && hzPerBin > 0) {
-        target = std::max(target, slice->sampleRateHz() / hzPerBin);
-    }
-    return std::max(baseSize, fftSizeFor(target));
+    // shared Wide engine. R-DSP-59: the size is the one rule a local pan
+    // uses too (ControlRanges::planDisplayFft): 4096 kept across the span in
+    // Auto, or the Hz/bin target, no further than about 0.7 s per
+    // transform. In Fixed it is the stored size exactly, whatever the span,
+    // so it equals the base size and stays on the Wide tier, and a zoom
+    // plans the same size again. The pan's width in pixels does not change
+    // the size.
+    return sizing.plan(double(slice->sampleRateHz()), span).size;
 }
 
 // Parity Task 17 (R-R3-12): the averaging constants for the rate the Core
@@ -644,9 +716,9 @@ QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice,
                                     .toString().toInt(), int(WindowFunction::Count) - 1);
     const int pixels = qBound(1, widget->width() - widget->reservedRightEdgeWidth(),
                              SpectrumEndpoint::kMaxPixels);
-    const double span = widget->bandwidth();
+    const double span = inputs.viewSpanHz.value_or(widget->bandwidth());
     int baseSize = 0;
-    const int size = plannedFftSize(widget, slice, &baseSize);
+    const int size = plannedFftSize(widget, slice, &baseSize, span);
     if (size <= 0) {
         return {};
     }
@@ -656,13 +728,11 @@ QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice,
         ? dssMaxRowSpanFactor(dssShapeForAngle(0)) : 0.0;
     const double binWidthHz = double(slice->sampleRateHz()) / size;
     const DbmWindow dbm = inputs.dbmWindow.value_or(
-        liveDbmWindow(widget, binWidthHz,
-                      waterfallLevelsWindow(widget, std::nullopt,
-                                            panLowDbm(widget, binWidthHz))));
+        heldDbmWindow(widget, binWidthHz, std::nullopt));
     QJsonObject request{{QStringLiteral("sliceId"), slice->sliceIndex()},
             {QStringLiteral("tier"), size > baseSize ? QStringLiteral("fine") : QStringLiteral("wide")},
             {QStringLiteral("fftSize"), size}, {QStringLiteral("windowType"), window},
-            {QStringLiteral("centreHz"), widget->centerFrequency()},
+            {QStringLiteral("centreHz"), inputs.viewCentreHz.value_or(widget->centerFrequency())},
             {QStringLiteral("spanHz"), span}, {QStringLiteral("pixels"), pixels},
             {QStringLiteral("fps"), fps}, {QStringLiteral("framesPerLine"), framesPerLine},
             {QStringLiteral("trace"), plane(int(widget->spectrumDetector()),
@@ -683,10 +753,11 @@ QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice,
     }
     if (inputs.coreWaterfallLevels && widget->coreWaterfallLevelsInUse()) {
         // JJ's ruling of 2026-09-28 (display extras v1, `waterfallLevels`):
-        // the Core runs the pan's waterfall AGC (the desktop's follower,
-        // 12 dB outside each line's lowest and highest values) or NF-AGC
-        // (the line's floor plus the offset, 60 dB above it) and sends the
-        // levels beside each frame.
+        // the Core runs the pan's waterfall AGC (the desktop's follower:
+        // the low level 12 dB under each line's smoothed lowest value) or,
+        // as an option under AGC, NF-AGC (the low level at the noise floor
+        // plus the offset) and sends the levels beside each frame. The
+        // high level stays the stored one.
         request.insert(QStringLiteral("waterfallLevels"), QJsonObject{
             {QStringLiteral("mode"), widget->waterfallNFAGCEnabled() ? QStringLiteral("noiseFloorAgc")
                                                                      : QStringLiteral("agc")},
@@ -852,6 +923,14 @@ struct RemoteMediaController::Private {
         QJsonObject acceptedRequest;
         int observedStream = -1;
         quint64 observedStreamEpoch = 0;
+        /// The Core ended this display because its slice left the Core
+        /// (kRetireReasonSliceRemoved). The removal itself reaches this
+        /// window's slice list after that word, so until it does the slice
+        /// still looks alive here, and asking again would ask for a receiver
+        /// that is gone. The removal retires the binding. Should it not
+        /// arrive within kPanWaitingGraceMs the display is asked for after
+        /// all, so the pan gets the Core's own answer and never sits blank.
+        bool sliceLeftCore = false;
         quint32 revision = 0;
         quint32 acceptedRevision = 0;
         quint32 contextRevision = 0;
@@ -869,8 +948,55 @@ struct RemoteMediaController::Private {
         bool askAgain = false;
         QJsonObject askedAgain;
         double sourceCentreHz = 0;
+        /// R-DISP-HOLD: the view this pan asked for and the bin-aligned view
+        /// the Core answered it with (zero until a receive context answers
+        /// the pan's latest ask). While the pan still shows the answered
+        /// view, a new ask (a new dBm range, say) carries the asked one
+        /// again, so the Core aligns it to the same bins: asking for the
+        /// answered view moved the upper edge out by one bin at every ask,
+        /// and made each ask a new picture.
+        /// R-DISP-RETUNE: the same holds while the pan keeps the answered
+        /// width and moves (a drag, or a pan that follows its receiver): it
+        /// asks for the width it asked before, at the asked center moved as
+        /// far as the pan moved. Asking for the answered width made every
+        /// drag two bins wider and a new picture for the Core, which judges
+        /// a moved picture by the span asked.
+        double viewAskedCentreHz = 0;
+        double viewAskedSpanHz = 0;
+        double viewAnsweredCentreHz = 0;
+        double viewAnsweredSpanHz = 0;
         DisplayCodecDecoder decoder;
         QVector<float> lastMiniTrace;
+        // R-DISP-RETUNE: the picture the Core says this binding's accepted
+        // receive context continues (its pictureGeneration). The next
+        // context carries on exactly when it states the same one. None from
+        // a Core that states no picture, and none once the Core has refused
+        // the binding or retired its source, or the binding has left the
+        // stream or the stream epoch the picture was shown on.
+        std::optional<quint32> shownPicture;
+        // R-DISP-RETUNE (7b): a context of the picture shown that answers a
+        // request the window has since changed, taken for drawing only. Its
+        // frames are decoded and drawn at the frequencies it states. It is
+        // no accepted answer: `context`, `accepted`, the views asked and
+        // answered and the budget planner's accepted revision and request
+        // stay those of the last accepted context, and the window's newer
+        // request goes out as it always did. Dropped when a context is
+        // accepted, when the binding leaves its stream, and when the Core
+        // refuses the binding or retires its source.
+        struct Drawing {
+            SpectrumEndpointContext context;
+            RemoteSpectrumCapture capture;
+        };
+        std::optional<Drawing> drawing;
+        /// Frames reach the decoder while a context is accepted or one is
+        /// taken for drawing.
+        bool takesFrames() const { return accepted || drawing.has_value(); }
+        /// The generation whose frames are decoded: the one taken for
+        /// drawing while there is one, else the accepted one.
+        quint32 drawnGeneration() const
+        {
+            return drawing ? drawing->context.codec.contextGeneration : acceptedGeneration();
+        }
         // R-R3-21 / R-R3-08: decoded frames waiting for their presentation
         // time, and the rows filling a lost message's gap.
         RemoteDisplayPresenter presenter;
@@ -900,6 +1026,13 @@ struct RemoteMediaController::Private {
         /// R-R3-37: when this pan began waiting for an accepted display
         /// (allocationClock), or -1 while it has one. See kPanWaitingGraceMs.
         qint64 waitingSinceMs = -1;
+        /// The Core retired this pan's display because its slice left the
+        /// receiver (kRetireReasonStreamBindingChanged) and the pan has not
+        /// asked again since. See Private::holdsForReceiverMove.
+        bool sliceLeftReceiver = false;
+        /// When this pan's ask began waiting to be for its slice's new
+        /// receiver (allocationClock), or -1 while it is not waiting.
+        qint64 receiverMoveHeldSinceMs = -1;
         QString refusedIdentity;
         QString refusalReason;
         QList<qint64> receivedFrameTimesMs;
@@ -918,6 +1051,9 @@ struct RemoteMediaController::Private {
     QSet<int> miniWanted;
     // Parity Task 28: this media start declared txDisplayVersion.
     bool txDisplayNegotiated = false;
+    // R-DISP-RETUNE: this media start declared spectrumPictureVersion, so
+    // each spectrum context states the picture its frames continue.
+    bool pictureNegotiated = false;
     // Parity Task 31: this media start declared txDisplayVersion 3, and the
     // window's DUP as MoxDisplayController applies it.
     bool displayDuplexNegotiated = false;
@@ -963,6 +1099,12 @@ struct RemoteMediaController::Private {
     bool currentRouted = false;
     bool replacementRouted = false;
     bool replacementDirect = false;
+    // Whether the connection in use, and the one being started, took
+    // their ICE settings from the media tunnel. The web relay leg is a
+    // loopback shim too, and the tunnel may be declared on it for a later
+    // move, so only this says media rides the tunnel.
+    bool currentTunnelIce = false;
+    bool replacementTunnelIce = false;
     // The direct media ladder: the next direct-only replace while media
     // rides the tunnel (PathRacer::kUpgradeRetryMs steps), and when a media
     // packet last came (allocationClock; -1 before the first).
@@ -982,6 +1124,31 @@ struct RemoteMediaController::Private {
         if (!client || client->capabilities().txStateVersion < 1) { return false; }
         const TransmitState* tx = client->transmitState();
         return tx && (tx->keyed() || tx->tuning() || tx->txEnding());
+    }
+    bool miniUsesTransmit(const SliceModel* slice) const
+    {
+        if (!model || !slice) { return false; }
+        if (model->role() != RadioModel::Role::Remote) {
+            return model->isTransmitting() && model->txBoundSlice() == slice;
+        }
+        // Same authority as MoxDisplayController::followStation: txState
+        // precedes slice mirrors in a snapshot, so resolve its stable ID
+        // only once that slice exists. The remote arbiter cache is not
+        // populated by the mirrored TX flags.
+        if (client && client->capabilities().txStateVersion >= 1) {
+            const TransmitState* state = client->transmitState();
+            return state && state->keyed() && state->txSliceId() >= 0
+                && model->sliceById(state->txSliceId()) == slice;
+        }
+        if (!model->isTransmitting()) { return false; }
+        const SliceModel* transmitSlice = nullptr;
+        for (const SliceModel* candidate : model->slices()) {
+            if (candidate && candidate->isTxSlice()) {
+                if (transmitSlice) { return false; }
+                transmitSlice = candidate;
+            }
+        }
+        return transmitSlice == slice;
     }
     bool replaceStartFailed = false;
     QTimer* replaceRetry = nullptr;
@@ -1009,15 +1176,46 @@ struct RemoteMediaController::Private {
     // Parity Task 17 (R-R3-01, R-R3-04): each pan's dBm window, settled
     // once it has held for a frame period so a drag of the dBm strip asks
     // the Core again when it stops, not at every step.
+    // R-DISP-HOLD: `settled` is the held window (heldDbmWindow), the one the
+    // pan's requests carry; `live` is what the hold rule gives now, which
+    // differs from it only once the pan needs a range the held one does not
+    // cover or is far narrower than.
     struct DbmWindowState {
         DbmWindow settled;
         DbmWindow live;
         qint64 liveSinceMs = 0;
-        // Parity Task 17 follow-up: the waterfall levels the window holds
-        // (waterfallLevelsWindow), kept while the run-time levels fit.
-        DbmWindow levels;
     };
     QHash<const SpectrumWidget*, DbmWindowState> dbmWindows;
+    // R-DISP-HOLD: the mini display's held window, by slice. It follows the
+    // same hold rule; it has no drag to wait out, so it is taken at once.
+    // Forgotten when the slice's mini display is no longer wanted.
+    mutable QHash<int, DbmWindow> miniDbmWindows;
+
+    // Resolve the operator's requested view before both FFT sizing and
+    // normalized dBm settlement; a clipped answer is not a deeper zoom.
+    void preserveRequestedView(const SpectrumWidget* widget, RequestInputs& inputs) const
+    {
+        // R-DISP-HOLD: a pan still showing the view the Core answered asks
+        // for the view it asked before (see Binding::viewAskedCentreHz).
+        // R-DISP-RETUNE: a pan that kept the answered width and moved asks
+        // for the width it asked before, at the asked center moved as far as
+        // the pan moved.
+        for (const auto& entry : bindings) {
+            const Binding& binding = entry.second;
+            if (binding.widget != widget || binding.isMini()) { continue; }
+            if (binding.viewAskedSpanHz > 0.0
+                && qFuzzyCompare(widget->bandwidth(), binding.viewAnsweredSpanHz)) {
+                const bool unmoved = qFuzzyCompare(widget->centerFrequency(),
+                                                   binding.viewAnsweredCentreHz);
+                inputs.viewCentreHz = unmoved
+                    ? binding.viewAskedCentreHz
+                    : binding.viewAskedCentreHz
+                        + (widget->centerFrequency() - binding.viewAnsweredCentreHz);
+                inputs.viewSpanHz = binding.viewAskedSpanHz;
+            }
+            break;
+        }
+    }
 
     /// The request this window would send for the pan now: requestFor with
     /// the pan's settled dBm window and, for a Core at spectrumGrantVersion
@@ -1025,6 +1223,7 @@ struct RemoteMediaController::Private {
     /// window's FFT engine, as a local window's page does).
     QJsonObject request(SpectrumWidget* widget, SliceModel* slice) const
     {
+        if (!widget) { return {}; }
         RequestInputs inputs;
         if (const auto found = dbmWindows.constFind(widget); found != dbmWindows.cend()) {
             inputs.dbmWindow = found->settled;
@@ -1038,7 +1237,55 @@ struct RemoteMediaController::Private {
         }
         inputs.duplex = displayDuplexNegotiated && displayDuplex;
         inputs.coreWaterfallLevels = coreWaterfallLevelsAvailable();
-        return requestFor(widget, slice, client && client->remoteWidebandAvailable(), inputs);
+        preserveRequestedView(widget, inputs);
+        // Size the FFT from the same preserved span that goes on the wire.
+        // A clipped Core answer must not feed back into Auto as a deeper zoom.
+        return requestFor(widget, slice,
+                          client && client->remoteWidebandAvailable(), inputs);
+    }
+
+    /// A pan's ask after its slice moved to another receiver is for the
+    /// pan's view on that receiver, never for the view it had on the old
+    /// one. The Core already has the slice on the new receiver, so the old
+    /// view is one that lies outside it: where this window permits an
+    /// extended view and the radio has a wideband ADC path, the Core takes
+    /// it for one and switches that input's filters to bypass to show it. A
+    /// local window never asks that way.
+    ///
+    /// The window learns of the move in two steps. The Core retires the
+    /// display at once (kRetireReasonStreamBindingChanged); the slice's new
+    /// frequency and receiver come with its next mirrored update, and the
+    /// pan follows its slice when they land. So the ask waits (true):
+    ///  - while the Core has retired the display for the move and the
+    ///    mirrored slice still shows the receiver the pan was on;
+    ///  - while the mirrored slice shows another receiver and the pan's view
+    ///    cannot lie on it. A slice is within half a receiver's width of its
+    ///    receiver's center, so a view a whole width or more from the slice
+    ///    is not on that receiver. A pan that was showing an extended view
+    ///    keeps its view: that one is the operator's.
+    /// Never for longer than kReceiverMoveSettleMs.
+    bool holdsForReceiverMove(Binding& binding, const SliceModel* slice,
+                              const QJsonObject& request, qint64 nowMs) const
+    {
+        if (binding.isMini() || !slice) { return false; }
+        const bool mirroredMove = binding.observedStream >= 0
+            && (binding.observedStream != slice->streamIndex()
+                || binding.observedStreamEpoch != slice->streamEpoch());
+        bool waits = binding.sliceLeftReceiver && !mirroredMove;
+        if (!waits && mirroredMove && !binding.context.wideband.active) {
+            const double rateHz = slice->sampleRateHz();
+            const double viewCenterHz = request.value(QStringLiteral("centreHz")).toDouble();
+            const double halfSpanHz = request.value(QStringLiteral("spanHz")).toDouble() / 2.0;
+            waits = rateHz > 0.0
+                && (viewCenterHz + halfSpanHz <= slice->frequency() - rateHz
+                    || viewCenterHz - halfSpanHz >= slice->frequency() + rateHz);
+        }
+        if (!waits) {
+            binding.receiverMoveHeldSinceMs = -1;
+            return false;
+        }
+        if (binding.receiverMoveHeldSinceMs < 0) { binding.receiverMoveHeldSinceMs = nowMs; }
+        return nowMs - binding.receiverMoveHeldSinceMs < kReceiverMoveSettleMs;
     }
 
     /// JJ's ruling of 2026-09-28: the Core computes a pan's waterfall AGC
@@ -1059,7 +1306,7 @@ struct RemoteMediaController::Private {
         constexpr double kTxSpanHz = 40'000.0;
         constexpr int kPixels = 1024;
         constexpr int kFps = 30;
-        const bool transmit = model->isTransmitting() && model->txBoundSlice() == slice;
+        const bool transmit = miniUsesTransmit(slice);
         const double span = transmit ? kTxSpanHz : kRxSpanHz;
         const double centre = transmit ? double(model->txFrequencyForSlice(slice))
                                        : slice->frequency();
@@ -1074,11 +1321,16 @@ struct RemoteMediaController::Private {
             int(WindowFunction::Count) - 1);
         SpectrumWidget* source = miniSettingsWidget(stack, slice->sliceIndex());
         const double binWidthHz = double(slice->sampleRateHz()) / size;
-        const DbmWindow dbm = source
-            ? liveDbmWindow(source, binWidthHz,
-                waterfallLevelsWindow(source, std::nullopt,
-                    panLowDbm(source, binWidthHz)))
-            : DbmWindow{-140.0, -40.0};
+        DbmWindow dbm{-140.0, -40.0};
+        if (source) {
+            const auto held = miniDbmWindows.constFind(slice->sliceIndex());
+            dbm = heldDbmWindow(source, binWidthHz,
+                                held == miniDbmWindows.cend()
+                                    ? std::nullopt : std::optional<DbmWindow>(*held));
+            miniDbmWindows.insert(slice->sliceIndex(), dbm);
+        } else {
+            miniDbmWindows.remove(slice->sliceIndex());
+        }
         QJsonObject request{{QStringLiteral("sliceId"), slice->sliceIndex()},
             {QStringLiteral("tier"), size > base ? QStringLiteral("fine")
                                                   : QStringLiteral("wide")},
@@ -1109,13 +1361,18 @@ struct RemoteMediaController::Private {
         return request;
     }
 
-    /// Parity Task 17: brings each pan's dBm window up to date. A pan seen
-    /// for the first time takes its window at once; a changed window is
-    /// taken once it has held for a frame period of the pan's rate (the
-    /// planner's tick, kPlannerIntervalMs, is longer, so a range change
-    /// asks the Core again at most once a tick and a drag once it stops).
+    /// Parity Task 17, R-DISP-HOLD: brings each pan's dBm window up to date.
+    /// A pan seen for the first time takes its window (what it needs plus
+    /// headroom) at once. After that the held window stays while the hold
+    /// rule keeps it (heldDbmWindow); a window the rule replaces is taken
+    /// once it has held for a frame period of the pan's rate (the planner's
+    /// tick, kPlannerIntervalMs, is longer, so a range change asks the Core
+    /// again at most once a tick and a drag once it stops).
     void settleDbmWindows(qint64 now)
     {
+        for (auto it = miniDbmWindows.begin(); it != miniDbmWindows.end();) {
+            it = miniWanted.contains(it.key()) ? std::next(it) : miniDbmWindows.erase(it);
+        }
         if (!stack || !model) { return; }
         QSet<const SpectrumWidget*> seen;
         for (PanadapterApplet* applet : stack->allApplets()) {
@@ -1123,23 +1380,22 @@ struct RemoteMediaController::Private {
             SliceModel* slice = widget ? model->sliceById(applet->activeSliceIndex()) : nullptr;
             if (!slice) { continue; }
             widget->setCoreWaterfallLevelsAvailable(coreWaterfallLevelsAvailable());
-            const int size = plannedFftSize(widget, slice);
+            RequestInputs inputs;
+            preserveRequestedView(widget, inputs);
+            const int size = plannedFftSize(widget, slice, nullptr, inputs.viewSpanHz);
             if (size <= 0) { continue; }
             seen.insert(widget);
             auto found = dbmWindows.find(widget);
             const double binWidthHz = double(slice->sampleRateHz()) / size;
-            const DbmWindow levels = waterfallLevelsWindow(
-                widget,
+            const DbmWindow live = heldDbmWindow(
+                widget, binWidthHz,
                 found == dbmWindows.end() ? std::nullopt
-                                          : std::optional<DbmWindow>(found->levels),
-                panLowDbm(widget, binWidthHz));
-            const DbmWindow live = liveDbmWindow(widget, binWidthHz, levels);
+                                          : std::optional<DbmWindow>(found->settled));
             if (found == dbmWindows.end()) {
-                dbmWindows.insert(widget, {live, live, now, levels});
+                dbmWindows.insert(widget, {live, live, now});
                 continue;
             }
             DbmWindowState& state = *found;
-            state.levels = levels;
             if (live != state.live) {
                 state.live = live;
                 state.liveSinceMs = now;
@@ -1177,6 +1433,20 @@ struct RemoteMediaController::Private {
         bool refused = false;
     };
     QHash<int, CtunState> ctunStreams;
+    // The receiver's C-Tune setting is not always this window's to change:
+    // a slice it only listens to is its controller's (StationServer::
+    // changeRefusal), and a receiver another device holds is that device's
+    // (ruling 6.3), so the Core refuses a pin on either. The Core's words
+    // for why, or empty when the setting is this window's. While it is not,
+    // nothing is asked for, the pan's saved setting waits, and the switch
+    // is shown held with these words. The Core checks in this order too.
+    QString ctunHeldReason(const SliceModel* slice) const
+    {
+        if (slice == nullptr) { return {}; }
+        if (slice->isReadOnlyListener()) { return slice->readOnlyListenerReason(); }
+        const SliceAccessMirror* access = client ? client->sliceAccess() : nullptr;
+        return access != nullptr ? access->receiverHeldReason(slice->sliceIndex()) : QString();
+    }
     // R-R3-18/21: one C-Tune centre request in flight per stream. A gesture
     // runs at mouse or wheel rate; the Core answers each request, and while
     // one is out the newest wanted centre waits here. A refusal drops it, so
@@ -1242,6 +1512,25 @@ struct RemoteMediaController::Private {
     // connection, so a slice id's revision only ever grows, even when a new
     // slice reuses the id; a new connection starts afresh.
     QHash<int, quint32> receiverRevisions;
+    // Slices whose latest receiver-audio request is a stop the Core has not
+    // answered yet; a move asks again (askAgainAfterMove).
+    QSet<int> receiverStopsUnanswered;
+    using WaveformKey = std::pair<int, WaveformKind>;
+    struct WaveformStream {
+        bool wanted = false;
+        bool enabled = false;
+        quint32 revision = 0;
+        quint32 answeredRevision = 0; // the revision the Core's last context answered
+        quint64 sourceGeneration = 0;
+        quint64 deliveryGeneration = 0;
+        quint64 lastSerial = 0;
+        quint64 nextSequence = 0;
+        quint64 lastDroppedTotal = 0;
+        int sampleRate = 0;
+    };
+    std::map<WaveformKey, WaveformStream> waveformStreams;
+    bool waveformNegotiated = false;
+    quint64 waveformBytesPerSecond = 0;
     struct IqStream {
         bool wanted = false;
         bool enabled = false;
@@ -1277,6 +1566,7 @@ struct RemoteMediaController::Private {
     bool headphonesRetryPending = false;
     qint64 headphonesLastRequestMs = -1000;
     RemoteAudioRestartBackoff headphonesRestartBackoff; // R-R3-21
+    bool headphonesHeldForTransmit = false;             // R-R3-51, as the speakers'
     QString headphonesProblem;
     bool destroying = false;
     std::optional<RemoteAudioContextMessage> acceptedAudioContext;
@@ -1290,14 +1580,34 @@ struct RemoteMediaController::Private {
     // restart does nothing; a media move leaves it alone, so a restart
     // waiting across the move still runs on the new connection.
     quint64 audioRetryGeneration = 0;
+    // 2026-10-16: the revision of the last request the window's own retry
+    // made (scheduleAudioRetry). A speaker failure met at that revision
+    // while the problem it retries still shows is quiet: the operator was
+    // told once. Any other request moves the revision past it.
+    quint32 audioRetryRevision = 0;
+    // 2026-10-16: the speakers wait for this computer's first device list
+    // (AudioEngine::speakersAwaitDeviceList): when the wait began (logged
+    // once), -1 when none is under way. A wait longer than
+    // speakerDeviceListWaitMs shows as the speaker problem.
+    qint64 audioAwaitingDevicesSinceMs = -1;
+    qint64 speakerDeviceListWaitMs = kSpeakerDeviceListWaitMs;
     // Test only: while held, a restart's backoff step that comes due is
     // kept here instead of running, and runs (through its own fence) once
     // released, so a test can order events against the step without
     // racing a real timer.
     bool audioRestartHeldForTest = false;
-    std::function<void()> heldAudioRestartStep;
+    // R-R3-44: setReceiverAudioClockForTest; empty is the receiver's own.
+    RemoteAudioReceiver::Clock receiverAudioClockForTest;
+    // In the order they came due: an ended restart's step and the step of
+    // the failure that ended it can both be held.
+    std::vector<std::function<void()>> heldAudioRestartSteps;
     // R-R3-21: repeated restarts wait 1, 2, 4 s, reset by a healthy 10 s.
     RemoteAudioRestartBackoff audioRestartBackoff;
+    // R-R3-51: the speakers' receiver ran out of packets while the Core
+    // transmits (it sends the keying device no receive audio), so it was
+    // stopped and nothing was asked for; the end of the Core's transmit
+    // asks again at once. Cleared by any request or accepted context.
+    bool audioHeldForTransmit = false;
     // R-R3-23. The operator's choice, stored on this computer. Whether this
     // media session has sent Core a `profile` (its contexts then carry the
     // profile shape). Whether this media session's link trial failed, so
@@ -1323,6 +1633,20 @@ struct RemoteMediaController::Private {
     // An interruption whose automatic retry is scheduled, until the next
     // accepted context or stop().
     bool audioRestarting = false;
+    // The latest audio request is the disable a playback failure sent
+    // (sendAudioDisable), or owes (audioDisableUnsent); a move that loses
+    // it sends it again.
+    bool audioFailureDisableSent = false;
+    // 2026-10-17: the latest audio request is one requestAudio could not
+    // make (no ready media connection, as when the old peer reports not
+    // ready while the Core moves), so a move asks again. It ends a
+    // failure's disable as the latest request: the window wants audio now.
+    bool audioRequestUnsent = false;
+    // 2026-10-17: the latest audio request is a playback failure's disable
+    // that sendAudioDisable could not send (no ready media connection), so
+    // a move sends it. audioFailureDisableSent is set with it; a request or
+    // a disable actually sent clears it.
+    bool audioDisableUnsent = false;
     QString selectedOutput;
     RemoteAudioStatus audioStatus;
     QTimer* audioStatusTimer = nullptr;
@@ -1369,11 +1693,55 @@ struct RemoteMediaController::Private {
     std::unique_ptr<RemoteMicEncoder> micEncoder;
     std::vector<float> micPending;
     std::vector<float> micScratch;
+    // 2026-10-10: the microphone's collector: its real-time thread pulls
+    // the microphone (AudioEngine::pullTxMic, whose one caller it is)
+    // while micLease is held, and the pump drains its queue. Made for
+    // micCollectorEngine on the first lease; stopped before the lease is
+    // released and before that engine goes. Once stop() returns its thread
+    // never calls the source: it is joined, or let go while still waiting
+    // on its priority request.
+    std::unique_ptr<MicUplinkCollector> micCollector;
+    AudioEngine* micCollectorEngine = nullptr;
+    // 2026-10-15: the collector pulls the VAX TX device
+    // (AudioEngine::pullVaxTxMic) when VAX is the transmit source, with no
+    // capture lease: VAX is not the PC microphone.
+    bool micCollectorVax = false;
+    // 2026-10-15 (fix wave): the collector reads the VAX TX device now.
+    // False from the moment it stops (stopMicCollector), so the next VAX
+    // feed starts by dropping what apps wrote meanwhile.
+    bool micVaxFed = false;
+    // The uplink started with VAX chosen and no VAX TX device open: said
+    // once per run.
+    bool micVaxMissingReported = false;
+    // What the collector had dropped when the line last started or
+    // reported: the rest is this key's.
+    quint64 micDroppedReported = 0;
+    // 2026-10-12: the collector's frames and wakes when its count last
+    // moved, for the one report of a collector that takes nothing while
+    // capture is ready (-1: not being timed).
+    quint64 micCollectedSeen = 0;
+    quint64 micWakesAtProgress = 0;
+    qint64 micCollectedMovedMs = -1;
+    bool micStallReported = false;
     quint16 micSequence = 0;
     quint32 micTimestamp = 0;
     quint64 micPacketsSent = 0;
     std::vector<float> programPending;
     qint64 programUntilMs = -1;
+    // 2026-10-08: a program key that brings its own audio sends silence
+    // whenever its audio is not current, paced by the clock from
+    // silenceStartMs (-1: not sending silence now). silenceLeadGiven: the
+    // line's first silence of this key came with its lead.
+    qint64 silenceStartMs = -1;
+    qint64 silenceFrames = 0;
+    bool silenceLeadGiven = false;
+    // 2026-10-09: this run of the line carried a program key that brings
+    // its own audio. The key's end reaches here as two signals (key down,
+    // then holds transmit); between them the run still sends no
+    // microphone. Cleared when the line stops, or when the screen key or
+    // VOX wants the line with no such program key.
+    bool programRun = false;
+    std::function<qint64()> micClockForTest;
     std::unique_ptr<Resampler> programResampler;
     int programRateHz = 0;
     /// Fix wave 2 (Critical 1, the several-devices design, ruling 9.3):
@@ -1412,6 +1780,12 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
 {
     d->client = client;
     d->model = model;
+    if (model && model->radeWaveformModel()) {
+        connect(model->radeWaveformModel(), &RadeWaveformModel::remoteDemandChanged,
+                this, &RemoteMediaController::reconcileWaveformDemand);
+        model->radeWaveformModel()->setRemoteSupported(false,
+            QStringLiteral("This Core does not support exact waveform observation."));
+    }
     d->stack = stack;
     d->factory = std::move(factory);
     d->clock.start();
@@ -1436,11 +1810,38 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     // Task 29 step 2b: the media stall rule's check.
     d->stallTimer = new QTimer(this);
     d->stallTimer->setInterval(500);
+    d->stallTimer->setObjectName(QStringLiteral("remoteMediaStallTimer"));
     connect(d->stallTimer, &QTimer::timeout, this, [this] {
+        // 2026-10-17: a failure's disable or an audio request owed because
+        // the peer was not ready goes out once this same peer is ready
+        // again. MediaPeer says ready once per connection, and no move need
+        // come: the Core streaming to a stopped receiver keeps lastAudio
+        // fresh, so the rule below never fires. A retry step that is waiting
+        // asks itself (a send now would move the revision past its fence);
+        // a request held for transmit waits for the unkey. The two flags
+        // never hold together, so a disable owed is never followed by a
+        // request from here.
+        if (d->peer && d->peer->isReady() && !d->audioRetryPending) {
+            const QPointer<RemoteMediaController> self(this);
+            if (d->audioDisableUnsent) {
+                qCInfo(lcRemoteMedia)
+                    << "Turning audio off now that the media connection is ready again";
+                sendAudioDisable();
+                if (!self) { return; }
+            } else if (d->audioRequestUnsent && !d->audioFailureDisableSent
+                       && !d->audioHeldForTransmit && d->model && d->client
+                       && d->client->mediaAvailable()) {
+                qCInfo(lcRemoteMedia)
+                    << "Asking for audio now that the media connection is ready again";
+                requestAudio();
+                if (!self) { return; }
+            }
+        }
         // Not isReady(): an agent that stopped hearing its pair may say it
         // is not ready long before it fails, which is the case to catch.
         // Nor audioEnabled: the audio receiver gives up on a starved
-        // stream within a second and waits to be asked again, which a dead
+        // stream after RemoteAudioReceiver::kNoPacketsRestartNs (2.5 s,
+        // 2026-10-16) and waits to be asked again, which a dead
         // connection never does. What counts is that audio came on this
         // connection and this window still wants it (not muted).
         const bool wanted = d->model && !d->model->audioEngine()->masterMuted();
@@ -1449,12 +1850,17 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         }
         // The tunnel counts only once ICE settled on it (a host pair on an
         // open network is not a slow path); the control heartbeat follows.
+        // The ladder and the heartbeat count only media on the tunnel's own
+        // settings; the stall rule still covers any loopback shim on a start
+        // that declared the tunnel, the web relay leg included (media left
+        // on it after the session moved to a better path).
         const std::optional<MediaIcePath> path = d->peer->selectedPath();
-        const bool viaTunnel = d->tunnelNegotiated && path && path->viaLoopbackShim();
+        const bool viaShim = path && path->viaLoopbackShim();
+        const bool viaTunnel = d->currentTunnelIce && viaShim;
         d->client->setMediaTunnelInUse(viaTunnel);
         const int rank = d->client->pathRank();
-        const bool slowPath = rank == PathRacer::ServiceRelayed || rank == PathRacer::Floor
-            || viaTunnel;
+        const bool slowPath = (rank == PathRacer::ServiceRelayed && !d->client->pathPairUnknown())
+            || rank == PathRacer::Floor || (d->tunnelNegotiated && viaShim);
         // The Core stops RX audio for the TX-bound slice while keyed. Only
         // its negotiated txState can establish that this silence is expected.
         // Keep the media connection and display alive; the independent TX
@@ -1560,46 +1966,90 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             this, &RemoteMediaController::refreshAudioStatus);
     connect(d->audio.get(), &RemoteAudioReceiver::errorOccurred, this,
             [this](const QString& reason, RemoteAudioReceiver::Fault fault) {
-        // Record the failure against this session and context as they stand
-        // now, before the disable below advances the audio revision.
-        d->audioFailure = RemoteAudioFailure{fault, d->epoch, d->connectionId,
-                                             d->audioGeneration,
-                                             d->audio->telemetry().generation};
-        // The receiver's detail is for diagnosis; the operator sees the
-        // plain-English problem below.
-        qCWarning(lcRemoteMedia).noquote()
-            << QStringLiteral("Remote audio playback failed: %1").arg(reason);
+        using Fault = RemoteAudioReceiver::Fault;
+        // 2026-10-16: speakers asked for before this computer's first device
+        // list is in wait for it. That is no failure: no problem, no toast.
+        // The list's arrival opens them and asks the Core again
+        // (speakersConfigChanged); the retry below asks meanwhile. A list
+        // that has not come in after speakerDeviceListWaitMs is the
+        // speaker problem, with Retry, as any other failure to open.
+        const bool listPending = fault == Fault::SpeakerOpenFailed && d->model
+            && d->model->audioEngine()->speakersAwaitDeviceList();
+        const qint64 now = d->clock.elapsed();
+        if (listPending && d->audioAwaitingDevicesSinceMs < 0) {
+            d->audioAwaitingDevicesSinceMs = now;
+            qCInfo(lcRemoteMedia) << "Remote audio waits for this computer's audio device list";
+        }
+        const bool awaitingDevices = listPending
+            && now - d->audioAwaitingDevicesSinceMs < d->speakerDeviceListWaitMs;
+        // A failure the window's own retry met while the problem it retries
+        // still shows: the operator has been told.
+        const bool quiet = awaitingDevices
+            || (d->audioFailure && d->audioRetryRevision != 0
+                && d->audioRetryRevision == d->audioRevision);
+        if (!awaitingDevices) {
+            // Record the failure against this session and context as they
+            // stand now, before the disable below advances the audio revision.
+            d->audioFailure = RemoteAudioFailure{fault, d->epoch, d->connectionId,
+                                                 d->audioGeneration,
+                                                 d->audio->telemetry().generation};
+            // The receiver's detail is for diagnosis; the operator sees the
+            // plain-English problem below.
+            if (quiet) {
+                qCDebug(lcRemoteMedia).noquote()
+                    << QStringLiteral("Remote audio playback still failing: %1").arg(reason);
+            } else {
+                qCWarning(lcRemoteMedia).noquote()
+                    << QStringLiteral("Remote audio playback failed: %1").arg(reason);
+                if (listPending) {
+                    qCWarning(lcRemoteMedia)
+                        << "Remote audio: this computer's audio device list is still not in after"
+                        << d->speakerDeviceListWaitMs << "ms";
+                }
+            }
+        }
         d->audioEnabled = false;
         d->audio->stop();
-        // A failure is lasting: a restart waiting on its backoff step ends
-        // here (the disable below moves the revision on, so it could never
-        // run), and the next request is the operator's Retry or a change.
+        // A restart waiting on its backoff step ends here (the disable below
+        // moves the revision on, so it could never run); the failure's own
+        // retry, below, takes the next step.
         d->audioRetryPending = false;
         ++d->audioRetryGeneration;
+        d->audioHeldForTransmit = false; // R-R3-51: the failure's retry asks, not the unkey
         const QPointer<RemoteMediaController> self(this);
-        if (d->peer && d->peer->isReady()) {
-            ++d->audioRevision;
-            if (!d->audioRevision) { ++d->audioRevision; }
-            QJsonObject disable{{QStringLiteral("op"), QStringLiteral("audio")},
-                                {QStringLiteral("revision"), double(d->audioRevision)},
-                                {QStringLiteral("enabled"), false}};
-            if (audioProfileNegotiated()) {
-                disable.insert(QStringLiteral("profile"), remoteAudioProfileToWire(
-                    d->audioProfileChoice == RemoteAudioProfile::Lossless && !d->losslessFallback
-                        ? RemoteAudioProfile::Lossless : RemoteAudioProfile::Opus));
-                d->audioProfileRequested = true;
-            }
-            send(disable);
-            if (!self) { return; }
+        sendAudioDisable();
+        if (!self) { return; }
+        // 2026-10-16 (2026.10.1 ship blocker): a speaker that failed is
+        // asked for again on its own, on the restart backoff, as a mute and
+        // unmute would; the operator's Retry, a mute or a device change
+        // still asks at once. A buffer too large for remote playback and a
+        // decoder that cannot start wait for the operator's change: asking
+        // again changes neither. Nor does it change a device format remote
+        // playback cannot play (channels, rate or sample type).
+        if (fault != Fault::SpeakerCallbackTooLarge && fault != Fault::DecoderUnavailable
+            && fault != Fault::SpeakerFormatUnsupported) {
+            scheduleAudioRetry();
         }
         refreshAudioStatus();
-        if (!self) { return; }
+        if (!self || quiet) { return; }
         emit errorOccurred(remoteAudioProblemText(fault));
     });
     connect(d->audio.get(), &RemoteAudioReceiver::restartRequested, this,
             [this](const QString& reason, RemoteAudioReceiver::Fault fault) {
         qCWarning(lcRemoteMedia) << reason;
         d->audio->stop();
+        // R-R3-21, R-R3-51: while the Core transmits it sends this device no
+        // receive audio, so running out of packets is expected silence, not
+        // an outage (nor a lossless link interruption). Nothing is asked
+        // for and no backoff step is taken: each context asked for while
+        // keyed would only run dry again and back off further, leaving the
+        // audio to wait for the next step after the unkey. The unkey asks
+        // again at once (resumeAudioAfterTransmit).
+        if (fault == RemoteAudioReceiver::Fault::NoPackets && d->coreTransmitting()) {
+            d->audioHeldForTransmit = true;
+            refreshAudioStatus();
+            return;
+        }
         // R-R3-23: a lossless stream that arrives badly enough to restart
         // counts against the link trial; failing it asks Core for Opus now.
         if (d->linkTrial.active() && linkInterruption(fault)
@@ -1609,26 +2059,7 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             return;
         }
         d->audioRestarting = true;
-        if (!d->audioRetryPending) {
-            d->audioRetryPending = true;
-            const quint64 generation = d->audioRetryGeneration;
-            const quint32 revision = d->audioRevision;
-            const int delay = int(d->audioRestartBackoff.nextDelayMs(d->clock.elapsed(),
-                                                                     d->lastAudioRequestMs));
-            const auto step = [this, generation, revision] {
-                if (generation != d->audioRetryGeneration
-                    || revision != d->audioRevision) { return; }
-                d->audioRetryPending = false;
-                requestAudio();
-            };
-            QTimer::singleShot(delay, Qt::PreciseTimer, this, [this, step] {
-                if (d->audioRestartHeldForTest) {
-                    d->heldAudioRestartStep = step;
-                    return;
-                }
-                step();
-            });
-        }
+        scheduleAudioRetry();
         refreshAudioStatus();
     });
     connect(model->audioEngine(), &AudioEngine::masterMutedChanged,
@@ -1696,6 +2127,16 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     connect(d->micTimer, &QTimer::timeout, this, &RemoteMediaController::reconcileMicUplink);
     d->micEncoder = std::make_unique<RemoteMicEncoder>();
     resetMicrophoneQuality();
+    // 2026-10-10: the collector's thread reads the model's audio engine;
+    // it is stopped before the model deletes that engine (a child of the
+    // model, deleted after this signal), and once stopped never calls it.
+    if (model) {
+        connect(model, &QObject::destroyed, this, [this] {
+            stopMicCollector();
+            d->micCollector.reset();
+            d->micCollectorEngine = nullptr;
+        });
+    }
     d->micScratch.resize(static_cast<size_t>(RemoteMicConfig::kOpusFrameSamples));
     // Desktop remote transmit (R-IOS-13): the uplink's production callers.
     // The window's transmit client says when its key is down and when its
@@ -1704,6 +2145,14 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     if (RemoteTransmitClient* transmit = client->remoteTransmit()) {
         connect(transmit, &RemoteTransmitClient::micKeyDownChanged, this,
                 &RemoteMediaController::setMicKeyDown);
+        // 2026-10-15 (fix wave 2): a program key that brings its own
+        // audio takes the VAX TX device from the collector, and gives it
+        // back, at once, even under the screen key (the key down does not
+        // move then). Direct: the transmit client and this controller both
+        // live on the GUI thread, and the collector must be joined before
+        // keyForProgram returns, ahead of the program's first read.
+        connect(transmit, &RemoteTransmitClient::programAudioKeyChanged, this,
+                [this](bool) { reconcileMicUplink(); }, Qt::DirectConnection);
         connect(transmit, &RemoteTransmitClient::holdsTransmitChanged, this,
                 &RemoteMediaController::setHoldsTransmit);
         connect(transmit, &RemoteTransmitClient::micSourceChanged, this,
@@ -1742,6 +2191,10 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     // display budget's holder is the Core's, from `txState`'s holderEpoch
     // and holderAway (0 and not away while unheld or not sent).
     if (TransmitState* txState = client->transmitState()) {
+        // Read the completed snapshot/delta, including a TX-slice change
+        // while keyed, rather than its individual property notifications.
+        connect(txState, &TransmitState::stateChanged, this,
+                &RemoteMediaController::refreshSubscriptions, Qt::QueuedConnection);
         connect(txState, &TransmitState::stateChanged, this, [this, client] {
             if (d->client != client) { return; }
             const bool onAir = d->coreTransmitting();
@@ -1760,6 +2213,9 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
                 const qint64 now = d->allocationClock();
                 if (d->lastMediaMs >= 0) { d->lastMediaMs = now; }
                 if (d->fallbackFinishedMs >= 0) { d->fallbackFinishedMs = now; }
+                // R-R3-51: streams the transmit silence stopped are asked
+                // for again now, not at a backoff step.
+                resumeAudioAfterTransmit();
             }
         });
         connect(txState, &TransmitState::holderChanged, this, [this, txState] {
@@ -1898,6 +2354,21 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             refreshCtunState();
         });
     }
+    // The pin delta may follow its command result. Budgeted displays do
+    // not re-project CTUN on every planner tick, so observe the mirror
+    // itself. This path only projects: it never restores a preference or
+    // turns a received pin into another request. Sender destruction retires
+    // each watcher when a snapshot replaces its slice.
+    const auto watchCtunPin = [this](int sliceId) {
+        if (SliceModel* slice = d->model->sliceById(sliceId)) {
+            connect(slice, &SliceModel::streamCtunPinnedChanged, this,
+                    [this](bool) { refreshCtunState(false); });
+        }
+    };
+    for (SliceModel* slice : model->slices()) {
+        if (slice) { watchCtunPin(slice->sliceIndex()); }
+    }
+    connect(model, &RadioModel::sliceAdded, this, watchCtunPin);
     connect(client, &StationClient::streamCentreFinished,
             this, &RemoteMediaController::finishCentreRequest);
     connect(client, &QObject::destroyed, this, &RemoteMediaController::stop);
@@ -1927,6 +2398,8 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     });
     connect(model, &RadioModel::transmittingChanged, this,
             &RemoteMediaController::refreshSubscriptions);
+    connect(client, &StationClient::stateSnapshotApplied, this,
+            &RemoteMediaController::refreshSubscriptions, Qt::QueuedConnection);
     if (client && client->mediaAvailable()) {
         start();
     }
@@ -2253,7 +2726,9 @@ void RemoteMediaController::reconcileClockProbe()
         && std::any_of(d->bindings.cbegin(), d->bindings.cend(),
                        [](const auto& entry) { return entry.second.accepted; });
     const bool probe = d->peer && audioClockNegotiated()
-        && ((d->audioEnabled && d->audio->isRunning()) || displaying);
+        && ((d->audioEnabled && d->audio->isRunning()) || displaying
+            || std::any_of(d->waveformStreams.cbegin(), d->waveformStreams.cend(),
+                [](const auto& entry) { return entry.second.wanted; }));
     if (probe && !d->clockProbeTimer->isActive()) {
         d->clockProbeTimer->start();
     } else if (!probe && d->clockProbeTimer->isActive()) {
@@ -2263,6 +2738,7 @@ void RemoteMediaController::reconcileClockProbe()
 
 void RemoteMediaController::sendClockProbe()
 {
+    updateWaveformClock();
     if (!d->peer || !audioClockNegotiated()) {
         return;
     }
@@ -2303,6 +2779,7 @@ void RemoteMediaController::receiveClockEcho(const QJsonObject& payload, qint64 
     if (!d->clockEstimator.addSample({t0, t1, t2, receivedNs})) {
         return;
     }
+    updateWaveformClock();
     if (generation != 0) {
         d->captureAnchor = AudioCaptureAnchor{quint32(generation), quint32(rtpTimestamp), capturedNs};
     } else {
@@ -2331,6 +2808,9 @@ void RemoteMediaController::resetMicrophoneQuality()
     d->micPending.clear();
     d->programPending.clear();
     d->programUntilMs = -1;
+    d->silenceStartMs = -1;
+    d->silenceFrames = 0;
+    d->silenceLeadGiven = false;
     if (d->micEncoder) {
         d->micEncoder->setBitrate(d->audioQualityChoice == RemoteAudioQualityChoice::SaveData
             ? 24000 : 48000);
@@ -2441,7 +2921,7 @@ QString RemoteMediaController::headphonesFaultText(RemoteAudioReceiver::Fault fa
     // or audio quality is chosen), so each says how to try again.
     using Fault = RemoteAudioReceiver::Fault;
     const QString again =
-        QStringLiteral(" Turn the headphones off and on in Setup, Audio, Devices to try again.");
+        QStringLiteral(" Turn the headphones off and on in Setup, Audio, Outputs to try again.");
     switch (fault) {
     case Fault::SpeakerOpenFailed:
         return QStringLiteral("The headphones could not be opened.") + again;
@@ -2457,6 +2937,10 @@ QString RemoteMediaController::headphonesFaultText(RemoteAudioReceiver::Fault fa
     case Fault::DecoderUnavailable:
         return QStringLiteral("The audio decoder for the headphones could not start on "
                               "this computer. Choosing the audio quality again tries once more.");
+    case Fault::SpeakerFormatUnsupported:
+        return QStringLiteral("The headphones are set to a format remote playback cannot "
+                              "play. Choose another sample rate, channel setting or other "
+                              "headphones.");
     case Fault::NoPackets:
     case Fault::DecodeFailed:
     case Fault::ClockBuffer:
@@ -2549,56 +3033,407 @@ void RemoteMediaController::reconcileMicUplink()
 {
     const bool wanted = micUplinkWanted();
     const RemoteTransmitClient* transmit = d->client ? d->client->remoteTransmit() : nullptr;
+    // 2026-10-08: a program key that brings its own audio (its trx carried
+    // ",tci"): the line carries that audio or silence, never the
+    // microphone, so it takes no capture demand of its own.
+    const bool programKey = transmit && transmit->programAudioKey();
+    // 2026-10-09: the run stays a program's (programRun) until the line
+    // stops or the screen key or VOX wants it with no such program key.
+    const bool voxWants = d->voxArmed && d->client && d->client->capabilities().txPermitted;
+    if (!programKey && (d->micKeyDown || voxWants)) {
+        d->programRun = false;
+    }
+    if (programKey && wanted) {
+        d->programRun = true;
+    }
+    const bool programAudio = programKey || (wanted && d->programRun);
     const bool preview = micLineOpen() && d->model && d->model->audioEngine()
         && d->model->transmitModel().micSource() == MicSource::Pc
         && transmit && transmit->acceptedMicSource() == RemoteMicSource::ClientAudio;
-    const bool captureWanted = wanted || preview;
-    if (captureWanted && !d->micLease.isActive()) {
+    // 2026-10-15: VAX as the transmit source. The line carries what apps
+    // write to this computer's VAX TX device, as a local window's VAX
+    // override feeds its transmitter (TxWorkerThread.cpp, the
+    // isVaxMicOverrideActive branch: pullVaxTxMic, left and right averaged,
+    // no gain), and never the PC microphone, so it takes no capture lease.
+    // The device is drained while the line is open, as preview drains the
+    // microphone, so a key never sends what an app wrote before it.
+    // 2026-10-15 (fix wave): not while a program brings its own audio
+    // (programAudio). The VAX TX device has one reader (its read position
+    // and meter are not shared), and a program key's audio may itself come
+    // from it (a remote window's rigctld key pumps pullVaxTxMic into
+    // pushProgramAudio), so the collector is joined first and reads
+    // nothing until the program's run ends.
+    const bool vaxSource = d->model && d->model->audioEngine()
+        && d->model->transmitModel().micSource() == MicSource::Vax;
+    const bool vaxFeed = vaxSource && !programAudio && d->model->audioEngine()->isVaxTxBusOpen()
+        && (wanted || (micLineOpen() && transmit
+                       && transmit->acceptedMicSource() == RemoteMicSource::ClientAudio));
+    const bool captureWanted = !vaxSource && ((wanted && !programAudio) || preview);
+    // 2026-10-09: such a key takes no demand of its own, and keeps a lease
+    // VOX or preview already holds (its samples are drained and dropped).
+    const bool keepLease = wanted && programAudio && !vaxSource;
+    const bool leaseWasActive = d->micLease.isActive();
+    // 2026-10-09: read before the acquire. A first lease opens a new
+    // generation by itself; with demand already held (this window's
+    // preview, Test Mic, a local session) only a retry does.
+    const bool demandBefore = d->model->audioEngine()->hasCaptureDemand();
+    const bool captureFailedBefore = d->model->audioEngine()->captureStatus().state
+        == CaptureSupervisor::Status::State::Failed;
+    if (captureWanted && !leaseWasActive) {
         d->micLease = d->model->audioEngine()->acquireCaptureDemand(
             CaptureSupervisor::Demand::RemoteWindow);
-    } else if (!captureWanted && d->micLease.isActive()) {
+    } else if (!captureWanted && !keepLease && leaseWasActive) {
+        // 2026-10-10: the collector is joined before its lease goes.
+        stopMicCollector();
         d->micLease.release();
+    }
+    // 2026-10-10: the collector runs exactly while the lease is held.
+    // 2026-10-15: or, with VAX the transmit source, while the VAX TX device
+    // is fed (vaxFeed).
+    if (vaxFeed) {
+        if (!d->micVaxFed) {
+            // 2026-10-15 (fix wave): the VAX feed starts or comes back
+            // (after a program's run, a line that reopens, a move from the
+            // PC microphone). What apps wrote while nothing here read the
+            // device is old: it is read and dropped before the collector
+            // starts, so it never follows into this run. Nothing else here
+            // reads the device now: the collector (on either source) is
+            // joined first.
+            stopMicCollector();
+            AudioEngine* engine = d->model->audioEngine();
+            const int block = static_cast<int>(d->micScratch.size());
+            for (int pull = 0; pull < kVaxBacklogDiscardPulls; ++pull) {
+                if (engine->pullVaxTxMic(d->micScratch.data(), block) < block) {
+                    break;
+                }
+            }
+        }
+        startMicCollector(d->model->audioEngine(), true);
+        d->micVaxFed = true;
+    } else if (d->micLease.isActive()) {
+        startMicCollector(d->model->audioEngine(), false);
+        d->micVaxFed = false;
+    } else {
+        stopMicCollector();
     }
     // Samples waiting before key-down belong to preview, even when the
     // key arrives between timer ticks. Drain them before sending fresh PCM.
     const bool starting = wanted && !d->micRunning;
+    bool retryCapture = false;
     if (wanted != d->micRunning) {
         d->micRunning = wanted;
         if (wanted) {
-            qCInfo(lcRemoteMedia) << "Microphone uplink started";
+            qCInfo(lcRemoteMedia) << "Microphone uplink started"
+                                  << (programAudio ? "with the program's audio or silence"
+                                      : vaxSource  ? "with VAX"
+                                                   : "with the microphone");
+            d->micVaxMissingReported = false;
+            // 2026-10-08: a capture that failed earlier never comes back by
+            // itself; a key that will send the microphone asks once.
+            // 2026-10-09: only when capture demand was already held:
+            // acquiring it from no demand starts a new generation by
+            // itself. Both are read before the acquire.
+            retryCapture = !programAudio && !vaxSource && demandBefore && captureFailedBefore;
+            d->micDroppedReported = d->micCollector ? d->micCollector->droppedFrames() : 0;
         } else {
+            reportMicDropped();
             d->micPending.clear();
             d->programPending.clear();
             d->programUntilMs = -1;
+            d->silenceStartMs = -1;
+            d->silenceFrames = 0;
+            d->silenceLeadGiven = false;
+            d->programRun = false;
             qCInfo(lcRemoteMedia) << "Microphone uplink stopped";
         }
     }
+    // 2026-10-15: a running line that moves from VAX onto the microphone
+    // takes the lease now, as a key would at its start: the same one retry
+    // when demand was already held.
+    if (wanted && !starting && !programAudio && !vaxSource && !leaseWasActive
+        && demandBefore && captureFailedBefore) {
+        retryCapture = true;
+    }
     const QPointer<RemoteMediaController> self(this);
+    if (retryCapture) {
+        qCInfo(lcRemoteMedia) << "Microphone capture had failed; retrying for this key";
+        d->model->audioEngine()->retryCapture();
+        if (!self) {
+            return;
+        }
+    }
     refreshAudioStatus();
-    if (!self || !d->micLease.isActive()) {
+    if (!self) {
+        return;
+    }
+    if (d->micRunning && vaxSource && !vaxFeed && !programAudio && !d->micVaxMissingReported) {
+        d->micVaxMissingReported = true;
+        qCWarning(lcRemoteMedia) << "Microphone uplink: VAX is the transmit source but this"
+                                    " computer's VAX TX device is not open; nothing is sent";
+    }
+    if (!programAudio && !d->micLease.isActive() && !vaxFeed) {
         return;
     }
     // A program's audio, while it keeps coming, replaces the microphone:
     // what the microphone captured meanwhile is drained and dropped.
-    const bool program = d->clock.elapsed() < d->programUntilMs;
-    AudioEngine* engine = d->model->audioEngine();
-    for (;;) {
-        const int got = engine->pullTxMic(d->micScratch.data(),
-                                          static_cast<int>(d->micScratch.size()));
-        if (got <= 0) {
-            break;
+    const qint64 nowMs = micNowMs();
+    const bool program = nowMs < d->programUntilMs;
+    if ((d->micLease.isActive() || vaxFeed) && d->micCollector) {
+        // 2026-10-10: the collector's thread pulled the microphone; this
+        // drains what it queued. (Inline, a test's collector has no thread
+        // and collects here, as this pump itself did before.)
+        if (!d->micCollector->isRunning()) {
+            d->micCollector->collectOnce();
         }
-        // Idle preview continuously drains the capture ring without
-        // encoding or sending. It must never queue old voice for a key.
-        if (d->micRunning && !starting && !program) {
-            d->micPending.insert(d->micPending.end(), d->micScratch.begin(),
-                                 d->micScratch.begin() + got);
+        for (;;) {
+            const int got = d->micCollector->drain(d->micScratch.data(),
+                                                   static_cast<int>(d->micScratch.size()));
+            if (got <= 0) {
+                break;
+            }
+            // Idle preview continuously drains the capture ring without
+            // encoding or sending. It must never queue old voice for a key.
+            // 2026-10-08: nor does a program key that brings its own audio.
+            if (d->micRunning && !starting && !program && !programAudio) {
+                d->micPending.insert(d->micPending.end(), d->micScratch.begin(),
+                                     d->micScratch.begin() + got);
+            }
+            // A short block means nothing more is waiting.  [2026-10-10:
+            // the queue is finite, so this loop ends either way.]
+            if (got < static_cast<int>(d->micScratch.size())) {
+                break;
+            }
+        }
+        // 2026-10-12: a collector thread that takes nothing while capture
+        // is ready leaves the helper's ring unread and the uplink silent.
+        // Said once per stall, with whether the thread still wakes, and
+        // again when it ends.
+        // 2026-10-15: not for VAX, which gives nothing while no app writes.
+        const bool captureReady = d->micCollector->isRunning() && !d->micCollectorVax
+            && d->model->audioEngine()->captureStatus().state
+                == CaptureSupervisor::Status::State::Ready;
+        const quint64 collected = d->micCollector->collectedFrames();
+        if (!captureReady || d->micCollectedMovedMs < 0 || collected != d->micCollectedSeen) {
+            if (d->micStallReported && captureReady) {
+                qCWarning(lcRemoteMedia) << "Microphone collector is taking audio again after"
+                                         << (nowMs - d->micCollectedMovedMs) << "ms";
+            }
+            d->micStallReported = false;
+            d->micCollectedSeen = collected;
+            d->micWakesAtProgress = d->micCollector->wakes();
+            d->micCollectedMovedMs = captureReady ? nowMs : -1;
+        } else if (!d->micStallReported && nowMs - d->micCollectedMovedMs >= kMicCollectorStallMs) {
+            d->micStallReported = true;
+            const quint64 wakes = d->micCollector->wakes() - d->micWakesAtProgress;
+            qCWarning(lcRemoteMedia) << "Microphone collector took no audio for"
+                                     << (nowMs - d->micCollectedMovedMs)
+                                     << "ms while capture is ready; its thread woke" << wakes
+                                     << "times in that time";
         }
     }
     if (!d->micRunning) {
         return;
     }
+    if (programAudio) {
+        // Nothing the microphone gave before this key may follow it.
+        d->micPending.clear();
+        if (!programKey) {
+            // 2026-10-09: the key has ended and the line is about to stop:
+            // nothing more is sent, least of all the microphone.
+            d->programPending.clear();
+            return;
+        }
+        if (program) {
+            // The program's own audio is this key's first: no lead later.
+            d->silenceStartMs = -1;
+            d->silenceLeadGiven = true;
+        } else {
+            queueProgramSilence(nowMs);
+        }
+        sendMicAudio(d->programPending);
+        return;
+    }
+    // A later program key's silence starts afresh, never from this one's.
+    d->silenceStartMs = -1;
     sendMicAudio(program ? d->programPending : d->micPending);
+}
+
+bool RemoteMediaController::micLineLossless() const
+{
+    return d->peer && d->peer->micLosslessNegotiated()
+        && d->audioProfileChoice == RemoteAudioProfile::Lossless && !d->losslessFallback;
+}
+
+qint64 RemoteMediaController::micNowMs() const
+{
+    return d->micClockForTest ? d->micClockForTest() : d->clock.elapsed();
+}
+
+void RemoteMediaController::setMicClockForTest(std::function<qint64()> clock)
+{
+    d->micClockForTest = std::move(clock);
+}
+
+bool RemoteMediaController::micCaptureLeaseHeldForTest() const
+{
+    return d->micLease.isActive();
+}
+
+namespace {
+// setMicCollectorInlineForTest.
+std::atomic<bool> g_micCollectorInlineForTest{false};
+}
+
+void RemoteMediaController::setMicCollectorInlineForTest(bool inlineMode)
+{
+    g_micCollectorInlineForTest.store(inlineMode, std::memory_order_release);
+}
+
+bool RemoteMediaController::micCollectorThreadRunningForTest() const
+{
+    return d->micCollector && d->micCollector->isRunning();
+}
+
+int RemoteMediaController::collectMicNowForTest()
+{
+    if (!d->micCollector || d->micCollector->isRunning() || !d->micLease.isActive()) {
+        return 0;
+    }
+    return d->micCollector->collectOnce();
+}
+
+void RemoteMediaController::pumpMicUplinkForTest()
+{
+    reconcileMicUplink();
+}
+
+void RemoteMediaController::startMicCollector(AudioEngine* engine, bool vax)
+{
+    if (engine == nullptr) {
+        stopMicCollector();
+        return;
+    }
+    // 2026-10-15: a change of source makes a new collector: what the old
+    // one queued is discarded with it, so the two never mix.
+    if (!d->micCollector || d->micCollectorEngine != engine || d->micCollectorVax != vax) {
+        stopMicCollector();
+        d->micCollector.reset();
+        d->micCollectorEngine = engine;
+        d->micCollectorVax = vax;
+        if (vax) {
+            d->micCollector = std::make_unique<MicUplinkCollector>(
+                [engine](float* dst, int frames) {
+                    return engine->pullVaxTxMicKeepingBacklog(dst, frames,
+                                                              RemoteMicConfig::kMaxDepthFrames);
+                });
+        } else {
+            d->micCollector = std::make_unique<MicUplinkCollector>(
+                [engine](float* dst, int frames) { return engine->pullTxMic(dst, frames); });
+        }
+        d->micDroppedReported = 0;
+    }
+    if (g_micCollectorInlineForTest.load(std::memory_order_acquire)) {
+        // A test's collector has no thread: the pump (or collectMicNowForTest)
+        // collects inline. Production never comes here.
+        if (d->micCollector->isRunning()) {
+            d->micCollector->stop();
+        }
+        return;
+    }
+    if (!d->micCollector->isRunning()) {
+        d->micCollector->start();
+        qCInfo(lcRemoteMedia) << "Microphone collector thread started";
+    }
+}
+
+void RemoteMediaController::stopMicCollector()
+{
+    // 2026-10-15 (fix wave): nothing reads the VAX TX device after this; a
+    // later VAX feed drops what waits there first.
+    d->micVaxFed = false;
+    // The next run starts its diagnostic clock when capture is ready.
+    d->micCollectedSeen = 0;
+    d->micWakesAtProgress = 0;
+    d->micCollectedMovedMs = -1;
+    d->micStallReported = false;
+    if (!d->micCollector) {
+        return;
+    }
+    const bool wasRunning = d->micCollector->isRunning();
+    const bool realtime = d->micCollector->realtimePriorityHeld();
+    // Joins the thread, or lets go of one still waiting on its priority
+    // request, and discards what it queued: nothing collected under this
+    // lease follows into the next.
+    const MicUplinkCollector::StopOutcome stopped = d->micCollector->stop();
+    if (stopped == MicUplinkCollector::StopOutcome::LeftWaitingOnPriority) {
+        qCInfo(lcRemoteMedia) << "Microphone collector thread stopped while it still waited on"
+                              << "the system for real-time priority; it ends on its own";
+    } else if (wasRunning) {
+        qCInfo(lcRemoteMedia) << "Microphone collector thread stopped"
+                              << (realtime ? "(it ran at real-time audio priority)"
+                                           : "(the system gave it no real-time priority)");
+    }
+}
+
+void RemoteMediaController::reportMicDropped()
+{
+    const quint64 dropped = d->micCollector ? d->micCollector->droppedFrames() : 0;
+    if (dropped > d->micDroppedReported) {
+        const quint64 frames = dropped - d->micDroppedReported;
+        qCWarning(lcRemoteMedia) << "Microphone uplink: this window was too busy to send"
+                                 << (frames * 1000 / MicUplinkCollector::kSampleRate)
+                                 << "ms of microphone audio during this key; the oldest was dropped";
+    }
+    d->micDroppedReported = dropped;
+}
+
+void RemoteMediaController::dropMediaPeerForTest()
+{
+    if (d->peer) {
+        emit d->peer->closed();
+    }
+}
+
+void RemoteMediaController::planNowForTest()
+{
+    refreshSubscriptions();
+}
+
+void RemoteMediaController::queueProgramSilence(qint64 nowMs)
+{
+    // Paced by the clock, never by counting pump ticks: the pump is a
+    // QTimer and can stall.
+    const qint64 packet = micLineLossless() ? PcmAudioCodecConfig::kPacketFrames
+                                            : RemoteMicConfig::kOpusFrameSamples;
+    if (d->silenceStartMs < 0) {
+        d->silenceStartMs = nowMs;
+        d->silenceFrames = 0;
+        if (!d->silenceLeadGiven) {
+            // The line's first audio of this key: the Core's target depth
+            // at once, in whole packets, so its line-start wait and its
+            // fill are met without waiting for the pump.
+            d->silenceLeadGiven = true;
+            constexpr qint64 kTargetFrames =
+                qint64(RemoteMicConfig::kTargetDepthMs) * RemoteMicConfig::kFramesPerMs;
+            const qint64 lead = ((kTargetFrames + packet - 1) / packet) * packet;
+            d->silenceFrames = -lead;
+        }
+    }
+    const qint64 due = (nowMs - d->silenceStartMs) * RemoteMicConfig::kFramesPerMs;
+    qint64 owed = due - d->silenceFrames;
+    // After a stall, at most the Core's deepest buffer of silence in one
+    // pump; the rest is never sent, so a stall never floods the Core.
+    constexpr qint64 kMaxOwedFrames =
+        qint64(RemoteMicConfig::kMaxDepthMs) * RemoteMicConfig::kFramesPerMs;
+    if (owed > kMaxOwedFrames) {
+        owed = kMaxOwedFrames;
+        d->silenceFrames = due - owed;
+    }
+    if (owed <= 0) {
+        return;
+    }
+    d->programPending.insert(d->programPending.end(), static_cast<size_t>(owed), 0.0f);
+    d->silenceFrames += owed;
 }
 
 void RemoteMediaController::sendMicAudio(std::vector<float>& pending)
@@ -2606,8 +3441,7 @@ void RemoteMediaController::sendMicAudio(std::vector<float>& pending)
     const float* mono = pending.data();
     const int frames = static_cast<int>(pending.size());
     // Whole packets only; the rest waits for the next pump.
-    const bool lossless = d->peer && d->peer->micLosslessNegotiated()
-        && d->audioProfileChoice == RemoteAudioProfile::Lossless && !d->losslessFallback;
+    const bool lossless = micLineLossless();
     const int packetFrames = lossless ? PcmAudioCodecConfig::kPacketFrames
                                       : RemoteMicConfig::kOpusFrameSamples;
     const quint32 ssrc = d->peer ? d->peer->micAudioSsrc() : 0;
@@ -2669,7 +3503,7 @@ void RemoteMediaController::pushProgramAudio(const float* samples, int frames, i
         const auto* resampled = reinterpret_cast<const float*>(out.constData());
         mono.assign(resampled, resampled + out.size() / static_cast<qsizetype>(sizeof(float)));
     }
-    d->programUntilMs = d->clock.elapsed() + kProgramAudioHoldMs;
+    d->programUntilMs = micNowMs() + kProgramAudioHoldMs;
     if (!d->micRunning) {
         return;
     }
@@ -2717,6 +3551,7 @@ void RemoteMediaController::requestHeadphonesAudio()
     if (!d->headphonesRevision) { ++d->headphonesRevision; }
     d->headphonesRequested = wanted;
     d->headphonesRetryPending = false;
+    d->headphonesHeldForTransmit = false; // R-R3-51
     d->headphonesLastRequestMs = d->clock.elapsed();
     // The one quality choice, as the speakers' stream asks for it.
     const RemoteAudioProfile profile =
@@ -2738,6 +3573,7 @@ void RemoteMediaController::receiveHeadphonesAudioContext(const QJsonObject& pay
     d->headphonesGeneration = context->generation;
     d->headphonesContext = context;
     d->headphonesRetryPending = false;
+    d->headphonesHeldForTransmit = false; // R-R3-51
     d->headphones->stop();
     // start() can report a headphones failure synchronously, and a listener
     // to that report may retire this controller.
@@ -2775,6 +3611,14 @@ void RemoteMediaController::onHeadphonesRestart(const QString& reason,
     qCWarning(lcRemoteMedia).noquote()
         << QStringLiteral("Remote headphones audio: %1").arg(reason);
     d->headphones->stop();
+    // R-R3-21, R-R3-51: no packets while the Core transmits is expected
+    // silence, as for the speakers: no request, no backoff step; the
+    // unkey asks again at once.
+    if (fault == RemoteAudioReceiver::Fault::NoPackets && d->coreTransmitting()) {
+        d->headphonesHeldForTransmit = true;
+        refreshAudioStatus();
+        return;
+    }
     // R-R3-23: a lossless headphones mix's restart counts against the one
     // link trial, as the speakers' does.
     if (d->headphonesContext && d->headphonesContext->losslessEncoder
@@ -2811,6 +3655,7 @@ void RemoteMediaController::onHeadphonesError(const QString& reason,
     d->headphones->stop();
     d->headphonesFaulted = true;
     d->headphonesRetryPending = false;
+    d->headphonesHeldForTransmit = false; // R-R3-51
     const QPointer<RemoteMediaController> self(this);
     // headphonesWanted() is false now: the Core is asked to stop the mix.
     requestHeadphonesAudio();
@@ -2822,6 +3667,28 @@ void RemoteMediaController::onHeadphonesError(const QString& reason,
     refreshAudioStatus();
     if (!self) { return; }
     emit errorOccurred(text);
+}
+
+void RemoteMediaController::resumeAudioAfterTransmit()
+{
+    // R-R3-21, R-R3-51: the Core stopped transmitting, so its receive audio
+    // comes again. The speakers and the headphones mix, if the transmit
+    // silence stopped them, are asked for now, each with a fresh backoff,
+    // instead of at a backoff step. One something else already asked for
+    // again (a request or a context since the hold) is not held any more
+    // and is left alone. A receiver stream for apps needs nothing here:
+    // its receiver never restarts for no packets (it idles, R-R3-43) and
+    // plays again as the Core's packets return.
+    const QPointer<RemoteMediaController> self(this);
+    if (std::exchange(d->audioHeldForTransmit, false) && !d->audio->isRunning()) {
+        d->audioRestartBackoff.reset();
+        requestAudio();
+        if (!self) { return; }
+    }
+    if (std::exchange(d->headphonesHeldForTransmit, false) && !d->headphones->isRunning()) {
+        d->headphonesRestartBackoff.reset();
+        requestHeadphonesAudio();
+    }
 }
 
 void RemoteMediaController::retryAudio()
@@ -2976,6 +3843,8 @@ void RemoteMediaController::stop()
     d->currentRouted = false;
     d->replacementRouted = false;
     d->replacementDirect = false;
+    d->currentTunnelIce = false;
+    d->replacementTunnelIce = false;
     d->silenceFallbackFired = false;
     d->replacementFallback = false;
     d->fallbackFinishedMs = -1;
@@ -3002,11 +3871,21 @@ void RemoteMediaController::stop()
     // Task 36: the microphone line goes with the media connection; the
     // capture helper closes.
     d->micTimer->stop();
+    // 2026-10-10: the collector is joined before its lease goes.
+    if (d->micRunning) {
+        reportMicDropped();
+    }
+    stopMicCollector();
     d->micLease.release();
     d->micRunning = false;
     d->micPending.clear();
     d->programPending.clear();
     d->programUntilMs = -1;
+    // 2026-10-09: and the silence of a program key cut off with it.
+    d->silenceStartMs = -1;
+    d->silenceFrames = 0;
+    d->silenceLeadGiven = false;
+    d->programRun = false;
     d->micPacketsSent = 0;
     d->ps3Generation = 0;
     d->ps3Assembler.reset(0);
@@ -3015,8 +3894,12 @@ void RemoteMediaController::stop()
     d->audioEnabled = false;
     d->audioRetryPending = false;
     ++d->audioRetryGeneration;
+    d->audioRetryRevision = 0;
+    d->audioAwaitingDevicesSinceMs = -1;
     d->audioRestartBackoff.reset();
     d->headphonesRestartBackoff.reset();
+    d->audioHeldForTransmit = false;       // R-R3-51
+    d->headphonesHeldForTransmit = false;
     d->audioRevision = 0;
     d->audioGeneration = 0;
     d->acceptedAudioContext.reset();
@@ -3030,6 +3913,18 @@ void RemoteMediaController::stop()
     // session; a reconnect measures afresh.
     d->clockProbeTimer->stop();
     d->clockEstimator.reset();
+    if (d->model && d->model->radeWaveformModel()) {
+        d->model->radeWaveformModel()->setRemoteClockMap(0, false);
+    }
+    for (auto& [key, stream] : d->waveformStreams) {
+        stream.enabled = false; stream.revision = 0; stream.sourceGeneration = 0;
+        stream.deliveryGeneration = 0; stream.lastSerial = 0; stream.nextSequence = 0; stream.lastDroppedTotal = 0; stream.sampleRate = 0;
+        if (d->model && d->model->radeWaveformModel()) {
+            d->model->radeWaveformModel()->applyRemoteContext(key.first, key.second, 0, 0, 0,
+                WaveformAvailability::Unavailable, QStringLiteral("The waveform media connection closed."));
+        }
+    }
+    d->waveformNegotiated = false; d->waveformBytesPerSecond = 0;
     d->captureAnchor.reset();
     d->pendingClockProbes.clear();
     // R-R3-21: so do the display's map and counters.
@@ -3040,9 +3935,13 @@ void RemoteMediaController::stop()
     // A playback problem belongs to its session and ends with it.
     d->audioFailure.reset();
     d->audioRestarting = false;
+    d->audioFailureDisableSent = false;
+    d->audioRequestUnsent = false;
+    d->audioDisableUnsent = false;
     // R-R3-43: receiver streams stop with the media connection. Their
     // sinks stay registered and are asked for again on the next one.
     d->receiverRevisions.clear();
+    d->receiverStopsUnanswered.clear();
     for (auto& [sliceId, stream] : d->iqStreams) {
         Q_UNUSED(sliceId);
         stream.enabled = false;
@@ -3277,6 +4176,7 @@ bool RemoteMediaController::startReplacement(ReplaceKind kind, bool carriesFolde
         }
     }
     std::optional<IceConfiguration> nextIce;
+    bool nextTunnelIce = false;
     if (direct) {
         nextIce = d->client->mediaDirectIceConfiguration();
     } else if (kind == ReplaceKind::TunnelFallback && d->tunnelNegotiated) {
@@ -3284,9 +4184,10 @@ bool RemoteMediaController::startReplacement(ReplaceKind kind, bool carriesFolde
         // candidates), so ICE cannot settle on the silent direct pair
         // again. The replace on the wire is the plain three-field one.
         nextIce = d->client->mediaTunnelOnlyIceConfiguration();
-        if (!nextIce) { nextIce = mediaIceConfiguration(); }
+        nextTunnelIce = nextIce.has_value();
+        if (!nextIce) { nextIce = mediaIceConfiguration(&nextTunnelIce); }
     } else {
-        nextIce = mediaIceConfiguration();
+        nextIce = mediaIceConfiguration(&nextTunnelIce);
     }
     // A raw tag-2 relay leg in use has one agent destination: a new
     // connection without the tunnel's own framing would redirect it.
@@ -3335,6 +4236,7 @@ bool RemoteMediaController::startReplacement(ReplaceKind kind, bool carriesFolde
     });
     d->replacementRouted = nextIce && nextIce->mediaRouting();
     d->replacementDirect = direct;
+    d->replacementTunnelIce = nextTunnelIce;
     d->replacementFallback = kind == ReplaceKind::TunnelFallback;
     d->replacementMoveFolded = carriesFoldedMove;
     peer->setIceConfiguration(nextIce);
@@ -3343,7 +4245,7 @@ bool RemoteMediaController::startReplacement(ReplaceKind kind, bool carriesFolde
                                 IMediaTransport::kDefaultAudioTargetBitrate,
                                 /*offerLosslessAudio=*/false, receiverAudioNegotiated(),
                                 headphonesMixNegotiated(), micLineNegotiated(),
-                                d->iqNegotiated);
+                                d->iqNegotiated, d->waveformNegotiated);
     if (!ok || !started) {
         dropReplacement(QStringLiteral("the new connection could not start"));
         // Re-review: a connection that cannot start is tried again only a
@@ -3449,6 +4351,7 @@ void RemoteMediaController::promoteReplacement()
     // The direct media ladder: the connection in use is now the new one,
     // and its silence is counted from here.
     d->currentRouted = std::exchange(d->replacementRouted, false);
+    d->currentTunnelIce = std::exchange(d->replacementTunnelIce, false);
     d->replacementDirect = false;
     d->replacementMoveFolded = false;
     d->lastMediaMs = d->allocationClock();
@@ -3459,6 +4362,11 @@ void RemoteMediaController::promoteReplacement()
         if (d->lastAudio.isValid()) { d->lastAudio.restart(); }
     }
     emit networkPathChanged();
+    // 2026-10-16: a speaker problem is this computer's, not the path's. It
+    // moves with the session, so playing on the new connection clears it.
+    if (d->audioFailure && d->audioFailure->connectionId == d->connectionId) {
+        d->audioFailure->connectionId = d->replacementId;
+    }
     d->connectionId = d->replacementId;
     d->replacementId.clear();
     // The existing migration contract carries accepted display contexts to
@@ -3478,6 +4386,10 @@ void RemoteMediaController::promoteReplacement()
         }
     }
     connectPeer(next, d->epoch);
+    for (const auto& [key, stream] : d->waveformStreams) {
+        if (stream.wanted) { sendWaveformRequest(key.first, key.second, true); }
+    }
+    reconcileClockProbe();
     for (const auto& [sliceId, stream] : d->iqStreams) {
         if (stream.wanted) { sendIqRequest(sliceId, true); }
     }
@@ -3490,6 +4402,160 @@ void RemoteMediaController::promoteReplacement()
                .arg(d->dualFromOld).arg(d->dualFromNew)
                .arg(d->dual->duplicatesDropped()).arg(d->dual->leadMs());
     noteMicLine();
+    askAgainAfterMove();
+}
+
+void RemoteMediaController::askAgainAfterMove()
+{
+    // A request made around the move may have been lost. The Core takes a
+    // request only on its current connection, so one naming the old
+    // connection after the Core moved is dropped, and one the old peer
+    // could not send was never made. The Core sends its answer before its
+    // replace on the same ordered channel, so a request still unanswered
+    // here is lost: ask again on the new connection, each with a newer
+    // revision. Without this a restart after a stall that met a move left
+    // the audio silent until mute and unmute.
+    const QPointer<RemoteMediaController> self(this);
+    const QPointer<MediaPeer> peer = d->peer;
+    const auto current = [this, &self, &peer] { return self && d->peer == peer; };
+    // The speakers' stream. A pending restart step asks on the new
+    // connection itself (it is fenced by revision, not connection).
+    const bool audioUnanswered = d->audioRevision != 0
+        && (!d->acceptedAudioContext
+            || d->acceptedAudioContext->revision != d->audioRevision);
+    if (d->audioFailureDisableSent) {
+        // A playback failure's disable: the Core would keep sending a
+        // stream this computer stopped playing. A failure that is asked for
+        // again on the restart backoff (scheduleAudioRetry) keeps its step:
+        // a new disable would move the revision past the step's fence, and
+        // the step's own request (requestAudio, which clears the flag) asks
+        // the Core on the new connection anyway. 2026-10-17: a disable that
+        // could not be sent at all (the old peer not ready) is sent here
+        // too, whether or not the Core answered the request before it.
+        if ((audioUnanswered || d->audioDisableUnsent) && !d->audioRetryPending) {
+            qCInfo(lcRemoteMedia) << "Turning audio off again on the new connection";
+            sendAudioDisable();
+            if (!current()) { return; }
+        }
+    } else if (!d->audioRetryPending && !d->audioHeldForTransmit
+               && (d->audioRestarting || audioUnanswered || d->audioRequestUnsent)) {
+        // 2026-10-17: a request that could not be made at all (a failure's
+        // retry step that ran while the old peer was not ready) is asked
+        // here too, whether or not the Core answered the disable before it.
+        qCInfo(lcRemoteMedia) << "Asking for audio again on the new connection";
+        requestAudio();
+        if (!current()) { return; }
+    }
+    // The headphones mix. Its restart step is fenced by connection, so a
+    // step waiting across the move would never run: ask now instead.
+    const bool headphonesUnanswered = d->headphonesRevision != 0
+        && (!d->headphonesContext
+            || d->headphonesContext->revision != d->headphonesRevision);
+    if (!d->headphonesHeldForTransmit
+        && (d->headphonesRetryPending || headphonesUnanswered)) {
+        qCInfo(lcRemoteMedia) << "Asking for the headphones mix again on the new connection";
+        requestHeadphonesAudio();
+        if (!current()) { return; }
+    }
+    // The transmit monitor's route.
+    if (d->monitorRevision != 0
+        && (!d->monitorContext || d->monitorContext->revision != d->monitorRevision)) {
+        qCInfo(lcRemoteMedia) << "Asking for the transmit monitor again on the new connection";
+        requestMonitorAudio();
+        if (!current()) { return; }
+    }
+    // Receiver streams for apps on this computer; their restart steps are
+    // fenced by connection too.
+    QList<int> receivers;
+    for (const auto& [sliceId, stream] : d->receiverStreams) {
+        const auto asked = d->receiverRevisions.constFind(sliceId);
+        if (stream.faulted || asked == d->receiverRevisions.cend()) { continue; }
+        if (stream.retryPending || !stream.context
+            || stream.context->revision != asked.value()) {
+            receivers.append(sliceId);
+        }
+    }
+    for (int sliceId : receivers) {
+        if (d->receiverStreams.count(sliceId) == 0) { continue; }
+        qCInfo(lcRemoteMedia) << "Asking for receiver audio again on the new connection"
+                              << sliceId;
+        sendReceiverAudioRequest(sliceId, true);
+        if (!current()) { return; }
+    }
+    // A receiver stream's stop (its last app closed, or it failed here)
+    // that the Core has not answered: without it the Core keeps sending a
+    // stream nothing plays.
+    QList<int> stops;
+    for (int sliceId : std::as_const(d->receiverStopsUnanswered)) {
+        const auto stream = d->receiverStreams.find(sliceId);
+        if (stream == d->receiverStreams.end() || stream->second.faulted) {
+            stops.append(sliceId);
+        }
+    }
+    for (int sliceId : stops) {
+        if (!d->receiverStopsUnanswered.contains(sliceId)) { continue; }
+        qCInfo(lcRemoteMedia) << "Stopping receiver audio again on the new connection"
+                              << sliceId;
+        sendReceiverAudioRequest(sliceId, false);
+        if (!current()) { return; }
+    }
+    // Waveform streams: promoteReplacement asks again for each one wanted;
+    // a stop the Core has not answered is sent again here.
+    QList<Private::WaveformKey> waveformStops;
+    for (const auto& [key, stream] : d->waveformStreams) {
+        if (!stream.wanted && stream.revision != 0
+            && stream.answeredRevision != stream.revision) {
+            waveformStops.append(key);
+        }
+    }
+    for (const auto& key : waveformStops) {
+        const auto stream = d->waveformStreams.find(key);
+        if (stream == d->waveformStreams.end() || stream->second.wanted) { continue; }
+        qCInfo(lcRemoteMedia) << "Stopping a waveform stream again on the new connection"
+                              << key.first;
+        sendWaveformRequest(key.first, key.second, false);
+        if (!current()) { return; }
+    }
+    // Displays: an allocation request still waiting for its answer is sent
+    // again as it was, with a newer revision, so a late answer to the lost
+    // one cannot be taken for it. Its charge and kind are unchanged, except
+    // that a closed display's subscribe becomes its release. If this answer
+    // is lost too, the acknowledgement timeout still applies from here.
+    QList<quint32> displays;
+    for (const auto& [endpointId, binding] : d->bindings) {
+        if (binding.pending) { displays.append(endpointId); }
+    }
+    for (quint32 endpointId : displays) {
+        auto found = d->bindings.find(endpointId);
+        if (found == d->bindings.end() || !found->second.pending) { continue; }
+        Private::Binding& binding = found->second;
+        ++binding.revision;
+        if (binding.revision == 0) { ++binding.revision; }
+        if (binding.retiring
+            && binding.pending->kind == Private::Binding::PendingKind::Subscribe) {
+            // A closed display's lost subscribe is not asked for again: it
+            // is released, keeping the largest reservation the Core may
+            // hold until it confirms the release (as an overdue one is).
+            binding.pending = Private::Binding::Pending{
+                Private::Binding::PendingKind::Unsubscribe, binding.revision, {},
+                maximumCharge(binding.acceptedCharge, binding.pending->charge),
+                QStringLiteral("retire"), d->allocationClock(), false};
+        }
+        binding.pending->revision = binding.revision;
+        binding.pending->sentAtMs = d->allocationClock();
+        binding.pending->timedOut = false;
+        const bool unsubscribe =
+            binding.pending->kind == Private::Binding::PendingKind::Unsubscribe;
+        QJsonObject wire = unsubscribe ? QJsonObject{} : binding.pending->request;
+        wire.insert(QStringLiteral("op"), unsubscribe ? QStringLiteral("unsubscribe")
+                                                      : QStringLiteral("subscribe"));
+        wire.insert(QStringLiteral("endpointId"), static_cast<qint64>(endpointId));
+        wire.insert(QStringLiteral("revision"), static_cast<qint64>(binding.revision));
+        qCInfo(lcRemoteMedia) << "Asking for display" << endpointId
+                              << "again on the new connection";
+        send(wire);
+        if (!current()) { return; }
+    }
 }
 
 void RemoteMediaController::retireOldPeer()
@@ -3512,12 +4578,18 @@ void RemoteMediaController::retireOldPeer()
     }
 }
 
-std::optional<IceConfiguration> RemoteMediaController::mediaIceConfiguration()
+std::optional<IceConfiguration> RemoteMediaController::mediaIceConfiguration(bool* fromTunnel)
 {
+    if (fromTunnel != nullptr) {
+        *fromTunnel = false;
+    }
     // Task 29 step 2b: over the tunnel while it was declared and the
     // session still runs on a WebSocket (as the Core decides the same).
     if (d->tunnelNegotiated) {
         if (auto tunnel = d->client->mediaTunnelIceConfiguration()) {
+            if (fromTunnel != nullptr) {
+                *fromTunnel = true;
+            }
             return tunnel;
         }
     }
@@ -3632,6 +4704,7 @@ void RemoteMediaController::dropReplacement(const QString& why)
     d->replacementId.clear();
     d->replacementRouted = false;
     d->replacementDirect = false;
+    d->replacementTunnelIce = false;
     d->replacementMoveFolded = false;
     if (std::exchange(d->replacementFallback, false)) {
         d->fallbackFinishedMs = d->allocationClock();
@@ -3663,20 +4736,48 @@ bool RemoteMediaController::audioRestartPendingForTest() const
     return d->audioRetryPending;
 }
 
+void RemoteMediaController::setSpeakerDeviceListWaitForTest(qint64 ms)
+{
+    d->speakerDeviceListWaitMs = ms;
+}
+
 void RemoteMediaController::holdAudioRestartForTest(bool held)
 {
     d->audioRestartHeldForTest = held;
     if (held) {
         return;
     }
-    if (const std::function<void()> step = std::exchange(d->heldAudioRestartStep, {})) {
+    const QPointer<RemoteMediaController> self(this);
+    for (const std::function<void()>& step : std::exchange(d->heldAudioRestartSteps, {})) {
         step();
+        if (!self) { return; }
     }
 }
 
 bool RemoteMediaController::audioRestartStepHeldForTest() const
 {
-    return bool(d->heldAudioRestartStep);
+    return !d->heldAudioRestartSteps.empty();
+}
+
+int RemoteMediaController::audioRestartStepsHeldForTest() const
+{
+    return int(d->heldAudioRestartSteps.size());
+}
+
+void RemoteMediaController::setReceiverAudioClockForTest(RemoteAudioReceiver::Clock clock)
+{
+    d->receiverAudioClockForTest = std::move(clock);
+}
+
+void RemoteMediaController::raiseAudioRestartForTest(RemoteAudioReceiver::Fault fault)
+{
+    emit d->audio->restartRequested(QStringLiteral("Remote audio restart raised by a test"),
+                                    fault);
+}
+
+void RemoteMediaController::raiseAudioFailureForTest(RemoteAudioReceiver::Fault fault)
+{
+    emit d->audio->errorOccurred(QStringLiteral("raised by a test"), fault);
 }
 
 void RemoteMediaController::updateDirectUpgrade(bool viaTunnel)
@@ -3705,7 +4806,7 @@ void RemoteMediaController::runDirectUpgradeStep()
     }
     const auto onTunnel = [this] {
         const std::optional<MediaIcePath> path = d->peer->selectedPath();
-        return d->tunnelNegotiated && path && path->viaLoopbackShim();
+        return d->currentTunnelIce && path && path->viaLoopbackShim();
     };
     if (!onTunnel()) {
         updateDirectUpgrade(false);
@@ -3765,7 +4866,8 @@ void RemoteMediaController::checkMediaSilence()
     }
     const std::optional<MediaIcePath> path = d->peer->selectedPath();
     const int rank = d->client->pathRank();
-    if (!path || path->viaLoopbackShim() || rank == PathRacer::ServiceRelayed
+    if (!path || path->viaLoopbackShim()
+        || (rank == PathRacer::ServiceRelayed && !d->client->pathPairUnknown())
         || rank == PathRacer::Floor) {
         return; // the tunnel and relays have the stall rule
     }
@@ -3802,6 +4904,18 @@ void RemoteMediaController::connectPeer(MediaPeer* peer, quint32 epoch)
         // Rendering can end this session; report drops for it first.
         reportDisplayDrops();
         receiveDisplay(packet);
+    });
+    connect(peer, &MediaPeer::waveformReceived, this, [this, current](const QByteArray& packet) {
+        if (current()) { receiveWaveformFrame(packet); }
+    });
+    connect(peer, &MediaPeer::waveformErrorOccurred, this, [this, current](const QString& reason) {
+        if (!current() || !d->model || !d->model->radeWaveformModel()) { return; }
+        for (auto& [key, stream] : d->waveformStreams) {
+            stream.enabled = false;
+            d->model->radeWaveformModel()->applyRemoteContext(key.first, key.second, 0, 0, 0,
+                WaveformAvailability::Unavailable, reason);
+        }
+        d->waveformBytesPerSecond = 0;
     });
     connect(peer, &MediaPeer::iqReceived, this, [this, current](const QByteArray& packet) {
         if (current()) { receiveIqFrame(packet); }
@@ -3846,6 +4960,10 @@ void RemoteMediaController::connectPeer(MediaPeer* peer, quint32 epoch)
             // R-R3-43: each receiver stream an app wants, after the mix.
             requestWantedReceiverAudio();
             if (!self || !current()) { return; }
+            for (const auto& [key, stream] : d->waveformStreams) {
+                if (stream.wanted) { sendWaveformRequest(key.first, key.second, true); }
+            }
+            reconcileClockProbe();
             for (const auto& [sliceId, stream] : d->iqStreams) {
                 if (stream.wanted) { sendIqRequest(sliceId, true); }
             }
@@ -3981,6 +5099,11 @@ void RemoteMediaController::start()
     // Task 36: likewise the microphone line.
     const bool micLine = micLineNegotiated();
     d->iqNegotiated = remoteIqNegotiated();
+    d->waveformNegotiated = waveformNegotiated();
+    if (d->model && d->model->radeWaveformModel()) {
+        d->model->radeWaveformModel()->setRemoteSupported(d->waveformNegotiated,
+            QStringLiteral("This Core does not support exact waveform observation."));
+    }
     // iPhone app plan Task 28 (R-IOS-16): a session through the remote
     // access service makes its media connection with the same ICE settings
     // as its control connection. Task 29 step 2b: a direct WebSocket
@@ -3991,12 +5114,15 @@ void RemoteMediaController::start()
     // The window pings faster once media rides the tunnel (step 2b; the
     // stall check sets it when ICE has settled on the tunnel's pair).
     d->client->setMediaTunnelInUse(false);
-    const auto startIce = mediaIceConfiguration();
+    bool startTunnelIce = false;
+    const auto startIce = mediaIceConfiguration(&startTunnelIce);
     // The direct media ladder: a new media start begins its direct-only
     // schedule at the first step.
     d->currentRouted = startIce && startIce->mediaRouting();
+    d->currentTunnelIce = startTunnelIce;
     d->replacementRouted = false;
     d->replacementDirect = false;
+    d->replacementTunnelIce = false;
     d->directUpgrade->stop();
     d->directUpgradeStep = 0;
     d->lastMediaMs = -1;
@@ -4007,7 +5133,7 @@ void RemoteMediaController::start()
     const bool started = peer->start(IMediaTransport::Role::Answerer, d->connectionId,
                                      IMediaTransport::kDefaultAudioTargetBitrate,
                                      /*offerLosslessAudio=*/false, receiverAudioNegotiated(),
-                                     headphonesMixNegotiated(), micLine, d->iqNegotiated);
+                                     headphonesMixNegotiated(), micLine, d->iqNegotiated, d->waveformNegotiated);
     if (!self) { return; }
     d->startingPeer = false;
     d->receiverSsrcs = started && startedPeer ? startedPeer->receiverAudioSsrcs() : QList<quint32>{};
@@ -4058,6 +5184,7 @@ void RemoteMediaController::start()
     if (receiverAudioNegotiated()) {
         startControl.insert(QStringLiteral("receiverAudioVersion"), 1);
     }
+    if (d->waveformNegotiated) { startControl.insert(QStringLiteral("waveformVersion"), 1); }
     if (d->iqNegotiated) {
         startControl.insert(QStringLiteral("remoteIqVersion"), 1);
     }
@@ -4078,6 +5205,13 @@ void RemoteMediaController::start()
     }
     if (d->client && d->client->capabilities().miniDisplayVersion >= 1) {
         startControl.insert(QStringLiteral("miniDisplayVersion"), 1);
+    }
+    // R-DISP-RETUNE: likewise the picture each context continues, only to
+    // a Core that states it (the value rides on the grant report's shape).
+    d->pictureNegotiated = d->client && spectrumGrantNegotiated()
+        && d->client->capabilities().spectrumPictureVersion >= 1;
+    if (d->pictureNegotiated) {
+        startControl.insert(QStringLiteral("spectrumPictureVersion"), 1);
     }
     // Parity Task 32 (R-IOS-13, R-R3-49): likewise the transmit monitor,
     // only to a Core that sends it.
@@ -4417,20 +5551,40 @@ void RemoteMediaController::refreshSubscriptions()
         // observed is the last attempted geometry, not proof of acceptance.
         // A rejected request remains blank until its inputs change; reconnect
         // retires the binding, and source-window changes are batched above.
-        if (request == binding.observed
+        // A display the Core retired because the slice left its receiver is
+        // asked for again even with nothing changed here: the slice may be
+        // back on that receiver before this window was told it had left.
+        if (request == binding.observed && !binding.sliceLeftReceiver
             && binding.observedStream == slice->streamIndex()
             && binding.observedStreamEpoch == slice->streamEpoch()) { continue; }
+        // The ask after a slice's move to another receiver is for the pan's
+        // view on that receiver.
+        if (d->holdsForReceiverMove(binding, slice, request, d->allocationClock())) { continue; }
+        // R-DISP-RETUNE (7b): a context taken for drawing only is one of
+        // this stream; its frames keep drawing through an ask on it. The
+        // picture shown is one of this stream and epoch too: once the
+        // binding leaves either, no context carries it on, and a late one
+        // that states it (the Core does not say which epoch a context is
+        // of) is not drawn.
+        if (binding.observedStream != slice->streamIndex()
+            || binding.observedStreamEpoch != slice->streamEpoch()) {
+            binding.drawing.reset();
+            binding.shownPicture.reset();
+        }
         binding.observed = request;
         binding.observedStream = slice->streamIndex();
         binding.observedStreamEpoch = slice->streamEpoch();
+        binding.sliceLeftReceiver = false;
         ++binding.revision;
         if (binding.revision == 0) { ++binding.revision; }
         binding.accepted = false;
             if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); }
         binding.rejected = false;
         binding.refusalReason.clear();
-        binding.decoder.reset();
-        binding.presenter.restartChain();
+        if (!binding.drawing) {
+            binding.decoder.reset();
+            binding.presenter.restartChain();
+        }
         // A tune/zoom renews this binding's codec, not its painted history.
         // New/replaced bindings were fully cleared above; rejection and
         // session retirement still clear them through their lifecycle paths.
@@ -4491,7 +5645,20 @@ void RemoteMediaController::refreshLegacyMiniSubscriptions()
         auto& binding = found->second;
         if (binding.observed == desired && binding.observedStream == slice->streamIndex()
             && binding.observedStreamEpoch == slice->streamEpoch()) { continue; }
-        emit miniDisplayUnavailable(sliceId);
+        // R-DISP-RETUNE: as in the budget planner (sendCandidate), where the
+        // Core states the picture an ask leaves the painted frame alone and
+        // the Core's context decides; where it states none the mini display
+        // is blanked at every ask.
+        const bool keepsFrame = d->pictureNegotiated && binding.shownPicture
+            && !binding.transmit
+            && binding.observedStream == slice->streamIndex()
+            && binding.observedStreamEpoch == slice->streamEpoch();
+        if (!keepsFrame) {
+            emit miniDisplayUnavailable(sliceId);
+            binding.lastMiniTrace.clear();
+            binding.shownPicture.reset();
+            binding.drawing.reset();
+        }
         binding.observed = desired;
         binding.observedStream = slice->streamIndex();
         binding.observedStreamEpoch = slice->streamEpoch();
@@ -4500,8 +5667,10 @@ void RemoteMediaController::refreshLegacyMiniSubscriptions()
         binding.accepted = false;
             if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); }
         binding.rejected = false;
-        binding.decoder.reset();
-        binding.presenter.reset();
+        if (!binding.drawing) {
+            binding.decoder.reset();
+            binding.presenter.reset();
+        }
         QJsonObject wire = desired;
         wire.insert(QStringLiteral("op"), QStringLiteral("subscribe"));
         wire.insert(QStringLiteral("endpointId"), double(found->first));
@@ -4856,7 +6025,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         d->wantedIntents = intents;
     }
     const bool askWanted = d->askingWanted && !retainedPs3ExceedsCap
-        && d->iqBytesPerSecond == 0;
+        && d->iqBytesPerSecond == 0 && d->waveformBytesPerSecond == 0;
     // While asking, plan without the share: every pan at its wanted quality.
     // The Core admits or refuses each against the share it gives this
     // device with the new request.
@@ -4864,10 +6033,11 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         ? DisplayBudgetLimits{kDisplayBudgetJsonSafePositiveLimit,
                               kDisplayBudgetJsonSafePositiveLimit, limits->generation}
         : *limits;
-    if (d->iqBytesPerSecond != 0) {
+    const quint64 observationBytes = d->iqBytesPerSecond + d->waveformBytesPerSecond;
+    if (observationBytes != 0) {
         planLimits.applicationBytesPerSecond =
-            planLimits.applicationBytesPerSecond > d->iqBytesPerSecond
-                ? planLimits.applicationBytesPerSecond - d->iqBytesPerSecond : 1;
+            planLimits.applicationBytesPerSecond > observationBytes
+                ? planLimits.applicationBytesPerSecond - observationBytes : 1;
     }
     const QString cacheIdentity = allocationIdentity(
         planLimits, intents, targetPs3, retainedPs3ExceedsCap);
@@ -4888,7 +6058,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         } else {
             d->cachedAllocation = allocateRemoteDisplay(
                 planLimits, intents, targetPs3, &d->cachedAllocationError,
-                d->iqBytesPerSecond != 0);
+                observationBytes != 0);
             if (!d->cachedAllocation) {
                 qCInfo(lcRemoteMedia).noquote() << "Remote display allocation failed:"
                                                 << d->cachedAllocationError;
@@ -4917,6 +6087,8 @@ void RemoteMediaController::refreshBudgetSubscriptions()
     };
     QList<Candidate> reductions;
     QList<Candidate> increases;
+    // A pan whose ask waits for its slice's new receiver is not answered yet.
+    bool heldForReceiverMove = false;
     QList<quint32> eraseUnaccepted;
 
     // R-R3-08/37: a reduction the Core made because it is busy says so;
@@ -5089,6 +6261,14 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         setPanStatus(item.panId, status);
         if (!self) { return; }
         if (binding.pending || binding.refusedIdentity == identity) { continue; }
+        if (binding.sliceLeftCore) {
+            // The Core said this display's slice is gone; the slice is
+            // still on this window's list for the moment. Nothing is asked
+            // for it while the removal is on its way: the same grace in
+            // which a waiting pan says nothing (statusFor, above).
+            if (now - binding.waitingSinceMs < kPanWaitingGraceMs) { continue; }
+            binding.sliceLeftCore = false;
+        }
         if (binding.askAgain && binding.acceptedRequest != target) {
             binding.askAgain = false; // A new request supersedes it.
         }
@@ -5096,6 +6276,12 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             && !binding.askAgain
             && binding.observedStream == item.slice->streamIndex()
             && binding.observedStreamEpoch == item.slice->streamEpoch()) {
+            continue;
+        }
+        // The ask after a slice's move to another receiver is for the pan's
+        // view on that receiver.
+        if (d->holdsForReceiverMove(binding, item.slice, target, now)) {
+            heldForReceiverMove = true;
             continue;
         }
         Candidate candidate{found->first, target, quality.charge, identity, false,
@@ -5114,7 +6300,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         if (sent != 0 && !sendRefusedRelease(endpointId, sent)) { return; }
     }
 
-    if (askWanted && reductions.isEmpty() && increases.isEmpty()
+    if (askWanted && reductions.isEmpty() && increases.isEmpty() && !heldForReceiverMove
         && std::none_of(d->bindings.cbegin(), d->bindings.cend(),
                         [](const auto& entry) { return entry.second.pending.has_value(); })) {
         // Every pan was answered at what the operator wants (or refused for
@@ -5136,7 +6322,29 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         if (found == d->bindings.end() || found->second.pending) { return; }
         Private::Binding& binding = found->second;
         if (binding.isMini()) {
-            emit miniDisplayUnavailable(binding.miniSliceId);
+            // R-DISP-RETUNE: where the Core states the picture, an ask
+            // leaves the painted frame alone and the Core's answer decides:
+            // its context continues the picture shown (every tuning step
+            // moves a mini display, which is centered on its slice, and the
+            // Core carries that on), or it does not and the display is
+            // blanked then. Nothing is predicted here; the window used to
+            // compare each ask with the one before it to guess what the
+            // Core would say. Frames of the old context are still refused,
+            // and those of a context taken for drawing keep coming.
+            //
+            // Where the Core states no picture the mini display is blanked
+            // at every ask, as it was before the moved picture: the window
+            // cannot know what that Core carried on, and does not guess.
+            const bool keepsFrame = d->pictureNegotiated && binding.shownPicture
+                && !binding.transmit && !candidate.unsubscribe && binding.slice
+                && binding.observedStream == binding.slice->streamIndex()
+                && binding.observedStreamEpoch == binding.slice->streamEpoch();
+            if (!keepsFrame) {
+                emit miniDisplayUnavailable(binding.miniSliceId);
+                binding.lastMiniTrace.clear();
+                binding.shownPicture.reset();
+                binding.drawing.reset();
+            }
             binding.accepted = false;
             if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); }
             binding.decoder.reset();
@@ -5150,6 +6358,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         ++binding.revision;
         if (binding.revision == 0) { ++binding.revision; }
         const quint32 revision = binding.revision;
+        binding.sliceLeftReceiver = false;
         binding.pending = Private::Binding::Pending{
             candidate.unsubscribe ? Private::Binding::PendingKind::Unsubscribe
                                   : Private::Binding::PendingKind::Subscribe,
@@ -5314,7 +6523,7 @@ void RemoteMediaController::finishCentreRequest(int sliceId, quint64 streamEpoch
     refreshSubscriptions();
 }
 
-void RemoteMediaController::refreshCtunState()
+void RemoteMediaController::refreshCtunState(bool restorePreference)
 {
     if (!d->model || !d->client || !d->stack) { return; }
     const QPointer<RemoteMediaController> self(this);
@@ -5347,8 +6556,11 @@ void RemoteMediaController::refreshCtunState()
         const bool available = d->client->remoteCtunAvailable()
             && d->model->isConnected() && stream >= 0 && epoch != 0
             && (state.initialized || state.pending || currentContext);
-        if (available && currentContext && !state.initialized && !state.pending
-            && !state.refused
+        // A setting that is another's to change is never asked for: the Core
+        // would refuse it at every sign-in, and the window would tell the
+        // operator of a change nobody made.
+        if (restorePreference && available && currentContext && !state.initialized && !state.pending
+            && !state.refused && d->ctunHeldReason(binding.slice).isEmpty()
             && (state.rejectedContext == 0
                 || isNewerGeneration(binding.context.codec.contextGeneration, state.rejectedContext))) {
             // One hardware stream has one effective pin, even when several
@@ -5386,9 +6598,68 @@ void RemoteMediaController::refreshCtunState()
             || !found->second.slice) { continue; }
         QPointer<SpectrumWidget> widget = found->second.widget;
         const bool pinned = found->second.slice->streamCtunPinned();
-        widget->applyRemoteCtunState(available, pinned);
+        widget->applyRemoteCtunState(available, pinned,
+                                     d->ctunHeldReason(found->second.slice));
         if (!self) { return; }
     }
+}
+
+void RemoteMediaController::scheduleAudioRetry()
+{
+    // R-R3-21: one step at a time, on the restart backoff (1, 2, 4 s, reset
+    // by a healthy 10 s), fenced so a request or a session change since
+    // makes it do nothing. A restart and a speaker failure share it.
+    if (d->audioRetryPending) { return; }
+    d->audioRetryPending = true;
+    const quint64 generation = d->audioRetryGeneration;
+    const quint32 revision = d->audioRevision;
+    const int delay = int(d->audioRestartBackoff.nextDelayMs(d->clock.elapsed(),
+                                                             d->lastAudioRequestMs));
+    const auto step = [this, generation, revision] {
+        if (generation != d->audioRetryGeneration
+            || revision != d->audioRevision) { return; }
+        d->audioRetryPending = false;
+        const QPointer<RemoteMediaController> self(this);
+        requestAudio();
+        if (!self) { return; }
+        // 2026-10-16: what this request meets is the window's own retry's.
+        d->audioRetryRevision = d->audioRevision;
+    };
+    QTimer::singleShot(delay, Qt::PreciseTimer, this, [this, step] {
+        if (d->audioRestartHeldForTest) {
+            d->heldAudioRestartSteps.push_back(step);
+            return;
+        }
+        step();
+    });
+}
+
+void RemoteMediaController::sendAudioDisable()
+{
+    if (!d->peer || !d->peer->isReady()) {
+        // 2026-10-17: the disable is still owed, so a move sends it
+        // (askAgainAfterMove); before, the Core went on streaming to a
+        // stopped receiver, or the move asked for audio again.
+        d->audioFailureDisableSent = true;
+        d->audioRequestUnsent = false;
+        d->audioDisableUnsent = true;
+        return;
+    }
+    ++d->audioRevision;
+    if (!d->audioRevision) { ++d->audioRevision; }
+    QJsonObject disable{{QStringLiteral("op"), QStringLiteral("audio")},
+                        {QStringLiteral("revision"), double(d->audioRevision)},
+                        {QStringLiteral("enabled"), false}};
+    if (audioProfileNegotiated()) {
+        disable.insert(QStringLiteral("profile"), remoteAudioProfileToWire(
+            d->audioProfileChoice == RemoteAudioProfile::Lossless && !d->losslessFallback
+                ? RemoteAudioProfile::Lossless : RemoteAudioProfile::Opus));
+        d->audioProfileRequested = true;
+    }
+    d->audioFailureDisableSent = true;
+    d->audioRequestUnsent = false;
+    d->audioDisableUnsent = false;
+    send(disable);
 }
 
 void RemoteMediaController::requestAudio()
@@ -5397,15 +6668,25 @@ void RemoteMediaController::requestAudio()
     d->audioEnabled = false;
     d->audioRetryPending = false;
     ++d->audioRetryGeneration;
+    d->audioHeldForTransmit = false; // R-R3-51: this request answers a hold
     // Every request follows a mute, speaker, radio or retry change (or the
     // media link becoming ready), each of which the status reflects.
     if (!d->peer || !d->peer->isReady() || !d->model || !d->client
         || !d->client->mediaAvailable()) {
+        // 2026-10-17: the window wants audio now, so a failure's disable is
+        // no longer its latest request: a move asks instead of turning the
+        // audio off again (askAgainAfterMove).
+        d->audioFailureDisableSent = false;
+        d->audioRequestUnsent = true;
+        d->audioDisableUnsent = false;
         refreshAudioStatus();
         return;
     }
     ++d->audioRevision;
     if (!d->audioRevision) { ++d->audioRevision; }
+    d->audioFailureDisableSent = false;
+    d->audioRequestUnsent = false;
+    d->audioDisableUnsent = false;
     d->lastAudioRequestMs = d->clock.elapsed();
     const bool enabled = d->model->isConnected() && !d->model->audioEngine()->masterMuted();
     const QPointer<RemoteMediaController> self(this);
@@ -5451,7 +6732,7 @@ std::shared_ptr<RemoteTciAudioStage> RemoteMediaController::requestReceiverAudio
                 for (IReceiverPcmSink* consumer : std::as_const(fanout->sinks)) {
                     consumer->receiverAudioBlock(fanout->sliceId, pcm, frames);
                 }
-            }, stream.tciStage});
+            }, stream.tciStage}, nullptr, d->receiverAudioClockForTest);
         RemoteAudioReceiver* const receiver = stream.receiver.get();
         connect(receiver, &RemoteAudioReceiver::restartRequested, this,
                 [this, sliceId, receiver](const QString& reason, RemoteAudioReceiver::Fault fault) {
@@ -5492,6 +6773,172 @@ std::shared_ptr<RemoteTciAudioStage> RemoteMediaController::requestReceiverAudio
     if (!self) { return {}; }
     refreshAudioStatus();
     return stage;
+}
+
+bool RemoteMediaController::waveformNegotiated() const
+{
+    return d->client && d->client->mediaAvailable() && d->client->capabilities().waveformVersion == 1;
+}
+
+void RemoteMediaController::reconcileWaveformDemand(const QList<WaveformRequest>& requests)
+{
+    if (!d->model || !d->model->radeWaveformModel()) { return; }
+    const QPointer<RemoteMediaController> self(this);
+    const quint64 epoch = d->epoch;
+    d->model->radeWaveformModel()->setRemoteSupported(waveformNegotiated(),
+        QStringLiteral("This Core does not support exact waveform observation."));
+    if (!self || d->epoch != epoch) { return; }
+    std::set<Private::WaveformKey> wanted;
+    for (const WaveformRequest& request : requests) {
+        if (request.sliceId >= 0 && d->model->sliceById(request.sliceId)) {
+            wanted.emplace(request.sliceId, request.kind);
+        }
+    }
+    QList<Private::WaveformKey> changed;
+    for (auto& [key, stream] : d->waveformStreams) {
+        const bool enabled = wanted.contains(key);
+        if (enabled != stream.wanted) {
+            stream.wanted = enabled; stream.enabled = false;
+            changed.append(key);
+        }
+    }
+    for (const auto& key : wanted) {
+        if (!d->waveformStreams.contains(key)) {
+            d->waveformStreams[key].wanted = true;
+            changed.append(key);
+        }
+    }
+    for (const auto& key : changed) {
+        if (!self || d->epoch != epoch) { return; }
+        const auto current = d->waveformStreams.find(key);
+        if (current != d->waveformStreams.end()) { sendWaveformRequest(key.first, key.second, current->second.wanted); }
+    }
+    if (self && d->epoch == epoch) { reconcileClockProbe(); }
+}
+
+void RemoteMediaController::sendWaveformRequest(int sliceId, WaveformKind kind, bool enabled)
+{
+    if (!d->waveformNegotiated || !d->peer || !d->peer->isReady()) { return; }
+    auto& stream = d->waveformStreams[{sliceId,kind}];
+    ++stream.revision;
+    if (!stream.revision) { ++stream.revision; }
+    stream.enabled = false;
+    const quint32 revision = stream.revision;
+    const quint64 epoch = d->epoch;
+    const QPointer<RemoteMediaController> self(this);
+    if (d->model && d->model->radeWaveformModel()) {
+        d->model->radeWaveformModel()->applyRemoteContext(sliceId, kind, 0, 0, 0,
+            WaveformAvailability::Unavailable, enabled ? QStringLiteral("Waiting for the Core waveform source.")
+                                                     : QStringLiteral("Waveform observation is disabled."));
+    }
+    if (!self || d->epoch != epoch) { return; }
+    send({{QStringLiteral("op"), QStringLiteral("waveform-stream")},
+          {QStringLiteral("connectionId"), d->connectionId},
+          {QStringLiteral("sliceId"), sliceId}, {QStringLiteral("kind"), WaveformCodec::kindName(kind)},
+          {QStringLiteral("revision"), qint64(revision)}, {QStringLiteral("enabled"), enabled}});
+}
+
+void RemoteMediaController::receiveWaveformContext(const QJsonObject& payload)
+{
+    static const QSet<QString> expected{QStringLiteral("op"), QStringLiteral("connectionId"),
+        QStringLiteral("sliceId"), QStringLiteral("kind"), QStringLiteral("revision"),
+        QStringLiteral("enabled"), QStringLiteral("availability"), QStringLiteral("reason"),
+        QStringLiteral("sourceGeneration"), QStringLiteral("deliveryGeneration"), QStringLiteral("sampleRateHz")};
+    if (payload.size() != expected.size()) { return; }
+    for (auto it = payload.begin(); it != payload.end(); ++it) { if (!expected.contains(it.key())) { return; } }
+    double slice = -1, revision = 0, rate = 0;
+    const auto kind = WaveformCodec::parseKind(payload.value(QStringLiteral("kind")).toString());
+    const auto source = WaveformCodec::decimalIdentity(payload.value(QStringLiteral("sourceGeneration")));
+    const auto delivery = WaveformCodec::decimalIdentity(payload.value(QStringLiteral("deliveryGeneration")));
+    if (!kind || !source || !delivery || payload.value(QStringLiteral("connectionId")).toString() != d->connectionId
+        || !number(payload, "sliceId", 0, INT_MAX, slice, true)
+        || !number(payload, "revision", 1, UINT32_MAX, revision, true)
+        || !number(payload, "sampleRateHz", 0, 48000, rate, true)
+        || !payload.value(QStringLiteral("enabled")).isBool()
+        || !payload.value(QStringLiteral("reason")).isString()) { return; }
+    const auto found = d->waveformStreams.find({int(slice), *kind});
+    if (found == d->waveformStreams.end() || found->second.revision != quint32(revision)) { return; }
+    const bool enabled = payload.value(QStringLiteral("enabled")).toBool();
+    const QString availability = payload.value(QStringLiteral("availability")).toString();
+    if ((enabled && (availability != QLatin1String("Available") || !*source || !*delivery
+                     || int(rate) != WaveformCodec::sampleRate(*kind) || !found->second.wanted))
+        || (!enabled && (availability != QLatin1String("Unavailable") || rate != 0))) { return; }
+    Private::WaveformStream& stream = found->second;
+    stream.answeredRevision = stream.revision;
+    if (stream.sourceGeneration != *source || stream.deliveryGeneration != *delivery || stream.enabled != enabled) {
+        stream.lastSerial = 0; stream.nextSequence = 0; stream.lastDroppedTotal = 0;
+    }
+    stream.sourceGeneration = *source; stream.deliveryGeneration = *delivery;
+    stream.enabled = enabled; stream.sampleRate = int(rate);
+    const QPointer<RemoteMediaController> self(this);
+    const quint64 epoch = d->epoch;
+    if (d->model && d->model->radeWaveformModel()) {
+        d->model->radeWaveformModel()->applyRemoteContext(int(slice), *kind, *source, *delivery, int(rate),
+            enabled ? WaveformAvailability::Available : WaveformAvailability::Unavailable,
+            payload.value(QStringLiteral("reason")).toString());
+    }
+    if (!self || d->epoch != epoch) { return; }
+    d->waveformBytesPerSecond = 0;
+    for (const auto& [key, current] : d->waveformStreams) {
+        Q_UNUSED(key);
+        if (current.enabled) {
+            const int segments = current.sampleRate == 24000 ? 100 : 750;
+            d->waveformBytesPerSecond += quint64(current.sampleRate) * 4
+                + quint64(WaveformCodec::kHeaderBytes) * quint64(segments + (current.sampleRate + 1023) / 1024 + 30);
+        }
+    }
+    refreshSubscriptions();
+    if (self && d->epoch == epoch) { reconcileClockProbe(); }
+}
+
+void RemoteMediaController::updateWaveformClock()
+{
+    if (!d->model || !d->model->radeWaveformModel() || !d->audio) { return; }
+    // Probes and the estimator use RemoteAudioReceiver's actual local clock.
+    // Its default clock is elapsed from a process-local steady-clock base,
+    // whereas waveform snapshots use the absolute steady-clock epoch. Convert
+    // that origin here without changing audio release/presentation timing.
+    const qint64 audioNow = d->audio->nowNs();
+    const qint64 waveformNow = waveformNowNs();
+    const auto map = d->clockEstimator.offset(audioNow);
+    if (!map || audioNow < 0 || waveformNow < 0) {
+        d->model->radeWaveformModel()->setRemoteClockMap(0, false);
+        return;
+    }
+    // Both clocks are nonnegative int64 readings, so their difference fits.
+    const qint64 originDifference = waveformNow - audioNow;
+    const qint64 offset = map->offsetNs;
+    if ((originDifference > 0 && offset < std::numeric_limits<qint64>::min() + originDifference)
+        || (originDifference < 0 && offset > std::numeric_limits<qint64>::max() + originDifference)) {
+        d->model->radeWaveformModel()->setRemoteClockMap(0, false);
+        return;
+    }
+    d->model->radeWaveformModel()->setRemoteClockMap(offset - originDifference, true);
+}
+
+void RemoteMediaController::receiveWaveformFrame(const QByteArray& bytes)
+{
+    const auto packet = WaveformCodec::decode(bytes);
+    if (!packet || !d->model || !d->model->radeWaveformModel()) { return; }
+    const auto found = d->waveformStreams.find({packet->sliceId, packet->batch.kind});
+    if (found == d->waveformStreams.end()) { return; }
+    Private::WaveformStream& stream = found->second;
+    const WaveformSegment& segment = packet->batch.segments[0];
+    if (!stream.wanted || !stream.enabled || !d->model->sliceById(packet->sliceId)
+        || stream.sourceGeneration != packet->sourceGeneration
+        || stream.deliveryGeneration != packet->deliveryGeneration
+        || stream.sampleRate != packet->batch.sampleRate
+        || packet->batch.serial <= stream.lastSerial || segment.firstSequence < stream.nextSequence) { return; }
+    if (packet->batch.droppedFrames < stream.lastDroppedTotal) { return; }
+    auto batch = std::make_shared<WaveformBatch>(packet->batch);
+    batch->droppedFrames = std::max(packet->batch.droppedFrames - stream.lastDroppedTotal,
+        segment.firstSequence - stream.nextSequence);
+    stream.lastDroppedTotal = packet->batch.droppedFrames;
+    stream.lastSerial = packet->batch.serial;
+    stream.nextSequence = segment.firstSequence + quint64(segment.count);
+    updateWaveformClock();
+    d->model->radeWaveformModel()->appendRemoteBatch(packet->sliceId, packet->sourceGeneration,
+        batch);
 }
 
 void RemoteMediaController::requestRawIq(int sliceId)
@@ -5687,6 +7134,11 @@ void RemoteMediaController::sendReceiverAudioRequest(int sliceId, bool enabled)
     quint32& revision = d->receiverRevisions[sliceId];
     ++revision;
     if (!revision) { ++revision; }
+    if (enabled) {
+        d->receiverStopsUnanswered.remove(sliceId);
+    } else {
+        d->receiverStopsUnanswered.insert(sliceId);
+    }
     const auto found = d->receiverStreams.find(sliceId);
     if (found != d->receiverStreams.end()) {
         found->second.heldBy.reset();
@@ -5726,6 +7178,10 @@ void RemoteMediaController::receiveReceiverAudioContext(const QJsonObject& paylo
         decodeReceiverAudioContext(payload);
     if (!message) { return; }
     const int sliceId = message->sliceId;
+    // The Core answered this slice's latest request, a stop among them.
+    if (message->context.revision == d->receiverRevisions.value(sliceId)) {
+        d->receiverStopsUnanswered.remove(sliceId);
+    }
     const auto found = d->receiverStreams.find(sliceId);
     // A released stream's late answer changes nothing.
     if (found == d->receiverStreams.end()) { return; }
@@ -5942,8 +7398,24 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
             binding.accepted = false;
             if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); }
             binding.contextRevision = 0;
+            binding.drawing.reset();
+            binding.shownPicture.reset();
             binding.decoder.reset();
             binding.presenter.reset();
+            if (reason == QLatin1String(kRetireReasonStreamBindingChanged)) {
+                // The Core says so at once; the slice's new frequency and
+                // receiver are still on their way. The next ask is for the
+                // pan's view on that receiver (Private::holdsForReceiverMove).
+                binding.sliceLeftReceiver = true;
+                binding.receiverMoveHeldSinceMs = -1;
+            }
+            // The Core ends a removed slice's display before the removal
+            // reaches this window's list, so the plan below still finds the
+            // slice. As the "rejected" path of a Core with no display budget
+            // does (below), that is the operator's own change and is not
+            // asked for again: the removal retires the binding. The wording
+            // is SpectrumEndpoint.h's, the constant the Core sends.
+            binding.sliceLeftCore = reason == QLatin1String(kRetireReasonSliceRemoved);
             if (erase) { d->bindings.erase(found); }
             if (widget) { widget->invalidateRemoteSpectrumFrame(); }
             if (!self) { return; }
@@ -5966,6 +7438,14 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
             binding.refusedIdentity.clear();
             binding.refusalReason.clear();
             if (binding.slice) {
+                // R-DISP-RETUNE (7b): a context taken for drawing only is
+                // one of the stream it was taken on, and so is the picture
+                // shown: neither outlives the stream or its epoch.
+                if (binding.observedStream != binding.slice->streamIndex()
+                    || binding.observedStreamEpoch != binding.slice->streamEpoch()) {
+                    binding.drawing.reset();
+                    binding.shownPicture.reset();
+                }
                 binding.observedStream = binding.slice->streamIndex();
                 binding.observedStreamEpoch = binding.slice->streamEpoch();
             }
@@ -5998,9 +7478,15 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
                 binding.accepted = false;
             if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); }
                 binding.contextRevision = 0;
+                binding.drawing.reset();
+                binding.shownPicture.reset();
                 binding.decoder.reset();
                 binding.presenter.reset();
                 binding.pending.reset();
+                if (reason == QLatin1String(kRetireReasonStreamBindingChanged)) {
+                    binding.sliceLeftReceiver = true;
+                    binding.receiverMoveHeldSinceMs = -1;
+                }
                 if (erase) { d->bindings.erase(found); }
                 if (widget) {
                     widget->invalidateRemoteSpectrumFrame();
@@ -6034,6 +7520,8 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
             binding.accepted = false;
             if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); }
             binding.contextRevision = 0;
+            binding.drawing.reset();
+            binding.shownPicture.reset();
             binding.decoder.reset();
             binding.presenter.reset();
             d->bindings.erase(found);
@@ -6120,6 +7608,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         d->captureAnchor.reset();
         // Core has answered: any automatic retry in flight is over.
         d->audioRestarting = false;
+        d->audioHeldForTransmit = false; // R-R3-51
         d->audio->stop();
         d->audioEnabled = false;
         // start() can report a speaker failure synchronously, and a listener
@@ -6135,6 +7624,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             d->audioEnabled = started;
             d->preparingAudio = false;
             if (d->audioEnabled) {
+                d->audioAwaitingDevicesSinceMs = -1;
                 qCInfo(lcRemoteMedia).noquote()
                     << QStringLiteral("Remote audio receiving: %1, context %2")
                            .arg(reportedAudioProfile(*context))
@@ -6163,6 +7653,10 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     }
     if (op == QLatin1String("receiver-audio-context")) {
         if (receiverAudioNegotiated()) { receiveReceiverAudioContext(payload); }
+        return;
+    }
+    if (op == QLatin1String("waveform-stream-context")) {
+        if (d->waveformNegotiated) { receiveWaveformContext(payload); }
         return;
     }
     if (op == QLatin1String("iq-stream-context")) {
@@ -6269,11 +7763,19 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             binding.accepted = false;
             if (binding.clarityRegistry) { binding.clarityRegistry->setRemoteAvailable(binding.panId, binding.clarityToken, false); }
             binding.rejected = true;
+            if (reason == QLatin1String(kRetireReasonStreamBindingChanged)) {
+                // The next ask is for the pan's view on the slice's new
+                // receiver (Private::holdsForReceiverMove).
+                binding.sliceLeftReceiver = true;
+                binding.receiverMoveHeldSinceMs = -1;
+            }
             binding.refusalReason = operatorChange ? QString()
                 : (reason.isEmpty() ? QStringLiteral("Core refused the display allocation.")
                                     : reason.left(512));
             qCInfo(lcRemoteMedia).noquote() << "Remote display endpoint rejected:"
                                             << endpointId << reason.left(512);
+            binding.drawing.reset();
+            binding.shownPicture.reset();
             binding.decoder.reset();
             binding.presenter.reset();
             if (binding.isMini()) {
@@ -6293,14 +7795,98 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     const bool widebandRequested = d->client->remoteWidebandAvailable()
         && (budgetMode ? binding.acceptedRequest : binding.observed)
                .value(QStringLiteral("extendedView")).isBool();
-    if (op != QLatin1String("context") || binding.rejected
-        || revision != (budgetMode ? binding.acceptedRevision : binding.revision)) { return; }
+    if (op != QLatin1String("context") || binding.rejected) { return; }
+    // R-DISP-RETUNE (7b): a context that answers a request before the
+    // window's latest is read only where the Core states the picture: it
+    // may be one to draw (takeForDrawing, below). From a Core that states
+    // none it is ignored, as it always was.
+    const bool answersCurrent = revision
+        == (budgetMode ? binding.acceptedRevision : binding.revision);
+    if (!answersCurrent && !d->pictureNegotiated) { return; }
     // The shape the agreed minor selects, with wideband exactly when this
     // subscription negotiated it.
     const std::optional<SpectrumContextMessage> decoded =
         decodeRemoteSpectrumContext(payload, spectrumGrantNegotiated(),
-                                    d->txDisplayNegotiated);
+                                    d->txDisplayNegotiated, d->pictureNegotiated);
     if (!decoded || decoded->wideband.has_value() != widebandRequested) { return; }
+    SpectrumEndpointContext context;
+    context.codec.endpointId = endpointId;
+    context.codec.contextGeneration = decoded->contextGeneration;
+    if (decoded->wideband) { context.wideband = *decoded->wideband; }
+    context.exactCentreHz = decoded->centreHz;
+    context.exactSpanHz = decoded->spanHz;
+    context.wideCentreHz = decoded->wideCentreHz;
+    context.wideSpanHz = decoded->wideSpanHz;
+    context.codec.traceSamples = quint16(decoded->traceSamples);
+    context.codec.waterfallSamples = quint16(decoded->waterfallSamples);
+    context.codec.wideSamples = quint16(decoded->wideSamples);
+    context.codec.minDbm = float(decoded->minDbm);
+    context.codec.maxDbm = float(decoded->maxDbm);
+    context.source.streamIndex = decoded->sourceStream;
+    context.targetFps = decoded->fps;
+    context.framesPerLine = decoded->framesPerLine;
+    const double sourceCentre = decoded->sourceCentreHz;
+    const double rate = decoded->sampleRateHz;
+    bool widebandValid = true;
+    if (widebandRequested) {
+        const bool permission = (budgetMode ? binding.acceptedRequest : binding.observed).value(
+            QStringLiteral("extendedView")).toBool();
+        const bool needsWideband = geometryNeedsWideband(
+            context.exactCentreHz, context.exactSpanHz, sourceCentre, rate);
+        widebandValid = context.wideband.active == needsWideband
+            && (!context.wideband.active || permission);
+    }
+    // R-DISP-RETUNE (7b): the window draws what it is sent. A wheel turned
+    // faster than the link answers changes the request before each context
+    // arrives, so no context of the spin answers the request the window
+    // has; ignoring them all left the pan with no frame until the wheel
+    // stopped. A context of this endpoint that continues the picture shown
+    // (the Core says so: its pictureGeneration is the one of the accepted
+    // context) and is newer than the one whose frames are drawn is taken
+    // for drawing. Its frames are drawn at the frequencies it states, in
+    // the pan as it stands (the presenter's capture, R-R3-21).
+    //
+    // Nothing else of the binding moves: the accepted context, `accepted`,
+    // the views asked and answered and the budget planner's accepted
+    // revision and request are as they were, and the newer request goes
+    // out below exactly as before. No keyframe is asked for here: the
+    // first frame of a context is a keyframe, a lost one is asked for when
+    // a frame of the generation is found missing (receiveDisplay), and the
+    // one request each 200 ms is left for the context that is accepted.
+    //
+    // A context of another picture, of a binding on another stream or
+    // epoch, of a transmit display, or of an endpoint being retired is not
+    // taken, and is ignored as it always was.
+    const auto takeForDrawing = [&]() {
+        if (!d->pictureNegotiated || !decoded->pictureGeneration || !binding.shownPicture
+            || *decoded->pictureGeneration != *binding.shownPicture
+            || decoded->transmit.value_or(false) || binding.transmit
+            || binding.retiring || binding.suspending || !binding.slice
+            || (!binding.widget && !binding.isMini())
+            || binding.observedStream != binding.slice->streamIndex()
+            || binding.observedStreamEpoch != binding.slice->streamEpoch()
+            || decoded->sourceStream != binding.observedStream
+            || !widebandValid) { return; }
+        const quint32 drawn = binding.drawing
+            ? binding.drawing->context.codec.contextGeneration
+            : binding.context.codec.contextGeneration;
+        if (!isNewerGeneration(context.codec.contextGeneration, drawn)) { return; }
+        if (binding.isMini()) {
+            const bool wantsTx = d->miniUsesTransmit(binding.slice);
+            if (!d->miniWanted.contains(binding.miniSliceId)
+                || binding.slice->sliceIndex() != binding.miniSliceId || wantsTx
+                || decoded->traceSamples <= 0
+                || decoded->traceSamples != decoded->waterfallSamples
+                || decoded->wideSamples != 0) { return; }
+        }
+        binding.drawing = Private::Binding::Drawing{context, {context, sourceCentre, rate}};
+        binding.decoder.reset();
+        binding.presenter.restartChain();
+    };
+    if (!answersCurrent) {
+        takeForDrawing();
+        return;
+    }
     // A gesture/rebind may arrive between the outgoing request and its ACK.
     // Issue the newer request before accepting an old view over that gesture.
     if (binding.slice) {
@@ -6312,77 +7898,90 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             : currentRequest != binding.observed;
         if (requestChanged || binding.observedStream != binding.slice->streamIndex()
             || binding.observedStreamEpoch != binding.slice->streamEpoch()) {
+            // R-DISP-RETUNE (7b): not accepted, and drawn if it continues
+            // the picture shown (never across a stream or epoch change).
+            takeForDrawing();
             refreshSubscriptions();
             return;
         }
     }
-    SpectrumEndpointContext context;
-    context.codec.endpointId = endpointId;
-    context.codec.contextGeneration = decoded->contextGeneration;
-    if (decoded->wideband) { context.wideband = *decoded->wideband; }
-    context.exactCentreHz = decoded->centreHz;
-    context.exactSpanHz = decoded->spanHz;
-    context.wideCentreHz = decoded->wideCentreHz;
-    context.wideSpanHz = decoded->wideSpanHz;
-    const double sourceCentre = decoded->sourceCentreHz;
-    const double rate = decoded->sampleRateHz;
-    if (widebandRequested) {
-        const bool permission = (budgetMode ? binding.acceptedRequest : binding.observed).value(
-            QStringLiteral("extendedView")).toBool();
-        const bool needsWideband = geometryNeedsWideband(
-            context.exactCentreHz, context.exactSpanHz, sourceCentre, rate);
-        if (context.wideband.active != needsWideband
-            || (context.wideband.active && !permission)) { return; }
-    }
+    if (!widebandValid) { return; }
     if (binding.accepted && !isNewerGeneration(context.codec.contextGeneration,
                                   binding.acceptedGeneration())) { return; }
-    context.codec.traceSamples = quint16(decoded->traceSamples);
-    context.codec.waterfallSamples = quint16(decoded->waterfallSamples);
-    context.codec.wideSamples = quint16(decoded->wideSamples);
-    context.codec.minDbm = float(decoded->minDbm);
-    context.codec.maxDbm = float(decoded->maxDbm);
-    context.source.streamIndex = decoded->sourceStream;
-    context.targetFps = decoded->fps;
-    context.framesPerLine = decoded->framesPerLine;
+    // R-DISP-RETUNE: the one comparison. Where the Core states the picture,
+    // this context carries on exactly when its picture is the one shown;
+    // where it states none the window has no word on it and the pan and the
+    // mini display fall back to the rule before the moved picture.
+    const std::optional<bool> coreCarriedOn = d->pictureNegotiated
+        ? std::optional<bool>(binding.shownPicture && decoded->pictureGeneration
+                              && *binding.shownPicture == *decoded->pictureGeneration)
+        : std::nullopt;
     if (binding.isMini()) {
         const QJsonObject target = budgetMode ? binding.acceptedRequest : binding.observed;
-        const bool wantsTx = d->model && binding.slice && d->model->isTransmitting()
-            && d->model->txBoundSlice() == binding.slice;
+        const bool wantsTx = d->miniUsesTransmit(binding.slice);
         const double expectedCentre = target.value(QStringLiteral("centreHz")).toDouble();
         const double expectedSpan = target.value(QStringLiteral("spanHz")).toDouble();
         const int fftSize = decoded->grant ? decoded->grant->grantedFftSize
             : target.value(QStringLiteral("fftSize")).toInt();
-        // Core reports the exact inclusive FFT-bin crop, which can differ
-        // from the requested RF window by several bins. Recompute that crop
-        // from the same SpectrumReducer rule rather than allowing a broad
-        // tolerance that could admit a stale, shifted context.
-        ReducerConfig crop;
-        crop.centreHz = expectedCentre;
-        crop.spanHz = expectedSpan;
-        crop.streamCentreHz = decoded->sourceCentreHz;
-        crop.sampleRateHz = decoded->sampleRateHz;
-        const auto bins = fftSize > 0
-            ? SpectrumReducer::visibleBinRange(fftSize, crop)
-            : std::pair<int, int>{0, -1};
         const double binHz = fftSize > 0 ? decoded->sampleRateHz / fftSize : 0.0;
-        const double cropCentre = decoded->sourceCentreHz - decoded->sampleRateHz * 0.5
-            + (bins.first + bins.second + 1) * binHz * 0.5;
-        const double cropSpan = (bins.second - bins.first + 1) * binHz;
         const double rfEpsilon = std::max(1.0e-6, binHz * 1.0e-9);
+        bool coordinatesMatch = false;
+        if (wantsTx) {
+            // DaemonMediaController::transmitContextFor sends miniView's
+            // exact fixed window, not a SpectrumReducer crop. Its source
+            // origin is the Core's NCO, including signed Tune compensation;
+            // the request centre is still the operator's dial plus XIT.
+            // The span comes from requestMini's existing fixed TX contract.
+            coordinatesMatch = fftSize > 0
+                && decoded->sampleRateHz == static_cast<double>(WdspEngine::kTxDspSampleRate)
+                && std::abs(decoded->centreHz - decoded->sourceCentreHz) <= rfEpsilon
+                && std::abs(decoded->spanHz - expectedSpan) <= rfEpsilon;
+        } else {
+            // Core reports the exact inclusive FFT-bin crop, which can differ
+            // from the requested RF window by several bins. Recompute that crop
+            // from the same SpectrumReducer rule rather than allowing a broad
+            // tolerance that could admit a stale, shifted context.
+            ReducerConfig crop;
+            crop.centreHz = expectedCentre;
+            crop.spanHz = expectedSpan;
+            crop.streamCentreHz = decoded->sourceCentreHz;
+            crop.sampleRateHz = decoded->sampleRateHz;
+            const auto bins = fftSize > 0
+                ? SpectrumReducer::visibleBinRange(fftSize, crop)
+                : std::pair<int, int>{0, -1};
+            const double cropCentre = decoded->sourceCentreHz - decoded->sampleRateHz * 0.5
+                + (bins.first + bins.second + 1) * binHz * 0.5;
+            const double cropSpan = (bins.second - bins.first + 1) * binHz;
+            coordinatesMatch = bins.second >= bins.first
+                && std::abs(decoded->centreHz - cropCentre) <= rfEpsilon
+                && std::abs(decoded->spanHz - cropSpan) <= rfEpsilon;
+        }
         if (!d->miniWanted.contains(binding.miniSliceId) || !binding.slice
             || binding.slice->sliceIndex() != binding.miniSliceId
             || decoded->sourceStream != binding.slice->streamIndex()
             || binding.observedStreamEpoch != binding.slice->streamEpoch()
             || decoded->transmit.value_or(false) != wantsTx
-            || bins.second < bins.first
-            || std::abs(decoded->centreHz - cropCentre) > rfEpsilon
-            || std::abs(decoded->spanHz - cropSpan) > rfEpsilon
+            || !coordinatesMatch
             || decoded->traceSamples <= 0
             || decoded->traceSamples != decoded->waterfallSamples
             || decoded->wideSamples != 0) {
             return;
         }
-        emit miniDisplayUnavailable(binding.miniSliceId);
+        // R-DISP-RETUNE: the mini display follows the pan's rule. A context
+        // the Core says continues the picture shown (it is centered on the
+        // slice, so every tuning step moves it, and the Core carries that
+        // on) leaves the painted frame in place until the keyframe.
+        // Anything else is a new picture and blanks it. From a Core that
+        // states no picture every context is a new picture, as it was
+        // before the moved picture.
+        const bool carriesOn = !binding.rejected && !binding.transmit && !wantsTx
+            && coreCarriedOn.value_or(false);
+        if (!carriesOn) {
+            emit miniDisplayUnavailable(binding.miniSliceId);
+            binding.lastMiniTrace.clear();
+        }
+        binding.shownPicture = decoded->pictureGeneration;
+        binding.drawing.reset();
         binding.context = context;
         binding.contextRevision = revision;
         binding.sourceCentreHz = sourceCentre;
@@ -6390,7 +7989,6 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         binding.grant = decoded->grant;
         binding.decoder.reset();
         binding.presenter.restartChain();
-        binding.lastMiniTrace.clear();
         binding.accepted = true;
         binding.rejected = false;
         binding.transmit = wantsTx;
@@ -6405,6 +8003,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         // status stay as they were; the transmit context and its frames go
         // to whoever draws the transmit display (Task 29).
         binding.contextRevision = revision;
+        binding.drawing.reset();
         binding.decoder.reset();
         binding.accepted = true;
         binding.rejected = false;
@@ -6444,11 +8043,28 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     binding.contextRevision = revision;
     binding.sourceCentreHz = sourceCentre;
     binding.capture = {context, sourceCentre, rate};
+    binding.shownPicture = decoded->pictureGeneration;
+    binding.drawing.reset();
+    {
+        // R-DISP-HOLD: the view asked and the view answered, when this
+        // context answers the pan's latest ask.
+        const QJsonObject& asked = budgetMode ? binding.acceptedRequest : binding.observed;
+        const bool answersLatest = revision
+            == (budgetMode ? binding.acceptedRevision : binding.revision);
+        const double askedSpan = asked.value(QStringLiteral("spanHz")).toDouble();
+        if (answersLatest && askedSpan > 0.0 && context.exactSpanHz > 0.0) {
+            binding.viewAskedCentreHz = asked.value(QStringLiteral("centreHz")).toDouble();
+            binding.viewAskedSpanHz = askedSpan;
+            binding.viewAnsweredCentreHz = context.exactCentreHz;
+            binding.viewAnsweredSpanHz = context.exactSpanHz;
+        } else {
+            binding.viewAskedSpanHz = 0.0;
+        }
+    }
     binding.decoder.reset();
     binding.presenter.restartChain();
     binding.accepted = true;
     binding.rejected = false;
-    binding.receivedNoiseFloor = false;
     binding.receivedFrameTimesMs.clear();
     const QPointer<RemoteMediaController> self(this);
     const QString connectionId = d->connectionId;
@@ -6460,8 +8076,36 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     const int grantedFftSize = decoded->grant ? decoded->grant->grantedFftSize
         : (budgetMode ? binding.acceptedRequest : binding.observed)
               .value(QStringLiteral("fftSize")).toInt();
-    binding.widget->setRemoteSpectrumContext(context, sourceCentre, rate, grantedFftSize);
+    // Display pill plan Task 15 (design 5.6): the decimation this context
+    // was asked for, which is what the Core runs the pan's FFT at; a Core
+    // with no decimation control was sent none and runs 1. The pan's hold
+    // after an un-key is twice that FFT's fill time
+    // (SpectrumWidget::moxHoldLengthMs). Neither key edge changes the
+    // request: Clarity stays on the pan through a key, so
+    // coreWaterfallLevelsInUse() and the dBm window stay as they were.
+    binding.widget->setRemoteDecimation(
+        (budgetMode ? binding.acceptedRequest : binding.observed)
+            .value(QStringLiteral("decimation")).toInt(1));
+    // R-DISP-HOLD: the decoder and the presenter's chain are renewed for
+    // every context and a keyframe is asked for below. What the pan has
+    // drawn and measured is the widget's to keep or empty: it keeps it for
+    // a context of the picture it already shows (a new dBm range or frame
+    // rate), and empties it for a new picture.
+    const QPointer<SpectrumWidget> contextWidget = binding.widget;
+    // R-DISP-RETUNE: with the Core's word on whether this context continues
+    // the picture shown, where the Core states it.
+    contextWidget->setRemoteSpectrumContext(
+        context, sourceCentre, rate, grantedFftSize, coreCarriedOn);
     if (!self || d->connectionId != connectionId) { return; }
+    it = d->bindings.find(endpointId);
+    if (it != d->bindings.end() && it->second.contextRevision == acceptedContextRevision
+        && !(contextWidget && contextWidget->remoteContextPicture()
+                 != SpectrumWidget::RemoteContextPicture::New)) {
+        // The Core's noise floor for a new picture has not arrived. For the
+        // same picture, or that picture moved in frequency (R-DISP-RETUNE),
+        // the Core's follower carried on and so does this.
+        it->second.receivedNoiseFloor = false;
+    }
     // Show or clear this pan's grant line now rather than on the next refresh.
     refreshPanGrantStatus(panId);
     if (!self || d->connectionId != connectionId) { return; }
@@ -6503,7 +8147,9 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
 void RemoteMediaController::requestKeyframe(quint32 endpointId)
 {
     auto it = d->bindings.find(endpointId);
-    if (it == d->bindings.end() || !it->second.accepted) { return; }
+    // R-DISP-RETUNE (7b): for the generation whose frames are decoded, the
+    // accepted one or one taken for drawing only.
+    if (it == d->bindings.end() || !it->second.takesFrames()) { return; }
     auto& binding = it->second;
     const qint64 now = d->clock.elapsed();
     if (now - binding.lastKeyframeMs < 200) { return; }
@@ -6511,7 +8157,7 @@ void RemoteMediaController::requestKeyframe(quint32 endpointId)
     ++d->displayCounters.keyframeRequests;
     send({{QStringLiteral("op"), QStringLiteral("keyframe")},
           {QStringLiteral("endpointId"), double(endpointId)},
-          {QStringLiteral("contextGeneration"), double(binding.acceptedGeneration())}});
+          {QStringLiteral("contextGeneration"), double(binding.drawnGeneration())}});
 }
 
 void RemoteMediaController::receiveDisplay(const QByteArray& packet)
@@ -6547,21 +8193,25 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
     const quint32 id = qFromBigEndian<quint32>(packet.constData() + 8);
     const quint32 generation = qFromBigEndian<quint32>(packet.constData() + 12);
     auto it = d->bindings.find(id);
-    if (it == d->bindings.end() || !it->second.accepted
+    // R-DISP-RETUNE (7b): frames of the accepted context, or of a context
+    // taken for drawing only while there is one.
+    if (it == d->bindings.end() || !it->second.takesFrames()
         || (!it->second.widget && !it->second.isMini())
         || !it->second.slice
         || it->second.observedStream != it->second.slice->streamIndex()
         || it->second.observedStreamEpoch != it->second.slice->streamEpoch()
-        || generation != it->second.acceptedGeneration()) { return; }
+        || generation != it->second.drawnGeneration()) { return; }
     if (it->second.isMini()) {
         const auto& mini = it->second;
         const bool budgetMode = d->client->remoteDisplayBudgetLimits().has_value();
         const QJsonObject wanted = d->requestMini(mini.slice);
         if (!d->miniWanted.contains(mini.miniSliceId) || wanted.isEmpty()
-            || mini.transmit != (d->model->isTransmitting()
-                && d->model->txBoundSlice() == mini.slice)
-            || (budgetMode ? !sameOriginalIntent(wanted, mini.acceptedRequest)
-                           : wanted != mini.observed)) { return; }
+            || mini.transmit != d->miniUsesTransmit(mini.slice)
+            // A context taken for drawing only answers a request the mini
+            // display has since changed, by its nature.
+            || (!mini.drawing
+                && (budgetMode ? !sameOriginalIntent(wanted, mini.acceptedRequest)
+                               : wanted != mini.observed))) { return; }
     }
     auto& binding = it->second;
     // R-R3-21: this pan's waits between display messages, the last 10 s.
@@ -6586,10 +8236,16 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
         }
         // A lost message: the rows wait for a keyframe, repeating the last
         // good row while none comes, and blend in when it does.
-        if (!binding.presenter.waitingForKeyframe()) {
+        const bool enteringKeyframeWait = !binding.presenter.waitingForKeyframe();
+        if (enteringKeyframeWait) {
             ++d->displayCounters.keyframeWaits;
         }
         binding.presenter.noteLoss();
+        if (enteringKeyframeWait && binding.widget) {
+            // The held picture and repeated waterfall rows remain visible,
+            // but they are no longer current receiver measurement input.
+            binding.widget->noteImdReceiverInputLost();
+        }
         requestKeyframe(id);
         scheduleDisplayPresentation(d->displayDelay.mapNs());
     } else if (decoded.disposition == DisplayCodecDisposition::Accepted) {
@@ -6613,11 +8269,15 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
             // from the over reaches the presenter.
             return;
         }
-        const SpectrumEndpointContext& context = binding.context;
+        const SpectrumEndpointContext& context =
+            binding.drawing ? binding.drawing->context : binding.context;
         binding.presenter.setRowPeriodNs(context.targetFps > 0 && context.framesPerLine > 0
             ? qint64(context.framesPerLine) * 1'000'000'000LL / context.targetFps : 0);
         const quint64 droppedBefore = binding.presenter.counters().itemsDropped;
-        binding.presenter.push(decoded.frame, binding.capture);
+        // Each frame goes on with where it was captured, so it is drawn
+        // there whatever the pan shows by then (R-R3-21).
+        binding.presenter.push(decoded.frame,
+                               binding.drawing ? binding.drawing->capture : binding.capture);
         d->displayCounters.itemsDropped += binding.presenter.counters().itemsDropped - droppedBefore;
         reconcileClockProbe();
         presentDueDisplay();
@@ -6753,36 +8413,41 @@ void RemoteMediaController::presentDueDisplay()
             if (it == d->bindings.end()) { break; }
             if (it->second.isMini()) {
                 auto& mini = it->second;
-                const bool currentTx = d->model && mini.slice
-                    && d->model->isTransmitting()
-                    && d->model->txBoundSlice() == mini.slice;
+                const bool currentTx = d->miniUsesTransmit(mini.slice);
                 const bool budgetMode = d->client
                     && d->client->remoteDisplayBudgetLimits().has_value();
                 const QJsonObject wanted = d->requestMini(mini.slice);
-                if (!mini.accepted || !mini.slice
+                // R-DISP-RETUNE (7b): the context whose frames are given,
+                // the accepted one or one taken for drawing only. The mini
+                // display is given each frame with the center and span of
+                // its own context, not those the slice has moved to.
+                const SpectrumEndpointContext& given =
+                    mini.drawing ? mini.drawing->context : mini.context;
+                if (!mini.takesFrames() || !mini.slice
                     || !d->miniWanted.contains(mini.miniSliceId)
                     || wanted.isEmpty() || mini.transmit != currentTx
-                    || (budgetMode ? !sameOriginalIntent(wanted, mini.acceptedRequest)
-                                   : wanted != mini.observed)
+                    || (!mini.drawing
+                        && (budgetMode ? !sameOriginalIntent(wanted, mini.acceptedRequest)
+                                       : wanted != mini.observed))
                     || mini.slice->sliceIndex() != mini.miniSliceId
                     || mini.observedStream != mini.slice->streamIndex()
                     || mini.observedStreamEpoch != mini.slice->streamEpoch()
-                    || item.frame.context.contextGeneration != mini.acceptedGeneration()
-                    || item.centreHz != mini.context.exactCentreHz
-                    || item.spanHz != mini.context.exactSpanHz
-                    || item.frame.waterfallDbm.size() != mini.context.codec.waterfallSamples) {
+                    || item.frame.context.contextGeneration != mini.drawnGeneration()
+                    || item.centreHz != given.exactCentreHz
+                    || item.spanHz != given.exactSpanHz
+                    || item.frame.waterfallDbm.size() != given.codec.waterfallSamples) {
                     continue;
                 }
                 if (item.kind == RemoteDisplayPresenter::Kind::Frame) {
-                    if (item.frame.traceDbm.size() != mini.context.codec.traceSamples) {
+                    if (item.frame.traceDbm.size() != given.codec.traceSamples) {
                         continue;
                     }
                     mini.lastMiniTrace = item.frame.traceDbm;
                 }
                 if (mini.lastMiniTrace.isEmpty()) { continue; }
                 emit miniDisplayFrame(mini.miniSliceId, mini.lastMiniTrace,
-                    item.frame.waterfallDbm, mini.context.exactCentreHz,
-                    mini.context.exactSpanHz, mini.transmit,
+                    item.frame.waterfallDbm, given.exactCentreHz,
+                    given.exactSpanHz, mini.transmit,
                     item.kind == RemoteDisplayPresenter::Kind::Frame
                         ? item.frame.waterfallAdvance : true);
                 if (!self || d->connectionId != connectionId) { return; }
@@ -6832,17 +8497,17 @@ void RemoteMediaController::presentDueDisplay()
                 }
                 continue;
             }
-            const bool rendered = widget->updateRemoteSpectrum(item.frame, item.capture);
+            const bool rendered = widget->updateRemoteSpectrum(
+                item.frame, item.capture, item.measurementCurrent);
             // Rendering emits application signals; a receiver may end this session.
             if (!self || d->connectionId != connectionId) { return; }
             if (!rendered) {
                 // Captured before this pan was tuned or renewed: its trace and
                 // waterfall row are drawn at the frequency they were captured
                 // at, so a tune or drag never blanks the trace (R-R3-21).
-                if (widget) {
-                    widget->presentRemoteTraceCaptured(item.frame.traceDbm,
-                                                       item.centreHz, item.spanHz);
-                }
+                const bool presented = widget
+                    && widget->presentRemoteTraceCaptured(item.frame.traceDbm,
+                                                          item.centreHz, item.spanHz);
                 if (item.frame.waterfallAdvance && widget) {
                     if (widget->enqueueRemoteWaterfallRow(item.frame.waterfallDbm,
                                                           item.frame.wideDbm,

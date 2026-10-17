@@ -29,6 +29,14 @@
 
 using namespace NereusSDR;
 
+// MinGW imports a static constexpr member of an exported class by address
+// when it is bound to a reference (QCOMPARE does), and the Core DLL never
+// exports one, so this test did not link on Windows. It reads these
+// copies by value instead.
+namespace {
+constexpr double kCfcDisplaySampleRateHz = NereusSDR::TxChannel::kCfcDisplaySampleRateHz;
+} // namespace
+
 // WDSP TX channel ID — from Thetis cmaster.c:177-190 [v2.10.3.13].
 static constexpr int kTxChannelId = 1;
 
@@ -96,7 +104,7 @@ private slots:
     void publicConstantsMatchThetisFsize()
     {
         QCOMPARE(TxChannel::kCfcDisplayBinCount, 1025);
-        QCOMPARE(TxChannel::kCfcDisplaySampleRateHz, 48000.0);
+        QCOMPARE(kCfcDisplaySampleRateHz, 48000.0);
     }
 };
 

@@ -15,6 +15,8 @@
 //   2026-05-06 — Phase 3M-4 Task 9: created by J.J. Boyd (KG4VCF),
 //                 with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-10-13 — Linked readout and session-local visibility;
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 
 /*  AmpView.cs
@@ -66,6 +68,8 @@ mw0lge@grange-lane.co.uk
 #include "core/dsp/Ps3DisplayAdapter.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "models/RadioModel.h"
+#include "gui/styles/WorkspacePreview.h"
+#include "gui/PureSignalViewStyle.h"
 
 #include <QByteArray>
 #include <QCheckBox>
@@ -93,11 +97,6 @@ constexpr auto kPhaseZoom = "ampview/phaseZoom";
 constexpr auto kLowRes = "ampview/lowRes";
 constexpr auto kOnTop = "ampview/onTop";
 constexpr auto kGeometry = "ampview/geometry";
-constexpr auto kShowReference = "ampview/showReference";
-constexpr auto kShowMeasuredMagnitude = "ampview/showMeasuredMagnitude";
-constexpr auto kShowMeasuredPhase = "ampview/showMeasuredPhase";
-constexpr auto kShowCorrectionMagnitude = "ampview/showCorrectionMagnitude";
-constexpr auto kShowCorrectionPhase = "ampview/showCorrectionPhase";
 constexpr qint64 kStaleAfterMs = 2000;
 
 bool preference(const char* key, bool fallback)
@@ -124,6 +123,7 @@ AmpViewWindow::AmpViewWindow(RadioModel* radioModel,
                              QWidget* parent)
     : QDialog(parent)
 {
+    setObjectName(QStringLiteral("ampViewWindow"));
     setWindowTitle(QStringLiteral("AmpView 1.0")); // AmpView.Designer.cs:223
     setMinimumSize(440, 380);                       // AmpView.Designer.cs:221
     resize(564, 401);                               // AmpView.Designer.cs:214
@@ -139,6 +139,7 @@ AmpViewWindow::AmpViewWindow(RadioModel* radioModel,
     }
 
     buildUi();
+    applyPresentationStyle();
     restorePreferences();
     connectUi();
     restoreAndRepairGeometry();
@@ -175,6 +176,14 @@ void AmpViewWindow::buildUi()
     m_chart = new AmpViewChart(this);
     root->addWidget(m_chart, 1);
 
+    m_cursorReadout = new QLabel(this);
+    m_cursorReadout->setObjectName(QStringLiteral("ampViewCursorReadout"));
+    m_cursorReadout->setContentsMargins(8, 3, 8, 3);
+    m_cursorReadout->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_cursorReadout->setFont(WorkspacePreview::readableFont(m_cursorReadout->font()));
+    root->addWidget(m_cursorReadout);
+    updateReadout();
+
     m_displayStatus = new QLabel(this);
     m_displayStatus->setObjectName(QStringLiteral("ampViewDisplayStatus"));
     m_displayStatus->setContentsMargins(7, 0, 7, 0);
@@ -196,45 +205,67 @@ void AmpViewWindow::buildUi()
     m_chkStayOnTop->setObjectName(QStringLiteral("chkStayOnTop"));
     options->addWidget(m_chkShowGain, 0, 0);
     options->addWidget(m_chkPhaseZoom, 0, 1);
-    options->addWidget(m_chkLowRes, 0, 2);
-    options->addWidget(m_chkStayOnTop, 0, 3);
+    options->addWidget(m_chkLowRes, 1, 0);
+    options->addWidget(m_chkStayOnTop, 1, 1);
 
-    m_chkReference = new QCheckBox(tr("Ref"), this);
+    m_chkReference = new QCheckBox(tr("- - Reference"), this);
     m_chkReference->setObjectName(QStringLiteral("chkAVReference"));
-    m_chkMeasuredMagnitude = new QCheckBox(tr("Amp Mag"), this);
+    m_chkMeasuredMagnitude = new QCheckBox(tr("● Amp mag/gain"), this);
     m_chkMeasuredMagnitude->setObjectName(QStringLiteral("chkAVMeasuredMagnitude"));
     m_chkMeasuredMagnitude->setToolTip(tr("Measured PA magnitude or gain"));
-    m_chkMeasuredPhase = new QCheckBox(tr("Amp Phase"), this);
+    m_chkMeasuredPhase = new QCheckBox(tr("◆ Amp phase"), this);
     m_chkMeasuredPhase->setObjectName(QStringLiteral("chkAVMeasuredPhase"));
-    m_chkCorrectionMagnitude = new QCheckBox(tr("Corr Mag"), this);
+    m_chkCorrectionMagnitude = new QCheckBox(tr("― Correction mag/gain"), this);
     m_chkCorrectionMagnitude->setObjectName(QStringLiteral("chkAVCorrectionMagnitude"));
     m_chkCorrectionMagnitude->setToolTip(tr("Correction magnitude or gain"));
-    m_chkCorrectionPhase = new QCheckBox(tr("Corr Phase"), this);
+    m_chkCorrectionPhase = new QCheckBox(tr("― Correction phase"), this);
     m_chkCorrectionPhase->setObjectName(QStringLiteral("chkAVCorrectionPhase"));
-    options->addWidget(m_chkReference, 1, 0);
-    options->addWidget(m_chkMeasuredMagnitude, 1, 1);
-    options->addWidget(m_chkMeasuredPhase, 1, 2);
-    options->addWidget(m_chkCorrectionMagnitude, 1, 3);
-    options->addWidget(m_chkCorrectionPhase, 1, 4);
+    options->addWidget(m_chkReference, 2, 0);
+    options->addWidget(m_chkMeasuredMagnitude, 2, 1);
+    options->addWidget(m_chkMeasuredPhase, 3, 0);
+    options->addWidget(m_chkCorrectionMagnitude, 3, 1);
+    options->addWidget(m_chkCorrectionPhase, 4, 0);
     root->addLayout(options);
+}
+
+void AmpViewWindow::applyPresentationStyle()
+{
+    if (!WorkspacePreview::enabled()) {
+        setStyleSheet(QString());
+        return;
+    }
+    setFont(PureSignalViewStyle::font(font()));
+    const QString panel = PureSignalViewStyle::background(this).name();
+    const QString text = PureSignalViewStyle::text().name();
+    const QString muted = PureSignalViewStyle::muted().name();
+    const QString border = PureSignalViewStyle::border().name();
+    // Plot-series colors stay in the chart. Ordinary controls follow the
+    // shared workspace text roles so their labels remain readable in every look.
+    setStyleSheet(QStringLiteral(
+        "QDialog#ampViewWindow { background: %1; color: %2; }"
+        "QLabel#ampViewCursorReadout { background: %1; color: %2; border-top: 1px solid %4; border-bottom: 1px solid %4; }"
+        "QLabel#ampViewDisplayStatus { color: %3; }"
+        "QCheckBox { color: %2; }"
+        "QCheckBox#chkAVReference { color: %3; }")
+        .arg(panel, text, muted, border));
 }
 
 void AmpViewWindow::restorePreferences()
 {
-    const std::array<std::pair<QCheckBox*, bool>, 9> restored{{
+    const std::array<std::pair<QCheckBox*, bool>, 4> restored{{
         {m_chkShowGain, preference(kShowGain, false)},
         {m_chkPhaseZoom, preference(kPhaseZoom, false)},
         {m_chkLowRes, preference(kLowRes, true)},
         {m_chkStayOnTop, preference(kOnTop, false)},
-        {m_chkReference, preference(kShowReference, true)},
-        {m_chkMeasuredMagnitude, preference(kShowMeasuredMagnitude, true)},
-        {m_chkMeasuredPhase, preference(kShowMeasuredPhase, true)},
-        {m_chkCorrectionMagnitude, preference(kShowCorrectionMagnitude, true)},
-        {m_chkCorrectionPhase, preference(kShowCorrectionPhase, true)},
     }};
     for (const auto& [checkBox, enabled] : restored) {
         const QSignalBlocker blocker(checkBox);
         checkBox->setChecked(enabled);
+    }
+    for (QCheckBox* checkBox : {m_chkReference, m_chkMeasuredMagnitude,
+                                m_chkMeasuredPhase, m_chkCorrectionMagnitude,
+                                m_chkCorrectionPhase}) {
+        checkBox->setChecked(true);
     }
 
     m_chart->setShowGain(m_chkShowGain->isChecked());
@@ -250,6 +281,7 @@ void AmpViewWindow::restorePreferences()
     m_chart->setSeriesVisible(AmpViewChart::Series::CorrectionPhase,
                               m_chkCorrectionPhase->isChecked());
     setWindowFlag(Qt::WindowStaysOnTopHint, m_chkStayOnTop->isChecked());
+    updateReadout();
 }
 
 void AmpViewWindow::connectUi()
@@ -259,23 +291,21 @@ void AmpViewWindow::connectUi()
     connect(m_chkLowRes, &QCheckBox::toggled, this, &AmpViewWindow::onLowResToggled);
     connect(m_chkStayOnTop, &QCheckBox::toggled, this, &AmpViewWindow::onStayOnTopToggled);
 
+    connect(m_chart, &AmpViewChart::selectedInputChanged,
+            this, &AmpViewWindow::updateReadout);
     const auto wireSeries = [this](QCheckBox* checkBox,
-                                   AmpViewChart::Series series,
-                                   const char* key) {
+                                   AmpViewChart::Series series) {
         connect(checkBox, &QCheckBox::toggled, this,
-                [this, series, key](bool visible) {
+                [this, series](bool visible) {
                     m_chart->setSeriesVisible(series, visible);
-                    persistPreference(key, visible);
+                    updateReadout();
                 });
     };
-    wireSeries(m_chkReference, AmpViewChart::Series::Reference, kShowReference);
-    wireSeries(m_chkMeasuredMagnitude, AmpViewChart::Series::MeasuredMagnitude,
-               kShowMeasuredMagnitude);
-    wireSeries(m_chkMeasuredPhase, AmpViewChart::Series::MeasuredPhase, kShowMeasuredPhase);
-    wireSeries(m_chkCorrectionMagnitude, AmpViewChart::Series::CorrectionMagnitude,
-               kShowCorrectionMagnitude);
-    wireSeries(m_chkCorrectionPhase, AmpViewChart::Series::CorrectionPhase,
-               kShowCorrectionPhase);
+    wireSeries(m_chkReference, AmpViewChart::Series::Reference);
+    wireSeries(m_chkMeasuredMagnitude, AmpViewChart::Series::MeasuredMagnitude);
+    wireSeries(m_chkMeasuredPhase, AmpViewChart::Series::MeasuredPhase);
+    wireSeries(m_chkCorrectionMagnitude, AmpViewChart::Series::CorrectionMagnitude);
+    wireSeries(m_chkCorrectionPhase, AmpViewChart::Series::CorrectionPhase);
 }
 
 void AmpViewWindow::restoreAndRepairGeometry()
@@ -332,6 +362,7 @@ void AmpViewWindow::onShowGainToggled(bool on)
 {
     m_chart->setShowGain(on);
     persistPreference(kShowGain, on);
+    updateReadout();
 }
 
 void AmpViewWindow::onPhaseZoomToggled(bool on)
@@ -378,8 +409,11 @@ void AmpViewWindow::acceptSnapshot(const Ps3Snapshot& snapshot)
     }
     if (generation != m_displayGeneration) {
         m_chart->clearData();
+        updateReadout();
         m_displayGeneration = generation;
         m_lastSequence = 0;
+        m_lastCaptureMs = 0;
+        m_lastCaptureWhileMox = false;
     }
     if (snapshot.sequence <= m_lastSequence) {
         return;
@@ -391,16 +425,20 @@ void AmpViewWindow::acceptSnapshot(const Ps3Snapshot& snapshot)
         return;
     }
     m_chart->setPlotData(plot);
+    updateReadout();
     m_lastSequence = snapshot.sequence;
     m_lastCaptureMs = snapshot.capturedAtUnixMilliseconds;
+    m_lastCaptureWhileMox = m_facade->statusSnapshot().mox;
     updateFreshnessLabel();
 }
 
 void AmpViewWindow::invalidateDisplay()
 {
     m_chart->clearData();
+    updateReadout();
     m_lastSequence = 0;
     m_lastCaptureMs = 0;
+    m_lastCaptureWhileMox = false;
     m_displayGeneration = m_facade ? m_facade->displayGeneration() : 0;
     refreshAvailability();
 }
@@ -413,11 +451,17 @@ void AmpViewWindow::refreshAvailability()
     }
     if (m_facade->displayGeneration() != m_displayGeneration) {
         m_chart->clearData();
+        updateReadout();
         m_displayGeneration = m_facade->displayGeneration();
         m_lastSequence = 0;
         m_lastCaptureMs = 0;
+        m_lastCaptureWhileMox = false;
     }
     if (!m_facade->available()) {
+        m_chart->clearData();
+        updateReadout();
+        m_lastCaptureMs = 0;
+        m_lastCaptureWhileMox = false;
         m_displayStatus->setText(tr("PureSignal display unavailable."));
         return;
     }
@@ -440,11 +484,29 @@ void AmpViewWindow::updateFreshnessLabel()
     }
     const qint64 age = std::max<qint64>(
         0, QDateTime::currentMSecsSinceEpoch() - m_lastCaptureMs);
-    if (age > kStaleAfterMs) {
-        m_displayStatus->setText(tr("PureSignal display data is stale."));
+    const bool current = age <= kStaleAfterMs && m_lastCaptureWhileMox
+        && m_facade->statusSnapshot().mox;
+    if (!current) {
+        m_displayStatus->setText(tr("Retained PureSignal curve • %1 ms old").arg(age));
     } else {
-        m_displayStatus->setText(tr("Live PureSignal display • %1 ms old").arg(age));
+        m_displayStatus->setText(tr("Current PureSignal curve • %1 ms old").arg(age));
     }
+}
+
+void AmpViewWindow::updateReadout()
+{
+    const AmpViewCursorReadout values = m_chart->readoutAt(m_chart->selectedInput());
+    const auto formatted = [](const std::optional<double>& value, int decimals) {
+        return value ? QString::number(*value, 'f', decimals) : QStringLiteral("—");
+    };
+    const QString ampLabel = m_chart->showGain() ? tr("AMP GAIN") : tr("AMP MAG");
+    const QString correctionLabel = m_chart->showGain() ? tr("CORR GAIN") : tr("CORR MAG");
+    m_cursorReadout->setText(
+        tr("INPUT %1\n%2 %3  ·  %4 %5\nAMP PHASE %6°  ·  CORR PHASE %7°")
+            .arg(QString::number(values.inputMagnitude, 'f', 2),
+                 ampLabel, formatted(values.magnitudeAmp, 3),
+                 correctionLabel, formatted(values.magnitudeCorrection, 3),
+                 formatted(values.phaseAmp, 1), formatted(values.phaseCorrection, 1)));
 }
 
 void AmpViewWindow::closeEvent(QCloseEvent* event)
@@ -466,6 +528,7 @@ void AmpViewWindow::hideEvent(QHideEvent* event)
 
 void AmpViewWindow::showEvent(QShowEvent* event)
 {
+    applyPresentationStyle();
     QDialog::showEvent(event);
     repairOffscreenPosition();
     setSubscribed(true);

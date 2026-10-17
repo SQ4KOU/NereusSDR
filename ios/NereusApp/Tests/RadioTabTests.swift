@@ -394,6 +394,43 @@ struct RadioTabTests {
         #expect(RadioAtAGlance.protocolNumber(old) == .unavailable(RadioAtAGlance.notReportedReason))
     }
 
+    @Test("the firmware reads both numbers of the radio's release where the Core sends the second")
+    func firmwareSecondNumber() {
+        func firmware(_ capabilities: [String: MirrorValue],
+                      radio: [String: MirrorValue] = [:]) -> RadioAtAGlance.Reading {
+            RadioAtAGlance.firmware(RadioAtAGlance.Inputs(connected: true, radio: radio,
+                                                         capabilities: capabilities, agreedMinor: 11))
+        }
+        // An ANAN-7000DLE or 8000DLE (board 5) on release 22 and 14.
+        #expect(firmware(["firmwareVersion": .text("22"), "board": .int(5), "firmwareBeta": .int(14)])
+                == .value("22.14"))
+        // An older Core sends the first number alone, and a radio may report no second.
+        #expect(firmware(["firmwareVersion": .text("22"), "board": .int(5)]) == .value("22"))
+        #expect(firmware(["firmwareVersion": .text("22"), "board": .int(5), "firmwareBeta": .int(0)])
+                == .value("22"))
+        // An ANAN-G2's second number (boards 10 and 11) is its program's version: left out.
+        #expect(firmware(["firmwareVersion": .text("27"), "board": .int(10), "firmwareBeta": .int(39)])
+                == .value("27"))
+        #expect(firmware(["firmwareVersion": .text("27"), "board": .int(11), "firmwareBeta": .int(39)])
+                == .value("27"))
+        // A Hermes Lite 2's (board 6) is its gateware's patch number.
+        #expect(firmware(["firmwareVersion": .text("72"), "board": .int(6), "firmwareBeta": .int(2)])
+                == .value("72.2"))
+        // The radio object's version moved before the capabilities followed:
+        // the second number came with another first, and is not shown beside this one.
+        #expect(firmware(["firmwareVersion": .text("22"), "board": .int(5), "firmwareBeta": .int(14)],
+                         radio: ["version": .text("21")]) == .value("21"))
+        // Not one byte, or not a number: not shown.
+        #expect(firmware(["firmwareVersion": .text("22"), "board": .int(5), "firmwareBeta": .int(256)])
+                == .value("22"))
+        #expect(firmware(["firmwareVersion": .text("22"), "board": .int(5), "firmwareBeta": .text("14")])
+                == .value("22"))
+        // The diagnostics line words it the same way.
+        #expect(RadioAtAGlance.firmwareText(first: "22", capabilities: ["firmwareVersion": .text("22"),
+                                                                       "board": .int(5),
+                                                                       "firmwareBeta": .int(14)]) == "22.14")
+    }
+
     // MARK: On screen only
 
     @Test("the readings tick once a second only while shown, and show current values at once on return")

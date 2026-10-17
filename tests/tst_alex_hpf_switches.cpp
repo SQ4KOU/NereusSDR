@@ -812,6 +812,225 @@ private slots:
 
         model.injectConnectionForTest(nullptr);
     }
+
+    // A combined selection (codec::alex::combinesRxBandFilters) that holds
+    // the 6 m BPF/LNA with another band's filter: the 6 m switches take the
+    // LNA out and leave the other filter, where the BPF/LNA alone becomes
+    // the bypass as before.
+    void sixMetreLnaSwitches_takeTheLnaOutOfACombinedSelection()
+    {
+        using codec::alex::applyAlex1HpfSwitches;
+        static constexpr quint8 k20m = 0x01;
+        static constexpr quint8 k20mAnd6m = k20m | k6mLna;
+        codec::alex::Alex1HpfSwitches sw;
+        sw.disable6mLnaOnTx = false;
+        QCOMPARE(applyAlex1HpfSwitches(k20mAnd6m, HPSDRHW::OrionMKII, false, false, sw), k20mAnd6m);
+
+        sw.disable6mLnaOnRx = true;
+        QCOMPARE(applyAlex1HpfSwitches(k20mAnd6m, HPSDRHW::OrionMKII, false, false, sw), k20m);
+        QCOMPARE(applyAlex1HpfSwitches(k6mLna, HPSDRHW::OrionMKII, false, false, sw), kBypass);
+
+        sw.disable6mLnaOnRx = false;
+        sw.disable6mLnaOnTx = true;
+        QCOMPARE(applyAlex1HpfSwitches(k20mAnd6m, HPSDRHW::OrionMKII, false, false, sw), k20mAnd6m);
+        QCOMPARE(applyAlex1HpfSwitches(k20mAnd6m, HPSDRHW::OrionMKII, /*keyed*/true, false, sw), k20m);
+        QCOMPARE(applyAlex1HpfSwitches(k6mLna, HPSDRHW::OrionMKII, /*keyed*/true, false, sw), kBypass);
+
+        // The master bypass replaces the whole selection, as it always has.
+        sw.hpfBypass = true;
+        QCOMPARE(applyAlex1HpfSwitches(k20mAnd6m, HPSDRHW::OrionMKII, false, false, sw), kBypass);
+    }
+
+    // ── HPF Bypass where the radio's own bypass passes nothing ───────────
+    //
+    // The Anvelina Pro 3 (codec::alex::receiveBypassSelection, a bench
+    // measurement quoted there): the master switch sends the five ordinary
+    // band filters together, keyed or not, so no relay moves at a T/R
+    // change. The two transmit-only bypasses are Thetis's and stay 0x20.
+    void masterBypass_isTheFiveBandFilters_whereTheBypassPassesNothing()
+    {
+        using codec::alex::applyAlex1HpfSwitches;
+        using codec::alex::receiveBypassSelection;
+        static constexpr quint8 kFive = 0x10 | 0x08 | 0x04 | 0x01 | 0x02;
+        static constexpr quint8 k40m = 0x04;
+        QCOMPARE(receiveBypassSelection(HPSDRModel::ANVELINAPRO3), kFive);
+        QCOMPARE(receiveBypassSelection(HPSDRModel::ANAN_G2), kBypass);
+        QCOMPARE(receiveBypassSelection(HPSDRModel::ANAN7000D), kBypass);
+        QCOMPARE(receiveBypassSelection(HPSDRModel::ORIONMKII), kBypass);
+        QCOMPARE(receiveBypassSelection(HPSDRModel::HERMES), kBypass);
+
+        codec::alex::Alex1HpfSwitches sw;
+        QCOMPARE(sw.receiveBypass, kBypass);   // every other radio
+        sw.receiveBypass = receiveBypassSelection(HPSDRModel::ANVELINAPRO3);
+        sw.disable6mLnaOnTx = false;
+        QCOMPARE(applyAlex1HpfSwitches(k40m, HPSDRHW::OrionMKII, false, false, sw), k40m);
+
+        sw.hpfBypass = true;
+        QCOMPARE(applyAlex1HpfSwitches(k40m, HPSDRHW::OrionMKII, false, false, sw), kFive);
+        QCOMPARE(applyAlex1HpfSwitches(k40m, HPSDRHW::OrionMKII, /*keyed*/true, false, sw), kFive);
+        QCOMPARE(applyAlex1HpfSwitches(k6mLna, HPSDRHW::OrionMKII, false, false, sw), kFive);
+
+        // HPF Bypass on TX and on PureSignal feedback: 0x20 while keyed.
+        sw.hpfBypassOnTx = true;
+        QCOMPARE(applyAlex1HpfSwitches(k40m, HPSDRHW::OrionMKII, /*keyed*/true, false, sw), kBypass);
+        QCOMPARE(applyAlex1HpfSwitches(k40m, HPSDRHW::OrionMKII, false, false, sw), kFive);
+        sw.hpfBypassOnTx = false;
+        sw.hpfBypass = false;
+        sw.hpfBypassOnPs = true;
+        QCOMPARE(applyAlex1HpfSwitches(k40m, HPSDRHW::OrionMKII, /*keyed*/true, /*ps*/true, sw),
+                 kBypass);
+
+        // The 6 m BPF/LNA alone with its switch on is Thetis's bypass, as
+        // before: nothing else on the board passes 6 m.
+        sw.hpfBypassOnPs = false;
+        sw.disable6mLnaOnRx = true;
+        QCOMPARE(applyAlex1HpfSwitches(k6mLna, HPSDRHW::OrionMKII, false, false, sw), kBypass);
+    }
+
+    // The same through an Anvelina Pro 3 Core on Protocol 2: the Setup
+    // tab's switch reaches Alex0 as the five filters, and the chain still
+    // reports the bypass with the switch named.
+    void masterBypass_onTheAnvelina_reachesTheWireAsFiveFilters()
+    {
+        static constexpr quint8 kFive = 0x10 | 0x08 | 0x04 | 0x01 | 0x02;
+        ConnectedP2 conn;
+        RadioModel model;
+        SliceModel* a = g2CoreWithSlice(model, conn, double(k40mHz), HPSDRHW::OrionMKII);
+        QVERIFY(a);
+        // The radio model, on the Core and on its connection (as
+        // connectToRadio hands it over).
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        conn.setHardwareProfile(model.hardwareProfile());
+        QCOMPARE(conn.hardwareProfile().model, HPSDRModel::ANVELINAPRO3);
+        model.requestDdcAssignment();
+        model.applyAlexHpfSwitchSettings();
+        const quint8 filtered = p2Alex0Hpf(conn);
+        QCOMPARE(filtered, quint8(0x04));   // the 5.5 to 11 MHz row
+
+        setSwitch("hpfBypass", true);
+        model.applyAlexHpfSwitchSettings();
+        QCOMPARE(p2Alex0Hpf(conn), kFive);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Bypass));
+        const RadioModel::PanBypassState wide = model.panBypassState({a->sliceIndex()});
+        QVERIFY(wide.bypassed);
+        QVERIFY2(wide.reason.contains(QStringLiteral("HPF Bypass")), qPrintable(wide.reason));
+
+        // Keyed: the same word, so no relay moves at the T/R change.
+        conn.setMox(true);
+        QCOMPARE(p2Alex0Hpf(conn), kFive);
+        conn.setMox(false);
+
+        setSwitch("hpfBypass", false);
+        model.applyAlexHpfSwitchSettings();
+        QCOMPARE(p2Alex0Hpf(conn), filtered);
+
+        model.injectConnectionForTest(nullptr);
+    }
+
+    // A filter row's own Bypass box (Alex-1 Filters, the 5.5 to 11 MHz
+    // row) on that radio: the slice in the row gets the five filters, alone
+    // or sharing the input, where the radio's own bypass would leave it
+    // deaf. Off the row nothing changes.
+    void rowBypass_onTheAnvelina_reachesTheWireAsFiveFilters()
+    {
+        static constexpr quint8 kFive = 0x10 | 0x08 | 0x04 | 0x01 | 0x02;
+        const QString rowKey =
+            QStringLiteral("hardware/%1/alex/bpf1/9_5MHz/enabled").arg(kMac);
+        ConnectedP2 conn;
+        RadioModel model;
+        SliceModel* a = g2CoreWithSlice(model, conn, double(k40mHz), HPSDRHW::OrionMKII);
+        QVERIFY(a);
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        conn.setHardwareProfile(model.hardwareProfile());
+        model.requestDdcAssignment();
+        model.applyAlexHpfSwitchSettings();
+        QCOMPARE(p2Alex0Hpf(conn), quint8(0x04));
+
+        AppSettings::instance().setValue(rowKey, QStringLiteral("True"));
+        model.applyAlexHpfSwitchSettings();
+        QVERIFY(model.alexHpfEdges().bpf1[2].bypass);
+        QCOMPARE(p2Alex0Hpf(conn), kFive);
+
+        // A second slice on 20 m shares the input: the five hold its row.
+        const int id = model.addSlice();
+        SliceModel* b = model.sliceById(id);
+        QVERIFY(b);
+        b->setFrequency(14200000.0);
+        model.requestDdcAssignment();
+        QCOMPARE(p2Alex0Hpf(conn), kFive);
+
+        // The first slice leaves the bypassed row for 80 m: two ordinary rows.
+        a->setFrequency(3800000.0);
+        model.requestDdcAssignment();
+        QCOMPARE(p2Alex0Hpf(conn), quint8(0x08 | 0x01));
+
+        AppSettings::instance().setValue(rowKey, QStringLiteral("False"));
+        model.applyAlexHpfSwitchSettings();
+        model.injectConnectionForTest(nullptr);
+    }
+
+    // Disable 6m LNA on RX on that radio, with 6 m sharing the input. The
+    // 12/10 m row stays out only while the BPF/LNA is in
+    // (codec::alex::combineRxBandSelections): with the switch on the
+    // BPF/LNA comes out in the connection, the 12/10 m row is sent, and the
+    // chain says it is the 6 m slice that has no filter.
+    void sixMeterLnaOnRx_onTheAnvelina_bringsThe10mRowBack()
+    {
+        static constexpr quint8 k10mRow = 0x02;
+        ConnectedP2 conn;
+        RadioModel model;
+        SliceModel* a = g2CoreWithSlice(model, conn, 28400000.0, HPSDRHW::OrionMKII);
+        QVERIFY(a);
+        model.setHpsdrModelForTest(HPSDRModel::ANVELINAPRO3);
+        conn.setHardwareProfile(model.hardwareProfile());
+        const int id = model.addSlice();
+        SliceModel* b = model.sliceById(id);
+        QVERIFY(b);
+        b->setFrequency(double(k6mHz));
+        model.requestDdcAssignment();
+        model.applyAlexHpfSwitchSettings();
+        QCOMPARE(p2Alex0Hpf(conn), k6mLna);   // the BPF/LNA alone
+        QCOMPARE(model.rxFilter0Reason(), QStringLiteral("10m + 6m (6m LNA in: 10m filter out)"));
+
+        setSwitch("disable6mLnaOnRx", true);
+        model.applyAlexHpfSwitchSettings();
+        QCOMPARE(p2Alex0Hpf(conn), k10mRow);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+        QCOMPARE(model.rxFilter0Reason(),
+                 QStringLiteral("10m + 6m (6m LNA off on RX: 6m filter out)"));
+        const QString reason = model.rxFilter0LowPassReason();
+        QVERIFY2(reason.contains(QStringLiteral("Disable 6m LNA on RX is on, so the 6m BPF/LNA "
+                                                "is out and slice %1 on 6m hears nothing")
+                                     .arg(b->sliceLetter())),
+                 qPrintable(reason));
+        QVERIFY2(!reason.contains(QStringLiteral("12/10m BPF")), qPrintable(reason));
+
+        setSwitch("disable6mLnaOnRx", false);
+        model.applyAlexHpfSwitchSettings();
+        QCOMPARE(p2Alex0Hpf(conn), k6mLna);
+        QCOMPARE(model.rxFilter0Reason(), QStringLiteral("10m + 6m (6m LNA in: 10m filter out)"));
+
+        model.injectConnectionForTest(nullptr);
+    }
+
+    // The same box on an ANAN-G2 is Thetis's 0x20, as before.
+    void rowBypass_onTheG2_isStillTheBypass()
+    {
+        const QString rowKey =
+            QStringLiteral("hardware/%1/alex/bpf1/9_5MHz/enabled").arg(kMac);
+        ConnectedP2 conn;
+        RadioModel model;
+        SliceModel* a = g2CoreWithSlice(model, conn, double(k40mHz));
+        QVERIFY(a);
+        model.applyAlexHpfSwitchSettings();
+        QCOMPARE(p2Alex0Hpf(conn), quint8(0x04));
+        AppSettings::instance().setValue(rowKey, QStringLiteral("True"));
+        model.applyAlexHpfSwitchSettings();
+        QCOMPARE(p2Alex0Hpf(conn), kBypass);
+        AppSettings::instance().setValue(rowKey, QStringLiteral("False"));
+        model.applyAlexHpfSwitchSettings();
+        model.injectConnectionForTest(nullptr);
+    }
 };
 
 QTEST_MAIN(TestAlexHpfSwitches)

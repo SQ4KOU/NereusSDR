@@ -52,9 +52,14 @@
 //                                    setDropsOutgoing() loses pings and
 //                                    pongs too. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-10-12  J.J. Boyd / KG4VCF  setRewritesIncoming(), the text a
+//                                    far end of another version would
+//                                    have sent. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <functional>
+#include <utility>
 
 #include <QByteArray>
 #include <QList>
@@ -121,6 +126,15 @@ public:
     /// waits, in order; false releases it in the order sent. A slow link:
     /// late, never lost. Default false.
     void setHoldsOutgoing(bool holds);
+    /// Text arriving at this end goes through `rewrite` first; its result
+    /// is what received() records and what this end's listener gets, and
+    /// an empty result delivers nothing. For a far end of another version:
+    /// the same messages without a value it does not send yet. An empty
+    /// function, the default, delivers the text as sent.
+    void setRewritesIncoming(std::function<QByteArray(const QByteArray&)> rewrite)
+    {
+        m_rewriteIncoming = std::move(rewrite);
+    }
     LoopbackTransport* peerForTest() const { return m_peer; }
 
     /// Every wire message this end has received, in arrival order.
@@ -152,6 +166,7 @@ private:
     bool m_carriesBinary = true;
     bool m_holdsOutgoing = false;
     QList<std::function<void()>> m_heldOutgoing;
+    std::function<QByteArray(const QByteArray&)> m_rewriteIncoming;
     int m_pingsSeen = 0;
     QString m_closeReason;
     QString m_peerAddress;

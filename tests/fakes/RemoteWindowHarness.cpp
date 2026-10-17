@@ -23,6 +23,10 @@
 //                                    updates and the slice access verbs the
 //                                    Core received.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-08  J.J. Boyd / KG4VCF  useNamedIsolatedProfile(): a profile
+//                                    under a fixed name, for the visual
+//                                    preview's scenes that show its path.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "RemoteWindowHarness.h"
@@ -150,7 +154,12 @@ bool pointsAtIsolatedProfile()
 
 bool RemoteWindowHarness::useIsolatedProfile(const QString& tag)
 {
-    const QString profile = QStringLiteral("%1-%2").arg(tag).arg(QCoreApplication::applicationPid());
+    return useNamedIsolatedProfile(
+        QStringLiteral("%1-%2").arg(tag).arg(QCoreApplication::applicationPid()));
+}
+
+bool RemoteWindowHarness::useNamedIsolatedProfile(const QString& profile)
+{
     AppSettings::setProfileOverride(profile);
     const QString expected = AppSettings::resolveSettingsPath(profile);
     if (AppSettings::instance().filePath() != expected) {

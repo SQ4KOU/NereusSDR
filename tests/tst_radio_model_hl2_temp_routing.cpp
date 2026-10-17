@@ -30,6 +30,12 @@
 //       Alternating high/low raw samples land at a midpoint °C that
 //       sits between the two single-sample values (proves the ring
 //       buffer averages, not just last-write-wins).
+//   - hl2_window_spans_800ms_at_idle_rate / _at_keyed_rate
+//       A step from one reading to another takes mi0bot's 800 ms
+//       (100 polls, 8 ms apart) to settle whether telemetry arrives
+//       every 200 ms (idle) or every 1 ms (keyed).
+//   - hl2_first_reading_shows_at_once
+//   - hl2_reading_after_disconnect_starts_fresh
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -37,10 +43,67 @@
 
 #include "core/AppSettings.h"
 #include "core/HpsdrModel.h"
+#include "core/PaTelemetryScaling.h"
 #include "core/RadioStatus.h"
 #include "models/RadioModel.h"
 
 using namespace NereusSDR;
+
+namespace {
+
+constexpr qint64 kMs = 1000000;  // nanoseconds per millisecond
+
+// One HL2 telemetry call at test time nowNs carrying temperature raw.
+void feedHl2Temp(RadioModel& model, qint64 nowNs, quint16 raw)
+{
+    model.setPaTelemetryNowNsForTest(nowNs);
+    model.handlePaTelemetryForTest(0, 0, raw, 0, 0, 0);
+}
+
+// Feeds raw every periodMs from fromMs up to and including toMs.
+void feedHl2TempEvery(RadioModel& model, qint64 fromMs, qint64 toMs,
+                      qint64 periodMs, quint16 raw)
+{
+    for (qint64 t = fromMs; t <= toMs; t += periodMs) {
+        feedHl2Temp(model, t * kMs, raw);
+    }
+}
+
+// Steady reading A, then a step to B; checks the average is between the
+// two 400 ms after the step and has fully reached B 800 ms after the step
+// plus one call. mi0bot console.cs:24927-24928, 24976, 24987
+// [v2.10.3.13-beta2 @c26a8a4]: 100 samples, one every 8 ms, so 800 ms.
+void checkStepSettlesIn800Ms(qint64 periodMs)
+{
+    constexpr quint16 kRawA = 628;   // about 0 C
+    constexpr quint16 kRawB = 2048;  // about 113 C
+    const double tempA = scaleHermesLiteTempCelsius(kRawA);
+    const double tempB = scaleHermesLiteTempCelsius(kRawB);
+
+    RadioModel model;
+    model.setBoardForTest(HPSDRHW::HermesLite);
+
+    // Two seconds of A fills the window with A at either rate.
+    constexpr qint64 kStepMs = 2000;
+    feedHl2TempEvery(model, 0, kStepMs - periodMs, periodMs, kRawA);
+    QVERIFY2(qAbs(model.radioStatus().paTemperatureCelsius() - tempA) < 1e-6,
+             qPrintable(QString::number(model.radioStatus().paTemperatureCelsius())));
+
+    feedHl2TempEvery(model, kStepMs, kStepMs + 400, periodMs, kRawB);
+    const double mid = model.radioStatus().paTemperatureCelsius();
+    QVERIFY2(mid > tempA + 10.0 && mid < tempB - 10.0,
+             qPrintable(QStringLiteral("400 ms after the step: %1 C, expected between %2 and %3")
+                            .arg(mid).arg(tempA).arg(tempB)));
+
+    feedHl2TempEvery(model, kStepMs + 400 + periodMs, kStepMs + 800 + periodMs,
+                     periodMs, kRawB);
+    const double settled = model.radioStatus().paTemperatureCelsius();
+    QVERIFY2(qAbs(settled - tempB) < 1e-6,
+             qPrintable(QStringLiteral("800 ms after the step: %1 C, expected %2")
+                            .arg(settled).arg(tempB)));
+}
+
+} // namespace
 
 class TstRadioModelHl2TempRouting : public QObject {
     Q_OBJECT
@@ -203,6 +266,7 @@ private slots:
         model.setBoardForTest(HPSDRHW::HermesLite);
 
         // Single sample at raw=628 → ~0 °C.
+        model.setPaTelemetryNowNsForTest(0);
         model.handlePaTelemetryForTest(
             /*fwdRaw*/      0,
             /*revRaw*/      0,
@@ -219,6 +283,8 @@ private slots:
         // {628, 2048}; the average is 1338, which scales to ~57 °C.
         // Pin the published temp to that midpoint so a regression that
         // skipped averaging would land at 113 °C and fail the bounds.
+        // The hot sample arrives one 8 ms poll later, so it is sampled.
+        model.setPaTelemetryNowNsForTest(8 * kMs);
         model.handlePaTelemetryForTest(
             /*fwdRaw*/      0,
             /*revRaw*/      0,
@@ -230,6 +296,40 @@ private slots:
         QVERIFY2(tempAfterSecond > 50.0 && tempAfterSecond < 65.0,
                  qPrintable(QStringLiteral("averaged temp %1 °C — expected ~57 (midpoint)")
                                 .arg(tempAfterSecond)));
+    }
+
+    // ── 5. The window is 800 ms at the idle status rate (200 ms) ────────────
+    void hl2_window_spans_800ms_at_idle_rate() { checkStepSettlesIn800Ms(200); }
+
+    // ── 6. The window is 800 ms at the keyed status rate (1 ms) ─────────────
+    void hl2_window_spans_800ms_at_keyed_rate() { checkStepSettlesIn800Ms(1); }
+
+    // ── 7. The first reading shows at once ──────────────────────────────────
+    void hl2_first_reading_shows_at_once()
+    {
+        RadioModel model;
+        model.setBoardForTest(HPSDRHW::HermesLite);
+        feedHl2Temp(model, 123456789, 2048);
+        QVERIFY(qAbs(model.radioStatus().paTemperatureCelsius()
+                     - scaleHermesLiteTempCelsius(2048)) < 1e-6);
+    }
+
+    // ── 8. Leaving Connected clears the window ──────────────────────────────
+    // A reconnect, perhaps to another radio, shows its own first reading
+    // at once, with nothing averaged in from before.
+    void hl2_reading_after_disconnect_starts_fresh()
+    {
+        RadioModel model;
+        model.setBoardForTest(HPSDRHW::HermesLite);
+        model.setConnectionStateForTest(ConnectionState::Connected);
+        feedHl2TempEvery(model, 0, 1000, 200, 628);
+        model.setConnectionStateForTest(ConnectionState::Disconnected);
+        model.setConnectionStateForTest(ConnectionState::Connected);
+        // 100 ms later: by the old clock that is 12 polls of the old reading.
+        feedHl2Temp(model, 1100 * kMs, 2048);
+        const double temp = model.radioStatus().paTemperatureCelsius();
+        QVERIFY2(qAbs(temp - scaleHermesLiteTempCelsius(2048)) < 1e-6,
+                 qPrintable(QString::number(temp)));
     }
 };
 

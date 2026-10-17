@@ -200,7 +200,7 @@ struct DisplayMoreTests {
         rig.main.changeDisplay { $0.clarityEnabled = true }
         now += 1
         let payload: [String: LinkJSON] = ["op": .string("noise-floor"), "connectionId": .string("c"),
-                                           "endpointId": .number(1), "revision": .number(1),
+                                           "endpointId": .number(1), "revision": .number(2),
                                            "contextGeneration": .number(1), "floorDbm": .number(-110)]
         band.receive(.noiseFloor(try #require(MediaControlDecoder.noiseFloor(payload))))
         #expect(band.drawnSettings.scaleRange.lowerBound == -115)
@@ -234,7 +234,12 @@ struct DisplayMoreTests {
 
     // MARK: Rows 16 and 19: detectors, averaging and the quantisation window
 
-    @Test("the pan's detectors and averaging go to the Core, and the quantisation window follows the scale")
+    // R-DISP-HOLD: this test pinned the window to the bare scale (-140 to
+    // -40, then a top of -20 sent as -20), when every move of the scale asked
+    // the Core again and restarted its averaged trace. The window is now
+    // what the band needs with 10 dB either side, held while what is needed
+    // lies inside it (`BandDisplaySettings.quantisationWindow`).
+    @Test("the pan's detectors and averaging go to the Core, and the quantisation window holds about the scale")
     func detectorsAndWindow() async throws {
         let rig = try Rig()
         await quiet()
@@ -243,7 +248,7 @@ struct DisplayMoreTests {
         let first = try #require(rig.sent.last)
         #expect(first.trace.detector == 0 && first.trace.averageMode == 3)
         #expect(first.waterfall.detector == 0 && first.waterfall.averageMode == 0)
-        #expect(first.minDbm == -140 && first.maxDbm == -40)
+        #expect(first.minDbm == -150 && first.maxDbm == -30)
         #expect(first.decimation == nil)
         rig.main.changeDisplay {
             $0.spectrumDetector = .rms
@@ -257,8 +262,19 @@ struct DisplayMoreTests {
         #expect(next.trace.averageMode == 2 && next.waterfall.detector == 2 && next.waterfall.averageMode == 1)
         // This Core does not take decimation: none goes.
         #expect(next.decimation == nil)
+        // A top inside the held window asks the Core nothing.
+        let asked = rig.sent.count
+        rig.main.display.setTop(-36)
+        await quiet()
+        #expect(rig.main.band.settings.scaleTopDbm == -36)
+        #expect(rig.sent.count == asked)
+        // A top past it asks once, for what the band needs with its headroom:
+        // the scale is now -120 to -20 and the waterfall's low level -122.
         rig.main.display.setTop(-20)
-        #expect(await settle { rig.sent.last?.maxDbm == -20 })
+        #expect(await settle { rig.sent.last?.maxDbm == -10 })
+        #expect(rig.sent.last?.minDbm == -132)
+        await quiet()
+        #expect(rig.sent.count == asked + 1)
     }
 
     // MARK: Row 28: the classic peak hold on the sheet
@@ -292,13 +308,13 @@ struct DisplayMoreTests {
         page.copyLevelsToScale()
         #expect(band.settings.scaleTopDbm == -60 && band.settings.scaleBottomDbm == -110)
         page.addCustomStop()
-        #expect(band.settings.customPalette.count == PaletteStop.customDefault.count + 1)
+        #expect(band.settings.customPalette.count == BandDisplaySettings.desktopDefaults.customPalette.count + 1)
         rig.main.display.selectPalette(BandPalette.customPaletteId)
         #expect(rig.main.display.paletteName == BandPalette.customPaletteName)
         page.change { $0.showFps = true }
         page.resetDisplay()
         #expect(!band.settings.showFps)
-        #expect(band.settings.customPalette == PaletteStop.customDefault)
+        #expect(band.settings.customPalette == BandDisplaySettings.desktopDefaults.customPalette)
         #expect(band.settings.scaleTopDbm == -60)
         #expect(DisplayOnThisPhonePage.resetTitle == "Reset to defaults")
         // The new words are plain and promise nothing to come.

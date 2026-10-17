@@ -88,9 +88,9 @@ struct StationActivityAttributes: ActivityAttributes {
         var keyed: Bool
         /// When the key began, for the clock that counts up.
         var keyedSince: Date?
-        /// The radio's forward power in watts and SWR while keyed.
-        var forwardWatts: Double
-        var swr: Double
+        /// Selected forward power and SWR while keyed; nil means unavailable.
+        var forwardWatts: Double?
+        var swr: Double?
         /// When the Core's transmit time-out stops this key; nil when none applies.
         var timeOutAt: Date?
         /// The radio is on the air for someone else (another device, the
@@ -107,7 +107,7 @@ struct StationActivityAttributes: ActivityAttributes {
 
         init(stationName: String = "", link: Link = .connecting, roundTripMs: Int? = nil, retry: Retry? = nil,
              lostWhileKeyed: Bool = false, slice: Slice? = nil, meter: Meter? = nil, muted: Bool = false,
-             keyed: Bool = false, keyedSince: Date? = nil, forwardWatts: Double = 0, swr: Double = 1,
+             keyed: Bool = false, keyedSince: Date? = nil, forwardWatts: Double? = nil, swr: Double? = nil,
              timeOutAt: Date? = nil, onAirFrom: String? = nil, message: String = "", messageGood: Bool = false) {
             self.stationName = stationName
             self.link = link

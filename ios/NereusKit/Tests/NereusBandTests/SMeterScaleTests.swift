@@ -76,3 +76,17 @@ import Testing
         #expect(scale.ticks.filter(\.major).count == 8)
     }
 }
+
+extension SMeterScaleTests {
+    @Test func amplifierDisplayRule() {
+        let rule = TransmitMeterRule(powerGenius: .init(present: true, operate: true, forwardW: 2300, swr: 1.12),
+                                     radioForwardW: 42, radioSwr: 1.34)
+        #expect(SMeterScale.transmitFraction(1236, mode: .power, power: nil, rule: rule) == 0.618)
+        #expect(SMeterScale.transmitFraction(2300, mode: .power, power: nil, rule: rule) == 1)
+        for style in [SMeterScale.Style.classic, .vintage] {
+            let scale = SMeterScale.transmit(.power, power: nil, style: style, rule: rule)
+            #expect(scale.redFrom == 0.75)
+            #expect(scale.ticks.compactMap(\.label) == ["0", "500", "1k", "1.5k", "2k"])
+        }
+    }
+}

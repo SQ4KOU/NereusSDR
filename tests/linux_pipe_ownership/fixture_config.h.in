@@ -1,0 +1,5 @@
+// Generated fixture-only constants; never included by production code.
+#pragma once
+inline constexpr const char* kFixtureRoot = "@FIXTURE_ROOT@";
+inline constexpr const char* kPactlStub = "@CMAKE_CURRENT_BINARY_DIR@/pactl";
+inline constexpr const char* kFixtureProcRoot = "@FIXTURE_ROOT@/proc";

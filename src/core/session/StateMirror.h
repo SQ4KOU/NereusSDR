@@ -177,6 +177,7 @@
 
 #include "core/session/MirrorSchema.h"
 #include "core/session/SessionMessages.h"
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
@@ -282,7 +283,7 @@ struct MirrorApplyResult {
     QString reason;
 };
 
-class StateMirror : public QObject {
+class NEREUS_CORE_EXPORT StateMirror : public QObject {
     Q_OBJECT
 
 public:

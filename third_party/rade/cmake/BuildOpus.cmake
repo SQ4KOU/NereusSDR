@@ -28,6 +28,8 @@
 #      dependency cache nor the re-extract of an existing build dir asks
 #      media.xiph.org for it. The pinned Opus's dnn/download_model.sh and
 #      download_model.bat download the model only when no copy is there.
+# RADE v2 refresh: apply upstream opus-nnet.c.diff in every path; its
+# 2048-float convolution scratch supports the V2 decoder (c8a3dc1).
 # All five are noted at their site as well. See Task A2 of
 # docs/architecture/phase3j2-3r-spots-and-rade-design.md.
 
@@ -66,6 +68,16 @@ set(_opus_model_stash ${CMAKE_CURRENT_BINARY_DIR}/opus_model/opus_data-${_opus_m
 if (NEREUS_OPUS_MODEL_ARCHIVE)
 message(STATUS "Using Opus model from ${NEREUS_OPUS_MODEL_ARCHIVE}")
 endif ()
+# Git for Windows supplies patch under usr/bin; other hosts use PATH.
+find_program(PATCH_EXECUTABLE NAMES patch
+    HINTS "C:/Program Files/Git/usr/bin" "C:/Program Files (x86)/Git/usr/bin"
+    REQUIRED)
+set(_opus_patch_script ${CMAKE_CURRENT_LIST_DIR}/NereusOpusPatches.cmake)
+set(_opus_patch_dir ${CMAKE_CURRENT_LIST_DIR}/../src)
+set(_opus_patch_command ${CMAKE_COMMAND}
+    -DSOURCE_DIR=<SOURCE_DIR>
+    "-DPATCH_EXECUTABLE=${PATCH_EXECUTABLE}"
+    -P ${_opus_patch_script})
 set(_opus_model_script ${CMAKE_CURRENT_LIST_DIR}/NereusOpusModel.cmake)
 set(_opus_model_seed_command ${CMAKE_COMMAND}
     -DMODE=seed
@@ -79,6 +91,10 @@ set(_opus_model_seed_command ${CMAKE_COMMAND}
 # download step (an existing build dir's copy, which the re-extract would
 # wipe) and after the configure step (the copy just downloaded).
 function(_nereus_opus_model_steps project)
+    ExternalProject_Add_StepDependencies(${project} patch
+        ${_opus_patch_script}
+        ${_opus_patch_dir}/opus-nnet.h.diff
+        ${_opus_patch_dir}/opus-nnet.c.diff)
     ExternalProject_Add_Step(${project} nereus_keep_model_before
         COMMAND ${CMAKE_COMMAND} -DMODE=stash "-DSTASH=${_opus_model_stash}"
                 -DSOURCE_DIR=<SOURCE_DIR> -DSHA256=${_opus_model_sha256}
@@ -101,7 +117,7 @@ ExternalProject_Add(build_opus_x86
     DOWNLOAD_EXTRACT_TIMESTAMP NO
     BUILD_IN_SOURCE 1
     PATCH_COMMAND ${_opus_model_seed_command}
-        COMMAND sh -c "patch dnn/nnet.h < ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff"
+        COMMAND ${_opus_patch_command}
     CONFIGURE_COMMAND ${CONFIGURE_COMMAND} --host=x86_64-apple-darwin --target=x86_64-apple-darwin CFLAGS=-arch\ x86_64\ -O2\ -mmacosx-version-min=10.11
     BUILD_COMMAND make
     # NereusSDR vendored patch: upstream uses $(MAKE), which Ninja
@@ -118,7 +134,7 @@ ExternalProject_Add(build_opus_arm
     DOWNLOAD_EXTRACT_TIMESTAMP NO
     BUILD_IN_SOURCE 1
     PATCH_COMMAND ${_opus_model_seed_command}
-        COMMAND sh -c "patch dnn/nnet.h < ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff"
+        COMMAND ${_opus_patch_command}
     CONFIGURE_COMMAND ${CONFIGURE_COMMAND} --host=aarch64-apple-darwin --target=aarch64-apple-darwin CFLAGS=-arch\ arm64\ -O2\ -mmacosx-version-min=10.11
     BUILD_COMMAND make
     # NereusSDR vendored patch: upstream uses $(MAKE), which Ninja
@@ -204,7 +220,7 @@ ExternalProject_Add(build_opus
     DOWNLOAD_EXTRACT_TIMESTAMP NO
     BUILD_IN_SOURCE 1
     PATCH_COMMAND ${_opus_model_seed_command}
-        COMMAND sh -c "patch dnn/nnet.h < ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff"
+        COMMAND ${_opus_patch_command}
     CONFIGURE_COMMAND ${CONFIGURE_COMMAND}
         --host=${_opus_host_triple}
         --target=${_opus_host_triple}
@@ -243,17 +259,6 @@ elseif(WIN32)
 # commit (verify: gh api repos/xiph/opus/contents/autogen.sh?ref=940d4e5).
 set(_opus_model_sha "4ed9445b96698bad25d852e912b41495ddfa30c8dbc8a55f9cde5826ed793453")
 
-# Git for Windows (preinstalled on the Actions windows-latest image)
-# bundles patch.exe under usr/bin. Add hints so find_program locates
-# it even when Git's usr/bin is not on PATH (it isn't, by default —
-# only Git's cmd/ dir is on the runner's PATH).
-find_program(PATCH_EXECUTABLE
-    NAMES patch
-    HINTS
-        "C:/Program Files/Git/usr/bin"
-        "C:/Program Files (x86)/Git/usr/bin"
-    REQUIRED)
-
 # CMake-built Opus (no BUILD_IN_SOURCE) puts the static lib in a
 # separate build tree under build_opus-prefix/src/build_opus-build/.
 set(_opus_binary_dir ${CMAKE_CURRENT_BINARY_DIR}/build_opus-prefix/src/build_opus-build)
@@ -276,7 +281,7 @@ ExternalProject_Add(build_opus
     # which also runs the bat from the source root.
     PATCH_COMMAND ${_opus_model_seed_command}
         COMMAND ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> cmd /c dnn\\download_model.bat ${_opus_model_sha}
-        COMMAND ${PATCH_EXECUTABLE} <SOURCE_DIR>/dnn/nnet.h -i ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff
+        COMMAND ${_opus_patch_command}
     CMAKE_ARGS
         -DCMAKE_BUILD_TYPE=Release
         -DOPUS_DRED=ON
@@ -322,7 +327,7 @@ set(_opus_static_lib ${_opus_binary_dir}/.libs/libopus${CMAKE_STATIC_LIBRARY_SUF
 ExternalProject_Add(build_opus
     BUILD_IN_SOURCE 1
     PATCH_COMMAND ${_opus_model_seed_command}
-        COMMAND sh -c "patch dnn/nnet.h < ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff"
+        COMMAND ${_opus_patch_command}
     CONFIGURE_COMMAND ${CONFIGURE_COMMAND}
     BUILD_COMMAND make
     # NereusSDR vendored patch: upstream uses $(MAKE), which Ninja

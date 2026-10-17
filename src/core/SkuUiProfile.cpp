@@ -13,6 +13,9 @@
 //   2026-09-28 - Share the per-SKU Ext 2 relay tooltip with the desktop and
 //                 Setup description. J.J. Boyd (KG4VCF), with AI-assisted
 //                 transformation via OpenAI Codex.
+//   2026-10-13 - Anvelina Ext2 uses the approved RX BYPASS on TX label.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation
+//                 via OpenAI Codex.
 // =================================================================
 
 //=================================================================
@@ -151,6 +154,11 @@ SkuUiProfile skuUiProfileFor(HPSDRModel sku)
                             QStringLiteral("XVTR")};
         p.antennaTabLabel = QStringLiteral("Ant/Filters");
         p.ext2OutOnTxTooltip = QStringLiteral("Enable RX Bypass during transmit.");
+        if (sku == HPSDRModel::ANVELINAPRO3) {
+            // Label fact: Yuri Enhanced setup.cs:20573 [@2a36dc6] identifies
+            // Ext2 as RX bypass on TX. The capitalization is JJ's UI wording.
+            p.ext2OutOnTxLabel = QStringLiteral("RX BYPASS on TX");
+        }
         break;
 
     case HPSDRModel::ANAN_G2:

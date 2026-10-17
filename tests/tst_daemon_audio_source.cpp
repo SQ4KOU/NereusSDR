@@ -413,6 +413,57 @@ private slots:
         QCOMPARE(telemetry.sourceDropEvents, std::uint64_t{0});
     }
 
+    // R-AUD-SEND: a block that completes while the consumer holds the lock
+    // stays with the producer until its next callback. With no next
+    // callback (a test that stops feeding) it is not queued; the test seam
+    // is that callback's hand-over without its samples.
+    void aBlockHeldBackWaitsForTheNextCallbackOrTheTestHandOver()
+    {
+        Harness harness;
+        DaemonAudioSource source;
+        source.setAudioEngine(harness.engine);
+        source.start();
+        harness.engine->setSliceStreaming(harness.sliceB, false);
+
+        constexpr int kCallbacksPerBlock = DaemonAudioSource::kBlockFrames / kDspFrames;
+        quint64 nextFrame = 0;
+        feedRamp(harness.engine, harness.sliceA, nextFrame, kCallbacksPerBlock);
+
+        QSemaphore entered;
+        QSemaphore release;
+        source.setTakeBlockLockedHookForTest([&] {
+            entered.release();
+            release.acquire();
+        });
+        std::optional<DaemonAudioBlock> first;
+        std::thread consumer([&] { first = source.takeBlock(); });
+        QVERIFY2(entered.tryAcquire(1, 1000),
+                 "the consumer did not enter takeBlock's locked section");
+        // Exactly one more block completes during the hold, and nothing
+        // is fed after it.
+        feedRamp(harness.engine, harness.sliceA, nextFrame, kCallbacksPerBlock);
+        release.release();
+        consumer.join();
+        source.setTakeBlockLockedHookForTest({});
+        QVERIFY(first.has_value());
+
+        // Held back, not lost and not queued.
+        QVERIFY(!source.takeBlock().has_value());
+        QCOMPARE(source.telemetry().sourceDropEvents, std::uint64_t{0});
+
+        source.handOverPendingForTest();
+        const auto second = source.takeBlock();
+        QVERIFY(second.has_value());
+        QCOMPARE(second->samplePosition, quint64{DaemonAudioSource::kBlockFrames});
+        const QString mismatch = rampMismatch(*second, DaemonAudioSource::kBlockFrames);
+        QVERIFY2(mismatch.isEmpty(), qPrintable(mismatch));
+        QVERIFY(!source.takeBlock().has_value());
+        // Nothing held back: the hand-over is a no-op.
+        source.handOverPendingForTest();
+        QVERIFY(!source.takeBlock().has_value());
+        QCOMPARE(source.telemetry().sourceDropEvents, std::uint64_t{0});
+    }
+
     void secondPacketDuringHeldLockIsAContentionLossOnTheGrid()
     {
         Harness harness;

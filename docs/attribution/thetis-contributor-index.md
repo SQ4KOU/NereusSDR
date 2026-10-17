@@ -1,7 +1,7 @@
 # Thetis Contributor Index
 
-**Generated mechanically** by `scripts/generate-contributor-indexes.py` on `2026-04-30T12:51:05+00:00`
-from corpus `docs/attribution/thetis-author-tags.json` (thetis@`501e3f51`, mi0bot@`c26a8a4`).
+**Generated mechanically** by `scripts/generate-contributor-indexes.py` on `2026-10-15T11:31:38+00:00`
+from corpus `docs/attribution/thetis-author-tags.json` (thetis@`3759d096`, mi0bot@`c26a8a4c`).
 
 **Do NOT hand-edit this file.** To add or correct a contributor, edit `docs/attribution/thetis-author-tags.json` and re-run the generator.
 
@@ -16,6 +16,7 @@ Historical Pass 5/6a snapshot preserved at `thetis-contributor-index-v020-snapsh
 | `DH1KLM` | Sigi | MIDI, skins & UI improvements; RedPitaya enum slot contribution |
 | `MI0BOT` | Reid Campbell | Hermes Lite 2 fork maintainer; HL2 I/O, bandwidth monitor, I2C TLV |
 | `G8NJJ` | Laurence Barker | G2, Andromeda, protocols; ANAN_G2_1K PA wiring |
+| `N1GP` | Rick Koch | ANAN-G2E (HermesC10) support, added in v2.10.3.15 |
 | `W4TME` | Ke Chen | FlexRadio Systems contributor; database/memory form tweaks |
 | `W4WMT` | Bryan Rambo | Resampler, VAC & cmASIO |
 | `MI0BIT` | Unknown | mi0bot fork HL2 contributions (TX latency, PTT hang, I2C, channel swap); identity unconfirmed — possible alt callsign for MI0BOT |
@@ -24,7 +25,7 @@ Historical Pass 5/6a snapshot preserved at `thetis-contributor-index-v020-snapsh
 | `W5WC` | Doug Wigley | UI, ChannelMaster, various; naming of 'Thetis' |
 | `WU2O` | Scott | Forum admin; WDSP SSQL default-threshold tuning |
 | `IK4JPN` | Unknown | 2014 console.cs modification (region marked IK4JPN+/IK4JPN-); identity to be researched |
-| `MW0GLE` | Richard Samphire | Typo of MW0LGE (Richie Samphire) in setup.cs:2740 version tag [2.10.3.6_dev4]; preserved verbatim |
+| `MW0GLE` | Richard Samphire | Typo of MW0LGE (Richie Samphire) in setup.cs:2741 version tag [2.10.3.6_dev4]; preserved verbatim |
 | `DK1HLM` | Unknown | OrionMKII/Saturn PA handling contribution; identity to be researched |
 | `K2UE` | George Donadio | EME/antenna authority; ANAN-8000D Hi-Z/Lo-Z load detection idea |
 | `KE9NS` | Darrin | Various contributions including SunTracking and memory-form URL drag-drop |
@@ -62,6 +63,7 @@ Scope: every `.cs/.c/.h/.cpp` in upstream Thetis + mi0bot fork. Each entry lists
 - Block: (none matched)
 - **Inline:** `G8NJJ` (Laurence Barker) — line 423
 - **Inline:** `MI0BOT` (Reid Campbell) — line 422
+- **Inline:** `N1GP` (Rick Koch) — lines 425, 446
 
 ### `thetis/Project Files/Source/ChannelMaster/networkproto1.c`
 - Block: (none matched)
@@ -90,8 +92,8 @@ Scope: every `.cs/.c/.h/.cpp` in upstream Thetis + mi0bot fork. Each entry lists
 
 ### `thetis/Project Files/Source/Console/Andromeda/Andromeda.cs`
 - Block: (none matched)
-- **Inline:** `G8NJJ` (Laurence Barker) — lines 16, 850, 1027, 1147
-- **Inline:** `MW0LGE` (Richard Samphire) — lines 2141, 4121, 4126, 4129, 4147
+- **Inline:** `G8NJJ` (Laurence Barker) — lines 41, 875, 1052, 1172
+- **Inline:** `MW0LGE` (Richard Samphire) — lines 2166, 4146, 4151, 4154, 4172
 
 ### `thetis/Project Files/Source/Console/Andromeda/SliderSettingsForm.cs`
 - Block: (none matched)
@@ -154,7 +156,7 @@ Scope: every `.cs/.c/.h/.cpp` in upstream Thetis + mi0bot fork. Each entry lists
 
 ### `thetis/Project Files/Source/Console/MeterManager.cs`
 - Block: (none matched)
-- **Inline:** `MW0LGE` (Richard Samphire) — lines 1800, 4200, 5695, 6433, 6563, 6791, 6846, 6851 (+10 more)
+- **Inline:** `MW0LGE` (Richard Samphire) — lines 1801, 4224, 5720, 6458, 6588, 6817, 6872, 6877 (+10 more)
 
 ### `thetis/Project Files/Source/Console/Midi2CatCommands.cs`
 - Block: (none matched)
@@ -178,7 +180,7 @@ Scope: every `.cs/.c/.h/.cpp` in upstream Thetis + mi0bot fork. Each entry lists
 
 ### `thetis/Project Files/Source/Console/TCIServer.cs`
 - Block: (none matched)
-- **Inline:** `MW0LGE` (Richard Samphire) — lines 2116, 2344, 3869, 4319, 6270, 7073, 7478
+- **Inline:** `MW0LGE` (Richard Samphire) — lines 2154, 2412, 4004, 4482, 6679, 7520, 7999
 
 ### `thetis/Project Files/Source/Console/audio.cs`
 - Block: (none matched)
@@ -190,13 +192,15 @@ Scope: every `.cs/.c/.h/.cpp` in upstream Thetis + mi0bot fork. Each entry lists
 
 ### `thetis/Project Files/Source/Console/clsHardwareSpecific.cs`
 - Block: (none matched)
-- **Inline:** `DH1KLM` (Sigi) — lines 178, 180, 403, 420
-- **Inline:** `G8NJJ` (Laurence Barker) — line 164
+- **Inline:** `DH1KLM` (Sigi) — lines 185, 187, 416, 433
+- **Inline:** `G8NJJ` (Laurence Barker) — line 171
+- **Inline:** `N1GP` (Rick Koch) — lines 129, 250, 260, 358, 385, 699, 794
 
 ### `thetis/Project Files/Source/Console/cmaster.cs`
 - Block: (none matched)
-- **Inline:** `DH1KLM` (Sigi) — lines 625, 708, 744, 838
-- **Inline:** `MW0LGE` (Richard Samphire) — lines 669, 999, 1011, 1017, 1020, 1105, 1872, 2293
+- **Inline:** `DH1KLM` (Sigi) — lines 631, 715, 751, 846
+- **Inline:** `MW0LGE` (Richard Samphire) — lines 675, 1008, 1020, 1026, 1029, 1114, 1912, 2333
+- **Inline:** `N1GP` (Rick Koch) — lines 595, 685, 807, 885
 
 ### `thetis/Project Files/Source/Console/common.cs`
 - Block: (none matched)
@@ -208,16 +212,17 @@ Scope: every `.cs/.c/.h/.cpp` in upstream Thetis + mi0bot fork. Each entry lists
 
 ### `thetis/Project Files/Source/Console/console.cs`
 - Block: (none matched)
-- **Inline:** `DH1KLM` (Sigi) — lines 6739, 8296, 10028, 10999, 11024, 11164, 11189, 11667 (+23 more)
-- **Inline:** `DK1HLM` (Unknown) — line 6821
-- **Inline:** `G7KLJ` (Unknown) — lines 725, 1221, 1225
-- **Inline:** `G8NJJ` (Laurence Barker) — lines 141, 492, 493, 494, 495, 496, 497, 498 (+44 more)
-- **Inline:** `IK4JPN` (Unknown) — lines 26345, 26372
-- **Inline:** `K2UE` (George Donadio) — lines 25985, 26064
-- **Inline:** `MW0LGE` (Richard Samphire) — lines 559, 614, 866, 902, 914, 950, 963, 1044 (+414 more)
-- **Inline:** `W1CEG` (Unknown) — lines 37084, 42364
-- **Inline:** `W2PA` (Chris Codella) — lines 52, 4971, 4977, 4985, 4991, 12978, 15752, 16007 (+37 more)
-- **Inline:** `W4TME` (Ke Chen) — lines 14647, 14682, 15718
+- **Inline:** `DH1KLM` (Sigi) — lines 6747, 8305, 10041, 11016, 11042, 11186, 11211, 11689 (+23 more)
+- **Inline:** `DK1HLM` (Unknown) — line 6830
+- **Inline:** `G7KLJ` (Unknown) — lines 731, 1228, 1232
+- **Inline:** `G8NJJ` (Laurence Barker) — lines 147, 498, 499, 500, 501, 502, 503, 504 (+44 more)
+- **Inline:** `IK4JPN` (Unknown) — lines 26394, 26421
+- **Inline:** `K2UE` (George Donadio) — lines 26034, 26113
+- **Inline:** `MW0LGE` (Richard Samphire) — lines 565, 620, 872, 909, 921, 957, 970, 1051 (+414 more)
+- **Inline:** `N1GP` (Rick Koch) — lines 8388, 8612, 8705, 10037, 11012, 11038, 11182, 14835 (+20 more)
+- **Inline:** `W1CEG` (Unknown) — lines 37138, 42437
+- **Inline:** `W2PA` (Chris Codella) — lines 58, 4979, 4985, 4993, 4999, 13000, 15781, 16036 (+37 more)
+- **Inline:** `W4TME` (Ke Chen) — lines 14669, 14704, 15747
 
 ### `thetis/Project Files/Source/Console/cwx.cs`
 - Block: (none matched)
@@ -226,13 +231,13 @@ Scope: every `.cs/.c/.h/.cpp` in upstream Thetis + mi0bot fork. Each entry lists
 
 ### `thetis/Project Files/Source/Console/database.cs`
 - Block: (none matched)
-- **Inline:** `MW0LGE` (Richard Samphire) — lines 744, 3425, 9844, 9860, 9886, 9910, 10038, 10336 (+11 more)
-- **Inline:** `W2PA` (Chris Codella) — lines 9469, 9475, 9987, 11164, 11197, 11228, 11235
-- **Inline:** `W4TME` (Ke Chen) — lines 5005, 5235
+- **Inline:** `MW0LGE` (Richard Samphire) — lines 744, 3425, 9910, 9926, 9952, 9976, 10104, 10402 (+11 more)
+- **Inline:** `W2PA` (Chris Codella) — lines 9535, 9541, 10053, 11230, 11263, 11294, 11301
+- **Inline:** `W4TME` (Ke Chen) — lines 5014, 5247
 
 ### `thetis/Project Files/Source/Console/display.cs`
 - Block: (none matched)
-- **Inline:** `MW0LGE` (Richard Samphire) — lines 249, 1972, 2038, 2054, 2135, 2272, 2368, 2415 (+48 more)
+- **Inline:** `MW0LGE` (Richard Samphire) — lines 255, 1978, 2044, 2060, 2141, 2278, 2374, 2421 (+48 more)
 
 ### `thetis/Project Files/Source/Console/dsp.cs`
 - Block: (none matched)
@@ -241,9 +246,10 @@ Scope: every `.cs/.c/.h/.cpp` in upstream Thetis + mi0bot fork. Each entry lists
 ### `thetis/Project Files/Source/Console/enums.cs`
 - Block: (none matched)
 - **Inline:** `DH1KLM` (Sigi) — line 129
-- **Inline:** `G8NJJ` (Laurence Barker) — lines 125, 126, 397
-- **Inline:** `MI0BOT` (Reid Campbell) — lines 128, 396
-- **Inline:** `MW0LGE` (Richard Samphire) — line 399
+- **Inline:** `G8NJJ` (Laurence Barker) — lines 125, 126, 398
+- **Inline:** `MI0BOT` (Reid Campbell) — lines 128, 397
+- **Inline:** `MW0LGE` (Richard Samphire) — line 401
+- **Inline:** `N1GP` (Rick Koch) — lines 130, 400
 
 ### `thetis/Project Files/Source/Console/eqform.cs`
 - Block: (none matched)
@@ -255,17 +261,18 @@ Scope: every `.cs/.c/.h/.cpp` in upstream Thetis + mi0bot fork. Each entry lists
 
 ### `thetis/Project Files/Source/Console/radio.cs`
 - Block: (none matched)
-- **Inline:** `MW0LGE` (Richard Samphire) — lines 82, 105, 1090, 1183, 4243, 4258, 4272, 4294
+- **Inline:** `MW0LGE` (Richard Samphire) — lines 82, 105, 1092, 1185, 4245, 4260, 4274, 4296
 
 ### `thetis/Project Files/Source/Console/setup.cs`
 - Block: (none matched)
-- **Inline:** `DH1KLM` (Sigi) — lines 847, 6162, 6164, 6223, 6228, 6309, 6356, 6394 (+10 more)
+- **Inline:** `DH1KLM` (Sigi) — lines 847, 6195, 6197, 6256, 6261, 6343, 6390, 6428 (+10 more)
 - **Inline:** `G7KLJ` (Unknown) — line 127
-- **Inline:** `G8NJJ` (Laurence Barker) — lines 6029, 6036, 6043, 6050, 6057, 6244, 8802, 9701 (+9 more)
-- **Inline:** `MW0GLE` (Richard Samphire) — line 2740
+- **Inline:** `G8NJJ` (Laurence Barker) — lines 6062, 6069, 6076, 6083, 6090, 6277, 8836, 9740 (+9 more)
+- **Inline:** `MW0GLE` (Richard Samphire) — line 2741
 - **Inline:** `MW0LGE` (Richard Samphire) — lines 134, 170, 176, 418, 576, 642, 646, 946 (+121 more)
-- **Inline:** `W2PA` (Chris Codella) — lines 10172, 12409
-- **Inline:** `W4WMT` (Bryan Rambo) — line 28453
+- **Inline:** `N1GP` (Rick Koch) — lines 6340, 15815, 15874, 19904, 20537, 20715, 20745, 23746
+- **Inline:** `W2PA` (Chris Codella) — lines 10211, 12448
+- **Inline:** `W4WMT` (Bryan Rambo) — line 28620
 
 ### `thetis/Project Files/Source/Console/splash.cs`
 - Block: (none matched)
@@ -336,6 +343,10 @@ Scope: every `.cs/.c/.h/.cpp` in upstream Thetis + mi0bot fork. Each entry lists
 - Block: (none matched)
 - **Inline:** `MW0LGE` (Richard Samphire) — line 74
 
+### `thetis/Project Files/Source/wdsp/cfcomp.c`
+- Block: (none matched)
+- **Inline:** `MW0LGE` (Richard Samphire) — line 110
+
 ### `thetis/Project Files/Source/wdsp/eq.c`
 - Block: (none matched)
 - **Inline:** `MW0LGE` (Richard Samphire) — line 176
@@ -366,7 +377,7 @@ Scope: every `.cs/.c/.h/.cpp` in upstream Thetis + mi0bot fork. Each entry lists
 
 ### `thetis/Project Files/lib/portaudio-19.7.0/src/hostapi/asio/pa_asio.cpp`
 - Block: (none matched)
-- **Inline:** `MW0LGE` (Richard Samphire) — lines 1274, 1304
+- **Inline:** `MW0LGE` (Richard Samphire) — lines 1274, 1305, 1306
 
 ### `thetis/Project Files/lib/portaudio-19.7.0/src/hostapi/wasapi/pa_win_wasapi.c`
 - Block: (none matched)

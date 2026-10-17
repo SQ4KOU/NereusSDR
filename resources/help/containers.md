@@ -52,6 +52,58 @@ unavailable reading rather than values from a different receiver or station.
 Clock and MMIO sources remain independent. An unavailable applet or unsupported
 legacy object keeps its place and configuration for later recovery.
 
+## With the workspace look on
+
+This section applies when the workspace look is on, which it is unless the app
+was started with `NEREUS_WORKSPACE_PREVIEW=0`. What "Headers, locks and sources"
+says about headers and **Lock** describes the app with the look off, where
+nothing has changed; with the look on, read this section in its place.
+
+**Headers.** Each container's header is either shown or hidden; there is no
+hover choice. The eye button on the header switches it: an open eye means the
+header stays, a crossed-out eye means it hides when you are not arranging.
+**Keep Header Showing** in the container's right-click menu is the same switch.
+A hidden header takes no room, so the content fills the container.
+
+**Arranging.** Hold **Shift** by itself for about a third of a second and every
+header appears, hidden ones included, until you let go. Shift with a click, a
+wheel turn or another key does not do this, so tuning with Shift held works as
+before. To keep arranging without holding a key, choose **Containers > Arrange
+Workspace** (Ctrl+Shift+A); **Escape** leaves it. Arranging does not change
+which headers are shown or hidden.
+
+**Moving a container.** While arranging, drag a container by its header and
+let go where you want it:
+
+* near an edge of the main window, a box shows where it will land, and it
+  docks there;
+* over the spectrum, it sits free where you dropped it, on an 8 pixel grid
+  (hold **Alt** to place it freely);
+* outside the main window, it becomes a window of its own.
+
+This works the same for a docked container, a free one and a popped-out window,
+so a window dragged back over the main window docks or sits free where you drop
+it. **Escape** during a drag puts the container back where it started. When you
+are not arranging, dragging a window only moves it, so you can park a window
+over the main window without docking it.
+
+**Pop Out, pin and return.** **Pop Out** is in the container's right-click menu
+as well as on the header. A popped-out window has a pin on its header: click it
+to keep the window on top of other windows, click it again to stop. The return
+arrow puts the container back where it was popped out from: the same strip,
+beside the same neighbour, or the same free place. A window that was never
+docked joins the Main Panel's strip.
+
+**No Lock.** The workspace look has no Lock setting. A container whose header
+is hidden has nothing to grab, so it cannot be moved by accident, and a
+container saved as locked opens unlocked.
+
+**Where things start.** Every container and window starts where you left it, at
+the size you left it, on the monitor you left it on. If that monitor is not
+connected the window opens on the main window's screen, and goes back to its
+own monitor when that is connected again. This part is the same with the look
+off.
+
 ## Portable exchange and recovery
 
 **Save / Load** exchange a container; **Export / Import** exchange its entries

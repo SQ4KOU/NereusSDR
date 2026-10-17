@@ -20,6 +20,7 @@
 
 #include <QtTest>
 
+#include "fakes/RecordingRtpSink.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/P2RadioConnection.h"
@@ -83,19 +84,20 @@ public:
         displays.append(bytes);
         return true;
     }
-    bool sendRtp(const QByteArray& packet) override
-    {
-        if (readyState) { rtpPackets.append(packet); }
-        return readyState;
-    }
+    bool sendRtp(const QByteArray& packet) override { return rtpSink->sendRtpAccepted(packet); }
+    std::shared_ptr<MediaRtpSink> audioRtpSink() override { return rtpSink; }
     bool isReady() const override { return readyState; }
     void becomeReady() { readyState = true; emit ready(); }
 
     bool started{false};
-    bool readyState{false};
+    // R-AUD-SEND: the Core sends audio from its sender thread, through the
+    // sink; what the sink took is read under its lock.
+    const std::shared_ptr<Test::RecordingRtpSink> rtpSink{
+        std::make_shared<Test::RecordingRtpSink>()};
+    std::atomic<bool>& readyState{rtpSink->ready};
+    Test::SharedPacketList& rtpPackets{rtpSink->packets};
     StartOptions startOptions{Role::Answerer, 0};
     QList<QByteArray> displays;
-    QList<QByteArray> rtpPackets;
 };
 
 QVector<float> syntheticIq(int complexSamples, double cyclesPerSample)

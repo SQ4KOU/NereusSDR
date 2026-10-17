@@ -6,6 +6,10 @@
 // Modification history (NereusSDR):
 //   2026-09-28  J.J. Boyd / KG4VCF  Created (iPhone app plan Task 25, D41).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-08  J.J. Boyd / KG4VCF  Rotor control plan Task 4b: the Rotor
+//                                    tool listed, not offered, without a
+//                                    rotor. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -76,7 +80,10 @@ private slots:
         const QJsonObject catalog = StationCatalog::build(
             inputsFor(HPSDRModel::ANAN_G2, /*stationTci=*/true, /*vax=*/true));
         const QHash<QString, bool> tools = offeredById(catalog, QStringLiteral("tools"));
-        QCOMPARE(tools.size(), 12);
+        QCOMPARE(tools.size(), 13);
+        // No rotor is set up: listed, not offered.
+        QVERIFY(tools.contains(QStringLiteral("rotor")));
+        QCOMPARE(tools.value(QStringLiteral("rotor")), false);
         for (const char* always : {"spotHub", "freedvReporter", "txEqualizer",
                                    "networkDiagnostics", "supportBundle"}) {
             QVERIFY2(tools.value(QString::fromLatin1(always)), always);
@@ -86,10 +93,10 @@ private slots:
         QCOMPARE(tools.value(QStringLiteral("diversity")), caps.hasDiversityReceiver);
         QCOMPARE(tools.value(QStringLiteral("tciServer")), true);
         QCOMPARE(tools.value(QStringLiteral("vaxAudio")), true);
-        // Not built on the desktop, so not offered.
+        // CAT is built; the other two desktop tools remain unavailable.
         QCOMPARE(tools.value(QStringLiteral("cwx")), false);
         QCOMPARE(tools.value(QStringLiteral("memoryManager")), false);
-        QCOMPARE(tools.value(QStringLiteral("catControl")), false);
+        QCOMPARE(tools.value(QStringLiteral("catControl")), true);
 
         const QHash<QString, bool> radio = offeredById(catalog, QStringLiteral("radioItems"));
         QCOMPARE(radio.size(), 4);

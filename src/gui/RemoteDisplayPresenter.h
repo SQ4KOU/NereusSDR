@@ -76,6 +76,9 @@ public:
     enum class Kind { Frame, Blended, Repeated };
     struct Item {
         Kind kind = Kind::Frame;
+        /// A Frame decoded before a later loss still draws at its audio-clock
+        /// slot, but cannot renew a current receiver measurement.
+        bool measurementCurrent = true;
         /// Frame: as decoded. Blended and Repeated: a waterfall row only
         /// (waterfallDbm, wideDbm, waterfallAdvance true), no trace.
         DisplayCodecFrame frame;

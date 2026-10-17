@@ -169,7 +169,8 @@ inline constexpr int kDssMeshUboFloats =
     + 8 * 4         // shadowBands[8]
     + 8 * 4         // shadowStyles[8]
     + 4             // shadowMeta
-    + kDssRows * 4; // rowFrames[kDssRows]
+    + kDssRows * 4  // rowFrames[kDssRows]
+    + kDssRows * 4; // rowQuietLevels[kDssRows]: quiet dBm / known / padding
 
 // ─── Outline pipeline selection ─────────────────────────────────────────
 // From AetherSDR src/gui/SpectrumPreviewLogic.h:11-56 [@1872028c].

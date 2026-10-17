@@ -50,9 +50,13 @@
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29 -- R-R3-49 / R-IOS-18: Setup description version 15 ids.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 -- The page carries its title above the tabs, as every
+//                 Setup page does (SetupPage::makePageTitle, as RF-Kit).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "FourO3APage.h"
+#include "gui/SetupPage.h"
 
 #include "CatNetworkSetupPages.h"   // PeripheralsPage
 #include "PgxlInterlockPage.h"
@@ -98,6 +102,9 @@ FourO3APage::FourO3APage(RadioModel* model, QWidget* parent)
 {
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(8, 8, 8, 8);
+
+    // The page title, as every Setup page draws it (SetupPage::init).
+    root->addWidget(SetupPage::makePageTitle(tr("4O3A"), this));
 
     m_tabs = new QTabWidget(this);
     root->addWidget(m_tabs);

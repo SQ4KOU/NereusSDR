@@ -48,6 +48,10 @@
 //   2026-09-30 - Keeps G8NJJ's setup.cs:6244 comment beside the Alex-2 gate
 //                cite (CI tag preservation). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-10-09 - D25: the Antenna Control sub-tab scrolls down inside its own
+//                area (SetupFit::scrollingTab), so the sub-tab strip stays at
+//                the top. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -99,6 +103,7 @@
 #include "AntennaAlexAntennaControlTab.h"
 #include "AntennaAlexAlex1Tab.h"
 #include "AntennaAlexAlex2Tab.h"
+#include "gui/setup/SetupFit.h"
 
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
@@ -129,7 +134,9 @@ AntennaAlexTab::AntennaAlexTab(RadioModel* model, QWidget* parent)
     // Source: Thetis tpAlexAntCtrl (setup.designer.cs:5981-7000) [@501e3f5]
     // Phase 3P-F Task 3: replaced placeholder with real AntennaAlexAntennaControlTab.
     m_antennaControlTab = new AntennaAlexAntennaControlTab(model, m_subTabs);
-    m_subTabs->addTab(m_antennaControlTab, tr("Antenna Control"));
+    // D25: the tab scrolls down inside its own area; the two filter tabs
+    // below have scroll areas of their own.
+    m_subTabs->addTab(SetupFit::scrollingTab(m_antennaControlTab), tr("Antenna Control"));
 
     // ── Tab 1: Alex-1 Filters ─────────────────────────────────────────────────
     // Source: Thetis tpAlexFilterControl (setup.designer.cs:23399-25538) [@501e3f5]

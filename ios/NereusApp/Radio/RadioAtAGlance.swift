@@ -144,10 +144,31 @@ enum RadioAtAGlance {
         if let reason = noRadio(inputs) { return .unavailable(reason) }
         if let version = [text(inputs.radio["version"]), text(inputs.capabilities["firmwareVersion"])]
             .compactMap({ $0 }).first(where: { !$0.isEmpty }) {
-            return .value(version)
+            return .value(firmwareText(first: version, capabilities: inputs.capabilities))
         }
         return .unavailable(notReportedReason)
     }
+
+    /// The radio's firmware release as the desktop words it: the first
+    /// number, then "." and the second where the Core sent one
+    /// (`firmwareBeta`, link document section 6.3), so 22 and 14 read
+    /// "22.14". The second number counts only beside the first it came with
+    /// (the capabilities' own `firmwareVersion`). An ANAN-G2's is the version
+    /// of the radio's own program, not of its gateware, and is left out.
+    static func firmwareText(first: String, capabilities: [String: MirrorValue]) -> String {
+        guard let second = int(capabilities["firmwareBeta"]), (1...255).contains(second),
+              text(capabilities["firmwareVersion"]) == first else {
+            return first
+        }
+        if let board = int(capabilities["board"]), programVersionBoards.contains(board) {
+            return first
+        }
+        return "\(first).\(second)"
+    }
+
+    /// The boards whose second number is a program's version: the ANAN-G2
+    /// and the ANAN-G2 MkII, as the capabilities' `board` numbers them.
+    static let programVersionBoards: Set<Int64> = [10, 11]
 
     /// "1" or "2", as the board shows it.
     static func protocolNumber(_ inputs: Inputs) -> Reading {

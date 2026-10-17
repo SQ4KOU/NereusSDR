@@ -11,6 +11,7 @@
 // =================================================================
 
 #include <QDialog>
+#include <QHash>
 #include <QMap>
 #include <QString>
 #include <QStringList>
@@ -22,7 +23,9 @@
 #include <QSet>
 
 #include "gui/RemoteReceiverAudioNote.h"
+#include "gui/SetupPage.h"
 #include "gui/setup/CoreSettingsContext.h"
+#include "gui/NereusGuiExport.h"
 
 #include <functional>
 #include <vector>
@@ -40,6 +43,8 @@ struct BoardCapabilities;
 struct RadioInfo;
 class TciServer;
 class CatTciServerPage;
+class RemoteRigctlServer;
+class RemoteRigctldPage;
 class AudioVaxPage;
 class SettingsProxy;
 class RemoteStationPage;
@@ -78,7 +83,7 @@ enum class SetupScope {
 // realizePage() the first time its tree node is selected, then cached for the
 // lifetime of the dialog. See SetupDialog.cpp for the cross-page wiring rules
 // that fall out of that split.
-class SetupDialog : public QDialog {
+class NEREUS_GUI_EXPORT SetupDialog : public QDialog {
     Q_OBJECT
 public:
     explicit SetupDialog(RadioModel* model, QWidget* parent = nullptr);
@@ -90,6 +95,45 @@ public:
     void setCoreTargets(CoreTargetStore* store);
     void setCoreSettingsContext(const CoreSettingsContext& context);
     void setCoresPageBinder(std::function<void(CoresSetupPage*)> binder);
+
+    // Display pill plan Task 20 (D22, D26; R-DSP-33): how Setup's FFT
+    // controls change the station's FFT settings. One handler per control;
+    // MainWindow points them at applyFftBaseline, applyDisplayFps,
+    // applyDisplayFftWindow, applyDisplayHzPerBinTarget and
+    // applyDisplayDecimation, the path each pan's Display pill uses, so a
+    // change made here reaches every stream and every open pill. The readout
+    // source says what the active pan's FFT runs at now. Each is kept and
+    // given to every page, built now or later (SetupPage::setFftHandlers).
+    void setFftBaselineHandler(std::function<void(int)> handler);
+    void setDisplayFpsHandler(std::function<void(int)> handler);
+    void setFftWindowHandler(std::function<void(int)> handler);
+    void setHzPerBinTargetHandler(std::function<void(double)> handler);
+    void setDisplayDecimationHandler(std::function<void(int)> handler);
+    void setFftReadoutSource(std::function<DisplayFftReadoutFacts()> source);
+    // FFT sizing mode (design D38): Spectrum Defaults' "Sizing" control;
+    // MainWindow points it at applyDisplayFftSizingMode.
+    void setFftSizingModeHandler(
+        std::function<void(ControlRanges::DisplayFftSizingMode, double)> handler);
+    // One of the station's FFT settings was changed from outside this
+    // dialog (a pan's Display pill, or the Core in a remote window): every
+    // realized page is told (SetupPage::stationFftSettingsChanged), so a
+    // page showing them shows them as they now stand. MainWindow connects
+    // its stationFftSettingsChanged() to this.
+    void notifyStationFftSettingsChanged();
+
+    // Display pill plan Task 21 (D26, D27): Setup's display controls are the
+    // defaults for every pan. The first provider names every pan's widget, so
+    // a changed default reaches each pan that has no value of its own; the
+    // second names the active pan's band store (PanModels), which Grid &
+    // Scales' per-band dB Max and dB Min write. Each is kept and given to
+    // every page, built now or later (SetupPage::setDisplayProviders).
+    void setPanWidgetsProvider(std::function<QList<SpectrumWidget*>()> provider);
+    void setDisplayPanIndex(int panIndex);
+    void setDisplayPanIndicesProvider(std::function<QList<int>()> provider);
+    void setBandGridModelProvider(std::function<PanadapterModel*()> provider);
+    void setBandGridModelForPanProvider(std::function<PanadapterModel*(int)> provider);
+    void setDisplayClarityStatusProvider(std::function<std::optional<SetupDisplayClarityStatus>(int)> provider);
+
     void inspectCoreTarget(const QString& id);
     void setCoreAudioSources(RemoteMediaController* media, RemoteTelemetryController* telemetry);
     void setCoreAudioContext(const CoreSettingsContext& context);
@@ -141,6 +185,10 @@ public:
     // is safe across server lifecycle changes.
     void setTciServer(class NereusSDR::TciServer* server);
 
+    // 2026-10-15: a remote window's rigctld, for CAT & Network > rigctld's
+    // status line. Held and replayed into the page when it is realized.
+    void setRemoteRigctlServer(class NereusSDR::RemoteRigctlServer* server);
+
     // R-R3-43 / R-R3-44: whether this remote window's receiver streams (the
     // ones feeding VAX) are Opus rather than lossless, and why (the choice,
     // or Lossless chosen but not running). MainWindow pushes it live; the
@@ -156,6 +204,7 @@ public:
     void reloadFeedbackPreferences();
 
 signals:
+    void clarityRetuneRequested(int panIndex);
     void connectionsRequested();
     /// Present this window's connection details; never initiate a connection.
     void coreConnectionDetailsRequested();
@@ -170,6 +219,7 @@ signals:
     // Phase 3J-1 review P2.4: forwarded from CatTciServerPage — enable checkbox
     // toggled.  MainWindow connects this to call TciServer::start() / stop()
     // so the server goes live immediately without a disconnect/reconnect cycle.
+    void catLogRequested();
     void tciServerEnableToggled(bool on, quint16 port);
 
     // Phase 3J-1 closeout Item 1 (2026-05-12): forwarded from CatTciServerPage —
@@ -183,6 +233,10 @@ signals:
     // and connects it to TciServer::messageLogged so the window outlives this
     // dialog closing.
     void tciShowLogRequested();
+
+    // 2026-10-15: forwarded from CAT & Network > rigctld (remote window
+    // only). MainWindow applies the new settings to its rigctld.
+    void remoteRigctldSettingsChanged();
 
     // Task 3.6: forwarded from GeneralOptionsPage — CPU meter rate spinbox.
     // MainWindow::setCpuTimerIntervalHz() is the handler.
@@ -240,6 +294,7 @@ private:
         QWidget*                  widget     = nullptr;
         int                       stackIndex = -1;
         bool                      requiresTransmit = false;
+        bool                      retainsDisplaySources = false;
         // Unavailable in a remote session: set by the local-DSP gate, or by
         // a non-empty remoteUnavailableReason on a page registered through
         // markRemoteUnavailable(). R-R3-21.
@@ -339,15 +394,6 @@ private:
     // Registry index for a leaf label, or -1 when no such leaf exists.
     int pageEntryIndex(const QString& label) const;
 
-    // Builds the AudioBackendStrip + page container used by Setup -> Audio.
-    // A member function rather than a buildTree() local because the audio
-    // page factories call it after buildTree() has already returned.
-    // R-R3-23: the strip (backend, Rescan, Open logs) acts on this
-    // computer's sound system, so it reaches the engine through
-    // RadioModel::localAudioDevices() and does not trip the local-DSP gate
-    // on the page it wraps.
-    QWidget* wrapWithAudioBackendStrip(SetupPage* page);
-
     RadioModel*      m_model   = nullptr;
     DspReceiverSelection* m_dspReceiverSelection = nullptr;
     QTreeWidget*     m_tree    = nullptr;
@@ -402,6 +448,16 @@ private:
     CoreSettingsContext m_coreSettingsContext;
     QString m_inspectedCoreTarget;
     std::function<void(CoresSetupPage*)> m_coresPageBinder;
+    // Display pill plan Task 20: the window's FFT handlers, for every page.
+    SetupFftHandlers m_fftHandlers;
+    void pushFftHandlers();
+    SetupDisplayProviders m_displayProviders;
+    int m_displayPanIndex{-1};
+    QWidget* m_displaySourceHost{nullptr};
+    QHash<QString, SetupPage*> m_displaySourcePages;
+    void ensureDisplaySourceSet(QWidget* hostParent = nullptr);
+    QWidget* buildDisplayAssembly(const QString& name);
+    void pushDisplayProviders();
     QPointer<RemoteMediaController> m_coreAudioMedia;
     QPointer<RemoteTelemetryController> m_coreAudioTelemetry;
     CoreSettingsContext m_coreAudioContext;
@@ -419,6 +475,10 @@ private:
     // non-WebSocket builds. Safe: MainWindow parents its single TciServer to
     // itself and never destroys it independently, so it outlives this dialog.
     TciServer* m_pendingTciServer = nullptr;
+
+    // 2026-10-15: the remote window's rigctld and its page, once realized.
+    QPointer<RemoteRigctlServer> m_remoteRigctlServer;
+    QPointer<RemoteRigctldPage> m_remoteRigctldPage;
 
     // R-R3-43 / R-R3-44: the value setReceiverAudioNote() last got,
     // replayed into the VAX page when it is realized.

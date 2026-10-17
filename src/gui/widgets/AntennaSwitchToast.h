@@ -19,6 +19,8 @@
 // Modification history (NereusSDR):
 //   2026-05-27 Created in C++20/Qt6 for NereusSDR by J.J. Boyd (KG4VCF),
 //              with AI-assisted transformation via Anthropic Claude Code.
+//   2026-10-09 paintEvent draws the toast's own style sheet frame. J.J.
+//              Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // no-port-check: NereusSDR-original
@@ -43,6 +45,9 @@ public:
 
 signals:
     void undoRequested();
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
 
 private:
     QTimer m_autoDismissTimer;

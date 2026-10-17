@@ -26,6 +26,42 @@
 //                 defaults to the new ones, out-of-range values clamped).
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-10-08 - importFileForNextLaunch(): Import All Settings saves the
+//                 chosen file and holds later saves until restart, as
+//                 Thetis's DB.Merged does, so the running window no longer
+//                 writes its old values back over the import. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - Schema v10: two-tone leaves TX profiles; the two-tone
+//                 keys saved inside profiles are removed and a live level
+//                 saved at the retired -6 dB default becomes 0, once.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - Display pill plan Task 3:
+//                 convertWaterfallLevelsForClarityModel(), the one-time
+//                 conversion of stored waterfall Black Level and Color Gain.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - Display pill plan Task 8:
+//                 resetPollutedDisplayCalOffset(), the one-time removal of
+//                 stored Cal Offset values that held the station's offset.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - Display pill plan Task 12:
+//                 clearUncalibratedClarityFloors(), the one-time removal of
+//                 per-band noise floors stored before they were calibrated.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - saveInBackground(): the timed settings save writes the
+//                 file on a writer thread, so the Core's main thread, which
+//                 also sends the receive audio, no longer waits for the
+//                 disk. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-12 - A saved radio keeps the second firmware number its
+//                 discovery reply carried (firmwareBetaVersion). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15 - addWriteObserver(): setValue() and remove() also tell
+//                 the write observers, beside the change hook. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15 - The writer thread is finished as the QCoreApplication
+//                 ends, so a background save still writing at exit no
+//                 longer leaves the Windows process waiting forever.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -77,12 +113,18 @@
 #include "AppSettings.h"
 
 #include "core/ControlRanges.h"
+#include "core/LogCategories.h"
 #include "core/settings/ISettingsBackend.h"
+#include "core/SettingsFileWriter.h"
+#include "core/spectrum/ClarityLevels.h"
 
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QBuffer>
@@ -94,6 +136,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <optional>
+#include <utility>
 
 namespace NereusSDR {
 
@@ -155,9 +200,12 @@ AppSettings& AppSettings::instance()
 }
 
 AppSettings::AppSettings()
+    : m_isInstance(true)
 {
     initFilePath();
 }
+
+AppSettings::~AppSettings() = default;
 
 AppSettings::AppSettings(const QString& filePath)
     : m_filePath(filePath)
@@ -478,6 +526,9 @@ bool parseSettingsXml(const QString& sanitizedXml,
     return true;
 }
 
+// The largest settings XML an import accepts.
+constexpr qint64 kMaxImportXmlBytes = 16 * 1024 * 1024;
+
 bool parseImportXml(const QByteArray& input, QMap<QString, QString>& settings,
                     QMap<QString, QString>& stationSettings, QString& stationName,
                     QString* error)
@@ -491,7 +542,7 @@ bool parseImportXml(const QByteArray& input, QMap<QString, QString>& settings,
     if (input.isEmpty()) {
         return reject(QStringLiteral("Settings XML is empty"));
     }
-    if (input.size() > 16 * 1024 * 1024) {
+    if (input.size() > kMaxImportXmlBytes) {
         return reject(QStringLiteral("Settings XML exceeds 16 MiB"));
     }
     QXmlStreamReader xml(input);
@@ -772,18 +823,24 @@ void AppSettings::load()
     m_stationSettings.clear();
 }
 
-bool AppSettings::save(QString* error)
+namespace {
+
+// One settings file is written at a time in this process: save(), the
+// writer thread's saveInBackground() jobs, and the imports, which write
+// through a second AppSettings on the same path.
+QMutex& settingsFileMutex()
 {
-    if (error) {
-        error->clear();
-    }
-    const QByteArray localXml = serializeLocalXml(m_settings, m_stationSettings,
-                                                   m_stationName, error);
-    if (localXml.isEmpty()) {
-        return false;
-    }
+    static QMutex mutex;
+    return mutex;
+}
+
+// The file half of AppSettings::save(): rotates .bak, then replaces the
+// file. Runs on the caller's thread for save() and on the writer thread
+// for saveInBackground(); the caller holds settingsFileMutex().
+bool writeSettingsFile(const QString& filePath, const QByteArray& localXml, QString* error)
+{
     // Ensure directory exists
-    QDir().mkpath(QFileInfo(m_filePath).absolutePath());
+    QDir().mkpath(QFileInfo(filePath).absolutePath());
 
     // ── .bak rotation (issue #241) ──────────────────────────────────────
     //
@@ -799,11 +856,11 @@ bool AppSettings::save(QString* error)
     // that's the exact failure mode reported in issue #241 (NTFS journal
     // rollback over a non-atomic write left the user with no recovery
     // path at all).
-    if (QFileInfo::exists(m_filePath)) {
-        const QString bakPath    = m_filePath + QStringLiteral(".bak");
-        const QString bakTmpPath = m_filePath + QStringLiteral(".bak.tmp");
+    if (QFileInfo::exists(filePath)) {
+        const QString bakPath    = filePath + QStringLiteral(".bak");
+        const QString bakTmpPath = filePath + QStringLiteral(".bak.tmp");
         QFile::remove(bakTmpPath);  // tolerate stale .bak.tmp from a prior crash
-        if (QFile::copy(m_filePath, bakTmpPath)) {
+        if (QFile::copy(filePath, bakTmpPath)) {
             // QFile::rename refuses to clobber an existing destination, so
             // remove the previous .bak first. The window between remove()
             // and rename() is tolerable here: even if a crash hits between
@@ -831,9 +888,9 @@ bool AppSettings::save(QString* error)
     // entirely the new version, never a partial overlay. This makes the
     // "leading 28 × 4 KB sectors zeroed" failure mode from issue #241
     // structurally impossible.
-    QSaveFile file(m_filePath);
+    QSaveFile file(filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qWarning() << "Could not save settings to" << m_filePath
+        qWarning() << "Could not save settings to" << filePath
                    << ":" << file.errorString();
         if (error) {
             *error = QStringLiteral("Settings could not be saved: %1").arg(file.errorString());
@@ -852,7 +909,7 @@ bool AppSettings::save(QString* error)
     }
 
     if (!file.commit()) {
-        qWarning() << "Could not commit settings to" << m_filePath
+        qWarning() << "Could not commit settings to" << filePath
                    << ":" << file.errorString();
         if (error) {
             *error = QStringLiteral("Settings could not be saved: %1").arg(file.errorString());
@@ -860,9 +917,101 @@ bool AppSettings::save(QString* error)
         return false;
     }
 
-    QFile::setPermissions(m_filePath,
+    QFile::setPermissions(filePath,
                           QFileDevice::ReadOwner | QFileDevice::WriteOwner);
     return true;
+}
+
+} // namespace
+
+bool AppSettings::save(QString* error)
+{
+    if (error) {
+        error->clear();
+    }
+    // importFileForNextLaunch(): the file on disk is the import the next
+    // launch loads, and this running store's values must not replace it.
+    if (m_savesHeldUntilRestart) {
+        return true;
+    }
+    const QByteArray localXml = serializeLocalXml(m_settings, m_stationSettings,
+                                                   m_stationName, error);
+    if (localXml.isEmpty()) {
+        return false;
+    }
+    // This save holds every value a background save still waiting for the
+    // writer thread would write, so that one is dropped (it sees a newer
+    // save and reports nothing). One already writing finishes first.
+    ++m_backgroundSave->newestSave;
+    QMutexLocker lock(&settingsFileMutex());
+    return writeSettingsFile(m_filePath, localXml, error);
+}
+
+quint64 AppSettings::saveInBackground()
+{
+    SettingsFileWriter* const writer = backgroundSaveNotifier();
+    const quint64 ticket = ++m_backgroundSave->newestSave;
+    if (m_savesHeldUntilRestart) {
+        // As save(): nothing is written, and that is success.
+        QMetaObject::invokeMethod(writer, [writer, ticket] {
+            writer->report(ticket, true, QString());
+        }, Qt::QueuedConnection);
+        return ticket;
+    }
+    // The maps are shared copies: taking them costs nothing here, and a
+    // later setValue() on this thread leaves the copies as they were.
+    writer->run([writer, ticket, state = m_backgroundSave, filePath = m_filePath,
+                 settings = m_settings, stationSettings = m_stationSettings,
+                 stationName = m_stationName] {
+        if (state->startHookForTesting) {
+            state->startHookForTesting();
+        }
+        if (state->newestSave.load() != ticket) {
+            return;
+        }
+        QString error;
+        const QByteArray localXml = serializeLocalXml(settings, stationSettings,
+                                                       stationName, &error);
+        bool saved = false;
+        {
+            QMutexLocker lock(&settingsFileMutex());
+            if (state->newestSave.load() != ticket) {
+                return;
+            }
+            saved = !localXml.isEmpty() && writeSettingsFile(filePath, localXml, &error);
+        }
+        writer->report(ticket, saved, error);
+    });
+    return ticket;
+}
+
+SettingsFileWriter* AppSettings::backgroundSaveNotifier()
+{
+    if (!m_fileWriter) {
+        m_fileWriter = std::make_unique<SettingsFileWriter>();
+        if (m_isInstance) {
+            qAddPostRoutine(&AppSettings::finishInstanceWriter);
+        }
+    }
+    return m_fileWriter.get();
+}
+
+void AppSettings::finishInstanceWriter()
+{
+    AppSettings& s = instance();
+    if (s.m_fileWriter) {
+        s.m_fileWriter->finish();
+    }
+}
+
+void AppSettings::setBackgroundSaveStartHookForTesting(std::function<void()> hook)
+{
+    // The writer thread reads the hook, so it is changed only while that
+    // thread has nothing to do.
+    if (m_fileWriter) {
+        m_fileWriter->waitUntilIdle();
+    }
+    m_backgroundSave->startHookForTesting = std::move(hook);
 }
 
 QByteArray AppSettings::exportLocalXml(QString* error) const
@@ -900,6 +1049,9 @@ bool AppSettings::importLocalXml(const QByteArray& input, QString* error)
     if (!parseImportXml(input, settings, stationSettings, stationName, error)) {
         return false;
     }
+    // The import replaces everything a background save still waiting for
+    // the writer thread would write; that one is dropped.
+    ++m_backgroundSave->newestSave;
     AppSettings replacement(m_filePath);
     replacement.m_settings = settings;
     replacement.m_stationSettings = stationSettings;
@@ -910,6 +1062,55 @@ bool AppSettings::importLocalXml(const QByteArray& input, QString* error)
     m_settings.swap(settings);
     m_stationSettings.swap(stationSettings);
     m_stationName.swap(stationName);
+    return true;
+}
+
+// Thetis holds its database the same way after an import:
+// ImportAndMergeDatabase sets _merged (database.cs:11199), and while it is
+// set SaveVarsDictionary, SaveVars and the console's SaveState return early
+// (database.cs:9908, database.cs:9950, console.cs:3332) [v2.10.3.15]. Thetis
+// also swaps the merged database into memory and restarts itself; here the
+// running window keeps its values, since it reads them live, and the
+// operator restarts as before.
+bool AppSettings::importFileForNextLaunch(const QString& path, QString* error)
+{
+    if (error) {
+        error->clear();
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (error) {
+            *error = QStringLiteral("The file could not be read: %1").arg(file.errorString());
+        }
+        return false;
+    }
+    // One byte past the limit is enough for the parser to refuse the file.
+    const QByteArray raw = file.read(kMaxImportXmlBytes + 1);
+    if (file.error() != QFileDevice::NoError) {
+        if (error) {
+            *error = QStringLiteral("The file could not be read: %1").arg(file.errorString());
+        }
+        return false;
+    }
+    file.close();
+    // sanitizeXmlForLoad() leaves a well-formed file unchanged and repairs
+    // the element names a build before 2026-04-30 wrote unescaped.
+    const QByteArray xml = sanitizeXmlForLoad(QString::fromUtf8(raw)).toUtf8();
+    AppSettings replacement(m_filePath);
+    if (!parseImportXml(xml, replacement.m_settings, replacement.m_stationSettings,
+                        replacement.m_stationName, error)) {
+        return false;
+    }
+    // A background save still waiting for the writer thread must not land
+    // on top of the import; it is dropped.
+    ++m_backgroundSave->newestSave;
+    // save() keeps the file this replaces as the one-deep .bak.
+    if (!replacement.save(error)) {
+        return false;
+    }
+    m_savesHeldUntilRestart = true;
+    qCInfo(lcApp) << "Settings imported from" << path << "into" << m_filePath
+                  << "- saving is held until NereusSDR restarts";
     return true;
 }
 
@@ -944,6 +1145,7 @@ void AppSettings::setValue(const QString& key, const QVariant& val)
     if (m_changeHook) {
         m_changeHook(key);
     }
+    notifyWriteObservers(key);
 }
 
 void AppSettings::remove(const QString& key)
@@ -998,6 +1200,7 @@ void AppSettings::remove(const QString& key)
     if (m_changeHook) {
         m_changeHook(key);
     }
+    notifyWriteObservers(key);
 }
 
 bool AppSettings::contains(const QString& key) const
@@ -1068,6 +1271,27 @@ void AppSettings::clear()
 void AppSettings::setChangeHook(std::function<void(const QString& key)> hook)
 {
     m_changeHook = std::move(hook);
+}
+
+int AppSettings::addWriteObserver(std::function<void(const QString& key)> observer)
+{
+    const int id = m_nextWriteObserverId++;
+    m_writeObservers.insert(id, std::move(observer));
+    return id;
+}
+
+void AppSettings::removeWriteObserver(int id)
+{
+    m_writeObservers.remove(id);
+}
+
+void AppSettings::notifyWriteObservers(const QString& key) const
+{
+    for (auto it = m_writeObservers.cbegin(); it != m_writeObservers.cend(); ++it) {
+        if (it.value()) {
+            it.value()(key);
+        }
+    }
 }
 
 QMap<QString, QString> AppSettings::snapshot(const QStringList& prefixes) const
@@ -1159,6 +1383,8 @@ void AppSettings::saveRadio(const RadioInfo& info, bool pinToMac, bool autoConne
     setValue(prefix + QStringLiteral("protocol"),
              QString::number(static_cast<int>(info.protocol)));
     setValue(prefix + QStringLiteral("firmwareVersion"), QString::number(info.firmwareVersion));
+    setValue(prefix + QStringLiteral("firmwareBetaVersion"),
+             QString::number(info.firmwareBetaVersion));
     setValue(prefix + QStringLiteral("pinToMac"),        pinToMac   ? QStringLiteral("True") : QStringLiteral("False"));
     setValue(prefix + QStringLiteral("autoConnect"),     autoConnect ? QStringLiteral("True") : QStringLiteral("False"));
     setValue(prefix + QStringLiteral("lastSeen"),
@@ -1257,6 +1483,9 @@ std::optional<SavedRadio> AppSettings::savedRadio(const QString& macKey) const
                                       QStringLiteral("1")).toInt());
     sr.info.firmwareVersion = value(prefix + QStringLiteral("firmwareVersion"),
                                     QStringLiteral("0")).toInt();
+    // Absent in a radio saved before 2026-10-12: none reported.
+    sr.info.firmwareBetaVersion = value(prefix + QStringLiteral("firmwareBetaVersion"),
+                                        QStringLiteral("0")).toInt();
 
     // Saved-only flags
     sr.pinToMac    = (value(prefix + QStringLiteral("pinToMac"),
@@ -1684,6 +1913,158 @@ void AppSettings::migrateRenamedKeys(AppSettings& s)
     }
 }
 
+void AppSettings::convertWaterfallLevelsForClarityModel(AppSettings& settings)
+{
+    namespace CL = ClarityLevels;
+    const QString markerKey = QStringLiteral("DisplayWfClarityLevelsConverted");
+    if (settings.value(markerKey).toString() == QLatin1String("True")) {
+        return;  // already converted: these values are in the new model
+    }
+
+    const QString blackBase = QStringLiteral("DisplayWfBlackLevel");
+    const QString gainBase  = QStringLiteral("DisplayWfColorGain");
+
+    // A stored value counts when it is a whole number. Anything else was
+    // never shown (the reader fell back to what the pan inherits), so it
+    // is left as it is.
+    const auto stored = [&settings](const QString& key) -> std::optional<int> {
+        if (!settings.contains(key)) { return std::nullopt; }
+        bool ok = false;
+        const int v = settings.value(key).toString().trimmed().toInt(&ok);
+        return ok ? std::optional<int>(v) : std::nullopt;
+    };
+
+    // Every pan that has a value of its own for either key.
+    static const QRegularExpression panKeyPattern(
+        QStringLiteral("^DisplayWf(?:BlackLevel|ColorGain)_(\\d+)$"));
+    QList<int> pans;
+    const QStringList keys = settings.allKeys();
+    for (const QString& key : keys) {
+        const QRegularExpressionMatch match = panKeyPattern.match(key);
+        if (!match.hasMatch()) { continue; }
+        bool ok = false;
+        const int pan = match.captured(1).toInt(&ok);
+        if (ok && !pans.contains(pan)) { pans.append(pan); }
+    }
+
+    // Read every old value before writing any: a Color Gain converts
+    // against the old Black Level, never a converted one.
+    const std::optional<int> oldDefaultBlack = stored(blackBase);
+    const std::optional<int> oldDefaultGain  = stored(gainBase);
+    const int shownDefaultBlack = oldDefaultBlack.value_or(CL::kLegacyBlackLevelDefault);
+    const int shownDefaultGain  = oldDefaultGain.value_or(CL::kLegacyColorGainDefault);
+
+    struct PanValues {
+        QString suffix;
+        std::optional<int> black;
+        std::optional<int> gain;
+    };
+    QList<PanValues> panValues;
+    for (const int pan : std::as_const(pans)) {
+        const QString suffix = QLatin1Char('_') + QString::number(pan);
+        panValues.append({suffix, stored(blackBase + suffix), stored(gainBase + suffix)});
+    }
+
+    int converted = 0;
+
+    // The Setup defaults. With only a Black Level stored the old span was
+    // not the ship one, so the Color Gain that keeps it is stored too.
+    if (oldDefaultBlack) {
+        settings.setValue(blackBase,
+            QString::number(CL::convertLegacyBlackLevel(*oldDefaultBlack)));
+        ++converted;
+    }
+    const int newDefaultGain =
+        CL::convertLegacyColorGain(shownDefaultGain, shownDefaultBlack);
+    if (oldDefaultGain || newDefaultGain != CL::kColorGainDefault) {
+        settings.setValue(gainBase, QString::number(newDefaultGain));
+        ++converted;
+    }
+
+    // Each pan's own values. A pan with no Color Gain of its own follows
+    // the Setup default; when its own Black Level made its span differ
+    // from the default's, it gets the Color Gain that keeps its span.
+    for (const PanValues& values : std::as_const(panValues)) {
+        const int shownBlack = values.black.value_or(shownDefaultBlack);
+        const int shownGain  = values.gain.value_or(shownDefaultGain);
+        if (values.black) {
+            settings.setValue(blackBase + values.suffix,
+                QString::number(CL::convertLegacyBlackLevel(*values.black)));
+            ++converted;
+        }
+        const int newGain = CL::convertLegacyColorGain(shownGain, shownBlack);
+        if (values.gain || newGain != newDefaultGain) {
+            settings.setValue(gainBase + values.suffix, QString::number(newGain));
+            ++converted;
+        }
+    }
+
+    settings.setValue(markerKey, QStringLiteral("True"));
+    settings.save();
+    if (converted > 0) {
+        qDebug() << "Converted" << converted
+                 << "waterfall Black Level / Color Gain value(s) to the Clarity level model";
+    }
+}
+
+void AppSettings::resetPollutedDisplayCalOffset(AppSettings& settings)
+{
+    const QString markerKey = QStringLiteral("DisplayCalOffsetReset");
+    if (settings.value(markerKey).toString() == QLatin1String("True")) {
+        return;  // already reset: what is stored now is the operator's
+    }
+
+    // The Setup default and every pan's own value, pan 0 included
+    // (PanDisplayKeys: <base>_<N>). Nothing else: RX1_DisplayCalOffsetDb
+    // is the station's calibration and is not this key.
+    static const QRegularExpression calOffsetPattern(
+        QStringLiteral("^DisplayCalOffset(?:_\\d+)?$"));
+    int removed = 0;
+    const QStringList keys = settings.allKeys();
+    for (const QString& key : keys) {
+        if (calOffsetPattern.match(key).hasMatch()) {
+            settings.remove(key);
+            ++removed;
+        }
+    }
+
+    settings.setValue(markerKey, QStringLiteral("True"));
+    settings.save();
+    if (removed > 0) {
+        qDebug() << "Removed" << removed
+                 << "stored display Cal Offset value(s) that held the station's offset";
+    }
+}
+
+void AppSettings::clearUncalibratedClarityFloors(AppSettings& settings)
+{
+    const QString markerKey = QStringLiteral("ClarityFloorsCalibrated");
+    if (settings.value(markerKey).toString() == QLatin1String("True")) {
+        return;  // already cleared: what is stored now is calibrated
+    }
+
+    // Every band's stored floor (PanadapterModel: <base>_<band>). Nothing
+    // else: the per-band grid and 3D floor keys are not floors Clarity
+    // measured.
+    static const QRegularExpression floorPattern(
+        QStringLiteral("^(?:DisplayBandNFEstimate|ClarityFloor)_.+$"));
+    int removed = 0;
+    const QStringList keys = settings.allKeys();
+    for (const QString& key : keys) {
+        if (floorPattern.match(key).hasMatch()) {
+            settings.remove(key);
+            ++removed;
+        }
+    }
+
+    settings.setValue(markerKey, QStringLiteral("True"));
+    settings.save();
+    if (removed > 0) {
+        qDebug() << "Removed" << removed
+                 << "stored per-band noise floor(s) measured before calibration";
+    }
+}
+
 // ---------------------------------------------------------------------------
 // v0.3.0 / v0.3.x settings schema migrations
 // ---------------------------------------------------------------------------
@@ -1873,6 +2254,50 @@ void AppSettings::ensureSettingsAtVersion(int currentVersion)
             }
         }
         qDebug() << "Settings migration to schema v9 complete";
+    }
+
+    // v9 -> v10 migration: two-tone is one station setting, as in Thetis.
+    // Profiles saved before 74812ec8b carried a two-tone level of -6, which
+    // halves the two-tone envelope and keeps PureSignal from calibrating,
+    // and loading the profile put it back every time. Thetis's default is 0
+    // (From Thetis setup.Designer.cs:62168-62172 [v2.10.3.15] udTwoToneLevel)
+    // and Thetis TX profiles carry no two-tone values (From Thetis
+    // database.cs:4299 [v2.10.3.15] AddTXProfileTable). Once:
+    //   - the eight two-tone keys under every
+    //     hardware/<mac>/tx/profile/<name>/ are removed; nothing reads them
+    //     now, and deleting a profile walks only today's key list, so this
+    //     also clears what an older profile would otherwise strand;
+    //   - a live hardware/<mac>/tx/TwoToneLevel saved as exactly the retired
+    //     default becomes 0; any other level the operator chose stays.
+    if (storedVersion < 10 && currentVersion >= 10) {
+        qDebug() << "Migrating settings to schema v10 (two-tone leaves TX profiles)";
+        // The two-tone level default before 1972888fb / 74812ec8b.
+        constexpr double kRetiredTwoToneLevelDb = -6.0;
+        static const QRegularExpression profileTwoToneKey(QStringLiteral(
+            "^hardware/[^/]+/tx/profile/.+/(TwoToneFreq1|TwoToneFreq2|TwoToneLevel|"
+            "TwoTonePower|TwoToneFreq2Delay|TwoToneInvert|TwoTonePulsed|"
+            "TwoToneDrivePowerOrigin)$"));
+        static const QRegularExpression liveTwoToneLevelKey(
+            QStringLiteral("^hardware/[^/]+/tx/TwoToneLevel$"));
+        for (const QString& key : allKeys()) {
+            if (profileTwoToneKey.match(key).hasMatch()) {
+                remove(key);
+                qDebug() << "Settings v10: removed" << key;
+                continue;
+            }
+            if (!liveTwoToneLevelKey.match(key).hasMatch()) {
+                continue;
+            }
+            bool ok = false;
+            const double saved = value(key).toString().toDouble(&ok);
+            if (!ok || saved != kRetiredTwoToneLevelDb) {
+                continue;
+            }
+            // The same string TransmitModel::persistOne writes for 0.
+            setValue(key, QString::number(0.0));
+            qDebug() << "Settings v10:" << key << "from" << saved << "to" << 0.0;
+        }
+        qDebug() << "Settings migration to schema v10 complete";
     }
 
     setValue(versionKey, QString::number(currentVersion));

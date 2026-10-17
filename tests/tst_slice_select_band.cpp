@@ -296,6 +296,7 @@ void TstSliceSelectBand::theCapabilityKeepsItsPlaceInTheMinor11Block()
              first + originalBlock.size() + 2);
     QVERIFY(!names.contains(QByteArrayLiteral("setupDescriptionVersion")));
     QVERIFY(!names.contains(QByteArrayLiteral("miniDisplayVersion")));
+    QVERIFY(!names.contains(QByteArrayLiteral("spectrumPictureVersion")));
     QCOMPARE(updates.at(first + 1).kind, MirrorWireKind::Int64);
     QCOMPARE(updates.at(first + 1).value.toInt(), 1);
     QCOMPARE(StationCapabilities::fromUpdates(updates).bandSelectVersion, 1);

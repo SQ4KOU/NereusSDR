@@ -13,6 +13,11 @@
 //      raw mmap from the test side reads back the same bytes.
 //   3. Consumer round-trip — test writes known samples to /nereussdr-vax-tx;
 //      CoreAudioHalBus(TxInput)::pull() returns them.
+//   3b. A reader on a timer: a writer like WSJT-X's against a 10 ms
+//      reader, in simulated time: pull()'s low-latency guard loses audio,
+//      pullKeepingBacklog() loses none; a deep backlog read keeps only the
+//      newest frames; a backlog given in an odd number of samples still
+//      starts the read on a left-channel sample.
 //   4. Role policing — push() returns -1 on TxInput; pull() returns -1 on
 //      Vax1..4.
 //   5. Format validation — open() rejects non-48k/non-stereo/non-float32.
@@ -50,6 +55,82 @@ void unlinkAllVaxSegments() {
     ::shm_unlink("/nereussdr-vax-3");
     ::shm_unlink("/nereussdr-vax-4");
     ::shm_unlink(kTxInputPath);
+}
+
+// A writer like WSJT-X's and a reader on a timer, in simulated time;
+// see the 3b tests.
+struct TimedRead {
+    quint64 lostFrames = ~quint64(0);
+    bool inOrder = false;
+};
+
+TimedRead timedRead(bool keepBacklog)
+{
+    TimedRead result;
+    CoreAudioHalBus bus(CoreAudioHalBus::Role::TxInput);
+    AudioFormat fmt;
+    if (!bus.open(fmt)) {
+        return result;
+    }
+    const int fd = ::shm_open(kTxInputPath, O_RDWR, 0666);
+    void* ptr = ::mmap(nullptr, sizeof(VaxShmBlock), PROT_READ | PROT_WRITE,
+                       MAP_SHARED, fd, 0);
+    auto* plugin = static_cast<VaxShmBlock*>(ptr);
+
+    constexpr int kWriteFrames = 512;
+    constexpr int kReadFrames = 4800;
+    constexpr qint64 kRunUs = 10'000'000;
+    std::vector<float> read(std::size_t(kReadFrames) * 2);
+    quint64 written = 0;
+    quint64 heard = 0;
+    quint64 expected = 0;  // the next frame's index, read in order
+    bool inOrder = true;
+    qint64 nextWriteUs = 0;
+    qint64 nextReadUs = 0;
+    int tick = 0;
+    // The last read, after the last write, takes what is left.
+    while (nextWriteUs < kRunUs || nextReadUs < kRunUs + 10'000) {
+        if (nextWriteUs <= nextReadUs && nextWriteUs < kRunUs) {
+            uint32_t wp = plugin->writePos.load(std::memory_order_acquire);
+            for (int f = 0; f < kWriteFrames; ++f) {
+                const float index = float(written + quint64(f));
+                plugin->ringBuffer[wp++ % VaxShmBlock::RING_SIZE] = index;
+                plugin->ringBuffer[wp++ % VaxShmBlock::RING_SIZE] = index;
+            }
+            plugin->writePos.store(wp, std::memory_order_release);
+            written += kWriteFrames;
+            nextWriteUs = qint64(written) * 1'000'000 / 48'000;
+            continue;
+        }
+        const qint64 maxBytes = qint64(read.size() * sizeof(float));
+        const qint64 got = keepBacklog
+            ? bus.pullKeepingBacklog(reinterpret_cast<char*>(read.data()), maxBytes,
+                                     qint64(120 * 48) * 2 * qint64(sizeof(float)))
+            : bus.pull(reinterpret_cast<char*>(read.data()), maxBytes);
+        const quint64 frames = quint64(got) / (2 * sizeof(float));
+        for (quint64 f = 0; f < frames; ++f) {
+            if (read[std::size_t(2 * f)] != float(expected + f)) {
+                inOrder = false;
+            }
+        }
+        if (frames > 0) {
+            expected = quint64(read[std::size_t(2 * (frames - 1))]) + 1;
+        }
+        if (nextReadUs >= kRunUs) {
+            heard += frames;
+            break;
+        }
+        heard += frames;
+        // Every fifth tick is 7 ms late, as a busy GUI thread's are.
+        ++tick;
+        nextReadUs = qint64(tick) * 10'000 + ((tick % 5 == 0) ? 7'000 : 0);
+    }
+    ::munmap(plugin, sizeof(VaxShmBlock));
+    ::close(fd);
+    bus.close();
+    result.lostFrames = written - heard;
+    result.inOrder = inOrder && expected == written;
+    return result;
 }
 
 } // namespace
@@ -179,6 +260,98 @@ private slots:
                  static_cast<uint32_t>(kFloats));
 
         ::munmap(pluginView, sizeof(VaxShmBlock));
+        ::close(fd);
+        bus.close();
+    }
+
+    // ── 3b. A reader on a timer (2026-10-16) ───────────────────────────────
+    //
+    // WSJT-X writes the TX device 512 frames at a time, about every
+    // 10.7 ms; a remote window's uplink reads it on a 10 ms GUI timer whose
+    // ticks come late now and then. pull()'s 16 ms guard drops what a late
+    // tick finds; pullKeepingBacklog() keeps it all.
+    void aTimedReaderLosesAudioToTheLowLatencyGuard()
+    {
+        // The cause of a remote key's gaps (2026-10-16): the Core heard
+        // its stream fall behind about 100 ms a second.
+        const TimedRead result = timedRead(false);
+        qInfo().noquote() << QStringLiteral("pull() lost %1 of 480000 frames")
+                                 .arg(result.lostFrames);
+        QVERIFY2(result.lostFrames > 48'000 / 2 && result.lostFrames != ~quint64(0),
+                 qPrintable(QStringLiteral("lost %1 frames").arg(result.lostFrames)));
+        QVERIFY(!result.inOrder);
+    }
+
+    void aTimedReaderKeepingTheBacklogLosesNothing()
+    {
+        const TimedRead result = timedRead(true);
+        QCOMPARE(result.lostFrames, quint64(0));
+        QVERIFY(result.inOrder);
+    }
+
+    void keepingTheBacklogSkipsOnlyWhatIsOlder()
+    {
+        CoreAudioHalBus bus(CoreAudioHalBus::Role::TxInput);
+        AudioFormat fmt;
+        QVERIFY2(bus.open(fmt), qPrintable(bus.errorString()));
+        const int fd = ::shm_open(kTxInputPath, O_RDWR, 0666);
+        QVERIFY(fd >= 0);
+        void* ptr = ::mmap(nullptr, sizeof(VaxShmBlock), PROT_READ | PROT_WRITE,
+                           MAP_SHARED, fd, 0);
+        QVERIFY(ptr != MAP_FAILED);
+        auto* plugin = static_cast<VaxShmBlock*>(ptr);
+
+        // 300 ms waiting; the reader keeps 120 ms: the newest 5760 frames.
+        constexpr uint32_t kWaiting = 14'400;
+        constexpr uint32_t kKeep = 5'760;
+        for (uint32_t f = 0; f < kWaiting; ++f) {
+            plugin->ringBuffer[2 * f] = float(f);
+            plugin->ringBuffer[2 * f + 1] = float(f);
+        }
+        plugin->writePos.store(2 * kWaiting, std::memory_order_release);
+        std::vector<float> read(2 * kWaiting, -1.0f);
+        const qint64 got = bus.pullKeepingBacklog(reinterpret_cast<char*>(read.data()),
+                                                  qint64(read.size() * sizeof(float)),
+                                                  qint64(kKeep) * 2 * qint64(sizeof(float)));
+        QCOMPARE(got, qint64(kKeep) * 2 * qint64(sizeof(float)));
+        QCOMPARE(read[0], float(kWaiting - kKeep));
+        QCOMPARE(read[2 * (kKeep - 1)], float(kWaiting - 1));
+
+        ::munmap(plugin, sizeof(VaxShmBlock));
+        ::close(fd);
+        bus.close();
+    }
+
+    void anOddBacklogStillStartsOnALeftSample()
+    {
+        CoreAudioHalBus bus(CoreAudioHalBus::Role::TxInput);
+        AudioFormat fmt;
+        QVERIFY2(bus.open(fmt), qPrintable(bus.errorString()));
+        const int fd = ::shm_open(kTxInputPath, O_RDWR, 0666);
+        QVERIFY(fd >= 0);
+        void* ptr = ::mmap(nullptr, sizeof(VaxShmBlock), PROT_READ | PROT_WRITE,
+                           MAP_SHARED, fd, 0);
+        QVERIFY(ptr != MAP_FAILED);
+        auto* plugin = static_cast<VaxShmBlock*>(ptr);
+
+        // Left holds the frame number, right its negative less one, so a
+        // read that starts on a right sample shows.
+        constexpr uint32_t kWaiting = 14'400;
+        constexpr uint32_t kKeep = 5'760;
+        for (uint32_t f = 0; f < kWaiting; ++f) {
+            plugin->ringBuffer[2 * f] = float(f);
+            plugin->ringBuffer[2 * f + 1] = -float(f) - 1.0f;
+        }
+        plugin->writePos.store(2 * kWaiting, std::memory_order_release);
+        std::vector<float> read(2 * kWaiting, 0.0f);
+        const qint64 got = bus.pullKeepingBacklog(reinterpret_cast<char*>(read.data()),
+                                                  qint64(read.size() * sizeof(float)),
+                                                  (qint64(kKeep) * 2 + 1) * qint64(sizeof(float)));
+        QCOMPARE(got, qint64(kKeep) * 2 * qint64(sizeof(float)));
+        QCOMPARE(read[0], float(kWaiting - kKeep));
+        QCOMPARE(read[1], -float(kWaiting - kKeep) - 1.0f);
+
+        ::munmap(plugin, sizeof(VaxShmBlock));
         ::close(fd);
         bus.close();
     }

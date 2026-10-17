@@ -7,10 +7,15 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-13 — Compact sourced feedback/correction instruments, preserving
+//                 facade actions; J.J. Boyd (KG4VCF), assisted by OpenAI Codex.
 //   2026-10-04 - Include the coordinator type for Qt 6.4 typed connections;
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-04 — Live Core status and passive numeric correction readouts,
 //                 by J.J. Boyd (KG4VCF), with OpenAI Codex assistance.
+//   2026-10-11 — A status update restyles a light only when it changes
+//                 state; J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 
 //   2026-04-18 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
@@ -82,7 +87,7 @@ mw0lge@grange-lane.co.uk
 #include "core/PureSignal.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "gui/DspAssetDialog.h"
-#include "gui/HGauge.h"
+#include "gui/PureSignalInstruments.h"
 #include "gui/StyleConstants.h"
 #include "models/PureSignalSettings.h"
 #include "models/RadioModel.h"
@@ -100,23 +105,6 @@ mw0lge@grange-lane.co.uk
 namespace NereusSDR {
 
 namespace {
-
-// LED active style — green-on-dark (mirrors PsaIndicatorWidget palette).
-constexpr const char* kLedActiveStyle =
-    "QLabel {"
-    "  background: #20c060; border-radius: 4px;"
-    "  color: #000000; font-size: 8px; font-weight: bold;"
-    "  padding: 0px 2px;"
-    "}";
-
-// LED inactive style — desaturated dark grey (matches the original
-// styling baked into PureSignalApplet's buildUI).
-constexpr const char* kLedInactiveStyle =
-    "QLabel {"
-    "  background: #405060; border-radius: 4px;"
-    "  color: #6080a0; font-size: 8px; font-weight: bold;"
-    "  padding: 0px 2px;"
-    "}";
 
 // R-R3-49 (parity Task 7): grey `control` with `reason` as its tooltip,
 // remembering its own tooltip, or put it back and apply `enabled`. An empty
@@ -170,162 +158,63 @@ void PureSignalApplet::setPureSignal(PureSignal* coordinator)
 void PureSignalApplet::buildUI()
 {
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->setSpacing(0);
+    root->setContentsMargins(12, 12, 12, 10);
+    root->setSpacing(10);
     // Phase 3M-4 bench-fix: AppletPanelWidget::wrapWithTitleBar (AppletPanelWidget.cpp:155)
     // already prepends a host-side title bar from appletTitle().  Adding our own
     // appletTitleBar() here resulted in a double header.  Same-shape bug exists
     // in DiversityApplet / DigitalApplet / TunerApplet / CwxApplet / CatApplet /
     // DvkApplet — fix here is PureSignal-scoped; flag for follow-up sweep.
-
-    auto* body = new QWidget(this);
-    auto* vbox = new QVBoxLayout(body);
-    vbox->setContentsMargins(4, 2, 4, 4);
-    vbox->setSpacing(2);
-
-    // --- Control 1+2: Calibrate + Auto-cal row ---
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-
-        // Control 1: calibrate (non-toggle push button)
-        m_calibrateBtn = styledButton(QStringLiteral("Calibrate"));
-        m_calibrateBtn->setObjectName(QStringLiteral("PsAppletCalibrateBtn"));
-        m_calibrateBtn->setToolTip(tr(
-            "Run a single PureSignal calibration sweep. "
-            "Right-click to open PureSignal..."));
-        row->addWidget(m_calibrateBtn);
-
-        // Control 2: auto-cal (green toggle)
-        m_autoCalBtn = greenToggle(QStringLiteral("Auto"));
-        m_autoCalBtn->setObjectName(QStringLiteral("PsAppletAutoCalBtn"));
-        m_autoCalBtn->setCheckable(true);
-        m_autoCalBtn->setToolTip(tr(
-            "Toggle continuous PureSignal auto-calibration. "
-            "Right-click to open PureSignal..."));
-        row->addWidget(m_autoCalBtn);
-        row->addStretch();
-
-        vbox->addLayout(row);
+    QFont readable = PureSignalViewStyle::font(font());
+    readable.setPixelSize(12);
+    setFont(readable);
+    m_instruments = new PureSignalInstruments(QStringLiteral("PsApplet"), true, this);
+    root->addWidget(m_instruments);
+    auto* actions = new QHBoxLayout;
+    actions->setSpacing(5);
+    m_autoCalBtn = greenToggle(QStringLiteral("Auto"));
+    m_calibrateBtn = styledButton(QStringLiteral("Calibrate"));
+    m_twoToneBtn = greenToggle(QStringLiteral("2-Tone"));
+    m_autoCalBtn->setObjectName(QStringLiteral("PsAppletAutoCalBtn"));
+    m_calibrateBtn->setObjectName(QStringLiteral("PsAppletCalibrateBtn"));
+    m_twoToneBtn->setObjectName(QStringLiteral("PsAppletTwoToneBtn"));
+    m_autoCalBtn->setCheckable(true);
+    m_twoToneBtn->setCheckable(true);
+    m_calibrateBtn->setToolTip(tr("Run a single PureSignal calibration sweep. Right-click for the Bench."));
+    m_autoCalBtn->setToolTip(tr("Toggle continuous PureSignal auto-calibration. Right-click for the Bench."));
+    m_twoToneBtn->setToolTip(tr("Inject a two-tone test signal for calibration. Right-click for the Bench."));
+    for (QPushButton* button : {m_autoCalBtn, m_calibrateBtn, m_twoToneBtn}) {
+        actions->addWidget(button);
     }
-
-    // --- Control 3: Feedback level gauge (0-100, yellow@70, red@90) ---
-    m_feedbackGauge = new HGauge(this);
-    m_feedbackGauge->setObjectName(QStringLiteral("PsAppletFeedbackGauge"));
-    m_feedbackGauge->setRange(0.0, 100.0);
-    m_feedbackGauge->setYellowStart(70.0);
-    m_feedbackGauge->setRedStart(90.0);
-    m_feedbackGauge->setTitle(QStringLiteral("FB Level"));
-    m_feedbackGauge->setToolTip(tr(
-        "PureSignal feedback level. Right-click to open PureSignal..."));
-    vbox->addWidget(m_feedbackGauge);
-
-    // --- Control 4: existing correction status gauge ---
-    m_correctionGauge = new HGauge(this);
-    m_correctionGauge->setObjectName(QStringLiteral("PsAppletCorrectionGauge"));
-    m_correctionGauge->setRange(0.0, 100.0);
-    m_correctionGauge->setYellowStart(80.0);
-    m_correctionGauge->setRedStart(95.0);
-    m_correctionGauge->setTitle(QStringLiteral("Correction"));
-    m_correctionGauge->setToolTip(tr(
-        "PureSignal correction status. Right-click to open PureSignal..."));
-    vbox->addWidget(m_correctionGauge);
-
-    // --- Control 5+6+7: Save / Restore / Two-tone row ---
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-
-        // Control 5: save coefficients
-        m_saveBtn = styledButton(QStringLiteral("Save"));
-        m_saveBtn->setObjectName(QStringLiteral("PsAppletSaveBtn"));
-        m_saveBtn->setEnabled(false);  // gated on correctingChanged
-        m_saveBtn->setToolTip(tr(
-            "Save the current PureSignal corrections to a file. "
-            "Right-click to open PureSignal..."));
-        row->addWidget(m_saveBtn);
-
-        // Control 6: restore coefficients
-        m_restoreBtn = styledButton(QStringLiteral("Restore"));
-        m_restoreBtn->setObjectName(QStringLiteral("PsAppletRestoreBtn"));
-        m_restoreBtn->setToolTip(tr(
-            "Load a previously saved PureSignal corrections file. "
-            "Right-click to open PureSignal..."));
-        row->addWidget(m_restoreBtn);
-
-        // Control 7: two-tone test (green toggle)
-        m_twoToneBtn = greenToggle(QStringLiteral("2-Tone"));
-        m_twoToneBtn->setObjectName(QStringLiteral("PsAppletTwoToneBtn"));
-        m_twoToneBtn->setCheckable(true);
-        m_twoToneBtn->setToolTip(tr(
-            "Inject a two-tone test signal for PureSignal calibration. "
-            "Right-click to open PureSignal..."));
-        row->addWidget(m_twoToneBtn);
-        row->addStretch();
-
-        vbox->addLayout(row);
-    }
-
-    // --- Control 8: Status LEDs row — "Cal", "Run", "Fbk" ---
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(6);
-
-        const QString ledNames[3] = {
-            QStringLiteral("Cal"),
-            QStringLiteral("Run"),
-            QStringLiteral("Fbk")
-        };
-        const QString ledObjectNames[3] = {
-            QStringLiteral("PsAppletCalLed"),
-            QStringLiteral("PsAppletRunLed"),
-            QStringLiteral("PsAppletFbkLed")
-        };
-
-        for (int i = 0; i < 3; ++i) {
-            m_led[i] = new QLabel(ledNames[i], this);
-            m_led[i]->setObjectName(ledObjectNames[i]);
-            m_led[i]->setFixedSize(24, 14);
-            m_led[i]->setAlignment(Qt::AlignCenter);
-            m_led[i]->setStyleSheet(QString::fromLatin1(kLedInactiveStyle));
-            row->addWidget(m_led[i]);
-        }
-        row->addStretch();
-        vbox->addLayout(row);
-    }
-
-    // --- Info readout labels ---
-    m_iterations   = new QLabel(QStringLiteral("Iterations: 0"), this);
-    m_iterations->setObjectName(QStringLiteral("PsAppletIterationsLabel"));
-    m_feedbackDb   = new QLabel(QStringLiteral("Feedback: — dB"), this);
-    m_feedbackDb->setObjectName(QStringLiteral("PsAppletFeedbackDbLabel"));
-    m_correctionDb = new QLabel(QStringLiteral("Correction: — dB"), this);
-    m_correctionDb->setObjectName(QStringLiteral("PsAppletCorrectionDbLabel"));
-
-    const QString infoStyle = QStringLiteral(
-        "QLabel { font-size: 10px; color: %1; }").arg(Style::kTextSecondary);
-    for (QLabel* lbl : {m_iterations, m_feedbackDb, m_correctionDb}) {
-        lbl->setStyleSheet(infoStyle);
-        vbox->addWidget(lbl);
-    }
-
+    root->addLayout(actions);
+    auto* files = new QHBoxLayout;
+    files->setSpacing(5);
+    m_saveBtn = styledButton(QStringLiteral("Save"));
+    m_restoreBtn = styledButton(QStringLiteral("Restore…"));
+    m_saveBtn->setObjectName(QStringLiteral("PsAppletSaveBtn"));
+    m_restoreBtn->setObjectName(QStringLiteral("PsAppletRestoreBtn"));
+    m_saveBtn->setEnabled(false); // Actual corrections-applied state gates Save.
+    m_saveBtn->setToolTip(tr("Save the current correction on the Core."));
+    m_restoreBtn->setToolTip(tr("Open the Core's saved PureSignal corrections."));
+    files->addWidget(m_saveBtn);
+    files->addWidget(m_restoreBtn);
+    auto* details = styledButton(QStringLiteral("Details →"));
+    details->setObjectName(QStringLiteral("PsAppletDetailsBtn"));
+    connect(details, &QPushButton::clicked, this, &PureSignalApplet::openPureSignalDialogRequested);
+    files->addWidget(details);
+    root->addLayout(files);
     m_status = new QLabel(this);
     m_status->setObjectName(QStringLiteral("PsAppletStatusLabel"));
     m_status->setWordWrap(true);
-    m_status->setStyleSheet(infoStyle);
-    vbox->addWidget(m_status);
-
-    vbox->addStretch();
-    root->addWidget(body);
-}
-
-void PureSignalApplet::setLedActive(QLabel* led, bool active)
-{
-    if (!led) {
-        return;
+    root->addWidget(m_status);
+    // The applet factories use legacy small fonts. The scoped presentation
+    // floor applies to all controls after their creation, with classic fallback.
+    for (QPushButton* button : findChildren<QPushButton*>()) {
+        button->setMinimumHeight(28);
+        button->setStyleSheet(button->styleSheet() + QStringLiteral("QPushButton { font-size: 12px; padding: 4px 5px; }"));
     }
-    led->setStyleSheet(QString::fromLatin1(active ? kLedActiveStyle
-                                                  : kLedInactiveStyle));
+    root->setAlignment(Qt::AlignTop);
+    WorkspacePreview::themeOnShow(this);
 }
 
 void PureSignalApplet::setupRightClick(QWidget* widget)
@@ -348,8 +237,10 @@ void PureSignalApplet::wireRightClicks()
     setupRightClick(m_saveBtn);
     setupRightClick(m_restoreBtn);
     setupRightClick(m_twoToneBtn);
-    setupRightClick(m_feedbackGauge);
-    setupRightClick(m_correctionGauge);
+    setupRightClick(m_instruments);
+    for (QWidget* widget : m_instruments->findChildren<QWidget*>()) {
+        setupRightClick(widget);
+    }
 
     connect(m_calibrateBtn, &QPushButton::clicked, this, [this]() {
         requestAction(Ps3Action::Single);
@@ -460,53 +351,11 @@ void PureSignalApplet::refreshFromFacade()
     m_saveBtn->setEnabled(available && status.correctionsApplied
                           && !status.savePending && !status.restorePending);
 
-    const double feedback = std::clamp(status.feedbackLevel * 100.0 / 255.0,
-                                       0.0, 100.0);
-    m_feedbackGauge->setValue(feedback);
-    m_correctionGauge->setValue(status.correctionsApplied ? 100.0 : 0.0);
-    m_iterations->setText(
-        tr("Calibrations: %1 / %2 attempts").arg(status.successfulCalibrations)
-            .arg(status.attemptedCalibrations));
-    m_feedbackDb->setText(
-        available ? tr("Feedback: %1 (raw)").arg(status.feedbackLevel)
-                  : tr("Feedback: —"));
-    m_correctionDb->setText(
-        status.correctionsApplied ? tr("Correction: Applied")
-                                  : tr("Correction: Off"));
+    m_instruments->setStatus(status, available);
+    m_status->setText(m_facade && !m_facade->lastActionError().isEmpty()
+        ? m_facade->lastActionError() : QString());
+    m_status->setVisible(!m_status->text().isEmpty());
 
-    // Control-state facts: vendored WDSP 2.10 calcc.c:2115-2127
-    // [@b02d5bac]. Keep unknown states visible rather than guessing.
-    const QStringList states{tr("Reset"), tr("Wait"), tr("MOX delay"),
-        tr("Setup"), tr("Collect"), tr("MOX check"), tr("Calculate"),
-        tr("Delay"), tr("Stay on"), tr("Turn on")};
-    const QString stateName = status.engineState >= 0 && status.engineState < states.size()
-        ? states.at(status.engineState) : tr("Unknown");
-    const QString pairedInput = available && status.pairedInputValid
-        ? tr("TX monitor: %1 | PA feedback: %2")
-            .arg(status.txMonitorPeak, 0, 'f', 4).arg(status.feedbackPeak, 0, 'f', 4)
-        : tr("TX monitor: — | PA feedback: —");
-    m_status->setText(available
-        ? tr("Engine: %1 (%2)\n%3\nLast cal TX peak: %4 | HW peak: %5\n"
-             "Pump: %6 | paired blocks: %7\nDDC TX: %8 | FB: %9\n"
-             "Solution: 0x%10 | watchdog: %11\nCorrection run: %12 | busy: %13")
-            .arg(stateName).arg(status.engineState).arg(pairedInput)
-            .arg(status.maxTx, 0, 'f', 4).arg(status.hardwarePeak, 0, 'f', 4)
-            .arg(status.pumpActive ? tr("Active") : tr("Inactive"))
-            .arg(static_cast<qulonglong>(status.pairedBlocks))
-            .arg(status.txMonitorDdc).arg(status.feedbackDdc)
-            .arg(status.solutionStatusBits, 0, 16).arg(status.dogCount)
-            .arg(status.correctionRun ? tr("On") : tr("Off"))
-            .arg(status.correctionBusy ? tr("Yes") : tr("No"))
-        : tr("PureSignal status: —"));
-    m_status->setToolTip(tr("TX monitor and PA feedback are the latest accepted paired I/Q "
-        "block peaks. The last calibration TX peak is published only after a completed "
-        "collection; zero there does not mean incoming TX samples are absent."));
-    const bool calibrating = available && (status.engineState == 3
-        || status.engineState == 4 || status.engineState == 6);
-    setLedActive(m_led[0], calibrating);
-    setLedActive(m_led[1], available && status.correctionsApplied);
-    setLedActive(m_led[2], available && status.mox && status.pumpActive && status.pairedInputValid
-        && status.feedbackPeak > 0.0);
 }
 
 void PureSignalApplet::syncFromModel()

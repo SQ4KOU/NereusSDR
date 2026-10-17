@@ -104,12 +104,12 @@ public struct BandGeometry: Equatable, Sendable {
     /// The frequencies of the vertical grid lines: a 1, 2 or 5 step (times a
     /// power of ten) that keeps them at least `minimumSpacing` apart, from
     /// the first multiple of the step inside the span.
-    public func frequencyTicks(minimumSpacing: Double) -> (stepHz: Double, ticks: [Double]) {
+    public func frequencyTicks(minimumSpacing: Double, forcedStepHz: Double = 0) -> (stepHz: Double, ticks: [Double]) {
         guard spanHz > 0, size.width > 0, minimumSpacing > 0 else {
             return (0, [])
         }
         let wanted = spanHz * minimumSpacing / Double(size.width)
-        let step = Self.niceStep(atLeast: wanted)
+        let step = forcedStepHz.isFinite && forcedStepHz > 0 ? forcedStepHz : Self.niceStep(atLeast: wanted)
         var ticks: [Double] = []
         var tick = (lowHz / step).rounded(.up) * step
         while tick <= highHz, ticks.count < 1000 {

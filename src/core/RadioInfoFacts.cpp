@@ -34,7 +34,7 @@ RadioInfoFacts radioInfoFacts(const RadioInfo& info, const BoardCapabilities& ca
     // otherwise: the same count the stream pool is sized from.
     facts.maxRx = QString::number(BoardCapsTable::effectiveReceiverCount(
         caps, info.protocol, info.reportedReceivers));
-    facts.firmware = info.firmwareVersion > 0 ? QString::number(info.firmwareVersion) : none;
+    facts.firmware = info.firmwareVersion > 0 ? info.firmwareText() : none;
     facts.mac = info.macAddress.isEmpty() ? none : info.macAddress;
     facts.ip = info.address.isNull() ? none : info.address.toString();
     // Plan Task 5: the top rate for the protocol the radio is running (the

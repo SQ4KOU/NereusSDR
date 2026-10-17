@@ -34,6 +34,13 @@
 //                 Dig Out follows the transmit settings gate; the TX pins,
 //                 pin actions and resets follow their own gates.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - setN2adrHintVisible forwards to the HF tab. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - D25: the HF and SWL sub-tabs scroll down inside their own
+//                areas (SetupFit::scrollingTab) and the sub-tab pane fills
+//                the tab, so the sub-tab strip stays at the top; the VHF
+//                note wraps. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -79,6 +86,7 @@
 #include "OcOutputsHfTab.h"
 #include "OcOutputsSwlTab.h"
 #include "gui/UnbuiltFeatures.h"
+#include "gui/setup/SetupFit.h"
 
 #include "core/BoardCapabilities.h"
 #include "core/OcMatrix.h"
@@ -129,7 +137,7 @@ OcOutputsTab::OcOutputsTab(RadioModel* model, QWidget* parent)
     // ── HF sub-sub-tab (Task 2 full implementation) ───────────────────────
     // Source: Thetis tpOCHFControl (setup.designer.cs) [@501e3f5]
     m_hfTab = new OcOutputsHfTab(model, m_ocMatrix, this);
-    m_subTabs->addTab(m_hfTab, tr("HF"));
+    m_subTabs->addTab(SetupFit::scrollingTab(m_hfTab), tr("HF"));
 
     // ── VHF sub-sub-tab (placeholder — Phase 3L follow-up) ────────────────
     // mi0bot mirrors HF onto a VHF tab for transverter / 2m+ band plans
@@ -144,6 +152,9 @@ OcOutputsTab::OcOutputsTab(RadioModel* model, QWidget* parent)
         auto* placeholder = new QLabel(
             tr("Open collector outputs for transverter bands are not available in this version."), m_vhfTab);
         placeholder->setAlignment(Qt::AlignCenter);
+        // D25: the note wraps; a hidden tab's page still sets the pane's
+        // minimum width.
+        placeholder->setWordWrap(true);
         placeholder->setStyleSheet(QStringLiteral(
             "color: rgba(255,255,255,0.5); font-style: italic;"));
         vhfLayout->addStretch();
@@ -158,9 +169,9 @@ OcOutputsTab::OcOutputsTab(RadioModel* model, QWidget* parent)
     // Source: Thetis tpOCSWLControl (setup.designer.cs) [@501e3f5]
     // mi0bot setup.designer.cs:tpOCSWLControl, grpExtCtrlSWL [v2.10.3.13-beta2]
     m_swlTab = new OcOutputsSwlTab(model, m_ocMatrix, this);
-    m_subTabs->addTab(m_swlTab, tr("SWL"));
+    m_subTabs->addTab(SetupFit::scrollingTab(m_swlTab), tr("SWL"));
 
-    layout->addWidget(m_subTabs);
+    layout->addWidget(m_subTabs, 1);
 }
 
 // ── populate ─────────────────────────────────────────────────────────────────
@@ -243,6 +254,13 @@ void OcOutputsTab::setPinActionsPermitted(bool permitted, const QString& reason)
 {
     if (m_hfTab) {
         m_hfTab->setPinActionsPermitted(permitted, reason);
+    }
+}
+
+void OcOutputsTab::setN2adrHintVisible(bool visible)
+{
+    if (m_hfTab) {
+        m_hfTab->setN2adrHintVisible(visible);
     }
 }
 

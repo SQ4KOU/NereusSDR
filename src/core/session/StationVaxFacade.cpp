@@ -285,7 +285,7 @@ void StationVax::save(const QString& key, const QString& value)
         return;
     }
     m_settings->setValue(key, value);
-    m_settings->save();
+    m_settings->saveInBackground();
 }
 
 void StationVax::setRxGain(int channel, double gain)

@@ -180,6 +180,7 @@
 
 #include "core/HpsdrModel.h"
 #include "models/Band.h"
+#include "gui/NereusGuiExport.h"
 
 #include <QList>
 #include <QString>
@@ -645,7 +646,7 @@ private:
 //                    NereusSDR splits the controller (this page) from the
 //                    state owner (PaValuesPage) via a signal.
 // ---------------------------------------------------------------------------
-class PaWattMeterPage : public SetupPage {
+class NEREUS_GUI_EXPORT PaWattMeterPage : public SetupPage {
     Q_OBJECT
 public:
     explicit PaWattMeterPage(RadioModel* model, QWidget* parent = nullptr);

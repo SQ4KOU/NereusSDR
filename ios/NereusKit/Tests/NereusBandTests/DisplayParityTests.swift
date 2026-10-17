@@ -30,14 +30,14 @@ import Testing
 
     @Test func colorGainAndBlackLevelStartAtTheDesktopsDefaults() {
         let settings = BandDisplaySettings.desktopDefaults
-        #expect(settings.waterfallColorGain == 45)
-        #expect(settings.waterfallBlackLevel == 104)
-        #expect(settings.waterfallAdjustment == .init(colorGain: 45, blackLevel: 104))
+        #expect(settings.waterfallColorGain == 60)
+        #expect(settings.waterfallBlackLevel == 57)
+        #expect(settings.waterfallAdjustment == .init(colorGain: 60, blackLevel: 57, mode: .clarity, storedHighDbm: -62))
     }
 
-    @Test func colorGainAndBlackLevelNarrowTheLevelsAsTheDesktopDoes() {
+    @Test func legacyExplicitColorGainAndBlackLevelRetainTheirOriginalArithmetic() {
         let levels = WaterfallHistory.Levels(lowDbm: -122, highDbm: -62)
-        let adjusted = levels.adjusted(by: BandDisplaySettings.desktopDefaults.waterfallAdjustment)
+        let adjusted = levels.adjusted(by: .init(colorGain: 45, blackLevel: 104))
         // The floor rises 0.4 dB a step under 125, the top falls 0.3 dB a step of gain.
         #expect(abs(adjusted.lowDbm - (-113.6)) < 0.001)
         #expect(abs(adjusted.highDbm - (-75.5)) < 0.001)
@@ -53,7 +53,8 @@ import Testing
         // The Core's Clarity says -100 to 0; with the desktop's defaults the
         // line is coloured against -91.6 to -13.5, so their middle is mid-palette.
         var state = BandState(waterfallLines: 4, expectsExtras: true)
-        state.levelAdjustment = BandDisplaySettings.desktopDefaults.waterfallAdjustment
+        // This fixture deliberately exercises an unversioned legacy adjustment.
+        state.levelAdjustment = .init(colorGain: 45, blackLevel: 104)
         let middle: Float = (-91.6 + -13.5) / 2
         let frame = BandFixtures.frame(trace: [Float](repeating: middle, count: 8), sequence: 1)
         let manual = BandDisplaySettings.desktopDefaults.manualLevels

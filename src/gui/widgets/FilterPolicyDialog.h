@@ -41,6 +41,9 @@ class RadioModel;
 /// chain state; Apply sends the chosen policy to the Core through `station`
 /// when the Core takes it, and otherwise the dialog says why in plain words
 /// and sends nothing.
+///
+/// `bandFiltersCombine`: the radio selects every band's filter at once in
+/// Auto (codec::alex::combinesRxBandFilters), and the Auto choice says so.
 class FilterPolicyDialog : public QDialog {
     Q_OBJECT
 public:
@@ -48,7 +51,8 @@ public:
     explicit FilterPolicyDialog(int chainIndex, AlexController* alex, QWidget* parent = nullptr,
                                 const AlexController::AlexAdcState* stationState = nullptr,
                                 bool stationStateAvailable = true,
-                                IStationLink* station = nullptr);
+                                IStationLink* station = nullptr,
+                                bool bandFiltersCombine = false);
     ~FilterPolicyDialog() override;
 };
 

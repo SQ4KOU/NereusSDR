@@ -174,6 +174,10 @@ private slots:
         w.resize(1000, height);
         w.setMoxOverlay(tx);
         w.setDbmRange(ref - range, ref);
+        w.cancelScheduledSettingsSave();
+        auto& settings = AppSettings::instance();
+        settings.setValue(QStringLiteral("DisplayTxGridRefLevel"), QStringLiteral("17.25"));
+        settings.setValue(QStringLiteral("DisplayTxGridDynamicRange"), QStringLiteral("63.5"));
         const int applies = w.displaySettingsApplyCountForTest();
         const auto button = right ? Qt::RightButton : Qt::LeftButton;
         const int x = w.width() - 18;
@@ -185,9 +189,24 @@ private slots:
         QCOMPARE(w.displaySettings()->dynamicRange(), expectedRange);
         QCOMPARE(w.displaySettingsApplyCountForTest(), applies);
         QVERIFY(!w.m_settingsSaveScheduled); // Only gesture completion owns its save.
+        QCOMPARE(settings.value(QStringLiteral("DisplayTxGridRefLevel")).toString(),
+                 QStringLiteral("17.25"));
+        QCOMPARE(settings.value(QStringLiteral("DisplayTxGridDynamicRange")).toString(),
+                 QStringLiteral("63.5"));
         if (right) { QCOMPARE(w.refLevel() - w.dynamicRange(), ref - range); }
         sendMouse(&w, QEvent::MouseButtonRelease, QPoint(x, 60 + dy), button, Qt::NoButton);
         QVERIFY(w.m_settingsSaveScheduled);
+        if (tx) {
+            QCOMPARE(settings.value(QStringLiteral("DisplayTxGridRefLevel")).toString(),
+                     QString::number(expectedRef));
+            QCOMPARE(settings.value(QStringLiteral("DisplayTxGridDynamicRange")).toString(),
+                     QString::number(expectedRange));
+        } else {
+            QCOMPARE(settings.value(QStringLiteral("DisplayTxGridRefLevel")).toString(),
+                     QStringLiteral("17.25"));
+            QCOMPARE(settings.value(QStringLiteral("DisplayTxGridDynamicRange")).toString(),
+                     QStringLiteral("63.5"));
+        }
     }
 
     void arrowAndWheel_keepNativeFiniteStateBeyondEditorBounds()
@@ -274,25 +293,33 @@ private slots:
         w.saveSettings();
         QCOMPARE(w.refLevel(), ref);
         auto& s = AppSettings::instance();
-        QCOMPARE(s.value("DisplayGridMax").toString(), QString::number(double(ref)));
-        QCOMPARE(s.value("DisplayGridMin").toString(), QString::number(double(ref - range)));
+        // Display pill plan Task 9 (S9): the range is live only. A save
+        // writes no range key, the pan's own or the bare one (the receive
+        // range is the band store's), and a new widget starts on its own
+        // default until that store gives it a range.
+        QVERIFY(!s.contains("DisplayGridMax_0"));
+        QVERIFY(!s.contains("DisplayGridMin_0"));
+        QVERIFY(!s.contains("DisplayGridMax"));
+        QVERIFY(!s.contains("DisplayGridMin"));
+        QCOMPARE(s.value("Display3DGain_0").toString(), QStringLiteral("33"));
         SpectrumWidget restored;
         restored.loadSettings();
-        QCOMPARE(restored.refLevel(), ref);
-        QCOMPARE(restored.dynamicRange(), range);
-        QCOMPARE(restored.displaySettings()->refLevel(), ref);
+        QCOMPARE(restored.refLevel(), -48.0f);
+        QCOMPARE(restored.dynamicRange(), 68.0f);
+        QCOMPARE(restored.displaySettings()->refLevel(), -48.0f);
         QCOMPARE(restored.displaySettingsApplyCountForTest(), 0);
         QVERIFY(!restored.m_settingsSaveScheduled);
     }
     void moxReflection_followsLivePairWithoutApplyOrSave()
     {
         auto& s = AppSettings::instance();
-        s.setValue("DisplayGridMax", "-43.5");
-        s.setValue("DisplayGridMin", "-116.5");
         s.setValue("DisplayTxGridRefLevel", "123.5");
         s.setValue("DisplayTxGridDynamicRange", "91");
         SpectrumWidget w;
         w.loadSettings();
+        // The receive range, set the way the band store sets it (display
+        // pill plan Task 9); no key holds it for the pan any more.
+        w.setReceiveDbmRange(-116.5f, -43.5f);
         setUpWidget(w);
         RadioModel radio;
         radio.setSpectrumWidget(&w);
@@ -319,7 +346,8 @@ private slots:
             QCOMPARE(refs.size(), count);
         }
         QCOMPARE(refs.size(), 2);
-        QCOMPARE(s.value("DisplayGridMax").toString(), QStringLiteral("-43.5"));
+        QVERIFY(!s.contains("DisplayGridMax"));
+        QVERIFY(!s.contains("DisplayGridMax_0"));
         radio.setSpectrumWidget(nullptr);
     }
 
@@ -484,8 +512,13 @@ private slots:
         QCOMPARE(m->wfColorScheme(), 3);
         QCOMPARE(m->wfColorGain(), 77);
         QCOMPARE(m->wfBlackLevel(), 50);
-        QVERIFY(std::abs(m->refLevel() - (-30.0f)) < 1e-6f);
-        QVERIFY(std::abs(m->dynamicRange() - 120.0f) < 1e-6f); // -30 - (-150)
+        // Display pill plan Task 9: the two range keys seeded above are an
+        // old install's and are not read; the model follows the widget's
+        // live range, which is its default here.
+        QVERIFY(std::abs(m->refLevel() - (-48.0f)) < 1e-6f);
+        QVERIFY(std::abs(m->dynamicRange() - 68.0f) < 1e-6f);
+        QCOMPARE(m->refLevel(), w.refLevel());
+        QCOMPARE(m->dynamicRange(), w.dynamicRange());
         QVERIFY(std::abs(m->fillAlpha() - 0.33f) < 1e-6f);
         QCOMPARE(m->panFill(), false);
         QVERIFY(std::abs(m->spectrumFrac() - 0.55f) < 1e-6f);

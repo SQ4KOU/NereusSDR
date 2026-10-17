@@ -103,8 +103,13 @@ Field legend (P1 parser: `clsRadioDiscovery.cs:1122` — `parseDiscoveryReply()`
 - **byte 19** `04` — `MetisVersion` = 4 (`data[19]` — `clsRadioDiscovery.cs:1165`)
 - **byte 20** `45` — `NumRxs` = 69 (`data[20]` — `clsRadioDiscovery.cs:1166`);
   raw value 0x45 as reported by HL2 firmware — unknown — investigate before implementing
-- **bytes 21–59** `02 00 00 ... 83 00 ...` — unknown — investigate before implementing
-  (not read by the P1 parser branch; 39 bytes total)
+- **byte 21** `02`: the HL2 gateware's patch number = 2, so this radio runs
+  gateware 74.2. Thetis's P1 branch does not read it; mi0bot's HL2 case does
+  (`r.BetaVersion = data[21]`, mi0bot `clsRadioDiscovery.cs:1175`
+  [v2.10.3.13-beta2]), and NereusSDR reads it the same way
+  (`RadioInfo::firmwareBetaVersion`)
+- **bytes 22–59** `00 00 ... 83 00 ...` — unknown — investigate before implementing
+  (not read by the P1 parser branch; 38 bytes total)
 
 **Thetis source:** `clsRadioDiscovery.cs:1301` (send — `buildDiscoveryPacketP1`), `:1122` (parse — `parseDiscoveryReply`)
 

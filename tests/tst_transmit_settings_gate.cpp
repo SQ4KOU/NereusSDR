@@ -36,6 +36,10 @@
 //                                    transmit settings and DSP > Options
 //                                    TX keys are taken on the air.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-12  J.J. Boyd / KG4VCF  Accessory meters: on the air, the
+//                                    Core's amplifier and tuner links ask
+//                                    for status at the keyed interval.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <tuple>
@@ -312,6 +316,7 @@ void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
     // display entries stay absent. Accessory transmit is separately appended.
     QVERIFY(!names.contains(QByteArrayLiteral("setupDescriptionVersion")));
     QVERIFY(!names.contains(QByteArrayLiteral("miniDisplayVersion")));
+    QVERIFY(!names.contains(QByteArrayLiteral("spectrumPictureVersion")));
     QCOMPARE(names.indexOf(QByteArrayLiteral("accessoryTxVersion")),
              first + originalBlock.size());
     QCOMPARE(updates.at(first + originalBlock.size()).kind, MirrorWireKind::Int64);
@@ -845,6 +850,10 @@ void TstTransmitSettingsGate::windowOnAirFollowsTheCore()
     QVERIFY(s.connect());
     QVERIFY(!s.window.isCoreOnAir());
     QSignalSpy onAir(&s.window, &RadioModel::coreOnAirChanged);
+    // Off the air, the Core's amplifier and tuner links ask for status at
+    // the receive interval (GeniusPollPacer.h).
+    QCOMPARE(s.core->pgxlConnection()->testPollIntervalMs(), PgxlConnection::kPollReceiveMs);
+    QCOMPARE(s.core->tgxlConnection()->testPollIntervalMs(), TgxlConnection::kPollReceiveMs);
 
     // The Core's MOX, reported as `transmitting`.
     MoxController* const mox = s.core->moxController();
@@ -852,6 +861,9 @@ void TstTransmitSettingsGate::windowOnAirFollowsTheCore()
     mox->setMox(true);
     QTRY_VERIFY(s.window.isCoreOnAir());
     QCOMPARE(onAir.last().at(0).toBool(), true);
+    // On the air, at the keyed interval.
+    QCOMPARE(s.core->pgxlConnection()->testPollIntervalMs(), PgxlConnection::kPollKeyedMs);
+    QCOMPARE(s.core->tgxlConnection()->testPollIntervalMs(), TgxlConnection::kPollKeyedMs);
     mox->setMox(false);
     QTRY_VERIFY(!s.window.isCoreOnAir());
     QCOMPARE(onAir.last().at(0).toBool(), false);

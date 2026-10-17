@@ -1,5 +1,12 @@
 // no-port-check: NereusSDR-original inert preview projection, no polling targets.
 // Modification history (NereusSDR):
+//   2026-10-09 - Workspace preview only: the preview paints the content
+//                 background the container paints in the window, through
+//                 ContainerWidget::contentBackground() and userBackground().
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - Workspace preview only: widget-factory previews get the
+//                 entry's effective context. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 //   2026-10-04 — Fit stacked button groups to compact shared rows by
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-04 — Match individual control preview sizes to live controls by
@@ -10,12 +17,15 @@
 #include "ContainerPreviewWidget.h"
 #include "ContainerContentRegistry.h"
 #include "ContainerContentHost.h"
+#include "ContainerWidget.h"
 #include "ContainerControlCatalog.h"
 #include "FreeCanvasSurface.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "gui/meters/MeterWidget.h"
 #include "gui/meters/MeterPoller.h"
 #include "gui/meters/presets/CompositePresetItem.h"
 #include "gui/meters/presets/BarPresetItem.h"
+#include "gui/meters/WaveformMeterItem.h"
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QSet>
@@ -38,6 +48,16 @@ ContainerPreviewWidget::ContainerPreviewWidget(ContainerContentRegistry& registr
         for(auto& entry:m_document.contents) {if(entry.id==id) {if(present) {entry.extensions["freeCanvasRect"]=value;}else {entry.extensions.remove("freeCanvasRect");}emit freeCanvasGeometryRestored(entry);break;}}
     });
     connect(&poller,&MeterPoller::frameAdvanced,this,&ContainerPreviewWidget::advance);
+    connect(&poller, &MeterPoller::waveformFrameAdvanced, this, [this](qint64) {
+        if (!m_poller) {
+            return;
+        }
+        for (const auto& surface : m_surfaces) {
+            if (surface.widget) {
+                m_poller->copyCachedWaveforms(surface.widget, surface.context);
+            }
+        }
+    });
     connect(&poller,&MeterPoller::bindingAvailabilityChanged,this,[this]{
         if(!m_poller) { return; }
         for(const auto& surface:m_surfaces) {
@@ -62,7 +82,18 @@ void ContainerPreviewWidget::setDocument(const ContainerDocument& document)
     }
     const auto prior=m_document; const bool reuse=m_materialized && document.layout!=ContentLayout::LegacyCanvas && prior.layout==document.layout;
     const auto oldViews=m_views; QSet<QWidget*> retained;
-    setStyleSheet(QStringLiteral("#containerDraftPreview {background:%1;}").arg(document.config.value("backgroundColor").toString("#0f0f1a")));
+    QString background=document.config.value("backgroundColor").toString("#0f0f1a");
+    if (WorkspacePreview::enabled()) {
+        // The window's path: the container's content background and the
+        // user's colour its meters read (ContainerWidget).
+        const QColor configured=QColor::fromString(background);
+        const QColor painted=ContainerWidget::contentBackground(configured);
+        if (painted.isValid()) {
+            background=painted.name(painted.alpha()<255 ? QColor::HexArgb : QColor::HexRgb);
+        }
+        setProperty(WorkspacePreview::kUserBackgroundProperty, ContainerWidget::userBackground(configured));
+    }
+    setStyleSheet(QStringLiteral("#containerDraftPreview {background:%1;}").arg(background));
     m_document=document; m_materialized=true; m_surfaces.clear(); m_views.clear();
     m_layout->setAlignment(document.layout==ContentLayout::VerticalStack ? Qt::AlignTop : Qt::Alignment());
     while (auto* child=m_layout->takeAt(0)) { delete child; }
@@ -93,7 +124,7 @@ void ContainerPreviewWidget::setDocument(const ContainerDocument& document)
             }
         }
         if(view) { retained.insert(view); if(auto* meter=qobject_cast<MeterWidget*>(view)) { reusedMeters.insert(meter); } }
-        else { view=m_registry->createPreview(entry,this); }
+        else { view=m_registry->createPreview(entry,this,context); }
         if(document.layout==ContentLayout::FreeCanvas && entry.typeId.startsWith("applet:")) {
             view->setProperty("freeCanvasMinimum",QSizeF(m_registry->singletonCanvasMinimum(entry.typeId)));
             view->setProperty("freeCanvasHint",m_registry->singletonCanvasSizeHint(entry.typeId));
@@ -108,6 +139,11 @@ void ContainerPreviewWidget::setDocument(const ContainerDocument& document)
                 const QSize stackSize=document.layout==ContentLayout::VerticalStack ? containerStackButtonSize(item) : QSize();
                 item->setProperty("containerStackGrid",!stackSize.isEmpty());
                 if (!stackSize.isEmpty()) { height=stackSize.height(); minimum=containerStackButtonMinimum(item); meter->setMinimumWidth(minimum.width()); }
+                if (auto* face = qobject_cast<WaveformMeterItem*>(item)) {
+                    height = face->preferredFaceHeight();
+                    minimum = face->minimumFaceSize();
+                    meter->setMinimumWidth(minimum.width());
+                }
                 if (auto* face=qobject_cast<CompositePresetItem*>(item)) { height=face->preferredFaceHeight(); minimum=face->minimumFaceSize(); meter->setMinimumWidth(minimum.width()); }
                 else if (auto* face=qobject_cast<BarPresetItem*>(item)) { height=face->preferredFaceHeight(); minimum=face->minimumFaceSize(); meter->setMinimumWidth(minimum.width()); }
                 item->setZOrder(entry.paintOrder);item->clearStackMetadata(); item->setRect(0,0,1,1); item->setProperty("containerSourceContext",context);

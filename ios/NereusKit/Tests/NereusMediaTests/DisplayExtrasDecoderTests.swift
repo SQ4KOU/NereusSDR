@@ -303,6 +303,37 @@ import Testing
         #expect(!quiet.isEmpty)
     }
 
+    /// A Core whose own averaging controls start at 1 ms takes 1 ms; any
+    /// other keeps the 10 ms floor, and the floor itself is never sent.
+    @Test func theAveragingFloorIsTheCoresOwn() throws {
+        typealias Request = DisplayExtrasRequest
+        #expect(Request().averageTimeFloorMs == 10 && Request.leastAverageTimeMs == 1)
+        #expect(Request().admittedAverageTimeRange == 10...9999)
+        var lower = Request(averageTimeMs: 1, waterfallAverageTimeMs: 1)
+        #expect(throws: Request.Invalid.averageTimeMs) { try lower.validate() }
+        lower.averageTimeFloorMs = 1
+        #expect(lower.admittedAverageTimeRange == 1...9999)
+        #expect(throws: Never.self) { try lower.validate() }
+        #expect(lower.subscribeFields == ["averageTimeMs": .number(1), "waterfallAverageTimeMs": .number(1)])
+        lower.averageTimeMs = 0
+        #expect(throws: Request.Invalid.averageTimeMs) { try lower.validate() }
+        lower.averageTimeMs = 5
+        lower.waterfallAverageTimeMs = 10_000
+        #expect(throws: Request.Invalid.waterfallAverageTimeMs) { try lower.validate() }
+        // A floor between the two is the Core's too; one below 1 is 1.
+        var five = Request(averageTimeMs: 4)
+        five.averageTimeFloorMs = 5
+        #expect(throws: Request.Invalid.averageTimeMs) { try five.validate() }
+        five.averageTimeMs = 5
+        #expect(throws: Never.self) { try five.validate() }
+        five.averageTimeFloorMs = -3
+        #expect(five.admittedAverageTimeRange == 1...9999)
+        // The floor alone asks for nothing.
+        var empty = Request()
+        empty.averageTimeFloorMs = 1
+        #expect(empty.isEmpty && empty.subscribeFields.isEmpty && empty.sections == 0)
+    }
+
     @Test func everyRangeIsTheDocuments() throws {
         try Self.everything.validate()
         typealias Request = DisplayExtrasRequest

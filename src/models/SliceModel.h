@@ -12,6 +12,13 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+// 2026-10-14 - Capture per-band persistence values before deferred saves.
+//              J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+// 2026-10-14 - FM squelch threshold default is Thetis's 0 (console.cs:171
+//              [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//              Claude Code.
+// 2026-10-04 - Track mode/filter commits for surviving notification continuations.
+//              J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-30: radeReason, why a RADE slice has no working decoder, in
 //               plain words, declared last. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -241,6 +248,7 @@
 #include <QList>
 #include <QObject>
 #include <QPointer>
+#include <QPair>
 #include <QTimer>
 #include <QString>
 #include <QVariant>
@@ -1402,6 +1410,9 @@ public:
     // slice adopt its stream's rate.
     int savedSampleRateHz(Band band) const;
 
+    // Immutable per-band values, in save order; excludes session/NNR state.
+    // RadioModel retains these until its existing coalesced save runs.
+    QList<QPair<QString, QVariant>> captureBandSettings(Band band) const;
     void saveToSettings(NereusSDR::Band band);
     void restoreFromSettings(NereusSDR::Band band);
 
@@ -1718,6 +1729,8 @@ private:
     quint64 m_stationAutoAgcNoiseFloorGeneration{0};
     bool    m_streamCtunPinned{false};
     quint64 m_streamEpoch{0};
+    quint64 m_modeRevision{0};
+    quint64 m_modeFilterRevision{0};
     DSPMode m_dspMode{DSPMode::USB};
     int     m_filterLow{100};            // USB default from Thetis F5
     int     m_filterHigh{3000};
@@ -1760,7 +1773,7 @@ private:
     bool   m_amsqEnabled{false};      // Neutral default — feature off at start
     double m_amsqThresh{-150.0};      // From Thetis radio.cs:1164-1165 — rx_squelch_threshold = -150.0f (AM reuses same field)
     bool   m_fmsqEnabled{false};      // Neutral default — feature off at start
-    double m_fmsqThresh{-150.0};      // dB domain (plan default); Thetis radio.cs:1274-1275 stores fm_squelch_threshold = 1.0f on a different (linear 0..1) scale. Scale reconciliation deferred to Stage 2 gate.
+    double m_fmsqThresh{0.0};         // From Thetis console.cs:171 [v2.10.3.15] (rx1_fm_squelch_threshold_scroll = 0) and console.Designer.cs:7578 (ptbSquelch.Value = 0): -160..0 squelch slider position; RxChannel::fmsqThresholdForWdsp maps it to WDSP's linear threshold as console.cs:47295-47304 does, so 0 sends 0.01.
     int    m_agcThreshold{-20};       // Thetis default — citation pending Stage 2 gate (no explicit default found in radio.cs AGCThreshold)
     int    m_agcHang{250};            // From Thetis radio.cs:1056-1057 — rx_agc_hang = 250 ms
     int    m_agcSlope{0};             // From Thetis radio.cs:1107-1108 — rx_agc_slope = 0 dB

@@ -1,5 +1,15 @@
 // no-port-check: NereusSDR-original. R-R3-38 complete station-session ownership.
 // 2026-10-04 - Include the setup signal type for Qt 6.4; JJ Boyd, OpenAI Codex.
+// 2026-10-08 - Rotor control plan Task 4c: a Local window's model owns the
+//              rotor (enableStationRotor). J.J. Boyd (KG4VCF), AI-assisted via
+//              Anthropic Claude Code.
+// 2026-10-06 - Start CAT when the window owns the station even if the Remote
+//              Access listener failed. J.J. Boyd (KG4VCF), AI-assisted via Claude Code.
+// 2026-10-11 - A Local window's model owns its Tuner Genius, Power Genius and
+//              RF-Kit for the windows and phones signed in to it
+//              (enableStationAccessoryIdentity, typed address). J.J. Boyd
+//              (KG4VCF), AI-assisted via Anthropic Claude Code.
+#include "core/cat/CatService.h"
 #include "gui/GuiSessionCoordinator.h"
 
 #include "core/AppSettings.h"
@@ -168,6 +178,18 @@ bool GuiSessionCoordinator::replace(const StationStartupSelection& selection,
     m_window->setConnectionPickerManaged(true);
     m_window->installEventFilter(this);
     const QPointer<MainWindow> installedWindow(m_window.get());
+    // Rotor control plan Task 4c: a desktop running its own radio owns the
+    // antenna rotor, as nereusd does, for its windows and any phone it hosts.
+    // retireWindow() above destroyed the outgoing model and with it any rotor
+    // it held, so the port is never open twice; a remote window holds none.
+    // 2026-10-11: and its Tuner Genius, Power Genius and RF-Kit, so a window
+    // or phone signed in to this desktop gets them as it gets nereusd's
+    // (enableStationAccessoryIdentity makes the rotor too). TypedAddress:
+    // this window's own links are dialed and used as they always were.
+    if (!selection.connection.isRemote()) {
+        m_window->radioModel()->enableStationAccessoryIdentity(
+            StationAccessoryAdmission::TypedAddress);
+    }
     if (m_desktopConfigured && !selection.connection.isRemote()) { installDesktopStation(); }
     if (!self || !installedWindow || m_window.get() != installedWindow) { return false; }
     const quint64 generation = m_generation;
@@ -186,6 +208,13 @@ bool GuiSessionCoordinator::replace(const StationStartupSelection& selection,
 
 void GuiSessionCoordinator::retireWindow()
 {
+    const QPointer<GuiSessionCoordinator> self(this);
+    const quint64 generation = m_generation;
+    const QPointer<MainWindow> window(m_window.get());
+    if (window && window->radioModel()->catService()) {
+        window->radioModel()->catService()->stopAll();
+        if (!self || generation != m_generation || m_window.get() != window) { return; }
+    }
     m_hostedStartupPending = false;
     m_hostedRadioRecovery = false;
     m_hostedRadioAttempted = false;
@@ -292,11 +321,16 @@ void GuiSessionCoordinator::installDesktopStation()
     refreshStationRadios();
     const QPointer<GuiSessionCoordinator> self(this);
     const QPointer<RadioModel> localModel(model);
-    m_desktopRuntime->restore();
+    const bool restored = m_desktopRuntime->restore();
     if (!self || !localModel || generation != m_generation || !m_window
         || m_window->radioModel() != localModel) { return; }
     // Initial host ownership adoption is part of the startup seed. Every
     // subsequent edit must be accounted for before handing this model away.
+    // CAT belongs to the local station, not to the Remote Access listener: a
+    // busy Core port or Core configuration error must not leave CAT stopped.
+    if (restored || m_desktopRuntime->stationOwnershipActive()) { model->catService()->startConfigured(); }
+    if (!self || !localModel || generation != m_generation || !m_window
+        || m_window->radioModel() != localModel) { return; }
     model->beginStationHandoverEditTracking();
 }
 

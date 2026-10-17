@@ -13,6 +13,23 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-15 - The mode combo resets before a RADE v2 mode is added or
+//                removed (resetItemsBeforeRowChange), so accessibility
+//                cannot read a deleted cell. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-10-14 - The flag's squelch slider tooltip says it sets SSB
+//                squelch, 0 to 100, and that AM and FM thresholds are on
+//                their Settings > DSP pages in dB. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-10-12 — J.J. Boyd (KG4VCF), gate experimental RADE V2 opt-in;
+//                AI-assisted implementation via OpenAI Codex.
+//   2026-10-11 - floatingButtonsRaised(): the flag says when it has raised
+//                 its floating buttons, so the pan can keep an open overlay
+//                 flyout above them outside a placement pass too. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-12 - JJ's option B: fit small workspace text to the approved
+//                 11 logical-pixel floor. J.J. Boyd (KG4VCF), AI-assisted
+//                 via OpenAI Codex. Classic geometry and colors retained.
 //   2026-09-30 - VFO flag crash lane: Slice A's close-button comment no
 //                 longer names the removed m_vfoWidget. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
@@ -143,6 +160,35 @@
 //                 Copyright (C) 2024-2026 Jeremy (KK7GWY) and
 //                 AetherSDR contributors. GPLv3; project source:
 //                 https://github.com/ten9876/AetherSDR
+//   2026-10-06 - Radio speaker plan Task 5 (R-SPK-19, D7): the floating
+//                 lock button shows the app's own lock / unlock icons
+//                 (AppIcon) in place of colour emoji text. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-10-06 - Radio speaker plan Task 7 (R-SPK-18, D6): the audio tab
+//                 (objectName audioTabButton) shows the pc-on / pc-muted
+//                 icon and follows the mute the flag shows: the listen mute
+//                 on a listened flag, the slice's mute otherwise. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-10-08 - Workspace visual review Task 26: the flag folds from its
+//                 letter badge, ported from AetherSDR src/gui/VfoWidget.cpp
+//                 (setCollapsed, the painted letter and TX badges, the
+//                 frequency label beside the fold) [@3a1f59ea]; the fold is
+//                 kept per receiver (ReceiverFlag_<n>_Collapsed). Upstream
+//                 has no per-file copyright header. Copyright (C) 2024-2026
+//                 Jeremy (KK7GWY) and AetherSDR contributors. GPLv3; project
+//                 source: https://github.com/ten9876/AetherSDR. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-10-11 - The flag takes the workspace look when it is on (JJ,
+//                 2026-10-11): the flag, its floating buttons and its
+//                 folded frequency label opt in to the live pass
+//                 (WorkspacePreview::kThemedIslandProperty), and the
+//                 painted panel takes the panel role at today's alpha.
+//                 Nothing changes with the look off. J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -389,6 +435,7 @@ warren@wpratt.com
 */
 
 #include "VfoWidget.h"
+#include "gui/widgets/AppIcon.h"
 #include "gui/TuneStepLabel.h"
 #include "DspParamPopup.h"
 #include "NnrControls.h"
@@ -396,6 +443,7 @@ warren@wpratt.com
 #include "gui/AntennaPopupBuilder.h"
 #include "gui/UnbuiltFeatures.h"
 #include "gui/OperatorReasonText.h"
+#include "gui/QtCocoaAccessibleTableCache.h"
 #include "core/BoardCapabilities.h"
 #include "core/ControlRanges.h"
 #include "core/SkuUiProfile.h"
@@ -403,13 +451,19 @@ warren@wpratt.com
 #include "core/accessories/AlexController.h"
 #include "gui/StyleConstants.h"
 #include "gui/styles/PopupMenuStyle.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "gui/widgets/AntennaPickerMenu.h"
 #include "models/FilterPresetStore.h"
 #include "models/RadioModel.h"
+#include "core/RadeV2Feature.h"
 #include "core/dsp/DspAssetService.h"
 #include "models/SliceModel.h"
 #include "gui/widgets/FilterPresetEditDialog.h"
+#include "core/AppSettings.h"
 
+#include <QFontMetrics>
+#include <QAccessible>
+#include <QAccessibleWidget>
 #include <QCoreApplication>
 #include <QEvent>
 #include <QGuiApplication>
@@ -424,6 +478,7 @@ warren@wpratt.com
 #include <QVariant>
 #include <QFontDatabase>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QToolTip>
 
 #include <cmath>
@@ -432,6 +487,36 @@ warren@wpratt.com
 namespace NereusSDR {
 
 namespace {
+
+// JJ's option B, 2026-10-12 (Codex): keep the AUTO badge's original
+// palette and classic box, and fit the final workspace font after updates.
+class AutoBadgeFit final : public QObject {
+public:
+    explicit AutoBadgeFit(QPushButton* badge) : QObject(badge) {
+        badge->installEventFilter(this);
+        fit(badge);
+    }
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange
+            || event->type() == QEvent::Show || event->type() == QEvent::Polish) {
+            fit(static_cast<QPushButton*>(watched));
+        }
+        return false;
+    }
+private:
+    static void fit(QPushButton* badge) {
+        if (!WorkspacePreview::enabled()) {
+            badge->setFixedSize(30, 14);
+            return;
+        }
+        const QFontMetrics metrics(WorkspacePreview::readableFont(badge->font(), badge), badge);
+        // Three pixels padding and the one-pixel border on each side.
+        badge->setFixedSize(std::max(30, metrics.horizontalAdvance(badge->text()) + 8),
+                            std::max(14, metrics.height() + 4));
+    }
+};
+
 // The TX badge's own words while it is held or offers a take
 // (updateTransmitControlAvailability, setInUseByRadio).
 constexpr const char* kSavedTransmitTooltip = "VfoSavedTransmitTooltip";
@@ -540,6 +625,20 @@ static inline QString vfoFlatBtnStyle()
 // Tab-row selector buttons (12px, underline indicator, muted-blue default).
 // Diverges from buttonBaseStyle(): transparent bg, underline :checked indicator,
 // different font-size and base colour.
+// R-SPK-18, D6: the audio tab shows the PC speaker icon, muted or not,
+// following the mute the flag's audio controls show.
+constexpr int kAudioTabIconPx = 16;
+
+static void applyAudioTabIcon(QPushButton* tab, bool muted)
+{
+    if (!tab) {
+        return;
+    }
+    NereusSDR::AppIcon::apply(tab,
+        muted ? QStringLiteral("pc-muted") : QStringLiteral("pc-on"),
+        kAudioTabIconPx);
+}
+
 static inline QString vfoTabBtnStyle()
 {
     return QStringLiteral(
@@ -607,11 +706,53 @@ static inline QString vfoModeBtnStyle()
           NereusSDR::Style::kOverlayBorder);
 }
 
+// ---- Accessibility (flag fold) ----
+// From AetherSDR src/gui/VfoWidget.cpp:482-537 [@3a1f59ea] (original commit
+// 4dad9a2c, #3754). Our flag has no ESC level-meter bars, so the
+// LevelBarAccessible half of upstream's factory is not ported.
+// [original inline comment from AetherSDR src/gui/VfoWidget.cpp:483-486]
+// The VFO flag custom-paints its chrome and, while collapsed, the slice-letter
+// and TX badges (the expanded controls are accessible child widgets). Expose a
+// Grouping with a live summary so the flag isn't opaque to AT tools — especially
+// collapsed, where the badges have no widget equivalent. (#3754)
+namespace {
+
+class VfoWidgetAccessible : public QAccessibleWidget {
+public:
+    explicit VfoWidgetAccessible(QWidget* w)
+        : QAccessibleWidget(w, QAccessible::Grouping) {}
+    QString text(QAccessible::Text t) const override
+    {
+        if (t == QAccessible::Name) {
+            if (auto* vfo = qobject_cast<VfoWidget*>(widget())) {
+                return vfo->accessibleSummary();
+            }
+        }
+        return QAccessibleWidget::text(t);
+    }
+};
+
+QAccessibleInterface* vfoAccessibleFactory(const QString& key, QObject* obj)
+{
+    if (key == QLatin1String("NereusSDR::VfoWidget")) {
+        return new VfoWidgetAccessible(qobject_cast<QWidget*>(obj));
+    }
+    return nullptr;
+}
+
+} // namespace
+
 // ---- Construction ----
 
 VfoWidget::VfoWidget(QWidget* parent)
     : QWidget(parent)
 {
+    // From AetherSDR src/gui/VfoWidget.cpp:545-549 [@3a1f59ea]
+    static bool s_a11yFactoryInstalled = false;
+    if (!s_a11yFactoryInstalled) {
+        s_a11yFactoryInstalled = true;
+        QAccessible::installFactory(vfoAccessibleFactory);
+    }
     // Width fixed at kWidgetW per original AetherSDR pattern. Height grows
     // to fit content (no fixed height). DSP tab's 4-col grid uses ~60 px
     // buttons so 4×60=240 + margins fit within the 252 px flag width.
@@ -619,6 +760,9 @@ VfoWidget::VfoWidget(QWidget* parent)
     setAttribute(Qt::WA_TranslucentBackground);
     setAutoFillBackground(false);
     setMouseTracking(true);
+    // The workspace look reaches the flag although its parent, the
+    // SpectrumWidget, is left out of the pass (JJ, 2026-10-11).
+    setProperty(WorkspacePreview::kThemedIslandProperty, true);
 
     buildUI();
 }
@@ -644,6 +788,8 @@ void VfoWidget::destroyFloatingButtons()
             *btn = nullptr;
         }
     }
+    // Flag fold: the folded frequency label lives on the SpectrumWidget too.
+    delete m_collapsedFreqLabel.data();
 }
 
 void VfoWidget::buildUI()
@@ -776,7 +922,10 @@ void VfoWidget::buildHeaderRow()
     m_txAntBtn = new QPushButton(QStringLiteral("ANT1"), this);
     m_txAntBtn->setObjectName(QStringLiteral("m_txAntBtn"));
     m_txAntBtn->setStyleSheet(vfoFlatBtnStyle() +
-        QStringLiteral("QPushButton { color: #ff4444; }"));
+        // The TX antenna's red is a transmit color: the look's transmit
+        // tone when the look is on, #ff4444 as written otherwise.
+        QStringLiteral("QPushButton { color: %1; }")
+            .arg(WorkspacePreview::statusColourName("#ff4444", "danger")));
     m_txAntBtn->setFixedHeight(18);
     // NereusSDR native — no single Thetis TX-antenna tooltip (TX ant is configured
     // via Alex board setup in Setup dialog, not via a main-window toggle)
@@ -824,7 +973,11 @@ void VfoWidget::buildHeaderRow()
     m_txBadge->setStyleSheet(
         QStringLiteral("QPushButton { background: #1a2a3a; border: 1px solid #304050;"
                         "border-radius: 3px; color: #6888a0; font-size: 10px; font-weight: bold; }"
-                        "QPushButton:checked { background: #6a3030; border-color: #ff4444; color: #ff8080; }"));
+                        "QPushButton:checked { background: %2; border-color: %1; color: #ff8080; }")
+            // The lit TX badge is a transmit state: the look's transmit tone
+            // on its danger fill when the look is on, today's reds otherwise.
+            .arg(WorkspacePreview::statusColourName("#ff4444", "danger"),
+                 WorkspacePreview::roleColourName("#6a3030", "danger-bg")));
     // NereusSDR native — Thetis has no per-slice TX badge (it uses chkMOX for TX state)
     m_txBadge->setToolTip(QStringLiteral("Indicates this slice is the TX slice"));
     hdr->addWidget(m_txBadge);
@@ -851,6 +1004,9 @@ void VfoWidget::buildHeaderRow()
     m_sliceBadge->setStyleSheet(
         QStringLiteral("background: #0070c0; color: white; font-size: 11px;"
                         "font-weight: bold; border-radius: 3px;"));
+    // Flag fold: a click on the letter folds the flag.
+    // From AetherSDR src/gui/VfoWidget.cpp:883 [@3a1f59ea] (bdd42658)
+    m_sliceBadge->setCursor(Qt::PointingHandCursor);
     hdr->addWidget(m_sliceBadge);
 
     static_cast<QVBoxLayout*>(layout())->addLayout(hdr);
@@ -1184,8 +1340,7 @@ void VfoWidget::updateSnrVisibility()
 {
     // AetherSDR-style: active state follows slice mode.  Setting
     // m_radeActive=false hides the label and clears stale text.
-    const bool isRade = (m_currentMode == DSPMode::RADE_U
-                         || m_currentMode == DSPMode::RADE_L);
+    const bool isRade = (isRadeDspMode(m_currentMode));
     setRadeActive(isRade);
 }
 
@@ -1202,8 +1357,7 @@ void VfoWidget::updateModeTabAccent()
     if (m_tabButtons.size() <= 2 || !m_tabButtons[2]) {
         return;
     }
-    const bool isRade = (m_currentMode == DSPMode::RADE_U
-                         || m_currentMode == DSPMode::RADE_L);
+    const bool isRade = (isRadeDspMode(m_currentMode));
     if (isRade) {
         // RADE accent style — same structure as vfoTabBtnStyle() but
         // with the cyan kAccent replaced by the purple #a78bfa.  Both
@@ -1307,6 +1461,14 @@ void VfoWidget::buildTabBar()
                 parentWidget()->update();
             }
         });
+        if (i == 0) {
+            // R-SPK-18, D6: the app's own speaker icon replaces the emoji
+            // text, so it renders the same on every platform and can show
+            // the slice's mute.
+            btn->setObjectName(QStringLiteral("audioTabButton"));
+            btn->setText(QString());
+            applyAudioTabIcon(btn, false);
+        }
         tabLayout->addWidget(btn, 1);  // stretch equally
         m_tabButtons.append(btn);
     }
@@ -1487,10 +1649,12 @@ void VfoWidget::buildAudioTab()
             if (isListening()) {
                 // Task 14b: mutes this slice on this device only.
                 m_listenMuted = on;
+                applyAudioTabIcon(m_tabButtons.value(0), on);
                 emit listenVolumeRequested(m_sliceIndex, m_listenVolume, on);
                 return;
             }
             m_modelMuted = on;
+            applyAudioTabIcon(m_tabButtons.value(0), on);
             emit muteChanged(on);
         });
         connect(m_binBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -1570,7 +1734,21 @@ void VfoWidget::buildAudioTab()
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
         // NereusSDR native — Thetis ptbSquelch has no ToolTip entry in console.resx
-        m_sqlSlider->setToolTip(QStringLiteral("Squelch threshold. SSB: 0–100 maps to 0.0–1.0 linear. AM: dB scale. FM: linear 0–1."));
+        // This slider and the SQL button drive SSB squelch (SSQL) only, in
+        // every mode: MainWindow wires them to SliceModel::setSsqlEnabled /
+        // setSsqlThresh (0 to 100, RadioModel divides by 100 for WDSP).
+        // AM and FM squelch thresholds live on Settings > DSP > AM/SAM and
+        // Settings > DSP > FM, in dB (-160 to 0, ControlRanges.h).
+        // FM squelch scale, for reference: Thetis maps its -160..0 slider to
+        // 0..100 and passes 10^(-2 * n / 100) (1.0 down to 0.01) to WDSP.
+        // From Thetis Project Files/Source/Console/console.cs:47295-47304 [v2.10.3.15]
+        // From Thetis Project Files/Source/Console/radio.cs:1276-1291 [v2.10.3.15]
+        //   (FMSquelchThreshold -> WDSP.SetRXAFMSQThreshold)
+        // WDSP third_party/wdsp/src/fmsq.c:247-251: the value is linear noise
+        //   level; tail_thresh = threshold, unmute_thresh = 0.9 * threshold.
+        m_sqlSlider->setToolTip(QStringLiteral(
+            "SSB squelch threshold, 0 to 100. AM and FM squelch thresholds "
+            "are set in dB in Settings > DSP > AM/SAM and Settings > DSP > FM."));
         row->addWidget(m_sqlSlider);
 
         connect(m_sqlBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -1628,6 +1806,7 @@ void VfoWidget::buildAudioTab()
                             "QPushButton:hover { border-color: #adff2f; }"));
         m_agcAutoLabel->setFixedHeight(14);
         m_agcAutoLabel->setFixedWidth(30);
+        new AutoBadgeFit(m_agcAutoLabel);
         m_agcAutoLabel->setCursor(Qt::PointingHandCursor);
         // From Thetis v2.10.3.13 setup.designer.cs:38679 — chkAutoAGCRX1.ToolTip
         m_agcAutoLabel->setToolTip(QStringLiteral("Automatically adjust AGC based on Noise Floor"));
@@ -1985,9 +2164,15 @@ void VfoWidget::buildModeTab()
             QStringLiteral("SAM"), QStringLiteral("DSB"),
             QStringLiteral("DRM"),
             QStringLiteral("RADE-U"),  // Phase 3R L3, NereusSDR-native upper
-            QStringLiteral("RADE-L")   // Phase 3R L3, NereusSDR-native lower
+            QStringLiteral("RADE-L"),   // Phase 3R L3, NereusSDR-native lower
+            QStringLiteral("RADE2-U"), QStringLiteral("RADE2-L")
         });
+        for (const QString& name : {QStringLiteral("RADE2-U"), QStringLiteral("RADE2-L")}) {
+            m_modeCmb->setItemData(m_modeCmb->findText(name),
+                QStringLiteral("Experimental RADE v2 speech mode"), Qt::ToolTipRole);
+        }
         m_modeCmb->setCurrentText(QStringLiteral("USB"));
+        refreshRadeV2Modes();
         m_modeCmb->setStyleSheet(
             QStringLiteral("QComboBox { background: #1a2a3a; color: #c8d8e8;"
                             "border: 1px solid #304050; border-radius: 3px;"
@@ -2249,9 +2434,11 @@ void VfoWidget::rebuildFilterButtons(DSPMode mode)
     // InitFilterPresets source: Thetis console.cs:5180-5575 [v2.10.3.13].
     // 3-column layout matches RxApplet's 3-column grid (i/kCols × i%kCols).
     QList<FilterPreset> storePresets;
-    if (m_filterPresetStore) {
+    const bool offered = !isRade2DspMode(mode)
+        || (m_radioModel ? m_radioModel->radeV2Enabled() : RadeV2Feature::enabled());
+    if (m_filterPresetStore && offered) {
         storePresets = m_filterPresetStore->presetsForMode(mode);
-    } else {
+    } else if (offered) {
         const auto pairs = SliceModel::presetsForMode(mode);
         for (int idx = 0; idx < pairs.size(); ++idx) {
             FilterPreset fp;
@@ -2298,6 +2485,8 @@ void VfoWidget::rebuildFilterButtons(DSPMode mode)
         // snaps to the same audio Hz range as the RX (Thetis-style
         // alignment shortcut).
         connect(btn, &QPushButton::clicked, this, [this, low, high, mode, btn](bool checked) {
+            if (isRade2DspMode(mode)
+                && !(m_radioModel ? m_radioModel->radeV2Enabled() : RadeV2Feature::enabled())) { return; }
             if (!checked) {
                 // Don't allow unchecking the active preset — keep it toggled on
                 btn->setChecked(true);
@@ -2339,7 +2528,8 @@ void VfoWidget::rebuildFilterButtons(DSPMode mode)
         const int slot = i;
         connect(btn, &QPushButton::customContextMenuRequested, this,
                 [this, slot, mode](const QPoint& pos) {
-            if (!m_filterPresetStore) { return; }
+            if (!m_filterPresetStore || (isRade2DspMode(mode)
+                && !(m_radioModel ? m_radioModel->radeV2Enabled() : RadeV2Feature::enabled()))) { return; }
             QMenu menu(this);
             menu.setStyleSheet(QString::fromLatin1(kPopupMenu));  // Stage C2 — issue #98 parity
             QAction* editAct  = menu.addAction(QStringLiteral("Edit this preset…"));
@@ -2480,12 +2670,38 @@ void VfoWidget::setFrequency(double hz)
     m_updatingFromModel = false;
 }
 
+void VfoWidget::refreshRadeV2Modes()
+{
+    if (!m_modeCmb) { return; }
+    const QSignalBlocker block(m_modeCmb);
+    const bool enabled = m_radioModel ? m_radioModel->radeV2Enabled() : RadeV2Feature::enabled();
+    for (const QString& name : {QStringLiteral("RADE2-U"), QStringLiteral("RADE2-L")}) {
+        const int index = m_modeCmb->findText(name);
+        if (enabled && index < 0) {
+            resetItemsBeforeRowChange(m_modeCmb);
+            m_modeCmb->addItem(name);
+            m_modeCmb->setItemData(m_modeCmb->count() - 1,
+                QStringLiteral("Experimental RADE v2 speech mode"), Qt::ToolTipRole);
+        } else if (!enabled && index >= 0) {
+            resetItemsBeforeRowChange(m_modeCmb);
+            m_modeCmb->removeItem(index);
+        }
+    }
+    // A preserved disabled current V2 stays on the mode tab; the picker
+    // has no selected fallback and refreshing never emits a mode request.
+    const QString currentName = SliceModel::modeName(m_currentMode);
+    m_modeCmb->setPlaceholderText(currentName);
+    m_modeCmb->setCurrentIndex(m_modeCmb->findText(currentName));
+    if (m_filterBtnContainer && isRade2DspMode(m_currentMode)) { rebuildFilterButtons(m_currentMode); }
+}
+
 void VfoWidget::setMode(DSPMode mode)
 {
     m_updatingFromModel = true;
     m_currentMode = mode;
     QString name = SliceModel::modeName(mode);
-    m_modeCmb->setCurrentText(name);
+    m_modeCmb->setPlaceholderText(name);
+    m_modeCmb->setCurrentIndex(m_modeCmb->findText(name));
     if (m_tabButtons.size() > 2) {
         m_tabButtons[2]->setText(name);
     }
@@ -2617,12 +2833,14 @@ void VfoWidget::setSliceIndex(int index)
             QStringLiteral("background: %1; color: white; font-size: 11px;"
                             "font-weight: bold; border-radius: 3px;").arg(c.name()));
     }
+    if (m_collapsed) { update(); }  // the folded flag paints the badges
 }
 
 void VfoWidget::setTxSlice(bool isTx)
 {
     m_txMarked = isTx;
     m_txBadge->setChecked(isTx && !m_inUseByRadio);
+    if (m_collapsed) { update(); }  // the folded flag paints the TX badge
 }
 
 void VfoWidget::setStationPresentationAllowed(bool allowed)
@@ -2659,7 +2877,11 @@ void VfoWidget::setInUseByRadio(bool inUse)
         m_txBadge->setStyleSheet(
             QStringLiteral("QPushButton { background: #1a2a3a; border: 1px solid #304050;"
                            "border-radius: 3px; color: #6888a0; font-size: 10px; font-weight: bold; }"
-                           "QPushButton:checked { background: #6a3030; border-color: #ff4444; color: #ff8080; }"));
+                           "QPushButton:checked { background: %2; border-color: %1; color: #ff8080; }")
+            // The lit TX badge is a transmit state: the look's transmit tone
+            // on its danger fill when the look is on, today's reds otherwise.
+            .arg(WorkspacePreview::statusColourName("#ff4444", "danger"),
+                 WorkspacePreview::roleColourName("#6a3030", "danger-bg")));
         m_txBadge->setToolTip(QStringLiteral("Indicates this slice is the TX slice"));
         m_txBadge->setAccessibleDescription(QString());
     }
@@ -2670,6 +2892,7 @@ void VfoWidget::setInUseByRadio(bool inUse)
         m_txBadge->setProperty(kSavedTransmitDescription, m_txBadge->accessibleDescription());
         updateTransmitControlAvailability();
     }
+    if (m_collapsed) { update(); }  // the folded flag paints the TX badge
 }
 
 void VfoWidget::setActiveSlice(bool active)
@@ -2877,6 +3100,7 @@ void VfoWidget::setMuted(bool v)
     m_modelMuted = v;
     // Task 14b: a listened flag shows this device's own mute instead.
     if (isListening()) { return; }
+    applyAudioTabIcon(m_tabButtons.value(0), v);
     if (m_muteBtn && m_muteBtn->isChecked() != v) {
         m_updatingFromModel = true;
         m_muteBtn->setChecked(v);
@@ -2995,7 +3219,7 @@ void VfoWidget::setBinauralEnabled(bool v)
 QString VfoWidget::headphonesMissingText()
 {
     return QStringLiteral("Silent: no headphones are set up. "
-                          "Turn them on in Setup, Audio, Devices.");
+                          "Turn them on in Setup, Audio, Outputs.");
 }
 
 void VfoWidget::setOutputRoute(SliceModel::OutputRoute route)
@@ -3146,6 +3370,19 @@ void VfoWidget::setSlice(SliceModel* slice)
         // Sync widget to current model state (e.g. restored from AppSettings)
         m_vaxSelector->setValue(slice->vaxChannel());
     }
+
+    // Flag fold: each receiver keeps its own folded state.
+    // From AetherSDR src/gui/VfoWidget.cpp:4684-4692 [@3a1f59ea] (bdd42658)
+    // Restore collapsed state from AppSettings
+    if (slice && m_sliceIndex >= 0) {
+        auto& s = AppSettings::instance();
+        bool savedCollapsed = s.value(collapsedSettingsKey(m_sliceIndex),
+                                      QStringLiteral("False")).toString()
+            == QStringLiteral("True");
+        if (savedCollapsed != m_collapsed) {
+            setCollapsed(savedCollapsed);
+        }
+    }
 }
 
 // ---- Floating control buttons (AetherSDR pattern) ----
@@ -3157,6 +3394,9 @@ void VfoWidget::setSlice(SliceModel* slice)
 // translucent filter bands the buttons effectively disappeared.  The dark
 // blue base matches the spectrum chrome palette and stays distinct from
 // either filter colour.
+// Logical size of the floating lock button's icon inside its 20 x 20 button.
+constexpr int kFlagLockIconPx = 16;
+
 static const char* kFloatingBtn =
     "QPushButton {"
     "  background: rgba(20,30,50,230); border: 1px solid rgba(80,100,130,180);"
@@ -3185,6 +3425,9 @@ void VfoWidget::buildFloatingButtons()
     auto makeBtn = [&](const QString& text, const char* style) -> QPushButton* {
         auto* btn = new QPushButton(text, parent);
         btn->setFixedSize(20, 20);
+        // A sibling of the flag on the SpectrumWidget: it takes the look
+        // with the flag.
+        btn->setProperty(WorkspacePreview::kThemedIslandProperty, true);
         btn->setStyleSheet(style);
         btn->show();
         return btn;
@@ -3213,7 +3456,9 @@ void VfoWidget::buildFloatingButtons()
     }
 
     // Lock button — wired
-    m_lockBtn = makeBtn(QStringLiteral("\U0001F513"), kFloatingBtn);
+    m_lockBtn = makeBtn(QString(), kFloatingBtn);
+    m_lockBtn->setObjectName(QStringLiteral("VfoFlagLockButton"));
+    AppIcon::apply(m_lockBtn, QStringLiteral("unlock"), kFlagLockIconPx);
     // From Thetis console.resx:5787 — chkVFOLock.ToolTip
     m_lockBtn->setToolTip(QStringLiteral("Keeps the VFO from changing while in the middle of a QSO."));
     m_lockBtn->setCheckable(true);
@@ -3222,6 +3467,14 @@ void VfoWidget::buildFloatingButtons()
             applyLockedState(locked);
         }
     });
+    // A slice locked before the floating buttons existed shows its lock now
+    // (setLocked had no button to drive yet). Guarded, so nothing is emitted.
+    if (m_locked) {
+        const bool wasUpdating = m_updatingFromModel;
+        m_updatingFromModel = true;
+        applyLockedState(true);
+        m_updatingFromModel = wasUpdating;
+    }
     // Task 14a: the lock writes the slice too, so it is held on a listened
     // flag; the close button's words follow the access.
     if (isListening()) {
@@ -3257,6 +3510,22 @@ void VfoWidget::buildFloatingButtons()
     // built; positionFloatingButtons() keeps them out of the strip.
     UnbuiltFeatures::hideUnlessBuilt(m_recBtn, UnbuiltFeature::Voice);
     UnbuiltFeatures::hideUnlessBuilt(m_playBtn, UnbuiltFeature::Voice);
+
+    // Flag fold: the folded flag's frequency, beside it on the SpectrumWidget
+    // like the buttons above. Our flag's own colours: the floating buttons'
+    // background and border with the frequency's colour and font.
+    // From AetherSDR src/gui/VfoWidget.cpp:969-975 [@3a1f59ea] (bdd42658)
+    // ── Collapsed-mode frequency label (child of parent like close/lock) ───
+    m_collapsedFreqLabel = new QLabel(parent);
+    m_collapsedFreqLabel->setObjectName(QStringLiteral("VfoFlagCollapsedFrequency"));
+    m_collapsedFreqLabel->setProperty(WorkspacePreview::kThemedIslandProperty, true);
+    m_collapsedFreqLabel->setStyleSheet(QStringLiteral(
+        "QLabel { background: rgba(20,30,50,230); border: 1px solid rgba(80,100,130,180);"
+        " border-radius: 3px; color: #00e5ff; font-size: 14px; font-weight: bold;"
+        " font-family: 'Consolas', 'Menlo', monospace; padding: 1px 4px; }"));
+    m_collapsedFreqLabel->setAlignment(Qt::AlignCenter);
+    m_collapsedFreqLabel->hide();
+    updateCollapsedFreqLabel();
 }
 
 // ---- Lock state: applyLockedState + setLocked (S1.8a review — I3) ----
@@ -3279,7 +3548,8 @@ void VfoWidget::applyLockedState(bool on)
     if (m_lockBtn) {
         m_updatingFromModel = true;
         m_lockBtn->setChecked(on);
-        m_lockBtn->setText(on ? QStringLiteral("\U0001F512") : QStringLiteral("\U0001F513"));
+        AppIcon::apply(m_lockBtn, on ? QStringLiteral("lock") : QStringLiteral("unlock"),
+                       kFlagLockIconPx);
         if (on) {
             m_lockBtn->setStyleSheet(QStringLiteral(
                 "QPushButton { background: rgba(255,100,100,80); border: none;"
@@ -3290,6 +3560,9 @@ void VfoWidget::applyLockedState(bool on)
         }
         m_updatingFromModel = wasUpdating;
     }
+
+    // Flag fold: a locked receiver's folded flag reads LOCKED.
+    updateCollapsedFreqLabel();
 
     // Only emit lockChanged when the change originates from a user action
     // (i.e., guard was false when this call began).  When called from
@@ -3347,6 +3620,7 @@ void VfoWidget::positionFloatingButtons()
     // not built.
     const bool voiceBuilt = UnbuiltFeatures::isBuilt(UnbuiltFeature::Voice);
 
+    bool raisedAny = false;
     QPushButton* btns[] = {m_closeBtn, m_lockBtn, m_recBtn, m_playBtn};
     for (QPushButton* btn : btns) {
         if (!voiceBuilt && (btn == m_recBtn || btn == m_playBtn)) {
@@ -3354,7 +3628,9 @@ void VfoWidget::positionFloatingButtons()
             continue;
         }
         const bool isCloseBtn = (btn == m_closeBtn);
-        const bool show = m_stationPresentationAllowed && isVisible()
+        // Flag fold: the side buttons hide while the flag is folded and come
+        // back by the same rule when it opens.
+        const bool show = m_stationPresentationAllowed && isVisible() && !m_collapsed
             && (closeShown || !isCloseBtn);
         if (isCloseBtn && !closeShown) {
             btn->hide();
@@ -3364,8 +3640,16 @@ void VfoWidget::positionFloatingButtons()
         btn->setVisible(show);
         if (show) {
             btn->raise();
+            raisedAny = true;
         }
         btnY += 22;
+    }
+    positionCollapsedFreqLabel();
+    // The buttons are the pan's children, so the raises above put them over
+    // every sibling, an open overlay flyout included. The pan hears this and
+    // lets the flyout go back on top (SpectrumWidget::flagsRaised()).
+    if (raisedAny) {
+        emit floatingButtonsRaised();
     }
 }
 
@@ -3384,6 +3668,9 @@ void VfoWidget::raiseAboveSiblings()
         if (btn) {
             btn->raise();
         }
+    }
+    if (m_collapsedFreqLabel && m_collapsed) {
+        m_collapsedFreqLabel->raise();
     }
     raise();
 }
@@ -3471,7 +3758,9 @@ void VfoWidget::paintEvent(QPaintEvent* event)
 
     // Dark panel background — from AetherSDR VfoWidget::paintEvent
     p.setPen(Qt::NoPen);
-    p.setBrush(QColor(0x0a, 0x0a, 0x14, 230));
+    // With the workspace look on, the panel role at the same alpha, so
+    // the flag stays as translucent over the spectrum as it is today.
+    p.setBrush(WorkspacePreview::roleColour(QColor(0x0a, 0x0a, 0x14, 230), "panel"));
     p.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 4, 4);
 
     // Subtle border
@@ -3483,12 +3772,50 @@ void VfoWidget::paintEvent(QPaintEvent* event)
     QColor c = sliceColor(m_sliceIndex);
     p.setPen(QPen(c, 2));
     p.drawLine(2, 1, width() - 3, 1);
+
+    if (m_collapsed) {
+        // Flag fold: the letter badge over the TX badge, as upstream paints
+        // them (AetherSDR src/gui/VfoWidget.cpp:3463-3490 [@3a1f59ea]), drawn
+        // from our own hidden badges so the folded flag shows exactly what
+        // the open one does (slice colour, TX lit, held or in use by the
+        // radio). Each badge is grabbed into its own pixmap first: a
+        // QWidget::render() into this widget's own painter draws nothing on
+        // the macOS backing store while the badges are hidden.
+        const QRect letter = QRect(QPoint((width() - m_sliceBadge->width()) / 2,
+                                          kCollapsedBadgeTop),
+                                   m_sliceBadge->size());
+        p.drawPixmap(letter.topLeft(), m_sliceBadge->grab());
+        p.drawPixmap(collapsedTxBadgeRect().topLeft(), m_txBadge->grab());
+    }
 }
 
 void VfoWidget::mousePressEvent(QMouseEvent* event)
 {
     event->accept();
     emit sliceActivationRequested(m_sliceIndex);
+
+    // Flag fold. From AetherSDR src/gui/VfoWidget.cpp:690-711 [@3a1f59ea]
+    // (bdd42658). Upstream's painted TX badge sets the slice's TX directly;
+    // ours does what a click on our TX badge does (the handoff, the take, or
+    // nothing while it is held).
+    if (m_collapsed) {
+        // Click on painted TX badge → toggle TX assignment
+        if (event->button() == Qt::LeftButton
+            && collapsedTxBadgeRect().contains(event->pos())) {
+            m_txBadge->click();
+            update();  // repaint TX badge color
+            return;
+        }
+        // Click anywhere else on collapsed widget → expand (deferred)
+        QTimer::singleShot(0, this, [this] { setCollapsed(false); });
+        return;
+    }
+    // Click on the slice badge → collapse the flag (deferred)
+    if (event->button() == Qt::LeftButton && m_sliceBadge && m_sliceBadge->isVisible()
+        && m_sliceBadge->geometry().contains(event->pos())) {
+        QTimer::singleShot(0, this, [this] { setCollapsed(true); });
+        return;
+    }
 
     // Double-click on frequency area → enter edit mode. Task 14a: not on a
     // slice another device controls.
@@ -3811,6 +4138,9 @@ void VfoWidget::updateFreqLabel()
 
     // Also update filter width display
     // (will be properly synced from setFilter)
+
+    // Keep collapsed frequency label in sync
+    updateCollapsedFreqLabel();
 }
 
 QString VfoWidget::formatFilterWidth(int low, int high) const
@@ -3903,6 +4233,7 @@ void VfoWidget::setRxBypassActive(bool on)
 // is non-owning; lifetime is RadioModel-owned and MainWindow-scoped.
 void VfoWidget::setRadioModel(RadioModel* model)
 {
+    if (m_radeV2AvailabilityConn) { disconnect(m_radeV2AvailabilityConn); }
     for (QMetaObject::Connection& conn : m_nrAvailabilityConns) {
         if (conn) {
             disconnect(conn);
@@ -3910,6 +4241,11 @@ void VfoWidget::setRadioModel(RadioModel* model)
         }
     }
     m_radioModel = model;
+    if (model) {
+        m_radeV2AvailabilityConn = connect(model, &RadioModel::radeV2AvailabilityChanged,
+                                          this, &VfoWidget::refreshRadeV2Modes);
+    }
+    refreshRadeV2Modes();
     // R-R3-49, Sub-epic C-1: DFNR and MNR are enabled only while the Core
     // can run them.
     if (model && model->dspAssets()) {
@@ -4196,6 +4532,7 @@ void VfoWidget::applyAudioBinding()
     const bool listening = isListening();
     const int value = listening ? m_listenVolume : m_modelAfGain;
     const bool muted = listening ? m_listenMuted : m_modelMuted;
+    applyAudioTabIcon(m_tabButtons.value(0), muted);
     const bool wasUpdating = m_updatingFromModel;
     m_updatingFromModel = true;
     m_afGainSlider->setValue(value);

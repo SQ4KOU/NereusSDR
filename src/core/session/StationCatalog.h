@@ -34,6 +34,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 — J.J. Boyd (KG4VCF), gate experimental RADE V2 opt-in;
+//                AI-assisted implementation via OpenAI Codex.
+//   2026-10-13: export the catalogue's Qt signal addresses from the Windows
+//               Core DLL. J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
@@ -59,10 +63,14 @@
 //               stationTciServer and vaxDevices, the board, the unbuilt
 //               features list). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-10-08: Rotor control plan Task 4b: the `rotor` tool, offered when
+//               a rotor is set up on the Core (Inputs' rotorConfigured). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
+#include "core/NereusCoreExport.h"
 #include "core/RadioDiscovery.h"
 #include "core/session/media/OpusAudioCodec.h"
 #include "models/BandPlan.h"
@@ -83,7 +91,7 @@ namespace NereusSDR {
 
 class RadioModel;
 
-class StationCatalog final : public QObject {
+class NEREUS_CORE_EXPORT StationCatalog final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString json READ json NOTIFY catalogChanged)
     Q_PROPERTY(quint32 revision READ revision NOTIFY catalogChanged)
@@ -104,10 +112,11 @@ public:
     /// What the catalogue is built from. inputsFrom() fills it from a
     /// RadioModel; a test fills it by hand.
     struct Inputs {
+        bool radeV2Enabled = false;
         HPSDRModel model = HPSDRModel::FIRST;
         BoardCapabilities board{};
         ProtocolVersion protocol = ProtocolVersion::Protocol1;
-        /// Each of the 14 modes (DSPMode 0 to 13) with its presets, in
+        /// Each of the 16 modes (DSPMode 0 to 15) with its presets, in
         /// DSPMode order.
         QList<std::pair<DSPMode, QList<FilterPreset>>> filterPresets;
         QList<int> tuneStepsHz;
@@ -125,6 +134,11 @@ public:
         /// hosts; a headless Core publishes none, R-R3-44), so the VAX
         /// Audio tool is offered.
         bool vaxDevices = false;
+        /// Rotor control plan Task 4b: a rotor is set up on the Core (its
+        /// driver is not none), so the Rotor tool is offered (remote rotor
+        /// control v1, "Tools catalogue"). Without one it is listed, not
+        /// offered.
+        bool rotorConfigured = false;
         /// iPhone app plan Task 23 (R-IOS-09): the Opus profiles the
         /// catalogue's `audio.opusProfiles` lists, the station's measured
         /// table (kOpusMeasuredProfiles) unless a test removes one.
@@ -166,6 +180,9 @@ private:
     QTimer* m_refreshTimer = nullptr;
     QString m_json;
     quint32 m_revision = 0;
+    // Rotor control plan Task 4b: whether the last refresh saw a rotor set
+    // up, so a rotor change refreshes only when that changes.
+    bool m_rotorConfigured = false;
 };
 
 } // namespace NereusSDR

@@ -1,6 +1,7 @@
 // src/gui/widgets/StatusBadge.cpp
 #include "StatusBadge.h"
 
+#include "gui/styles/WorkspacePreview.h"
 #include <QColor>
 #include <QHBoxLayout>
 #include <QImage>
@@ -11,6 +12,23 @@
 #include <QSvgRenderer>
 
 namespace NereusSDR {
+
+namespace {
+
+// "rgba(r,g,b,a)" with 0..255 channels, as applyStyle() writes them.
+QColor parseRgba(const QString& rgba)
+{
+    const int open = rgba.indexOf(QLatin1Char('('));
+    const int close = rgba.lastIndexOf(QLatin1Char(')'));
+    const QStringList parts = rgba.mid(open + 1, close - open - 1).split(QLatin1Char(','));
+    if (open < 0 || close < open || parts.size() != 4) {
+        return {};
+    }
+    return QColor(parts[0].trimmed().toInt(), parts[1].trimmed().toInt(), parts[2].trimmed().toInt(),
+                  parts[3].trimmed().toInt());
+}
+
+} // namespace
 
 StatusBadge::StatusBadge(QWidget* parent) : QWidget(parent)
 {
@@ -125,14 +143,19 @@ QColor StatusBadge::variantForegroundColor() const
 {
     // Mirror the colors used by applyStyle() so the SVG tint matches the
     // text color. If applyStyle() colors change, update both.
+    // Workspace preview: the roles the stylesheet translator gives the
+    // same literals as text (StylesheetColourTable), so tint and text
+    // still match. statusColour() gives the indicator tones, and
+    // applyStyle() writes the same colours with the switch on.
+    using WorkspacePreview::statusColour;
     switch (m_variant) {
-        case Variant::Info: return QColor(QStringLiteral("#5fa8ff"));
-        case Variant::On:   return QColor(QStringLiteral("#5fff8a"));
-        case Variant::Off:  return QColor(QStringLiteral("#404858"));
-        case Variant::Warn: return QColor(QStringLiteral("#ffd700"));
-        case Variant::Tx:   return QColor(QStringLiteral("#ff6060"));
+        case Variant::Info: return statusColour(QColor(QStringLiteral("#5fa8ff")), "accent");
+        case Variant::On:   return statusColour(QColor(QStringLiteral("#5fff8a")), "ok");
+        case Variant::Off:  return statusColour(QColor(QStringLiteral("#404858")), "text-inactive");
+        case Variant::Warn: return statusColour(QColor(QStringLiteral("#ffd700")), "measured");
+        case Variant::Tx:   return statusColour(QColor(QStringLiteral("#ff6060")), "tx");
     }
-    return QColor(QStringLiteral("#5fa8ff"));
+    return statusColour(QColor(QStringLiteral("#5fa8ff")), "accent");
 }
 
 void StatusBadge::renderSvgIcon()
@@ -202,27 +225,49 @@ void StatusBadge::mousePressEvent(QMouseEvent* event)
 void StatusBadge::applyStyle()
 {
     QString fg, bg;
+    const char* role = "accent";
     switch (m_variant) {
         case Variant::Info:
             fg = QStringLiteral("#5fa8ff");
             bg = QStringLiteral("rgba(95,168,255,26)");   // 0.10 alpha
+            role = "accent";
             break;
         case Variant::On:
             fg = QStringLiteral("#5fff8a");
             bg = QStringLiteral("rgba(95,255,138,26)");
+            role = "ok";
             break;
         case Variant::Off:
             fg = QStringLiteral("#404858");
             bg = QStringLiteral("rgba(64,72,88,46)");      // 0.18 alpha
+            role = "text-inactive";
             break;
         case Variant::Warn:
             fg = QStringLiteral("#ffd700");
             bg = QStringLiteral("rgba(255,215,0,30)");
+            role = "measured";
             break;
         case Variant::Tx:
             fg = QStringLiteral("#ff6060");
             bg = QStringLiteral("rgba(255,96,96,51)");     // 0.20 alpha
+            role = "tx";
             break;
+    }
+
+    // Workspace preview: the badge writes the indicator tones itself and
+    // keeps the stylesheet pass (which would map today's literals to the
+    // muted semantic roles) out of its subtree. The switch off leaves the
+    // sheet as it always was.
+    if (WorkspacePreview::enabled()) {
+        const QColor text = WorkspacePreview::statusColour(QColor(fg), role);
+        const QColor legacyFill = parseRgba(bg);
+        const QColor fill = WorkspacePreview::statusColour(legacyFill, role);
+        fg = text.name();
+        bg = QStringLiteral("rgba(%1,%2,%3,%4)")
+                 .arg(fill.red()).arg(fill.green()).arg(fill.blue()).arg(fill.alpha());
+        setProperty(WorkspacePreview::kSkipProperty, true);
+    } else if (property(WorkspacePreview::kSkipProperty).isValid()) {
+        setProperty(WorkspacePreview::kSkipProperty, false);
     }
 
     // Font-size bumped 10 → 12 px (2026-04-30) so the badge text reads

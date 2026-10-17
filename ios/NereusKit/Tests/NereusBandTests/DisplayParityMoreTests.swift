@@ -223,7 +223,7 @@ import Testing
 
     @Test func useSpectrumMinMaxColoursAgainstTheScaleAndAsksTheCoreForNoLevels() throws {
         var settings = BandDisplaySettings.desktopDefaults
-        settings.useSpectrumMinMax = true
+        settings.waterfallLevelMode = .scale
         #expect(settings.phoneLevels == .init(lowDbm: -140, highDbm: -40))
         let request = try #require(settings.extrasRequest(gates: BandDisplaySettingsTests.open))
         #expect(request.waterfallLevels?.mode == .manual)
@@ -271,24 +271,123 @@ import Testing
 
     // MARK: Row 19: the quantisation window
 
+    // R-DISP-HOLD: this test held the scale's part rounded outward to whole
+    // ten dB with no headroom, so the grid following the noise floor across
+    // a ten asked the Core again and restarted its averaged trace. The
+    // window is now what the band needs with 10 dB either side on whole dB,
+    // held while what is needed lies inside it.
     @Test func theQuantisationWindowHoldsTheScaleAndTheLevelsInForce() {
         var settings = BandDisplaySettings.desktopDefaults
-        // Manual levels inside the scale: the scale's own range.
+        // Manual levels inside the scale: the scale with the headroom.
         settings.waterfallLevelMode = .manual
-        #expect(settings.quantisationWindow(coreLevels: nil, held: nil) == -140 ... -40)
+        #expect(settings.quantisationWindow(coreLevels: nil, held: nil) == -150 ... -30)
         // Levels outside it widen it.
         settings.waterfallLowDbm = -160
-        #expect(settings.quantisationWindow(coreLevels: nil, held: nil) == -160 ... -40)
-        // Clarity: the Core's levels with 10 dB either side, held while they fit.
+        #expect(settings.quantisationWindow(coreLevels: nil, held: nil) == -170 ... -30)
+        // Clarity: the Core's levels joined with the scale, held while they fit.
         settings.waterfallLevelMode = .clarity
         let window = settings.quantisationWindow(coreLevels: .init(lowDbm: -150, highDbm: -30), held: nil)
         #expect(window == -160 ... -20)
         #expect(settings.quantisationWindow(coreLevels: .init(lowDbm: -148, highDbm: -32), held: window) == window)
-        // A drag of the scale asks again only at whole ten dB.
+        // Edges on whole dB, outward.
         settings.waterfallLevelMode = .manual
         settings.waterfallLowDbm = -122
-        settings.scaleBottomDbm = -133
-        #expect(settings.quantisationWindow(coreLevels: nil, held: nil) == -140 ... -40)
+        settings.scaleBottomDbm = -133.5
+        #expect(settings.quantisationWindow(coreLevels: nil, held: nil) == -144 ... -30)
+    }
+
+    // R-DISP-HOLD: crossing a ten inside the hold asks nothing; past the
+    // hold asks once.
+    @Test func theQuantisationWindowIsHeldWhileWhatIsNeededLiesInsideIt() {
+        var settings = BandDisplaySettings.desktopDefaults
+        settings.waterfallLevelMode = .manual
+        settings.waterfallLowDbm = -120
+        settings.waterfallHighDbm = -60
+        var held: ClosedRange<Double>?
+        var asks = 0
+        func plan() {
+            let window = settings.quantisationWindow(coreLevels: nil, held: held)
+            if window != held { asks += 1 }
+            held = window
+        }
+        plan()
+        #expect(held == -150 ... -30)
+        #expect(asks == 1)
+        // The grid following the noise floor 2 dB at a time, down across a
+        // ten and back: nothing is asked.
+        for bottom in [-138.0, -140, -142, -144, -146, -148, -150, -148, -146, -144, -142, -140] {
+            settings.scaleBottomDbm = bottom
+            settings.scaleTopDbm = bottom + 100
+            plan()
+        }
+        #expect(asks == 1)
+        // Past the hold: one ask, for what is needed with the headroom,
+        // and that window is then held.
+        settings.scaleBottomDbm = -150.5
+        settings.scaleTopDbm = -50.5
+        plan()
+        #expect(asks == 2)
+        #expect(held == -161 ... -40)
+        plan()
+        settings.scaleBottomDbm = -158
+        settings.scaleTopDbm = -58
+        plan()
+        #expect(asks == 2)
+        // An edge more than twice the headroom outside what is needed: the
+        // window is drawn in, once.
+        settings.scaleBottomDbm = -140
+        settings.scaleTopDbm = -50
+        plan()
+        #expect(asks == 3)
+        #expect(held == -150 ... -40)
+        // The link's limits stand.
+        settings.waterfallHighDbm = 95
+        plan()
+        #expect(held?.upperBound == 100)
+    }
+
+    @Test func aLongWalkOfTheScaleAndTheCoresLevelsNeverAsksBeforeAHeadroomOfTravel() {
+        var settings = BandDisplaySettings.desktopDefaults
+        settings.waterfallLevelMode = .clarity
+        // A fixed sequence, so the test repeats.
+        var seed: UInt64 = 0x4E53
+        func next(_ bound: Int) -> Int {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Int((seed >> 33) % UInt64(bound))
+        }
+        var scaleLow = -140.0, scaleHigh = -40.0, levelLow = -125.0, levelHigh = -65.0
+        var held: ClosedRange<Double>?
+        var neededAtAsk: ClosedRange<Double>?
+        var asks = 0
+        for _ in 0..<2000 {
+            let delta = Double(next(25) - 12) * 0.25
+            switch next(4) {
+            case 0: scaleLow = min(max(scaleLow + delta, -220), scaleHigh - 20)
+            case 1: scaleHigh = min(max(scaleHigh + delta, scaleLow + 20), 20)
+            case 2: levelLow = min(max(levelLow + delta, -220), levelHigh - 10)
+            default: levelHigh = min(max(levelHigh + delta, levelLow + 10), 20)
+            }
+            settings.scaleBottomDbm = scaleLow
+            settings.scaleTopDbm = scaleHigh
+            let core = WaterfallHistory.Levels(lowDbm: Float(levelLow), highDbm: Float(levelHigh))
+            let window = settings.quantisationWindow(coreLevels: core, held: held)
+            let needed = min(scaleLow, Double(core.lowDbm)) ... max(scaleHigh, Double(core.highDbm))
+            #expect(window.lowerBound <= needed.lowerBound && window.upperBound >= needed.upperBound)
+            #expect(window.lowerBound >= needed.lowerBound - 20 && window.upperBound <= needed.upperBound + 20)
+            if window != held {
+                asks += 1
+                #expect(window.lowerBound == (needed.lowerBound - 10).rounded(.down))
+                #expect(window.upperBound == (needed.upperBound + 10).rounded(.up))
+                if let before = neededAtAsk {
+                    let travelled = max(abs(needed.lowerBound - before.lowerBound),
+                                        abs(needed.upperBound - before.upperBound))
+                    #expect(travelled >= 9)
+                }
+                neededAtAsk = needed
+                held = window
+            }
+        }
+        #expect(asks > 3 && asks < 200)
     }
 
     // MARK: Row 16: detectors, averaging and decimation on the link

@@ -30,6 +30,9 @@
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex. NereusSDR-original.
 // 2026-10-02: Separate manual listener retention and current-target leases.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex. NereusSDR-original.
+// 2026-10-16: A Core's explicit empty address list clears its saved Core
+// addresses, and a Core-named address a new list drops leaves the reached
+// ones too. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #pragma once
 
@@ -118,8 +121,18 @@ public:
 
     /// Parse the existing devices.coreAddresses contract. No service/ICE URLs.
     static QStringList parseCoreAddresses(const QString& text);
+    /// Link 7.1: the saved Core address list a devices.coreAddresses document
+    /// asks for. An empty list is the Core's own explicit `"addresses":[]` and
+    /// clears the saved ones; std::nullopt (malformed text, no `addresses`
+    /// array, or entries that every filter dropped) keeps them.
+    static std::optional<QStringList> parseCoreAddressUpdate(const QString& text);
+    /// Saves an accepted list. A Core-named address the new list drops also
+    /// leaves cachedAddresses, in the same save, except `inUseUrl`, the
+    /// address this session is connected on (empty when none), which stays
+    /// listed until a later accepted list arrives on another session.
     bool rememberCoreAddresses(const QString& id, const QByteArray& identity,
-                              const QString& text, QString* error = nullptr);
+                              const QString& text, const QString& inUseUrl,
+                              QString* error = nullptr);
     /// Caller supplies the actual stationLabel from a proved paired session.
     /// Updates matching saved paired identities atomically; label stays local.
     bool rememberCoreName(const QString& id, const QByteArray& identity,

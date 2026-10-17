@@ -7,6 +7,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-13 — Compact PureSignal presentation; J.J. Boyd (KG4VCF),
+//                 assisted by OpenAI Codex.
 //   2026-10-04 — Live Core status and passive numeric correction readouts,
 //                 by J.J. Boyd (KG4VCF), with OpenAI Codex assistance.
 
@@ -69,7 +71,9 @@ mw0lge@grange-lane.co.uk
 //============================================================================================//
 
 #pragma once
+#include "gui/NereusGuiExport.h"
 #include "AppletWidget.h"
+#include "gui/NereusGuiExport.h"
 #include <QPointer>
 #include <QVariantMap>
 
@@ -78,7 +82,7 @@ class QLabel;
 
 namespace NereusSDR {
 
-class HGauge;
+class PureSignalInstruments;
 class DspAssetDialog;
 class PureSignalSessionFacade;
 enum class Ps3Action;
@@ -88,23 +92,9 @@ enum class Ps3Action;
 // Actions and readback use RadioModel's shared PureSignalSessionFacade so the
 // same surface works for local and remote station sessions.
 //
-// Controls:
-//   1. Calibrate button      — QPushButton (non-toggle) → Single action
-//   2. Auto-cal toggle       — QPushButton green "Auto" ↔ session settings
-//   3. Feedback level gauge  — HGauge (0-100, yellow@70, red@90, title "FB Level")
-//                              ← feedbackLevelChanged 0..255 → 0..100
-//   4. Correction mag gauge  — HGauge (0-100, yellow@80, red@95, title "Correction")
-//                              ← correctionPeakChanged 0..1 → 0..100
-//   5. Save coefficients     — QPushButton "Save" → station SaveCorrection
-//   6. Restore coefficients  — QPushButton "Restore" → station asset manager
-//   7. Two-tone test         — QPushButton green toggle "2-Tone" → SetTwoTone
-//   8. Status LEDs           — 3x QLabel (24x14 rounded: "Cal", "Run", "Fbk")
-//      Cal LED active during LSETUP/LCOLLECT/LCALC (driven by calStateChanged)
-//      Run LED active during LSTAYON
-//      Fbk LED active when feedback samples flow (feedbackActiveChanged)
-//
-// Plus: info readout labels (Iterations, Feedback dB, Correction dB) — driven
-// by calibrationCountChanged + feedbackLevelChanged + correctionPeakChanged.
+// Compact correction-applied state, raw RF feedback classification/meter,
+// successful calibrations and attempts. Engine activity remains distinct from
+// the feedback >90 correcting predicate. Existing action/file controls use the facade.
 //
 // Right-click on every control emits openPureSignalDialogRequested, which
 // MainWindow routes to openPureSignalDialog (Tools → PureSignal…) per the
@@ -112,7 +102,7 @@ enum class Ps3Action;
 // at console.cs:46149-46152 [v2.10.3.13]).
 class PureSignal;
 
-class PureSignalApplet : public AppletWidget {
+class NEREUS_GUI_EXPORT PureSignalApplet : public AppletWidget {
     Q_OBJECT
 public:
     explicit PureSignalApplet(RadioModel* model, QWidget* parent = nullptr);
@@ -144,7 +134,6 @@ private:
     void refreshFromFacade();
     void requestAction(Ps3Action action, const QVariantMap& arguments = {});
     void showRestoreDialog();
-    void setLedActive(QLabel* led, bool active);
     void setupRightClick(QWidget* widget);
 
     // Shared facade owned by RadioModel. The QPointer safely clears when the
@@ -157,10 +146,7 @@ private:
     // Control 2 — auto-cal toggle (green)
     QPushButton* m_autoCalBtn    = nullptr;
 
-    // Control 3 — feedback level gauge (0-100, yellow@70, red@90)
-    HGauge* m_feedbackGauge      = nullptr;
-    // Control 4 — correction magnitude gauge (0-100, yellow@80, red@95)
-    HGauge* m_correctionGauge    = nullptr;
+    PureSignalInstruments* m_instruments = nullptr;
 
     // Control 5 — save coefficients
     QPushButton* m_saveBtn       = nullptr;
@@ -170,13 +156,6 @@ private:
     // Control 7 — two-tone test (green toggle)
     QPushButton* m_twoToneBtn    = nullptr;
 
-    // Control 8 — status LEDs: "Cal", "Run", "Fbk"
-    QLabel* m_led[3]             = {};
-
-    // Info readout labels
-    QLabel* m_iterations         = nullptr;
-    QLabel* m_feedbackDb         = nullptr;
-    QLabel* m_correctionDb       = nullptr;
     QLabel* m_status             = nullptr;
 };
 

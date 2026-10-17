@@ -18,12 +18,19 @@
 //                the profile choice, Save and Delete; Save's tooltip says
 //                "transmit settings". J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-10-08  J.J. Boyd (KG4VCF): Qt 6.11.0 Cocoa accessibility cache
+//               repair on a live item view (QtCocoaAccessibleTableCache).
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-15  J.J. Boyd (KG4VCF): rows change after a real model reset
+//               (resetItemsBeforeRowChange), so accessibility cannot read a
+//               deleted cell. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived semantics are
 // cited inline in the header.
 
 #include "TxProfileSetupPage.h"
+#include "gui/QtCocoaAccessibleTableCache.h"
 
 #include "core/MicProfileManager.h"
 #include "core/session/IStationLink.h"
@@ -226,6 +233,7 @@ void TxProfileSetupPage::rebuildCombo()
     QSignalBlocker blk(m_combo);
     m_seedingFromModel = true;
 
+    resetItemsBeforeRowChange(m_combo);
     m_combo->clear();
     if (m_profileMgr) {
         const QStringList names = m_profileMgr->profileNames();

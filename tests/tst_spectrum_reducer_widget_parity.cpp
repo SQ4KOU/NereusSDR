@@ -89,6 +89,7 @@ private:
         w.resize(widgetW, 600);
         w.setDbmScaleVisible(stripVisible);
         w.setSampleRate(sampleRateHz);
+        w.setDisplayFps(30);
         w.setDdcCenterFrequency(streamCentreHz);
         w.setFrequencyRange(centreHz, spanHz);
         w.setSpectrumDetector(det);
@@ -107,6 +108,8 @@ private:
         cfg.detector       = det;
         cfg.averageMode    = avengerMode(avg);
         cfg.averageAlpha   = static_cast<double>(w.spectrumAverageAlpha());
+        cfg.averageFrames = SpectrumAvenger::windowFramesForTimeMs(
+            w.spectrumAverageTimeMs(), 30);
 
         SpectrumReducer spec;
         SpectrumReducer wf;
@@ -114,6 +117,8 @@ private:
 
         ReducerConfig wfCfg = cfg;
         wfCfg.averageAlpha = static_cast<double>(w.waterfallAverageAlpha());
+        wfCfg.averageFrames = SpectrumAvenger::windowFramesForTimeMs(
+            w.waterfallAverageTimeMs(), 30);
         wf.setConfig(wfCfg);
 
         const double windowEnb = 2.0;

@@ -378,6 +378,7 @@ private slots:
     {
         PanadapterStack stack;
         QSignalSpy spy(&stack, &PanadapterStack::countChanged);
+        QVERIFY(spy.isValid());
 
         QVERIFY(stack.addPanadapter(QStringLiteral("pan-1")));
         QVERIFY2(spy.count() >= 1,

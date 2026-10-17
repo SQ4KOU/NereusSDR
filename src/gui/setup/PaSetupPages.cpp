@@ -161,6 +161,21 @@
 //                 transmit band change, which holds while keyed, not the
 //                 slice's band. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-10-08  J.J. Boyd (KG4VCF): Qt 6.11.0 Cocoa accessibility cache
+//               repair on a live item view (QtCocoaAccessibleTableCache).
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - PA Values' first temperature text spells the degree sign
+//                 as U+00B0: its UTF-8 bytes in a UTF-16 literal read as
+//                 two characters. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-09 - D25: the gain toolbar stacks its profile combo over its
+//                 buttons when narrow (SetupFit::FitRow), and the gain table,
+//                 too wide for the window, scrolls sideways inside its own
+//                 frame (SetupFit::SidewaysFrame). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-10-15  J.J. Boyd (KG4VCF): rows change after a real model reset
+//               (resetItemsBeforeRowChange), so accessibility cannot read a
+//               deleted cell. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -209,6 +224,8 @@
 //============================================================================================//
 
 #include "PaSetupPages.h"
+#include "gui/setup/SetupFit.h"
+#include "gui/QtCocoaAccessibleTableCache.h"
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
@@ -467,8 +484,14 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // Per STYLEGUIDE.md layout polish: the combo stretches (factor 1) so it
     // fills the page width; the 4 lifecycle buttons get matched fixed widths
     // (90 px) so they line up cleanly regardless of label length.
-    auto* toolbar = new QHBoxLayout;
+    //
+    // D25: the buttons go under the combo when the window is too narrow for
+    // the row.
+    auto* toolbar = new SetupFit::FitRow;
+    toolbar->setObjectName(QStringLiteral("paGainToolbar"));
     toolbar->setSpacing(6);
+    auto* lifecycleButtons = new QHBoxLayout;
+    lifecycleButtons->setSpacing(6);
 
     m_profileCombo = new QComboBox(this);
     m_profileCombo->setMinimumWidth(220);
@@ -489,14 +512,14 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     m_btnNew->setToolTip(QStringLiteral(
         "Create a new empty profile seeded from the connected radio's "
         "factory PA gain row."));
-    toolbar->addWidget(m_btnNew);
+    lifecycleButtons->addWidget(m_btnNew);
 
     m_btnCopy = new QPushButton(QStringLiteral("Copy"), this);
     m_btnCopy->setMinimumWidth(kLifecycleButtonWidth);
     m_btnCopy->setProperty("nereusSetupId", "pa.gain.copy");
     m_btnCopy->setToolTip(QStringLiteral(
         "Duplicate the active profile under a new name."));
-    toolbar->addWidget(m_btnCopy);
+    lifecycleButtons->addWidget(m_btnCopy);
 
     m_btnDelete = new QPushButton(QStringLiteral("Delete"), this);
     m_btnDelete->setMinimumWidth(kLifecycleButtonWidth);
@@ -504,7 +527,7 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     m_btnDelete->setToolTip(QStringLiteral(
         "Delete the active profile.  The last remaining profile cannot be "
         "deleted."));
-    toolbar->addWidget(m_btnDelete);
+    lifecycleButtons->addWidget(m_btnDelete);
 
     m_btnReset = new QPushButton(QStringLiteral("Reset Defaults"), this);
     m_btnReset->setMinimumWidth(kLifecycleButtonWidth);
@@ -513,7 +536,8 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
         "Re-seed the active profile from the canonical factory PA gain row "
         "for its model.  Drive-step adjusts and max-power columns are "
         "cleared."));
-    toolbar->addWidget(m_btnReset);
+    lifecycleButtons->addWidget(m_btnReset);
+    toolbar->addLayout(lifecycleButtons);
 
     contentLayout()->insertLayout(contentLayout()->count() - 1, toolbar);
 
@@ -676,7 +700,13 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
         ++row;
     }
 
-    contentLayout()->insertWidget(contentLayout()->count() - 1, gainGroup);
+    // D25: fourteen bands by thirteen columns of fixed-width boxes cannot
+    // fit the Settings window, so the table scrolls sideways inside its own
+    // frame (the page itself never does).
+    auto* gainFrame = new SetupFit::SidewaysFrame(this);
+    gainFrame->setObjectName(QStringLiteral("paGainTableFrame"));
+    gainFrame->setWidget(gainGroup);
+    contentLayout()->insertWidget(contentLayout()->count() - 1, gainFrame);
 
     // ── Bottom: chkAutoPACalibrate + auto-cal sub-panel (Phase 7 of #167) ─
     // From Thetis chkAutoPACalibrate setup.designer.cs:49084 [v2.10.3.13]
@@ -1270,6 +1300,7 @@ void PaGainByBandPage::rebuildProfileCombo()
     QSignalBlocker blocker(m_profileCombo);
 
     const QString prevActive = m_paProfileManager->activeProfileName();
+    resetItemsBeforeRowChange(m_profileCombo);
     m_profileCombo->clear();
     // #202 deep-fix: filter to `Default - <connectedModel>` + every
     // user-customised profile (hide all other `Default - *`).  Mirrors
@@ -2466,7 +2497,7 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
                                          QStringLiteral("0.00 A"), paGroup);
     m_paCurrentLabel->setProperty("nereusSetupId", "pa.values.paCurrent");
     m_paTempLabel      = new MetricLabel(QStringLiteral("PA T"),
-                                         QStringLiteral("0.0 \xC2\xB0""C"), paGroup);
+                                         QStringLiteral("0.0 \u00B0C"), paGroup);
     // R-IOS-18: the Setup description's id for the temperature readout.
     m_paTempLabel->setProperty("nereusSetupId", "pa.values.paTemperature");
     m_supplyVoltsLabel = new MetricLabel(QStringLiteral("V"),

@@ -112,6 +112,7 @@
 #include <optional>
 
 #include "core/safety/TxRefusal.h"
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
@@ -119,7 +120,7 @@ class RadioModel;
 class TransmitHolder;
 struct KeyerIdentity;
 
-class RemoteKeying : public QObject {
+class NEREUS_CORE_EXPORT RemoteKeying : public QObject {
     Q_OBJECT
 
 public:

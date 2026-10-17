@@ -68,13 +68,28 @@
 //               a remote TUNE click while the Core is on the air starts
 //               nothing and puts the reason back. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-10-10: Workspace look, JJ's D30 and D31: OPERATE carries
+//               kLitWhenOnProperty and the ANT buttons kChoiceProperty,
+//               so the on sheet draws the lit green and the chosen
+//               antenna the selection glass; the buttons stay plain push
+//               buttons and clicking is unchanged. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-12  Forward power is one large bar and reflected power and
+//               SWR are slim rows, each with its number on the face
+//               (BarInstrument through AccessoryReadouts), in place of
+//               the two HGauge bars. Reflected power is worked out from
+//               forward power and SWR. The rows show dashes below 0.5 W
+//               forward. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "TunerApplet.h"
 #include "core/AppSettings.h"
 #include "core/MoxController.h"
-#include "gui/HGauge.h"
 #include "gui/RelayBar.h"
+#include "gui/applets/AccessoryReadouts.h"
+#include "gui/instruments/BarInstrument.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "models/RadioModel.h"
 #include "models/TunerModel.h"
 #include "models/AccessoryDataModel.h"
@@ -177,24 +192,32 @@ void TunerApplet::buildUI()
     m_staleLabel->setVisible(false);
     vbox->addWidget(m_staleLabel);
 
-    // --- Control 1: Forward power gauge (0-200W, red@125; auto-rescaled via setPowerScale) ---
+    // --- Control 1: Forward power (0-200W, limit 125; auto-rescaled via setPowerScale) ---
     // From AetherSDR src/gui/TunerApplet.cpp:buildUI() [@0cd4559]
-    m_fwdPowerGauge = new HGauge(this);
-    m_fwdPowerGauge->setRange(0.0, 200.0);
-    m_fwdPowerGauge->setYellowStart(125.0);
-    m_fwdPowerGauge->setRedStart(125.0);
-    m_fwdPowerGauge->setTitle(QStringLiteral("Fwd Pwr"));
-    m_fwdPowerGauge->setUnit(QStringLiteral("W"));
-    vbox->addWidget(m_fwdPowerGauge);
+    // The range and the red start are AetherSDR's. NereusSDR: the bar is
+    // the workspace look's instrument in its large form, with its scale
+    // numbers and the reading on its face.
+    m_fwdBar = AccessoryReadouts::makeLargeBar(
+        AccessoryReadouts::forwardPower(kBarefootMaxW, kBarefootLimitW),
+        AccessoryReadouts::forwardName(), this);
+    m_fwdBar->setAccessibleName(QStringLiteral("Forward power"));
+    vbox->addWidget(m_fwdBar);
 
-    // --- Control 2: SWR gauge (1.0-3.0, red@2.5) ---
+    // Reflected power (0-500W, no limit). NereusSDR: the Tuner Genius does
+    // not report it; it is worked out from forward power and SWR
+    // (AccessoryReadouts::reflectedWatts).
+    m_refBar = AccessoryReadouts::makeSlimBar(
+        AccessoryReadouts::reflectedPower(), AccessoryReadouts::reflectedName(), this);
+    m_refBar->setAccessibleName(QStringLiteral("Reflected power"));
+    vbox->addWidget(m_refBar);
+
+    // --- Control 2: SWR (1.0-3.0, limit 2.5) ---
     // From AetherSDR src/gui/TunerApplet.cpp:buildUI() [@0cd4559]
-    m_swrGauge = new HGauge(this);
-    m_swrGauge->setRange(1.0, 3.0);
-    m_swrGauge->setYellowStart(2.5);
-    m_swrGauge->setRedStart(2.5);
-    m_swrGauge->setTitle(QStringLiteral("SWR"));
-    vbox->addWidget(m_swrGauge);
+    // The range and the red start are AetherSDR's. NereusSDR: a slim row.
+    m_swrBar = AccessoryReadouts::makeSlimBar(
+        AccessoryReadouts::swr(), AccessoryReadouts::swrName(), this);
+    m_swrBar->setAccessibleName(QStringLiteral("SWR"));
+    vbox->addWidget(m_swrBar);
 
     // --- Bottom row: relay bars (left, 70%) + buttons (right, 30%) ---
     // From AetherSDR src/gui/TunerApplet.cpp:buildUI() [@0cd4559]
@@ -331,6 +354,9 @@ void TunerApplet::buildUI()
     // Single cycle button: OPERATE -> BYPASS -> STANDBY -> OPERATE.
     // From AetherSDR src/gui/TunerApplet.cpp:buildUI() m_operateBtn [@0cd4559]
     m_operateBtn = new QPushButton(QStringLiteral("STANDBY"), this);
+    // Workspace look (JJ's D30, 2026-10-10): OPERATE on is the lit green.
+    // The property is read only by the workspace look's sheet pass.
+    m_operateBtn->setProperty(WorkspacePreview::kLitWhenOnProperty, true);
     m_operateBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     m_operateBtn->setStyleSheet(QStringLiteral(
         "QPushButton { background: #1a3a5a; border: 1px solid #205070; "
@@ -364,6 +390,11 @@ void TunerApplet::buildUI()
         // From AetherSDR src/gui/TunerApplet.cpp:buildUI() makeAntBtn [@0cd4559]
         auto makeAntBtn = [this](const QString& text) {
             auto* btn = new QPushButton(text, this);
+            // Workspace look (JJ's D31, 2026-10-10): the chosen antenna is
+            // the selection glass. The button stays a plain push button
+            // (a click asks the tuner; the sheet follows its report), and
+            // the property is read only by the workspace look's sheet pass.
+            btn->setProperty(WorkspacePreview::kChoiceProperty, true);
             btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
             btn->setFixedHeight(22);
             btn->setStyleSheet(QStringLiteral(
@@ -440,6 +471,23 @@ void TunerApplet::onAntennaLabelChanged(int index, const QString& label)
 void TunerApplet::setBand(Band band)
 {
     m_currentBand = band;
+}
+
+double TunerApplet::fwdValueForTesting() const { return m_fwdBar->value(); }
+double TunerApplet::reflectedValueForTesting() const { return m_refBar->value(); }
+double TunerApplet::swrValueForTesting() const { return m_swrBar->value(); }
+bool TunerApplet::fwdHasValueForTesting() const { return m_fwdBar->hasValue(); }
+bool TunerApplet::reflectedHasValueForTesting() const { return m_refBar->hasValue(); }
+bool TunerApplet::swrHasValueForTesting() const { return m_swrBar->hasValue(); }
+double TunerApplet::fwdScaleMaxForTesting() const
+{
+    const ReadingDescriptor* d = m_fwdBar->reading();
+    return d ? d->max : 0.0;
+}
+double TunerApplet::fwdScaleLimitForTesting() const
+{
+    const ReadingDescriptor* d = m_fwdBar->reading();
+    return (d && d->threshold.has_value()) ? d->threshold.value() : 0.0;
 }
 
 QString TunerApplet::tuneButtonTextForTesting() const
@@ -884,22 +932,27 @@ void TunerApplet::setTunerModel(TunerModel* model)
 void TunerApplet::setPowerScale(int maxWatts, bool hasAmplifier)
 {
     // From AetherSDR src/gui/TunerApplet.cpp:setPowerScale [@0cd4559]
+    // The three ranges and their red starts are AetherSDR's. NereusSDR:
+    // each is a scale of the forward power bar (labeled ticks at every
+    // quarter); a value on the bar stays through the change.
+    double scaleMax = kBarefootMaxW;
+    double scaleLimit = kBarefootLimitW;
     if (hasAmplifier) {
         // PGXL: 0-2000 W, red > 1500 W
-        m_fwdPowerGauge->setRange(0.0, 2000.0);
-        m_fwdPowerGauge->setYellowStart(1500.0);
-        m_fwdPowerGauge->setRedStart(1500.0);
+        scaleMax = 2000.0;
+        scaleLimit = 1500.0;
     } else if (maxWatts > 100) {
         // Aurora (500 W): 0-600 W, red > 500 W
-        m_fwdPowerGauge->setRange(0.0, 600.0);
-        m_fwdPowerGauge->setYellowStart(500.0);
-        m_fwdPowerGauge->setRedStart(500.0);
-    } else {
-        // Barefoot radio: 0-200 W, red > 125 W
-        m_fwdPowerGauge->setRange(0.0, 200.0);
-        m_fwdPowerGauge->setYellowStart(125.0);
-        m_fwdPowerGauge->setRedStart(125.0);
+        scaleMax = 600.0;
+        scaleLimit = 500.0;
     }
+    // else: Barefoot radio: 0-200 W, red > 125 W
+    if (scaleMax == m_fwdScaleMaxW) {
+        return;
+    }
+    m_fwdScaleMaxW = scaleMax;
+    m_fwdBar->setReading(AccessoryReadouts::forwardPower(scaleMax, scaleLimit),
+                         AccessoryReadouts::forwardName());
 }
 
 void TunerApplet::syncFromModel()
@@ -983,8 +1036,20 @@ void TunerApplet::updateMeters(float fwdPower, float swr)
     // From AetherSDR src/gui/TunerApplet.cpp:updateMeters [@0cd4559]
     m_fwdPower = fwdPower;
     m_swr = swr;
-    m_fwdPowerGauge->setValue(fwdPower);
-    m_swrGauge->setValue(swr);
+    // NereusSDR: the rows show a reading only while the tuner is passing
+    // power (kPassingPowerW and up); below that they show the instrument's
+    // dashes (BarInstrument::clearValue(), which also drops the held peak
+    // so it cannot linger over them). A tuner that is gone reports 0 W.
+    if (fwdPower >= kPassingPowerW) {
+        m_fwdBar->setValue(static_cast<double>(fwdPower));
+        m_refBar->setValue(AccessoryReadouts::reflectedWatts(
+            static_cast<double>(fwdPower), static_cast<double>(swr)));
+        m_swrBar->setValue(static_cast<double>(swr));
+    } else {
+        for (BarInstrument* bar : {m_fwdBar, m_refBar, m_swrBar}) {
+            if (bar->hasValue()) { bar->clearValue(); }
+        }
+    }
 
     // During the post-tune capture window, record the last non-idle SWR.
     // The TGXL reports the settled SWR shortly after tuning=0 arrives;

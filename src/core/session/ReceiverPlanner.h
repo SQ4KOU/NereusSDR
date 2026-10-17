@@ -38,6 +38,11 @@
 //   2026-09-29: slice control plan Task 9: Disturbed::listeners and
 //               setShowListeners (listenerDeviceIds). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-12: devicesHoldingReceivers() in place of
+//               namesHoldingReceivers(): the server words each device, so
+//               the Core's own position and a device with no name are
+//               named too. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -167,9 +172,11 @@ public:
     /// Whether any receiver in use carries a slice of a device other than
     /// `requester`: with none, a take has nobody to take from.
     bool anotherDeviceHoldsAReceiver(const QByteArray& requester) const;
-    /// The numbered names of the devices whose slices hold the radio's
-    /// receivers, but `requester`, in the order they first appear.
-    QStringList namesHoldingReceivers(const QByteArray& requester) const;
+    /// The devices whose slices hold the radio's receivers, but
+    /// `requester`, each once and in the order they first appear. The
+    /// Core's own position is one of them. The server gives each its words
+    /// (StationServer::sliceHolderWords).
+    QList<QByteArray> devicesHoldingReceivers(const QByteArray& requester) const;
 
     // ---- JSON for confirm.request (the link document, section 7.3) ----
 

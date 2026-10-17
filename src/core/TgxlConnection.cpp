@@ -43,6 +43,22 @@
 //   2026-10-01: TGXL tune lane fix round: autotuneSent for every
 //               `autotune` written. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-10-09: Core journal volume: the status poll, ping and their
+//               answers log at debug; an S-frame logs at info only when
+//               its state or tuning flag changes. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-12: One `status` in flight (GeniusStatusGate), as on the
+//               amplifier link: the poll waits for the tuner's answer
+//               to the one before. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-10-12: The status poll runs every 250 ms (it was 1 s), and every
+//               62 ms while the Core or the tuner's own pttA, pttB or
+//               tuning flag says keyed, and for 2 s after
+//               (GeniusPollPacer). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-10-12: Two comments that named the 1 Hz poll give the new
+//               rates. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 #include "TgxlConnection.h"
 #include "AppSettings.h"
@@ -56,6 +72,18 @@ namespace NereusSDR {
 
 Q_LOGGING_CATEGORY(lcTgxl, "nereus.tgxl")
 
+namespace {
+
+// Commands a timer sends while connected: the status poll, the keepalive
+// status poke and the auto-ping. They log at debug; everything else is an
+// operator or setup command and logs at info.
+bool isPeriodicCommand(const QString& cmd)
+{
+    return cmd == QLatin1String("status") || cmd == QLatin1String("ping");
+}
+
+}  // namespace
+
 // Exponential backoff schedule for auto-reconnect, in seconds.
 // Parallel to PgxlConnection (design §6.4); cap at 60 s.
 static constexpr int kTgxlBackoffSec[] = {1, 2, 5, 10, 30, 60};
@@ -65,7 +93,7 @@ TgxlConnection::TgxlConnection(QObject* parent)
     : QObject(parent)
     , m_socket(new QTcpSocket(this))
 {
-    m_pollTimer.setInterval(1000);  // 1 Hz per AetherSDR [@0cd4559]
+    // m_pollPacer set the poll interval (kPollReceiveMs) and keeps it.
     connect(&m_pollTimer, &QTimer::timeout, this, &TgxlConnection::pollStatus);
 
     // Keepalive timer: issues a status poke at the configured interval.
@@ -161,6 +189,7 @@ bool TgxlConnection::admitIdentity(quint64 socketAttemptToken,
     m_retryHost.clear();
     m_retryPort = 0;
     m_connected = true;
+    m_lastLoggedSFrameState.clear();
 
     // Native info uses `serial`; TunerModel's established direct-status
     // contract consumes `serial_num`. Publish the buffered identity only now,
@@ -550,6 +579,15 @@ void TgxlConnection::onConnected(quint64 attemptGeneration)
     // "disconnected" forever despite an ESTABLISHED TCP socket. Same bug
     // pattern existed in PgxlConnection.
     m_gotVersion = false;
+    // A `status` the last connection never answered holds nothing back on
+    // this one. The handshake's own `status` restarts the wait before any
+    // poll can run, so today this only guards a change in that order.
+    m_statusGate.reset();
+    // Nor does what the last connection's tuner said keep the poll fast.
+    m_devicePttA = false;
+    m_devicePttB = false;
+    m_deviceTuning = false;
+    m_pollPacer.reset();
     clearIdentityAttempt();
     if (m_identityAdmissionRequired) {
         // Bound the complete TCP-handshake/V/info/owner-approval interval. A
@@ -726,6 +764,7 @@ void TgxlConnection::processLine(const QString& line,
         }
 
         m_connected = true;
+        m_lastLoggedSFrameState.clear();
         m_pollTimer.start();
         emit connected();
         return;
@@ -747,11 +786,15 @@ void TgxlConnection::processLine(const QString& line,
 
             QString body = line.mid(pipe2 + 1).trimmed();
 
+            // A refused `status` is answered here; the next one may go.
+            m_statusGate.answered(rseq);
+
             // Phase 3P-II bench-diagnostic logging (remove after pairing protocol confirmed)
             if (hexOk && hexCode != 0) {
                 qCWarning(lcTgxl) << "RX R-frame seq=" << rseq << "hex=" << QString::number(hexCode, 16) << "body:" << body;
             } else {
-                qCInfo(lcTgxl) << "RX R-frame seq=" << rseq << "hex=" << (hexOk ? QString::number(hexCode, 16) : "PARSE_ERROR") << "body:" << body;
+                // Debug, not info: one per poll (Core journal volume).
+                qCDebug(lcTgxl) << "RX R-frame seq=" << rseq << "hex=" << (hexOk ? QString::number(hexCode, 16) : "PARSE_ERROR") << "body:" << body;
             }
 
             if (m_identityAdmissionRequired && !m_connected
@@ -883,6 +926,7 @@ void TgxlConnection::processLine(const QString& line,
                     if (eq > 0)
                         kvs.insert(part.left(eq), part.mid(eq + 1));
                 }
+                noteDeviceKeys(kvs);
                 if (!kvs.isEmpty())
                     emit statusUpdated(kvs);
             }
@@ -916,6 +960,12 @@ void TgxlConnection::processLine(const QString& line,
 
         QString rest = line.mid(pipe + 1);
 
+        // The tuner answers `C<seq>|status` with `S<seq>|status ...`
+        // (captures/flex-tgxl-direct-NOTES.md:73); the next one may go.
+        if (rest.startsWith(QLatin1String("status"))) {
+            m_statusGate.answered(line.mid(1, pipe - 1).toUInt());
+        }
+
         // Find object name -- everything before first key=val
         // "state bypassA=0 ..." or "status fwd=0.0000 ..."
         int firstEq = rest.indexOf('=');
@@ -939,13 +989,29 @@ void TgxlConnection::processLine(const QString& line,
         if (!kvs.isEmpty()) {
             // TGXL tune lane: the tuning flag too, so a cycle's sweep (or
             // its absence) is in the log.
-            qCInfo(lcTgxl) << "RX S-frame object=" << object << "state=" << kvs.value("state", kvs.value("status", "unknown"))
-                           << "tuning=" << kvs.value(QStringLiteral("tuning"), QStringLiteral("-"));
+            // Info only when this object's state or tuning flag changed; the
+            // status answer (4 a second in receive, about 16 keyed) repeats
+            // them (Core journal volume, Rock 5C bench 2026-10-09). A sweep
+            // still shows as tuning=1 then 0.
+            const QString state = kvs.value("state", kvs.value("status", "unknown"));
+            const QString tuning = kvs.value(QStringLiteral("tuning"), QStringLiteral("-"));
+            const QString logged = state + QLatin1Char('|') + tuning;
+            const auto last = m_lastLoggedSFrameState.constFind(object);
+            if (last == m_lastLoggedSFrameState.constEnd() || *last != logged) {
+                m_lastLoggedSFrameState.insert(object, logged);
+                qCInfo(lcTgxl) << "RX S-frame object=" << object << "state=" << state
+                               << "tuning=" << tuning;
+            } else {
+                qCDebug(lcTgxl) << "RX S-frame object=" << object << "state=" << state
+                                << "tuning=" << tuning;
+            }
         }
 
         if (object == "state") {
+            noteDeviceKeys(kvs);
             emit stateUpdated(kvs);
         } else if (object == "status") {
+            noteDeviceKeys(kvs);
             emit statusUpdated(kvs);
         }
         return;
@@ -960,6 +1026,12 @@ quint32 TgxlConnection::sendCommand(const QString& cmd)
     if (!m_connected) {
         return 0;
     }
+    // One `status` in flight (GeniusStatusGate.h): the poll, the keepalive
+    // and any other caller wait for the tuner's answer to the one before.
+    // Nothing is queued; the next poll asks.
+    if (cmd == QLatin1String("status") && m_statusGate.answerPending()) {
+        return 0;
+    }
     return writeProtocolCommand(cmd);
 }
 
@@ -967,10 +1039,20 @@ quint32 TgxlConnection::writeProtocolCommand(const QString& cmd)
 {
     quint32 seq = ++m_seq;
     QString line = QString("C%1|%2\n").arg(seq).arg(cmd);
+    if (cmd == QLatin1String("status")) {
+        m_statusGate.sent(seq);
+    }
     m_socket->write(line.toUtf8());
     qCDebug(lcTgxl) << "TgxlConnection: sent" << line.trimmed();
     // Phase 3P-II bench-diagnostic logging (remove after pairing protocol confirmed)
-    qCInfo(lcTgxl) << "TX seq=" << seq << "cmd:" << cmd;
+    // The status poll (4 a second in receive, about 16 keyed) and the
+    // auto-ping log at debug, not info; at info they filled the Core's
+    // journal (Rock 5C bench 2026-10-09).
+    if (isPeriodicCommand(cmd)) {
+        qCDebug(lcTgxl) << "TX seq=" << seq << "cmd:" << cmd;
+    } else {
+        qCInfo(lcTgxl) << "TX seq=" << seq << "cmd:" << cmd;
+    }
     ++m_framesOut;
     m_bytesOut += quint64(line.size());
     if (cmd == QLatin1String("autotune")) {
@@ -997,6 +1079,27 @@ void TgxlConnection::pollStatus()
     if (m_connected) {
         sendCommand("status");
     }
+}
+
+// The tuner's own word on whether it is passing power or tuning, from any
+// status answer or state push that carries the flag. Either port keyed
+// counts, as in AetherSDR's applyPollRateFor,
+// src/core/TgxlConnection.cpp:512-517 [@a9a83e66]; `tuning` is added here.
+void TgxlConnection::noteDeviceKeys(const QMap<QString, QString>& kvs)
+{
+    const auto pttA = kvs.constFind(QStringLiteral("pttA"));
+    if (pttA != kvs.constEnd()) {
+        m_devicePttA = pttA->toInt() != 0;
+    }
+    const auto pttB = kvs.constFind(QStringLiteral("pttB"));
+    if (pttB != kvs.constEnd()) {
+        m_devicePttB = pttB->toInt() != 0;
+    }
+    const auto tuning = kvs.constFind(QStringLiteral("tuning"));
+    if (tuning != kvs.constEnd()) {
+        m_deviceTuning = tuning->toInt() == 1;
+    }
+    m_pollPacer.setDeviceBusy(m_devicePttA || m_devicePttB || m_deviceTuning);
 }
 
 // -------------------------------------------------------------------------

@@ -29,6 +29,8 @@
 #include "models/RfKitModel.h"
 #include "OperatorWording.h"
 #include <QLabel>
+#include <QTabWidget>
+#include "gui/SetupPage.h"
 
 using namespace NereusSDR;
 
@@ -47,6 +49,7 @@ private slots:
     void remotePageAsksTheCore();
     void remotePageWithoutCoreSupportSaysWhy();
     void bandFollowLineLocalAndRemote();
+    void pageTitleSitsAboveTheTabsAsOnSetupPages();
 
 private:
     static void primeConnectedRadio(RadioModel& m,
@@ -267,6 +270,36 @@ void RfKitPageMasterGateTest::bandFollowLineLocalAndRemote() {
              QStringLiteral("Band follow: enter 192.168.1.20, port 50001 as the TCI server on the "
                             "amplifier."));
     QVERIFY(OperatorWording::isPlain(remote.bandFollowTextForTesting()));
+}
+
+// RF-Kit carries a page title above its tabs, drawn as every Setup page
+// draws its own (RF2K-S showed its tab strip at the top of the page).
+void RfKitPageMasterGateTest::pageTitleSitsAboveTheTabsAsOnSetupPages() {
+    RadioModel m;
+    RfKitPage page(&m);
+    page.resize(900, 650);
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+    auto* tabs = page.findChild<QTabWidget*>();
+    QVERIFY(tabs != nullptr);
+    QLabel* title = nullptr;
+    for (QLabel* label : page.findChildren<QLabel*>()) {
+        if (label->text() == QStringLiteral("RF-Kit") && label->parentWidget() == &page) {
+            title = label;
+        }
+    }
+    QVERIFY2(title != nullptr, "no RF-Kit page title");
+    QVERIFY(title->isVisible());
+    QVERIFY(title->geometry().bottom() < tabs->geometry().top());
+    SetupPage reference(QStringLiteral("Reference"));
+    QLabel* referenceTitle = nullptr;
+    for (QLabel* label : reference.findChildren<QLabel*>()) {
+        if (label->text() == QStringLiteral("Reference")) {
+            referenceTitle = label;
+        }
+    }
+    QVERIFY(referenceTitle != nullptr);
+    QCOMPARE(title->styleSheet(), referenceTitle->styleSheet());
 }
 
 QTEST_MAIN(RfKitPageMasterGateTest)

@@ -34,6 +34,7 @@
 // =================================================================
 #pragma once
 
+#include "gui/NereusGuiExport.h"
 #include "gui/PanStatusText.h"
 
 #include <QWidget>
@@ -51,7 +52,7 @@ namespace NereusSDR {
 /// (parent-wired).
 /// See docs/architecture/2026-05-26-phase3f-multi-pan-multi-slice-design.md
 /// section 11 (UI Atlas Surfaces).
-class SpectrumStatusOverlay : public QWidget {
+class NEREUS_GUI_EXPORT SpectrumStatusOverlay : public QWidget {
     Q_OBJECT
 public:
     explicit SpectrumStatusOverlay(QWidget* parent = nullptr);

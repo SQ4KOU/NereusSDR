@@ -237,6 +237,109 @@ private slots:
         QVERIFY(!restarted.hasLastEmittedPacket);
     }
 
+    // R-AUD-SEND: how evenly the packets left, on the sender's own clock
+    // (injected here; nothing sleeps). One block and one drain at a time,
+    // the clock moved by hand before each drain.
+    void sendGapsFollowTheClockBetweenPacketsHandedOver()
+    {
+        constexpr qint64 kNsPerMs = 1'000'000;
+        Harness h;
+        h.engine->setSliceStreaming(h.sliceB, false);
+        DaemonAudioSender sender(h.engine);
+        PacingClock clock;
+        clock.attach(sender);
+        QSignalSpy packets(&sender, &DaemonAudioSender::packetReady);
+        const auto sendAfter = [&](qint64 ms) {
+            h.feedMixed(DaemonAudioSource::kBlockFrames, 0.25f, -0.25f, 0.0f, 0.0f);
+            clock.nowNs += ms * kNsPerMs;
+            const int before = packets.count();
+            sender.drain();
+            return packets.count() == before + 1;
+        };
+        QVERIFY(sender.start(kSsrc, 1, 0));
+        // Nothing sent, then one packet: no gap yet, however long it took.
+        QCOMPARE(sender.telemetry().longestSendGapUs, qint64{-1});
+        QCOMPARE(sender.telemetry().longestSendGapSinceTakenUs, qint64{-1});
+        QVERIFY(sendAfter(700));
+        QCOMPARE(sender.telemetry().longestSendGapUs, qint64{-1});
+        QCOMPARE(sender.telemetry().longestSendGapSinceTakenUs, qint64{-1});
+        QCOMPARE(sender.takeLongestSendGapSinceTakenUs(), qint64{-1});
+
+        // Even spacing reports that spacing.
+        for (int packet = 0; packet < 4; ++packet) {
+            QVERIFY(sendAfter(40));
+        }
+        QCOMPARE(sender.telemetry().longestSendGapUs, qint64{40'000});
+        QCOMPARE(sender.telemetry().longestSendGapSinceTakenUs, qint64{40'000});
+
+        // One late drain shows in both figures, and a punctual one after
+        // it takes nothing back.
+        QVERIFY(sendAfter(123));
+        QVERIFY(sendAfter(40));
+        QCOMPARE(sender.telemetry().longestSendGapUs, qint64{123'000});
+        QCOMPARE(sender.telemetry().longestSendGapSinceTakenUs, qint64{123'000});
+
+        // Taken: the second figure begins again, the first stays.
+        QCOMPARE(sender.takeLongestSendGapSinceTakenUs(), qint64{123'000});
+        QCOMPARE(sender.telemetry().longestSendGapUs, qint64{123'000});
+        QCOMPARE(sender.telemetry().longestSendGapSinceTakenUs, qint64{-1});
+        QVERIFY(sendAfter(41));
+        QCOMPARE(sender.telemetry().longestSendGapUs, qint64{123'000});
+        QCOMPARE(sender.telemetry().longestSendGapSinceTakenUs, qint64{41'000});
+
+        // Both stand after stop(), and start() begins both again: the
+        // first packet of the new run opens no gap from the old one.
+        sender.stop();
+        QCOMPARE(sender.telemetry().longestSendGapUs, qint64{123'000});
+        QCOMPARE(sender.telemetry().longestSendGapSinceTakenUs, qint64{41'000});
+        clock.nowNs += 5'000 * kNsPerMs;
+        QVERIFY(sender.start(kSsrc, 1, 0));
+        QCOMPARE(sender.telemetry().longestSendGapUs, qint64{-1});
+        QCOMPARE(sender.telemetry().longestSendGapSinceTakenUs, qint64{-1});
+        QVERIFY(sendAfter(900));
+        QCOMPARE(sender.telemetry().longestSendGapUs, qint64{-1});
+        QCOMPARE(sender.telemetry().longestSendGapSinceTakenUs, qint64{-1});
+        QVERIFY(sendAfter(40));
+        QCOMPARE(sender.telemetry().longestSendGapUs, qint64{40'000});
+        QCOMPARE(sender.telemetry().longestSendGapSinceTakenUs, qint64{40'000});
+    }
+
+    // R-AUD-SEND: the same figures on the lossless path, where one tick
+    // hands over several packets at one reading of the clock.
+    void losslessSendGapsFollowTheClock()
+    {
+        constexpr qint64 kLateTickNs = 70'000'000;
+        constexpr int kPacketsPerBlock = PcmAudioCodecConfig::kPacketsPerBlock;
+        Harness h;
+        h.engine->setSliceStreaming(h.sliceB, false);
+        DaemonAudioSender sender(h.engine);
+        QVERIFY(sender.setProfile(RemoteAudioProfile::Lossless));
+        PacingClock clock;
+        clock.attach(sender);
+        QSignalSpy packets(&sender, &DaemonAudioSender::packetReady);
+        QVERIFY(sender.start(kSsrc, 1, 0));
+        h.feedMixed(DaemonAudioSource::kBlockFrames, 0.25f, -0.25f, 0.0f, 0.0f);
+        // One block over several 10 ms ticks: the longest gap is one tick.
+        QVERIFY(drainPaced(sender, clock, packets, kPacketsPerBlock) > 1);
+        QCOMPARE(packets.count(), kPacketsPerBlock);
+        QCOMPARE(sender.telemetry().longestSendGapUs, qint64{10'000});
+        QCOMPARE(sender.telemetry().longestSendGapSinceTakenUs, qint64{10'000});
+
+        // A late tick, then punctual ones for the rest of the block.
+        h.feedMixed(DaemonAudioSource::kBlockFrames, 0.25f, -0.25f, 0.0f, 0.0f);
+        clock.nowNs += kLateTickNs;
+        sender.drain();
+        QVERIFY(packets.count() > kPacketsPerBlock);
+        QVERIFY(packets.count() < kPacketsPerBlock * 2);
+        QCOMPARE(sender.telemetry().longestSendGapUs, qint64{70'000});
+        QCOMPARE(sender.takeLongestSendGapSinceTakenUs(), qint64{70'000});
+        QCOMPARE(sender.telemetry().longestSendGapSinceTakenUs, qint64{-1});
+        QVERIFY(drainPaced(sender, clock, packets, kPacketsPerBlock * 2) >= 1);
+        QCOMPARE(packets.count(), kPacketsPerBlock * 2);
+        QCOMPARE(sender.telemetry().longestSendGapUs, qint64{70'000});
+        QCOMPARE(sender.telemetry().longestSendGapSinceTakenUs, qint64{10'000});
+    }
+
     void stopRestartFlushesCaptureAndUsesTheNewCallerBases()
     {
         Harness h;

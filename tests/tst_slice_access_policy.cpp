@@ -44,6 +44,11 @@
 //               desktopSliceAllowed calls (moved in Task 11). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-10-12: the retired PureSignal save's coordinator check is in
+//               PureSignalSessionFacade::updateStatus now (refreshStatus
+//               and the poll both call it); the scan's list names it
+//               there. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -651,7 +656,7 @@ private slots:
             {QStringLiteral("src/core/dsp/DspAssetService.cpp|DspAssetService::cancelOwner"),
              QStringLiteral("not a slice")},
             {QStringLiteral("src/core/session/PureSignalSessionFacade.cpp|"
-                            "PureSignalSessionFacade::refreshStatus"),
+                            "PureSignalSessionFacade::updateStatus"),
              QStringLiteral("not a slice")},
             // These owners identify the exact admitted radio-mic session,
             // device and key epoch; slice access still uses the policy.

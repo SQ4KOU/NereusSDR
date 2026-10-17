@@ -185,6 +185,34 @@ private slots:
                      QStringLiteral("bound 192.168.50.121")),
                  QStringLiteral("bound *.*.*. 121"));
     }
+
+    // Declared last: it closes the log. A failure that happens after the
+    // window has closed its log (a background Core that does not start at
+    // window close) still has to reach the profile's log.
+    void lateLineReachesTheLogAfterShutdown()
+    {
+        const QString profile = QStringLiteral("r1task8test");
+        const QDir dir(AppSettings::resolveConfigDir(profile));
+        const QString line = QStringLiteral("late-line-after-shutdown at 192.168.50.121");
+
+        // While the log is open the usual logging works, so nothing is done.
+        QVERIFY(!CoreInit::logAfterShutdown(profile, line));
+
+        CoreInit::shutdown();
+        QVERIFY(CoreInit::logAfterShutdown(profile, line));
+
+        const QStringList logs = dir.entryList({QStringLiteral("nereussdr-*.log")},
+                                                QDir::Files, QDir::Name);
+        QVERIFY(!logs.isEmpty());
+        QFile newest(dir.filePath(logs.last()));
+        QVERIFY(newest.open(QIODevice::ReadOnly));
+        const QByteArray written = newest.readAll();
+        // Through the same handler as every other line: marked as a warning
+        // and with the address redacted.
+        QVERIFY2(written.contains("WRN: late-line-after-shutdown at *.*.*. 121"), written.constData());
+        // The log is closed again, so the background Core can open it.
+        QVERIFY(!QFileInfo::exists(dir.filePath("nereussdr-log.lock")));
+    }
 };
 
 QTEST_MAIN(TstCoreInit)

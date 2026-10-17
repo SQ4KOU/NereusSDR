@@ -24,9 +24,11 @@ final class FakeRendezvousMailbox: LinkTransport, @unchecked Sendable {
     private var pump: Task<Void, Never>?
     private var pairing: FakePairingConnection?
     private var closed = false
+    private let beforePairingOpen: (@Sendable () async -> Void)?
 
-    init(station: FakeStation) {
+    init(station: FakeStation, beforePairingOpen: (@Sendable () async -> Void)? = nil) {
         self.station = station
+        self.beforePairingOpen = beforePairingOpen
     }
 
     deinit {
@@ -103,19 +105,29 @@ final class FakeRendezvousMailbox: LinkTransport, @unchecked Sendable {
         }
         let connection = station.mailboxPairingConnection()
         lock.withLock { pairing = connection }
-        enqueue(.mailboxOpened(nameplate: nameplate))
         Task { [weak self] in
-            _ = try? await connection.open { [weak self] event in
-                switch event {
-                case .text(let body):
-                    self?.enqueue(.mailbox(body: body))
-                case .closed:
-                    // The Core's side left the mailbox.
-                    self?.endMailbox(code: "peerClosed")
-                case .pong:
-                    break
+            await self?.beforePairingOpen?()
+            do {
+                _ = try await connection.open { [weak self] event in
+                    switch event {
+                    case .text(let body):
+                        self?.enqueue(.mailbox(body: body))
+                    case .closed:
+                        // The Core's side left the mailbox.
+                        self?.endMailbox(code: "peerClosed")
+                    case .pong:
+                        break
+                    }
                 }
+            } catch {
+                self?.endMailbox(code: "peerClosed")
+                return
             }
+            guard let self, lock.withLock({ !closed && pairing === connection }) else {
+                connection.close()
+                return
+            }
+            enqueue(.mailboxOpened(nameplate: nameplate))
         }
     }
 

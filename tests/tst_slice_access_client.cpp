@@ -44,6 +44,9 @@
 //               again answers "That can no longer be taken back." J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-10-12: held command results are logged as confirmation requests,
+//               while actual refusals keep their diagnostic wording.
+//               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -244,6 +247,48 @@ private slots:
             QStringLiteral("slice-access-client-%1").arg(QCoreApplication::applicationPid());
         AppSettings::setProfileOverride(profile);
         AppSettings::instance().clear();
+    }
+
+    void aHeldCommandIsLoggedAsAQuestion_data()
+    {
+        QTest::addColumn<bool>("held");
+        QTest::addColumn<QString>("expectedLog");
+        QTest::newRow("held")
+            << true
+            << QStringLiteral("Station asks before slice.takeControl command 110 : Waiting for you to confirm.");
+        QTest::newRow("refused")
+            << false
+            << QStringLiteral("Station refused slice.takeControl command 110 : Waiting for you to confirm.");
+    }
+
+    // The same reason text alone must not decide whether this is a refusal.
+    // The Core's phase decides, and the existing held-result route stays intact.
+    void aHeldCommandIsLoggedAsAQuestion()
+    {
+        QFETCH(bool, held);
+        QFETCH(QString, expectedLog);
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        Window w;
+        QVERIFY(core.server->deviceStore()->add(w.record()));
+        QVERIFY(w.connectTo(core));
+        QSignalSpy answers(&w.client, &StationClient::deviceCommandFinished);
+        QList<MirrorUpdate> values;
+        if (held) {
+            values.append({0, "phase", MirrorWireKind::Utf8,
+                           QStringLiteral("needsConfirmation")});
+        }
+        QTest::ignoreMessage(QtInfoMsg, expectedLog.toUtf8().constData());
+        w.coreEnd->sendText(SessionMessages::encode(SessionMessages::commandResult(
+            "slice.takeControl", 110, false, QStringLiteral("Waiting for you to confirm."),
+            {}, values)));
+        QTRY_COMPARE(answers.count(), 1);
+        const QList<QVariant> answer = answers.first();
+        QCOMPARE(answer.at(0).toByteArray(), QByteArray("slice.takeControl"));
+        QCOMPARE(answer.at(1).toUInt(), 110U);
+        QCOMPARE(answer.at(2).toBool(), false);
+        QCOMPARE(answer.at(3).toString(), QStringLiteral("Waiting for you to confirm."));
+        QCOMPARE(answer.at(4).toBool(), held);
     }
 
     // The window holds the Core's access objects: its own slice controlled

@@ -27,6 +27,33 @@
 //               the plan (JJ's ruling of 2026-09-30), each choice logged.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-10-10: radio connection and spectrum roles, and a receive
+//               worker without a core shares the later receivers' cores
+//               (see ThreadPlacement.h; measured on the Rock 5C, numbers
+//               at planThreadPlacement). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-11: a transmit channel listening for VOX is seated after the
+//               receive workers (setTransmitUse); as if keyed it held two
+//               fast cores for as long as VOX was on. The comment at the
+//               spectrum threads records what a raise does not buy,
+//               measured on the installed build. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-11: that comment corrected: the wait is not held to two
+//               ticks. A thread that has just woken keeps the core for up
+//               to half the scheduling latency (12.1 ms measured). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-10-11: that comment corrected again: the Rock 5C does not refuse
+//               real-time priority to a service outright, only while a
+//               root login has the CPU controller switched on. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-10-15: fix round after the review: the connection thread moves
+//               to the DSP thread's core only where slower cores run
+//               housekeeping (on equal cores it was not measured and stays
+//               on the housekeeping cores), and while transmitting the
+//               spectrum threads keep off the transmit roles' cores. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/platform/ThreadPlacement.h"
@@ -137,7 +164,40 @@ bool isChannelRole(ThreadRole role)
 // transmit worker is not told apart by channel.
 bool assignedPerChannel(ThreadRole role)
 {
-    return role == ThreadRole::RxWorker || role == ThreadRole::RadeDecoder;
+    return role == ThreadRole::RxWorker || role == ThreadRole::RadeDecoder
+        || role == ThreadRole::SpectrumThread;
+}
+
+bool isTransmitRole(ThreadRole role)
+{
+    return role == ThreadRole::TxWorker || role == ThreadRole::TxWorkerThread
+        || role == ThreadRole::TxIqSender;
+}
+
+// Roles that are housekeeping threads like any other while no thread is
+// moved (priority only): raised there, they would sit level with signal
+// processing on whatever core the kernel chose.
+bool housekeepingWithoutPlacement(ThreadRole role)
+{
+    return role == ThreadRole::ConnectionThread || role == ThreadRole::SpectrumThread;
+}
+
+const RoleAssignment* findAssignment(const QList<RoleAssignment>& assignments,
+                                     ThreadRole role, int channel)
+{
+    for (const RoleAssignment& a : assignments) {
+        // One transmit channel: only receive workers, RADE decoders and
+        // spectrum threads are told apart by channel.
+        if (a.role == role && (!assignedPerChannel(role) || a.channel == channel)) {
+            return &a;
+        }
+    }
+    return nullptr;
+}
+
+QList<int> coresOf(const RoleAssignment& a)
+{
+    return a.cpu >= 0 ? QList<int>{a.cpu} : a.shared;
 }
 
 } // namespace
@@ -281,14 +341,20 @@ CpuTopology readCpuTopology(const QString& cpuRoot, const QList<int>& allowed)
 
 int PlacementPlan::cpuFor(ThreadRole role, int channel) const
 {
-    for (const RoleAssignment& a : assignments) {
-        // One transmit channel: only receive workers and RADE decoders are
-        // told apart by channel.
-        if (a.role == role && (!assignedPerChannel(role) || a.channel == channel)) {
-            return a.cpu;
-        }
-    }
-    return -1;
+    const RoleAssignment* a = findAssignment(assignments, role, channel);
+    return a != nullptr ? a->cpu : -1;
+}
+
+QList<int> PlacementPlan::coresFor(ThreadRole role, int channel) const
+{
+    const RoleAssignment* a = findAssignment(assignments, role, channel);
+    return a != nullptr ? coresOf(*a) : QList<int>{};
+}
+
+bool PlacementPlan::raisedFor(ThreadRole role, int channel) const
+{
+    const RoleAssignment* a = findAssignment(assignments, role, channel);
+    return a != nullptr && a->raised;
 }
 
 QList<int> PlacementPlan::signalCores() const
@@ -302,6 +368,14 @@ QList<int> PlacementPlan::signalCores() const
     std::sort(cores.begin(), cores.end());
     cores.erase(std::unique(cores.begin(), cores.end()), cores.end());
     return cores;
+}
+
+bool PlacementPlan::carriesSpectrum(int cpu) const
+{
+    return cpu >= 0
+        && std::any_of(assignments.cbegin(), assignments.cend(), [cpu](const RoleAssignment& a) {
+               return a.role == ThreadRole::SpectrumThread && coresOf(a).contains(cpu);
+           });
 }
 
 PlacementPlan planThreadPlacement(const CpuTopology& topology,
@@ -429,24 +503,84 @@ PlacementPlan planThreadPlacement(const CpuTopology& topology,
     // transmit path (worker, pump, I/Q sender) must not lose its core to a
     // second or third receiver; those demand cores only for as long as
     // transmit does not.
+    //
+    // Where slower cores run everything else, the radio connection thread
+    // shares the DSP thread's core, both raised. Measured on the Rock 5C on 2026-10-10 with three receivers,
+    // two at 1,536,000 and one at 768,000 (17,000 packets a second, a
+    // socket buffer worth 9 ms of them), each receive worker processing
+    // 85 ms of signal at a stretch (DSP blocks of 4096) except where
+    // noted. Packets the kernel dropped per second:
+    //   - on a slow core with everything else (four receivers then,
+    //     26,600 packets a second): 12,000;
+    //   - a fast core to itself at normal priority, the DSP thread on the
+    //     first receive worker's core, a spectrum thread held to each
+    //     later receiver's core: 37 to 59;
+    //   - the same with the spectrum threads free on every fast core
+    //     (below): 0.8, and it waited up to 14 ms for its own core behind
+    //     a spectrum thread at its own priority;
+    //   - that with the connection thread raised: none in three minutes
+    //     while the first receive worker ran a fifth of a millisecond at
+    //     a stretch (DSP blocks of 64). Once it ran 10 ms at a stretch
+    //     (blocks of 4096) the DSP thread, level with it on its core,
+    //     waited the burst out 803 times in 94 s, the radio's audio ran
+    //     dry at every block and 6 packets a second were dropped;
+    //   - on the DSP thread's core, both raised: none in 90 s, then 0.8
+    //     over four minutes, all of it one wait of 13.9 ms for a lock a
+    //     spectrum thread held (below). The DSP thread never waited
+    //     0.2 ms for the core. With a fourth receiver (20,200 packets a
+    //     second, a buffer worth 7.6 ms): 1.3 over 150 s, with one 9 ms
+    //     wait for that lock.
+    // The two belong together because neither runs for long: at a stretch
+    // the DSP thread ran 0.07 ms (0.9 ms at most) and the connection thread
+    // 0.18 ms (3.9 ms at most), so neither can keep the other off the core
+    // the way a receive worker's burst does, and together they filled 46%
+    // of it (56% with the fourth receiver). With no DSP thread running the
+    // connection thread has the core to itself; with no core for the DSP
+    // thread both run on the housekeeping cores at normal priority.
+    // Where every core is equally fast (a Raspberry Pi 4 or 5, x86 Linux)
+    // the connection thread stays on the housekeeping cores at normal
+    // priority, as it did before it had a role: none of this was measured
+    // there, and the Pi 4, the Hermes Lite 2 bench, has one core for the
+    // DSP thread to fill with several receivers.
     QList<RoleAssignment> order;
     if (!rx.isEmpty()) {
         order.append({ThreadRole::RxWorker, rx.first(), -1});
     }
     if (demand.dspThread) {
         order.append({ThreadRole::DspThread, -1, -1});
+    } else if (demand.connectionThread && slowRunsHousekeeping) {
+        order.append({ThreadRole::ConnectionThread, -1, -1});
     }
-    if (demand.txWorker) {
-        order.append({ThreadRole::TxWorker, -1, -1});
-    }
-    if (demand.txWorkerThread) {
-        order.append({ThreadRole::TxWorkerThread, -1, -1});
-    }
-    if (demand.txIqSender) {
-        order.append({ThreadRole::TxIqSender, -1, -1});
+    // G-06 is for transmitting. With VOX on the transmit channel runs
+    // through every receive period so VOX can hear the microphone, with
+    // nothing on the air, and its roles come after every receive worker.
+    // Seated as if keyed, they kept two fast cores for as long as VOX was
+    // on: on the Rock on 2026-10-11, VOX on and one receiver, the transmit
+    // worker held core 6 and the pump core 7 between transmissions, and
+    // each receiver after the first would have run on the slow cores,
+    // where a wide one does not fit. Listening is not light work for the
+    // worker: 456 ms of a fast core each second in 1,170 runs, against
+    // 483 ms keyed. The pump took 33 ms.
+    const bool listening = demand.txWorker && demand.txListening;
+    const auto appendTransmitRoles = [&order, &demand]() {
+        if (demand.txWorker) {
+            order.append({ThreadRole::TxWorker, -1, -1});
+        }
+        if (demand.txWorkerThread) {
+            order.append({ThreadRole::TxWorkerThread, -1, -1});
+        }
+        if (demand.txIqSender) {
+            order.append({ThreadRole::TxIqSender, -1, -1});
+        }
+    };
+    if (!listening) {
+        appendTransmitRoles();
     }
     for (int i = 1; i < rx.size(); ++i) {
         order.append({ThreadRole::RxWorker, rx.at(i), -1});
+    }
+    if (listening) {
+        appendTransmitRoles();
     }
     int next = 0;
     for (RoleAssignment& a : order) {
@@ -455,14 +589,162 @@ PlacementPlan planThreadPlacement(const CpuTopology& topology,
         }
     }
 
+    // Where slower cores run everything else, a receive worker left without
+    // a core shares the cores of the later receive workers that have one,
+    // raised like them. On a slow core it runs at normal priority and takes
+    // far longer: the Rock's third wide receiver took 386 ms of a slow core
+    // each second against 178 ms of a fast one, and the heaviest receiver
+    // that evening (600 ms of a fast core) would not fit a slow core at
+    // all. Sharing one later receiver's core, both raised, it dropped no
+    // packets and the later receiver waited 178 ms a second for the core.
+    // Never the first receiver's core or the one the DSP and connection
+    // threads share. Where every core is equally fast the housekeeping
+    // cores cost it nothing but the priority, so it stays there.
+    //
+    // A transmit worker listening for VOX and left without a core shares
+    // those cores the same way, for the same reason: at twice the time a
+    // slow core would not carry it, and VOX would hear the microphone
+    // late. Not measured with a receiver on those cores. The pump and the
+    // I/Q sender are light and run with everything else, as they do while
+    // the transmit channel is off.
+    const int firstRx = rx.isEmpty() ? -1 : rx.first();
+    QList<int> laterReceiverCores;
+    if (slowRunsHousekeeping) {
+        for (const RoleAssignment& a : std::as_const(order)) {
+            if (a.role == ThreadRole::RxWorker && a.cpu >= 0 && a.channel != firstRx) {
+                laterReceiverCores.append(a.cpu);
+            }
+        }
+        std::sort(laterReceiverCores.begin(), laterReceiverCores.end());
+    }
+    for (RoleAssignment& a : order) {
+        const bool sharesWithReceivers = a.role == ThreadRole::RxWorker
+            || (listening && a.role == ThreadRole::TxWorker);
+        if (sharesWithReceivers && a.cpu < 0) {
+            a.shared = laterReceiverCores;
+        }
+        // Minor 2: raised only on signal processing cores. On the
+        // housekeeping cores a raised thread would crowd spectrum and
+        // networking.
+        a.raised = a.cpu >= 0 || !a.shared.isEmpty();
+    }
+
+    if (demand.dspThread && demand.connectionThread) {
+        int dspCpu = -1;
+        if (slowRunsHousekeeping) {
+            for (const RoleAssignment& a : std::as_const(order)) {
+                if (a.role == ThreadRole::DspThread) {
+                    dspCpu = a.cpu;
+                }
+            }
+        }
+        order.append({ThreadRole::ConnectionThread, -1, dspCpu, {}, dspCpu >= 0});
+    }
+
+    // Spectrum threads own no core. Where slower cores run everything else
+    // they may use every signal processing core (while transmitting, every
+    // one the transmit roles leave), at normal priority; held to fewer they
+    // stall the connection thread. A spectrum thread takes
+    // its event queue's lock for each block of samples, and so does the
+    // connection thread to hand it one. Held to one later receiver's core,
+    // a spectrum thread that lost the core to that receiver's burst (50 ms
+    // of processing for each 85 ms block at 1,536,000) kept the lock until
+    // the burst ended, and the connection thread waited 47 to 55 ms for it
+    // about four times a minute, against a socket buffer of 9 ms. Measured
+    // as above with the connection thread raised, packets dropped per
+    // second and the connection thread's longest wait for the lock, by the
+    // cores the spectrum threads could use:
+    //   - one later receiver's core each (connection thread not raised):
+    //     37 to 59, 55 ms;
+    //   - the three fast cores without the first receiver's: 3.2, 14.5 ms;
+    //   - all four: none in three minutes, 1.1 ms; over a later four
+    //     minutes 0.8, 13.9 ms once.
+    // That last wait is not the placement's to remove: a spectrum thread
+    // that loses its core to a receive worker's burst while it holds the
+    // lock keeps it until another fast core takes the thread over. A
+    // receive worker running shorter DSP blocks, a socket buffer granted
+    // in full (the kernel gave 426 KB of the 4 MB asked for) or a handoff
+    // that takes no lock would each end it.
+    // At normal priority they cost the raised threads little: a spectrum
+    // thread on its core kept the connection thread waiting 2 ms or more
+    // 14 times in four minutes, 5.4 ms at most, and the DSP thread never
+    // 0.3 ms. Every figure here was measured receiving. Where the system
+    // refuses the raise (no LimitNICE), spectrum, the receive workers and
+    // the connection thread share the fast cores at nice 0; that case is
+    // not measured either.
+    //
+    // While transmitting (G-06, not listening for VOX) they keep off the
+    // cores the transmit roles hold, as the RADE decoders do (below): a
+    // raised thread can wait out a normal-priority thread's run (next
+    // paragraph), and the pump feeds the radio every 1.33 ms. With no fast
+    // core left they run on the housekeeping cores, as on equal cores.
+    // Keyed behavior is not measured. While listening for VOX nothing
+    // changes.
+    //
+    // What a raise buys against a thread at normal priority is less than
+    // it looks: it does not take the core from one that has just woken.
+    // Linux places a thread that wakes from sleep up to half its
+    // scheduling latency ahead of the threads already queued
+    // (place_entity, kernel/sched/fair.c, v6.1; 12 ms on this board:
+    // latency 24 ms with GENTLE_FAIR_SLEEPERS on). A normal-priority
+    // thread uses that lead up one for one as it runs, and until it has,
+    // the tick hands the core straight back to it (check_preempt_tick,
+    // pick_next_entity). So a raised thread can wait out a normal-priority
+    // thread's whole run, up to about 12 ms. Recorded on 2026-10-11 with
+    // one receiver at 768,000. Every switch on the connection thread's
+    // core for four minutes: nine waits of 2 ms or more, eight of them
+    // (4.4 to 5.4 ms) behind a program that is not the Core's (htop in a
+    // terminal, allowed on every core) and one (2.0 ms) behind a spectrum
+    // thread. On a later build, two minutes of polling: one wait, 12.1 ms,
+    // while htop ran 12.7 ms on that core. No packet was dropped: one
+    // receiver's packets fill the socket buffer in about 45 ms. Four wide
+    // receivers fill it in 6 to 9 ms, which is where such a wait costs
+    // packets. Real-time priority would end it. This board does not
+    // refuse it to a service outright, as this comment first said: its
+    // kernel groups real-time scheduling by cgroup, and a request is
+    // refused only while the CPU controller is switched on, which root's
+    // login manager (user@0.service, started by any root login) asks for.
+    // Read on the Rock on 2026-10-11 by the native audio work: of six
+    // requests by audio threads, the four made while that login manager
+    // ran were refused and the two made with it stopped were granted
+    // (SCHED_FIFO 98). The threads placed here do not ask for it; they
+    // take the raise above. A socket buffer granted in full makes the
+    // wait harmless.
+    //
+    // Where every core is equally fast they stay on the housekeeping cores,
+    // which no raised thread runs on.
+    QList<int> spectrum = demand.spectrumThreads;
+    std::sort(spectrum.begin(), spectrum.end());
+    spectrum.erase(std::unique(spectrum.begin(), spectrum.end()), spectrum.end());
+    QList<int> spectrumCores;
+    if (slowRunsHousekeeping) {
+        spectrumCores = plan.signalPool;
+        if (!listening) {
+            for (const RoleAssignment& a : std::as_const(order)) {
+                if (isTransmitRole(a.role) && a.cpu >= 0) {
+                    spectrumCores.removeAll(a.cpu);
+                }
+            }
+        }
+        std::sort(spectrumCores.begin(), spectrumCores.end());
+    }
+    for (int bucket : std::as_const(spectrum)) {
+        order.append({ThreadRole::SpectrumThread, bucket, -1, spectrumCores});
+    }
+
     // RADE decoders (JJ's ruling of 2026-09-30: the least busy fast core),
     // after every other role, each sharing a signal processing core, judged
     // from the plan. The key, smallest first:
     //  1. decoders already on the core, so decoders spread across cores
     //     before any core takes a second;
-    //  2. busy: every role the plan gives the core. Transmit roles count in
-    //     full: they are in the plan only while transmitting, and then they
-    //     are working (G-06 keeps their cores for them);
+    //  1a. the connection thread's core after every other core without a
+    //     decoder: it shares only with the DSP thread for a reason (above).
+    //     Where the connection thread has no core of its own (equal
+    //     cores) this counts nothing;
+    //  2. busy: every role the plan gives the core as its own. Transmit
+    //     roles count in full: they are in the plan only while
+    //     transmitting, and then they are working (G-06 keeps their cores
+    //     for them). Roles that move between cores are not counted;
     //  3. a core carrying a transmit role last among equals, so that while
     //     keyed a receive decoder leaves the transmit cores to the transmit
     //     path (G-06) whenever an equal core without one exists;
@@ -483,13 +765,16 @@ PlacementPlan planThreadPlacement(const CpuTopology& topology,
         QMap<int, int> decoders;
         std::set<int> dspCores;
         std::set<int> transmitCores;
+        std::set<int> connectionCores;
         for (const RoleAssignment& a : std::as_const(order)) {
             if (a.cpu < 0) {
                 continue;
             }
             ++busy[a.cpu];
-            if (a.role == ThreadRole::TxWorker || a.role == ThreadRole::TxWorkerThread
-                || a.role == ThreadRole::TxIqSender) {
+            if (a.role == ThreadRole::ConnectionThread) {
+                connectionCores.insert(a.cpu);
+            }
+            if (isTransmitRole(a.role)) {
                 transmitCores.insert(a.cpu);
             }
             if (a.role == ThreadRole::DspThread) {
@@ -504,15 +789,16 @@ PlacementPlan planThreadPlacement(const CpuTopology& topology,
                     continue;
                 }
                 const auto key = [&](int c) {
-                    return std::make_tuple(decoders.value(c), busy.value(c),
-                                           transmitCores.count(c), dspCores.count(c));
+                    return std::make_tuple(decoders.value(c), connectionCores.count(c),
+                                           busy.value(c), transmitCores.count(c),
+                                           dspCores.count(c));
                 };
                 // Strictly less: an equal core keeps the earlier one.
                 if (key(cpu) < key(best)) {
                     best = cpu;
                 }
             }
-            order.append({ThreadRole::RadeDecoder, channel, best});
+            order.append({ThreadRole::RadeDecoder, channel, best, {}, true});
             ++busy[best];
             ++decoders[best];
         }
@@ -770,9 +1056,12 @@ PlacementDemand ThreadPlacement::demandLocked() const
             demand.rxChannels.append(it.key());
         }
     }
+    bool keyed = false;
     for (auto it = m_activeTx.cbegin(); it != m_activeTx.cend(); ++it) {
         demand.txWorker = demand.txWorker || it.value();
+        keyed = keyed || (it.value() && !m_listeningTx.value(it.key(), false));
     }
+    demand.txListening = demand.txWorker && !keyed;
     for (const Registered& t : m_threads) {
         demand.dspThread = demand.dspThread || t.role == ThreadRole::DspThread;
         demand.txWorkerThread = demand.txWorkerThread
@@ -781,6 +1070,11 @@ PlacementDemand ThreadPlacement::demandLocked() const
             || (t.role == ThreadRole::TxIqSender && demand.txWorker);
         if (t.role == ThreadRole::RadeDecoder) {
             demand.radeDecoders.append(t.channel);
+        }
+        demand.connectionThread = demand.connectionThread
+            || t.role == ThreadRole::ConnectionThread;
+        if (t.role == ThreadRole::SpectrumThread) {
+            demand.spectrumThreads.append(t.channel);
         }
     }
     return demand;
@@ -795,6 +1089,8 @@ bool ThreadPlacement::roleActiveLocked(ThreadRole role, int channel) const
         return m_activeTx.value(channel, false);
     case ThreadRole::DspThread:
     case ThreadRole::RadeDecoder:
+    case ThreadRole::ConnectionThread:
+    case ThreadRole::SpectrumThread:
         return true;
     case ThreadRole::TxWorkerThread:
     case ThreadRole::TxIqSender:
@@ -813,7 +1109,9 @@ void ThreadPlacement::applyOneLocked(Registered& thread, const PlacementPlan& pl
     bool raised = roleActiveLocked(thread.role, thread.channel);
     if (m_placing) {
         const int cpu = plan.active ? plan.cpuFor(thread.role, thread.channel) : -1;
-        const QList<int> cpus = cpu >= 0 ? QList<int>{cpu} : m_startupPlan.housekeeping;
+        const QList<int> own =
+            plan.active ? plan.coresFor(thread.role, thread.channel) : QList<int>{};
+        const QList<int> cpus = own.isEmpty() ? m_startupPlan.housekeeping : own;
         if (cpus != thread.appliedCpus && setAffinityLocked(thread.threadId, cpus)) {
             thread.appliedCpus = cpus;
             // Each RADE decoder's core is logged when it is chosen (a
@@ -831,10 +1129,14 @@ void ThreadPlacement::applyOneLocked(Registered& thread, const PlacementPlan& pl
                                   .arg(formatCpuList(cpus)));
             }
         }
-        // A role left without a core of its own (none free, or the move
-        // was refused) shares the housekeeping cores; raised there, it
-        // would crowd spectrum and networking.
-        raised = cpu >= 0 && thread.appliedCpus == cpus;
+        // A role left without signal processing cores (none free, or the
+        // move was refused) shares the housekeeping cores; raised there,
+        // it would crowd spectrum and networking. The plan says which of
+        // the others are raised: never a spectrum thread.
+        raised = !own.isEmpty() && thread.appliedCpus == cpus
+            && plan.raisedFor(thread.role, thread.channel);
+    } else if (housekeepingWithoutPlacement(thread.role)) {
+        raised = false;
     }
     if (m_raisePriority) {
         const int nice = raised ? kDspNice : 0;
@@ -863,7 +1165,7 @@ void ThreadPlacement::registerCurrentThread(ThreadRole role, int channel)
     }
     QMutexLocker lock(&m_mutex);
     const qint64 threadId = m_api->currentThreadId();
-    const bool perChannel = isChannelRole(role) || role == ThreadRole::RadeDecoder;
+    const bool perChannel = isChannelRole(role) || assignedPerChannel(role);
     const int ownChannel = perChannel ? channel : -1;
     // A channel has one worker: WDSP's own rebuilds (a rate or size change)
     // replace it with a new thread, so the old entry goes too. A RADE
@@ -903,12 +1205,33 @@ void ThreadPlacement::setChannelActive(ThreadRole role, int channel, bool active
     if (!isActive() || !isChannelRole(role)) {
         return;
     }
+    if (role == ThreadRole::TxWorker) {
+        setTransmitUse(channel, active ? TransmitUse::Transmitting : TransmitUse::Stopped);
+        return;
+    }
     QMutexLocker lock(&m_mutex);
-    QMap<int, bool>& states = role == ThreadRole::TxWorker ? m_activeTx : m_activeRx;
+    QMap<int, bool>& states = m_activeRx;
     if (states.value(channel, false) == active && states.contains(channel)) {
         return;
     }
     states.insert(channel, active);
+    applyLocked();
+}
+
+void ThreadPlacement::setTransmitUse(int channel, TransmitUse use)
+{
+    if (!isActive()) {
+        return;
+    }
+    const bool active = use != TransmitUse::Stopped;
+    const bool listening = use == TransmitUse::Listening;
+    QMutexLocker lock(&m_mutex);
+    if (m_activeTx.contains(channel) && m_activeTx.value(channel) == active
+        && m_listeningTx.value(channel, false) == listening) {
+        return;
+    }
+    m_activeTx.insert(channel, active);
+    m_listeningTx.insert(channel, listening);
     applyLocked();
 }
 
@@ -925,6 +1248,7 @@ void ThreadPlacement::forgetChannel(int channel)
                     m_threads.end());
     m_activeRx.remove(channel);
     m_activeTx.remove(channel);
+    m_listeningTx.remove(channel);
     applyLocked();
 }
 
@@ -988,20 +1312,25 @@ PlacementPlan ThreadPlacement::appliedPlan() const
     PlacementPlan plan = planThreadPlacement(m_topology, demandLocked());
     QList<RoleAssignment> inForce;
     for (const RoleAssignment& assignment : std::as_const(plan.assignments)) {
-        if (assignment.cpu < 0) {
+        const QList<int> cores = coresOf(assignment);
+        if (cores.isEmpty()) {
             continue;
         }
-        const bool applied = std::any_of(
-            m_threads.cbegin(), m_threads.cend(), [&assignment](const Registered& thread) {
-                // As in cpuFor(): only receive workers and RADE decoders
-                // are told apart by channel.
-                return thread.role == assignment.role
-                    && (!assignedPerChannel(assignment.role)
-                        || thread.channel == assignment.channel)
-                    && thread.appliedCpus == QList<int>{assignment.cpu};
-            });
-        if (applied) {
-            inForce.append(assignment);
+        for (const Registered& thread : m_threads) {
+            // As in cpuFor(): only receive workers, RADE decoders and
+            // spectrum threads are told apart by channel.
+            if (thread.role != assignment.role
+                || (assignedPerChannel(assignment.role)
+                    && thread.channel != assignment.channel)
+                || thread.appliedCpus != cores) {
+                continue;
+            }
+            RoleAssignment applied = assignment;
+            // Raised only where the system took the priority too.
+            applied.raised = assignment.raised && thread.niceApplied
+                && thread.appliedNice == kDspNice;
+            inForce.append(applied);
+            break;
         }
     }
     plan.assignments = inForce;

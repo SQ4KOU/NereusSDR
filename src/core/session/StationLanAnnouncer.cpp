@@ -3,6 +3,7 @@
 
 #include <QNetworkInterface>
 #include <QUdpSocket>
+#include <QVariant>
 
 namespace NereusSDR {
 namespace {

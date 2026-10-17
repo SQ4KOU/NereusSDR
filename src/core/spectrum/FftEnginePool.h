@@ -28,19 +28,30 @@
 //                                    applies Rendering > Decimation to every
 //                                    engine. AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-10-10  J.J. Boyd / KG4VCF  One setter per FFT setting, each
+//                                    reaching every engine and the stored
+//                                    config (R-DSP-30, R-DSP-33), and
+//                                    resetInputHistoryAll. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-10-11  J.J. Boyd / KG4VCF  Follow-up wave F6: each purge has a
+//                                    generation, which the frames computed
+//                                    after it carry (inputGeneration).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/NereusCoreExport.h"
+#include "core/ControlRanges.h"
 #include "core/FFTEngine.h"
 
 #include <QMap>
 #include <QObject>
 #include <QSet>
+#include <QThread>
 #include <QVector>
 
+#include <memory>
+#include <mutex>
 #include <optional>
-
-class QThread;
 
 namespace NereusSDR {
 
@@ -91,6 +102,13 @@ struct FftPoolConfig {
     // value removes the trap rather than documenting it.
     int    windowType     {1};
     double hzPerBinTarget {0.0};
+    // Which control sets the size a stream runs (design D38). With it,
+    // fftSize above is the size that control chose (the stored
+    // DisplayFftSize in Fixed, 4096 in Auto and HzPerBin) and
+    // hzPerBinTarget is above 0 only in HzPerBin. The pool only carries it
+    // for whoever replans a stream (MainWindow::replanFftForStream); a Core's
+    // engines are sized by each request and never read it.
+    ControlRanges::DisplayFftSizingMode sizingMode {ControlRanges::kDisplayFftSizingModeDefault};
     // 1 = today's shared thread. Design section 4.5a measured only a
     // 1.35x aggregate-throughput gain at 4 threads on the Pi 4B floor
     // hardware -- the workload is memory-bandwidth bound, not core
@@ -191,6 +209,56 @@ public:
     /// The value setDecimation() last took; 1 before any call.
     int decimation() const { return m_decimation.value_or(1); }
 
+    // ── One FFT setting at a time (R-DSP-30, R-DSP-33) ──────────────────
+    //
+    // Each of these stores the value in the pool's config, so an engine
+    // created afterwards starts with it, and hands it to every engine the
+    // pool has now, both tiers. Unlike setConfig() none of them touches an
+    // engine's current fftSize(): a zoom's size is the caller's to replan.
+    // The engine setters they call are atomic stores, safe from the pool's
+    // thread; resetInputHistoryAll() is the one call that is queued.
+
+    /// The FFT size at full span (the Size slider's choice). Sets each
+    /// engine's baseline only and leaves its current fftSize() for the
+    /// caller's replan. A size that is not a power of two in 1024 to
+    /// 262144 is ignored with a warning.
+    void setFftSizeBaseline(int size);
+    /// The station's FFT sizing (design D38, D43): `mode`, the size its own
+    /// control chose (`baseline`: ControlRanges::displayFftSizingBaseline)
+    /// and the Hz/bin target in force (0 outside HzPerBin), for every engine
+    /// now and made later. Like setFftSizeBaseline it sets each engine's
+    /// baseline only, so its FFT size offset follows, and leaves the
+    /// running size for the caller's replan. When the mode changes, every
+    /// engine says fftSizeBaselineChanged exactly once: from its changed
+    /// baseline, or from FFTEngine::announceFftSizingChanged() when the
+    /// baseline stayed. Called again with what is already in place it does
+    /// nothing. A baseline that is not a power of two in 1024 to 262144 is
+    /// ignored with a warning, and nothing else changes.
+    void setSizing(ControlRanges::DisplayFftSizingMode mode, int baseline, double hzPerBinTarget);
+    void setWindowType(int windowType);
+    /// 0 is off. Negative and non-finite values are stored as 0.
+    void setHzPerBinTarget(double hz);
+    /// Clamped to 1 to 60, as FFTEngine::setOutputFps clamps it.
+    void setOutputFps(int fps);
+    /// The scheduling priority of every worker thread the pool has and
+    /// every one it starts afterwards. Until it is called the pool keeps
+    /// its own start-up elevation. Ignored where ThreadPlacement manages
+    /// thread priority (nereusd on Linux).
+    void setThreadPriority(QThread::Priority priority);
+    /// The value setThreadPriority() last took, if any.
+    std::optional<QThread::Priority> threadPriority() const { return m_threadPriority; }
+
+    /// Queues FFTEngine::resetInputHistory() to every engine, each on its
+    /// own worker thread, behind whatever input that thread already holds.
+    /// Each call is a new generation (inputGeneration()), which every frame
+    /// computed after the purge carries as fftFrameReady's last argument; a
+    /// frame computed before it carries an older one however late it is
+    /// delivered.
+    void resetInputHistoryAll();
+    /// The generation of the last resetInputHistoryAll(); 0 before the
+    /// first. An engine made afterwards starts with it.
+    quint64 inputGeneration() const { return m_inputGeneration; }
+
     /// Returns the engine for streamIndex, creating and configuring one
     /// from the current config on first use. A negative streamIndex
     /// returns nullptr and creates nothing (mirrors the old
@@ -235,8 +303,11 @@ signals:
     /// index is always the engine's receiverId -- every engine is
     /// constructed with receiverId == streamIndex -- so this is a plain
     /// signal-to-signal forward, not a per-engine lambda.
+    /// inputGeneration is the engine's: the generation of the last purge
+    /// before this frame's samples.
     void fftFrameReady(int streamIndex, const QVector<float>& binsLinear,
-                       double windowEnb, double dbmOffset);
+                       double windowEnb, double dbmOffset,
+                       quint64 inputGeneration = 0);
 
 private:
     FFTEngine* createEngine(const FftSourceKey& key, const FftPoolConfig& cfg);
@@ -244,7 +315,17 @@ private:
 
     FftPoolConfig          m_config;
     bool                   m_forwardFrameReady{true};
+    quint64                m_inputGeneration{0};
     std::optional<int>     m_decimation;
+    std::optional<QThread::Priority> m_threadPriority;
+    // Whether setThreadPriority() has chosen a priority, shared with each
+    // worker thread's start-up elevation (which runs on that thread).
+    // Display threads only: nothing on the audio path takes this mutex.
+    struct ElevationState {
+        std::mutex mutex;
+        bool priorityChosen{false};
+    };
+    std::shared_ptr<ElevationState> m_elevation;
     QMap<FftSourceKey, FFTEngine*> m_engines;
     QMap<int, QThread*>    m_threadsByBucket;  // keyed by streamIndex % threadCount
 };

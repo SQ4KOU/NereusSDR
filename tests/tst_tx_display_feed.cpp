@@ -20,6 +20,9 @@
 //                 AI-assisted implementation via Anthropic Claude Code.
 //   2026-10-04 : Cover first-key pending DSP geometry in both TX analyzers.
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-15 : Skip the first-key geometry case on Windows, where the
+//                 test reads its own copy of WDSP's global arrays.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -125,6 +128,10 @@ void TstTxDisplayFeed::first_key_uses_pending_dsp_geometry()
 {
 #ifndef HAVE_WDSP
     QSKIP("Requires the real WDSP channel and transmit control lane");
+#elif defined(Q_OS_WIN)
+    // WDSP is linked into both the Core library and this program on Windows,
+    // so its global arrays read here are this program's own, never filled.
+    QSKIP("Reads WDSP's global arrays, which this program has its own copy of on Windows");
 #else
     Station station(true);
     WdspEngine* engine = station.radio.wdspEngine();

@@ -21,6 +21,11 @@
 //                 core/DiversityPattern, which the Core also sends to the
 //                 phone; the radar draws from it. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - Workspace preview only: the backdrop is a data background
+//                 (D22) and takes the surrounding container's surface
+//                 through WorkspacePreview::dataBackground(); the ink is
+//                 unchanged. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -64,7 +69,12 @@
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+// Modification history (NereusSDR):
+//   2026-10-12 - Apply the approved workspace-only 11 px text minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
 #include "gui/widgets/DiversityRadarWidget.h"
+#include "gui/styles/WorkspacePreview.h"
 
 #include <QFont>
 #include <QLinearGradient>
@@ -156,8 +166,9 @@ void DiversityRadarWidget::paintEvent(QPaintEvent* /*event*/)
 
     // Backdrop radial gradient (NereusSDR-original chrome).
     QRadialGradient bg(c, r);
-    bg.setColorAt(0.0, QColor(0, 60, 100));
-    bg.setColorAt(1.0, QColor(0, 20, 40));
+    // Workspace preview: both stops are the container's surface (D22).
+    bg.setColorAt(0.0, WorkspacePreview::dataBackground(QColor(0, 60, 100), "panel", this));
+    bg.setColorAt(1.0, WorkspacePreview::dataBackground(QColor(0, 20, 40), "panel", this));
     p.setBrush(bg);
     p.setPen(QPen(QColor(0, 255, 255), 1.0));
     p.drawEllipse(c, r, r);
@@ -177,8 +188,11 @@ void DiversityRadarWidget::paintEvent(QPaintEvent* /*event*/)
     p.drawLine(QPointF(c.x(), c.y() - r), QPointF(c.x(), c.y() + r));
 
     // Compass labels (NereusSDR-original chrome).
-    QFont labelFont = p.font();
-    labelFont.setPointSizeF(labelFont.pointSizeF() * 0.85);
+    QFont labelFont = WorkspacePreview::readableFont(p.font(), p.device());
+    if (labelFont.pointSizeF() > 0) {
+        labelFont.setPointSizeF(labelFont.pointSizeF() * 0.85);
+    }
+    labelFont = WorkspacePreview::readableFont(labelFont, p.device());
     p.setFont(labelFont);
     p.setPen(QColor(200, 220, 230));
     const QString labels[4] = {QStringLiteral("N"), QStringLiteral("E"),

@@ -13,6 +13,12 @@
 // Modification history (NereusSDR):
 //   2026-09-22: J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-10-11: a newly started scripted helper gets 30 s for its hello
+//               and for the first wait after its start
+//               (kFakeCaptureChildStartMs, fakes/FakeCaptureChild.h),
+//               so a busy computer cannot fail a case that is not about
+//               the helper's start.  J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -57,11 +63,17 @@ namespace {
 const QString kRefusal =
     QStringLiteral("Microphone is not ready. Check Audio settings and retry.");
 
+// What a newly started scripted helper is allowed before its start counts
+// as failed: the hello deadline, and each first wait after a start
+// (fakes/FakeCaptureChild.h).
+constexpr int kHelperStartMs = NereusSDR::Test::kFakeCaptureChildStartMs;
+
 CaptureSupervisor::Options fakeOptions(const QString& scenario)
 {
     CaptureSupervisor::Options options;
     options.program = QCoreApplication::applicationFilePath();
     options.arguments = {QStringLiteral("--fake-capture-child"), scenario};
+    options.helloTimeoutMs = kHelperStartMs;   // 3000 in production
     return options;
 }
 
@@ -192,7 +204,8 @@ bool reachCaptureState(Rig& rig, const QString& state)
     const State want = state == QLatin1String("ready")     ? State::Ready
                      : state == QLatin1String("opening")   ? State::Opening
                                                             : State::Failed;
-    return QTest::qWaitFor([&] { return rig.engine()->captureStatus().state == want; }, 8000);
+    return QTest::qWaitFor([&] { return rig.engine()->captureStatus().state == want; },
+                           kHelperStartMs);
 }
 
 QString scenarioFor(const QString& state)
@@ -434,6 +447,8 @@ private slots:
             QVERIFY(!rig.model->pcCaptureRequired());
             rig.mox()->setMox(true);
         } else if (keying == QLatin1String("vax")) {
+            // Tests the VAX path itself, which Windows does not offer.
+            rig.model->transmitModel().setVaxSourceAvailable(true);
             rig.model->transmitModel().setMicSource(MicSource::Vax);
             QVERIFY(!rig.model->pcCaptureRequired());
             rig.mox()->setMox(true);
@@ -530,7 +545,8 @@ private slots:
         } else {
             rig.takeDemand();
         }
-        QTRY_COMPARE_WITH_TIMEOUT(rig.engine()->captureStatus().state, State::Ready, 8000);
+        QTRY_COMPARE_WITH_TIMEOUT(rig.engine()->captureStatus().state, State::Ready,
+                                  kHelperStartMs);
         QTest::qWait(300);
         QVERIFY(!rig.mox()->isMox());
         QCOMPARE(aboutToBegin.count(), 1);
@@ -913,7 +929,8 @@ private slots:
             QTRY_COMPARE_WITH_TIMEOUT(rig.engine()->captureStatus().state, State::Failed, 5000);
             rig.engine()->retryCapture();
         }
-        QTRY_COMPARE_WITH_TIMEOUT(rig.engine()->captureStatus().state, State::Ready, 8000);
+        QTRY_COMPARE_WITH_TIMEOUT(rig.engine()->captureStatus().state, State::Ready,
+                                  kHelperStartMs);
         rig.mox()->setMox(true);
         QTest::qWait(50);
         QVERIFY(rig.mox()->isMox());

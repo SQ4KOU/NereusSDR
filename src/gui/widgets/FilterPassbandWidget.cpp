@@ -17,6 +17,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - JJ's option B: fit small workspace text to the approved
+//                 11 logical-pixel floor. J.J. Boyd (KG4VCF), AI-assisted
+//                 via OpenAI Codex. Classic geometry and colors retained.
 //   2026-04-16 — Ported/adapted in C++20/Qt6 for NereusSDR by
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.
@@ -26,9 +29,16 @@
 //                 hand cursors instead of Qt's drawn four-way move cursor,
 //                 which crashed Qt 6.11.0 on macOS. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - The background reads WorkspacePreview::dataBackground()
+//                 (the data colour choice; navy until a choice is made).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - JJ's data colour decision: the background is the
+//                 container's, the user's colour when set. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "FilterPassbandWidget.h"
+#include "gui/styles/WorkspacePreview.h"
 
 #include <QPainter>
 #include <QPainterPath>
@@ -87,7 +97,7 @@ void FilterPassbandWidget::paintEvent(QPaintEvent*)
     const int h = height();
 
     // Background — from AetherSDR
-    p.fillRect(rect(), QColor(0x0a, 0x0a, 0x18));
+    p.fillRect(rect(), WorkspacePreview::dataBackground(QColor(0x0a, 0x0a, 0x18), "panel", this));
 
     // Border
     p.setPen(QColor(0x20, 0x30, 0x40));
@@ -96,9 +106,14 @@ void FilterPassbandWidget::paintEvent(QPaintEvent*)
     // ── Static trapezoid shape ──────────────────────────────────────────
     // Fixed geometry — shape doesn't change with filter width
     // From AetherSDR FilterPassbandWidget.cpp lines 53-64
-    const int margin = 16;
+    const int margin = WorkspacePreview::enabled() ? 17 : 16;
     const int topY = 8;
-    const int botY = h - 16;  // room for labels
+    QFont labelFont = p.font();
+    labelFont.setPixelSize(WorkspacePreview::readableTextPixelSize(10));
+    const QFontMetrics labelMetrics(labelFont, this);
+    const int bottomSpace = WorkspacePreview::enabled()
+        ? std::max(17, labelMetrics.height() + 4) : 16;
+    const int botY = h - bottomSpace;  // room for labels
     const int loX = margin;
     const int hiX = w - margin;
     const int kSkirt = (hiX - loX) / 7;
@@ -118,9 +133,11 @@ void FilterPassbandWidget::paintEvent(QPaintEvent*)
     // ── Labels ──────────────────────────────────────────────────────────
     // From AetherSDR FilterPassbandWidget.cpp lines 72-99
     QFont font = p.font();
-    font.setPixelSize(10);
+    font.setPixelSize(WorkspacePreview::readableTextPixelSize(10));
     p.setFont(font);
-    const QFontMetrics fm(font);
+    const QFontMetrics fm(font, this);
+    const int baseline = WorkspacePreview::enabled()
+        ? h - 3 - fm.descent() : botY + 12;
 
     // Bandwidth label (centered at bottom)
     const int bw = std::abs(m_hi - m_lo);
@@ -128,7 +145,7 @@ void FilterPassbandWidget::paintEvent(QPaintEvent*)
         ? QStringLiteral("%1.%2K").arg(bw / 1000).arg((bw % 1000) / 100)
         : QString::number(bw);
     p.setPen(QColor(0xc8, 0xd8, 0xe8));
-    p.drawText((loX + hiX) / 2 - fm.horizontalAdvance(bwText) / 2, botY + 12, bwText);
+    p.drawText((loX + hiX) / 2 - fm.horizontalAdvance(bwText) / 2, baseline, bwText);
 
     // Passband center offset (below top line)
     const int center = (m_lo + m_hi) / 2;
@@ -141,11 +158,15 @@ void FilterPassbandWidget::paintEvent(QPaintEvent*)
     // Lo label (centered on left slant bottom point)
     const QString loText = QString::number(std::abs(m_lo));
     p.setPen(QColor(0x80, 0x90, 0xa0));
-    p.drawText(loX - fm.horizontalAdvance(loText) / 2, botY + 12, loText);
+    p.drawText(WorkspacePreview::enabled()
+        ? std::max(2, loX - fm.horizontalAdvance(loText) / 2)
+        : loX - fm.horizontalAdvance(loText) / 2, baseline, loText);
 
     // Hi label (centered on right slant bottom point)
     const QString hiText = QString::number(std::abs(m_hi));
-    p.drawText(hiX - fm.horizontalAdvance(hiText) / 2, botY + 12, hiText);
+    p.drawText(WorkspacePreview::enabled()
+        ? std::min(w - 2 - fm.horizontalAdvance(hiText), hiX - fm.horizontalAdvance(hiText) / 2)
+        : hiX - fm.horizontalAdvance(hiText) / 2, baseline, hiText);
 }
 
 // ─── Mouse interaction ──────────────────────────────────────────────────────

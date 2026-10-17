@@ -1,9 +1,34 @@
 // no-port-check: NereusSDR-original presentation document contract tests.
+// Modification history (NereusSDR):
+//   2026-10-11 - Unknown keys inside screen are kept. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - A free home's geometryPane round trips. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - home round trip (strip and free), absent, unknown keys
+//                 kept, and malformed. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-11 - header loads and saves as Shown (0), Reveal (1) or Hidden
+//                 (2); anything else is rejected. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - locked is written only when true, and a document without
+//                 the key loads unlocked. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
+//   2026-10-11 - screen round trip, absent and malformed, and a floating
+//                 container's unreadable geometry. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - geometryPane round trip, absent and malformed. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-07 - Container edge and workspace arrangement round trips for
+//                 the workspace preview by J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 #include <QtTest>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QRegularExpression>
 #include <limits>
+#include <optional>
 #include "gui/containers/ContainerDocumentCodec.h"
+#include "gui/containers/ScreenSource.h"
 
 using namespace NereusSDR;
 
@@ -64,6 +89,96 @@ private slots:
         QCOMPARE(int(DockMode::OverlayDocked), 1);
         QCOMPARE(int(DockMode::Floating), 2);
         QCOMPARE(int(AxisLock::BottomLeft), 7);
+    }
+    void lockedIsWrittenOnlyWhenTrue()
+    {
+        const auto containerObject = [](const WorkspaceDocument& doc) {
+            return QJsonDocument::fromJson(ContainerDocumentCodec::encode(doc)).object()["containers"].toArray().first().toObject();
+        };
+        WorkspaceDocument doc = sample();
+        QVERIFY(doc.containers[0].locked);
+        QJsonObject written = containerObject(doc);
+        QVERIFY(written.contains("locked"));
+        QCOMPARE(written["locked"], QJsonValue(true));
+        DocumentResult decoded = ContainerDocumentCodec::decode(ContainerDocumentCodec::encode(doc));
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QVERIFY(decoded.document.containers[0].locked);
+
+        doc.containers[0].locked = false;
+        written = containerObject(doc);
+        QVERIFY(!written.contains("locked"));
+        QVERIFY(written.contains("autoHeight"));
+        // Without the key the container loads unlocked.
+        decoded = ContainerDocumentCodec::decode(ContainerDocumentCodec::encode(doc));
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QVERIFY(!decoded.document.containers[0].locked);
+        QCOMPARE(decoded.document, doc);
+
+        // A document that carries "locked": false, as older builds wrote it,
+        // still loads, unlocked.
+        QJsonObject root = QJsonDocument::fromJson(ContainerDocumentCodec::encode(doc)).object();
+        QJsonArray containers = root["containers"].toArray();
+        QJsonObject first = containers.first().toObject();
+        first["locked"] = false;
+        containers[0] = first;
+        root["containers"] = containers;
+        decoded = ContainerDocumentCodec::decode(QJsonDocument(root).toJson(QJsonDocument::Compact));
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QCOMPARE(decoded.document, doc);
+    }
+    void headerLoadsAndSavesItsThreeValues_data()
+    {
+        QTest::addColumn<int>("saved");
+        QTest::addColumn<bool>("loads");
+        QTest::addColumn<HeaderMode>("header");
+        QTest::addColumn<int>("writtenBack");
+        QTest::newRow("0 is shown") << 0 << true << HeaderMode::Shown << 0;
+        QTest::newRow("2 is hidden") << 2 << true << HeaderMode::Hidden << 2;
+        // The codec does not know the look: the look-off hover mode
+        // survives a load and a save. The manager hides it with the look on.
+        QTest::newRow("1 is reveal") << 1 << true << HeaderMode::Reveal << 1;
+        QTest::newRow("3 is rejected") << 3 << false << HeaderMode::Shown << 0;
+        QTest::newRow("-1 is rejected") << -1 << false << HeaderMode::Shown << 0;
+    }
+    void headerLoadsAndSavesItsThreeValues()
+    {
+        QFETCH(int, saved);
+        QFETCH(bool, loads);
+        QFETCH(HeaderMode, header);
+        QFETCH(int, writtenBack);
+        QJsonObject root = QJsonDocument::fromJson(ContainerDocumentCodec::encode(sample())).object();
+        QJsonArray containers = root["containers"].toArray();
+        QJsonObject first = containers.first().toObject();
+        first["header"] = saved;
+        containers[0] = first;
+        root["containers"] = containers;
+        const DocumentResult decoded = ContainerDocumentCodec::decode(QJsonDocument(root).toJson(QJsonDocument::Compact));
+        QCOMPARE(decoded.ok, loads);
+        if (!loads) {
+            QVERIFY(!decoded.error.isEmpty());
+            return;
+        }
+        QCOMPARE(decoded.document.containers[0].header, header);
+        const QJsonObject written = QJsonDocument::fromJson(ContainerDocumentCodec::encode(decoded.document))
+                                        .object()["containers"].toArray().first().toObject();
+        QCOMPARE(written["header"].toInt(-1), writtenBack);
+        // The other container values are untouched by the header read.
+        WorkspaceDocument expected = sample();
+        expected.containers[0].header = header;
+        QCOMPARE(decoded.document, expected);
+    }
+    void onlyTheThreeHeaderValuesAreAValidDocument()
+    {
+        WorkspaceDocument doc = sample();
+        for (HeaderMode mode : {HeaderMode::Shown, HeaderMode::Reveal, HeaderMode::Hidden}) {
+            doc.containers[0].header = mode;
+            QVERIFY(ContainerDocumentCodec::validate(doc).isEmpty());
+        }
+        doc.containers[0].header = static_cast<HeaderMode>(3);
+        QVERIFY(!ContainerDocumentCodec::validate(doc).isEmpty());
+        QCOMPARE(int(HeaderMode::Shown), 0);
+        QCOMPARE(int(HeaderMode::Reveal), 1);
+        QCOMPARE(int(HeaderMode::Hidden), 2);
     }
     void freeCanvasKeepsPrecisePlacementAndLegacyRecord()
     {
@@ -154,6 +269,395 @@ private slots:
         containers[0] = container;
         root["containers"] = containers;
         QVERIFY(!ContainerDocumentCodec::decode(QJsonDocument(root).toJson()).ok);
+    }
+    void geometryPaneRoundTripsForAFreeContainer()
+    {
+        WorkspaceDocument doc = sample();
+        doc.containers[0].dockMode = DockMode::OverlayDocked;
+        doc.containers[0].geometryPane = QSize(1185, 872);
+        const QByteArray json = ContainerDocumentCodec::encode(doc);
+        const QJsonObject container = QJsonDocument::fromJson(json).object()["containers"].toArray().first().toObject();
+        QCOMPARE(container["geometryPane"].toArray(), (QJsonArray{1185, 872}));
+        const DocumentResult decoded = ContainerDocumentCodec::decode(json);
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QCOMPARE(decoded.document, doc);
+        QCOMPARE(decoded.document.containers.first().geometryPane, std::optional<QSize>(QSize(1185, 872)));
+        QVERIFY(!decoded.document.containers.first().extensions.contains("geometryPane"));
+    }
+    void geometryPaneAbsentStaysAbsent()
+    {
+        // A document from before the field: read as empty, written without it.
+        const QByteArray json = ContainerDocumentCodec::encode(sample());
+        QVERIFY(!json.contains("geometryPane"));
+        const DocumentResult decoded = ContainerDocumentCodec::decode(json);
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QVERIFY(!decoded.document.containers.first().geometryPane.has_value());
+        QCOMPARE(ContainerDocumentCodec::encode(decoded.document), json);
+        // Written for free containers only.
+        WorkspaceDocument floating = sample();
+        floating.containers[0].geometryPane = QSize(1000, 700);
+        QCOMPARE(floating.containers[0].dockMode, DockMode::Floating);
+        QVERIFY(!ContainerDocumentCodec::encode(floating).contains("geometryPane"));
+    }
+    void malformedGeometryPaneIsDroppedForThatContainerOnly_data()
+    {
+        QTest::addColumn<QJsonValue>("value");
+        QTest::newRow("string") << QJsonValue(QStringLiteral("1000x700"));
+        QTest::newRow("three numbers") << QJsonValue(QJsonArray{1000, 700, 1});
+        QTest::newRow("zero width") << QJsonValue(QJsonArray{0, 700});
+        QTest::newRow("fraction") << QJsonValue(QJsonArray{1000.5, 700});
+        QTest::newRow("object") << QJsonValue(QJsonObject{{"w", 1000}});
+    }
+    void malformedGeometryPaneIsDroppedForThatContainerOnly()
+    {
+        QFETCH(QJsonValue, value);
+        WorkspaceDocument doc = sample();
+        doc.containers[0].dockMode = DockMode::OverlayDocked;
+        ContainerDocument other;
+        other.id = QStringLiteral("other");
+        other.dockMode = DockMode::OverlayDocked;
+        other.geometry = QRect(10, 20, 300, 200);
+        other.geometryPane = QSize(900, 600);
+        doc.containers.append(other);
+        QJsonObject root = QJsonDocument::fromJson(ContainerDocumentCodec::encode(doc)).object();
+        QJsonArray containers = root["containers"].toArray();
+        QJsonObject first = containers.first().toObject();
+        first["geometryPane"] = value;
+        containers[0] = first;
+        root["containers"] = containers;
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("unreadable geometryPane")));
+        const DocumentResult decoded = ContainerDocumentCodec::decode(QJsonDocument(root).toJson());
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QCOMPARE(decoded.document, doc);
+        QVERIFY(!decoded.document.containers[0].geometryPane.has_value());
+        QVERIFY(!decoded.document.containers[0].extensions.contains("geometryPane"));
+        QCOMPARE(decoded.document.containers[1].geometryPane, std::optional<QSize>(QSize(900, 600)));
+    }
+    void homeRoundTripsForAWindow()
+    {
+        WorkspaceDocument doc = sample();
+        QCOMPARE(doc.containers[0].dockMode, DockMode::Floating);
+        ContainerHome strip;
+        strip.dockMode = DockMode::PanelDocked;
+        strip.edge = DockEdge::Left;
+        strip.beforeId = QStringLiteral("first");
+        strip.afterId = QStringLiteral("third");
+        doc.containers[0].home = strip;
+        QByteArray json = ContainerDocumentCodec::encode(doc);
+        QJsonObject container = QJsonDocument::fromJson(json).object()["containers"].toArray().first().toObject();
+        QCOMPARE(container["home"].toObject(),
+                 (QJsonObject{{"dockMode", 0}, {"edge", "Left"}, {"before", "first"}, {"after", "third"}}));
+        DocumentResult decoded = ContainerDocumentCodec::decode(json);
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QCOMPARE(decoded.document, doc);
+        QVERIFY(!decoded.document.containers.first().extensions.contains("home"));
+        QCOMPARE(ContainerDocumentCodec::encode(decoded.document), json);
+
+        ContainerHome free;
+        free.dockMode = DockMode::OverlayDocked;
+        free.geometry = QRect(200, 150, 320, 240);
+        doc.containers[0].home = free;
+        json = ContainerDocumentCodec::encode(doc);
+        container = QJsonDocument::fromJson(json).object()["containers"].toArray().first().toObject();
+        QCOMPARE(container["home"].toObject(),
+                 (QJsonObject{{"dockMode", 1}, {"geometry", QJsonArray{200, 150, 320, 240}}}));
+        decoded = ContainerDocumentCodec::decode(json);
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QCOMPARE(decoded.document, doc);
+        QCOMPARE(ContainerDocumentCodec::encode(decoded.document), json);
+
+        // With the pane that rect was placed in.
+        doc.containers[0].home->geometryPane = QSize(1100, 760);
+        json = ContainerDocumentCodec::encode(doc);
+        container = QJsonDocument::fromJson(json).object()["containers"].toArray().first().toObject();
+        QCOMPARE(container["home"].toObject(),
+                 (QJsonObject{{"dockMode", 1}, {"geometry", QJsonArray{200, 150, 320, 240}},
+                              {"geometryPane", QJsonArray{1100, 760}}}));
+        decoded = ContainerDocumentCodec::decode(json);
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QCOMPARE(decoded.document, doc);
+        QVERIFY(!decoded.document.containers.first().home->extensions.contains("geometryPane"));
+        QCOMPARE(ContainerDocumentCodec::encode(decoded.document), json);
+    }
+    void homeAbsentStaysAbsentAndIsWrittenOnlyWhileFloating()
+    {
+        const QByteArray json = ContainerDocumentCodec::encode(sample());
+        QVERIFY(!json.contains("\"home\""));
+        const DocumentResult decoded = ContainerDocumentCodec::decode(json);
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QVERIFY(!decoded.document.containers.first().home.has_value());
+        QCOMPARE(ContainerDocumentCodec::encode(decoded.document), json);
+        WorkspaceDocument docked = sample();
+        docked.containers[0].popOutShell = false;
+        docked.containers[0].home = ContainerHome{};
+        QVERIFY(ContainerDocumentCodec::encode(docked).contains("\"home\""));
+        docked.containers[0].dockMode = DockMode::OverlayDocked;
+        QVERIFY(!ContainerDocumentCodec::encode(docked).contains("\"home\""));
+    }
+    void unknownKeysInsideHomeSurviveALoadAndSave()
+    {
+        WorkspaceDocument doc = sample();
+        doc.containers[0].home = ContainerHome{};
+        QJsonObject root = QJsonDocument::fromJson(ContainerDocumentCodec::encode(doc)).object();
+        QJsonArray containers = root["containers"].toArray();
+        QJsonObject first = containers.first().toObject();
+        QJsonObject home = first["home"].toObject();
+        home["futureIndex"] = 4;
+        home["futureNote"] = QJsonObject{{"a", true}};
+        first["home"] = home;
+        containers[0] = first;
+        root["containers"] = containers;
+        const DocumentResult decoded = ContainerDocumentCodec::decode(QJsonDocument(root).toJson());
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QVERIFY(decoded.document.containers[0].home.has_value());
+        QCOMPARE(decoded.document.containers[0].home->extensions,
+                 (QJsonObject{{"futureIndex", 4}, {"futureNote", QJsonObject{{"a", true}}}}));
+        const QJsonObject again = QJsonDocument::fromJson(ContainerDocumentCodec::encode(decoded.document))
+                                      .object()["containers"].toArray().first().toObject()["home"].toObject();
+        QCOMPARE(again, home);
+        // A known key hidden among the unknown ones is not a valid document.
+        WorkspaceDocument bad = doc;
+        bad.containers[0].home->extensions["edge"] = QStringLiteral("Top");
+        QVERIFY(!ContainerDocumentCodec::validate(bad).isEmpty());
+    }
+    void malformedHomeIsDroppedForThatContainerOnly_data()
+    {
+        QTest::addColumn<QJsonValue>("value");
+        QTest::newRow("string") << QJsonValue(QStringLiteral("Right"));
+        QTest::newRow("array") << QJsonValue(QJsonArray{200, 150, 320, 240});
+        QTest::newRow("no dockMode") << QJsonValue(QJsonObject{{"edge", "Left"}});
+        QTest::newRow("floating dockMode") << QJsonValue(QJsonObject{{"dockMode", 2}});
+        QTest::newRow("unknown edge") << QJsonValue(QJsonObject{{"dockMode", 0}, {"edge", "Middle"}});
+        QTest::newRow("before not a string") << QJsonValue(QJsonObject{{"dockMode", 0}, {"before", 3}});
+        QTest::newRow("free with no geometry") << QJsonValue(QJsonObject{{"dockMode", 1}});
+        QTest::newRow("free geometry of three")
+            << QJsonValue(QJsonObject{{"dockMode", 1}, {"geometry", QJsonArray{0, 0, 320}}});
+        QTest::newRow("free empty geometry")
+            << QJsonValue(QJsonObject{{"dockMode", 1}, {"geometry", QJsonArray{0, 0, 0, 0}}});
+        QTest::newRow("free with a pane of one number")
+            << QJsonValue(QJsonObject{{"dockMode", 1}, {"geometry", QJsonArray{0, 0, 320, 240}},
+                                      {"geometryPane", QJsonArray{1100}}});
+    }
+    void malformedHomeIsDroppedForThatContainerOnly()
+    {
+        QFETCH(QJsonValue, value);
+        WorkspaceDocument doc = sample();
+        ContainerDocument other;
+        other.id = QStringLiteral("other");
+        other.dockMode = DockMode::Floating;
+        other.geometry = QRect(2100, 200, 400, 300);
+        ContainerHome home;
+        home.dockMode = DockMode::OverlayDocked;
+        home.geometry = QRect(10, 20, 300, 200);
+        other.home = home;
+        doc.containers.append(other);
+        QJsonObject root = QJsonDocument::fromJson(ContainerDocumentCodec::encode(doc)).object();
+        QJsonArray containers = root["containers"].toArray();
+        QJsonObject first = containers.first().toObject();
+        first["home"] = value;
+        containers[0] = first;
+        root["containers"] = containers;
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("unreadable home")));
+        const DocumentResult decoded = ContainerDocumentCodec::decode(QJsonDocument(root).toJson());
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QCOMPARE(decoded.document, doc);
+        QVERIFY(!decoded.document.containers[0].home.has_value());
+        QVERIFY(!decoded.document.containers[0].extensions.contains("home"));
+        QCOMPARE(decoded.document.containers[1].home, other.home);
+    }
+    void screenRoundTripsForAWindow()
+    {
+        WorkspaceDocument doc = sample();
+        QCOMPARE(doc.containers[0].dockMode, DockMode::Floating);
+        doc.containers[0].screen = SavedScreen{QStringLiteral("DELL U2720Q"), QStringLiteral("SN-7"),
+                                               QRect(1920, 0, 2560, 1440)};
+        const QByteArray json = ContainerDocumentCodec::encode(doc);
+        const QJsonObject container = QJsonDocument::fromJson(json).object()["containers"].toArray().first().toObject();
+        QCOMPARE(container["screen"].toObject(),
+                 (QJsonObject{{"name", "DELL U2720Q"}, {"serial", "SN-7"},
+                              {"geometry", QJsonArray{1920, 0, 2560, 1440}}}));
+        const DocumentResult decoded = ContainerDocumentCodec::decode(json);
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QCOMPARE(decoded.document, doc);
+        QCOMPARE(decoded.document.containers.first().screen, doc.containers[0].screen);
+        QVERIFY(!decoded.document.containers.first().extensions.contains("screen"));
+        QCOMPARE(ContainerDocumentCodec::encode(decoded.document), json);
+    }
+    void screenAbsentStaysAbsent()
+    {
+        // A document from before the field: read as empty, written without it.
+        const QByteArray json = ContainerDocumentCodec::encode(sample());
+        QVERIFY(!json.contains("\"screen\""));
+        const DocumentResult decoded = ContainerDocumentCodec::decode(json);
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QVERIFY(!decoded.document.containers.first().screen.has_value());
+        QCOMPARE(ContainerDocumentCodec::encode(decoded.document), json);
+        // Written for floating and popped-out containers only.
+        WorkspaceDocument docked = sample();
+        docked.containers[0].dockMode = DockMode::OverlayDocked;
+        docked.containers[0].popOutShell = false;
+        docked.containers[0].screen = SavedScreen{QStringLiteral("A"), QString(), QRect(0, 0, 1920, 1080)};
+        QVERIFY(!ContainerDocumentCodec::encode(docked).contains("\"screen\""));
+        docked.containers[0].popOutShell = true;
+        QVERIFY(ContainerDocumentCodec::encode(docked).contains("\"screen\""));
+    }
+    void unknownKeysInsideScreenSurviveALoadAndSave()
+    {
+        WorkspaceDocument doc = sample();
+        doc.containers[0].screen = SavedScreen{QStringLiteral("A"), QStringLiteral("SN-7"), QRect(0, 0, 1920, 1080)};
+        QJsonObject root = QJsonDocument::fromJson(ContainerDocumentCodec::encode(doc)).object();
+        QJsonArray containers = root["containers"].toArray();
+        QJsonObject first = containers.first().toObject();
+        QJsonObject screen = first["screen"].toObject();
+        screen["futureScale"] = 2;
+        screen["futureNote"] = QJsonObject{{"a", true}};
+        first["screen"] = screen;
+        containers[0] = first;
+        root["containers"] = containers;
+        const DocumentResult decoded = ContainerDocumentCodec::decode(QJsonDocument(root).toJson());
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QVERIFY(decoded.document.containers[0].screen.has_value());
+        QCOMPARE(decoded.document.containers[0].screen->extensions,
+                 (QJsonObject{{"futureScale", 2}, {"futureNote", QJsonObject{{"a", true}}}}));
+        // The unknown keys play no part in matching the monitor.
+        QVERIFY(screenMatches(ScreenInfo{QStringLiteral("A"), QStringLiteral("SN-7"), QRect(0, 0, 1920, 1080),
+                                         QRect(0, 0, 1920, 1080)},
+                              *decoded.document.containers[0].screen));
+        const QJsonObject again = QJsonDocument::fromJson(ContainerDocumentCodec::encode(decoded.document))
+                                      .object()["containers"].toArray().first().toObject()["screen"].toObject();
+        QCOMPARE(again, screen);
+        // A known key hidden among the unknown ones is not a valid document.
+        WorkspaceDocument bad = doc;
+        bad.containers[0].screen->extensions["serial"] = QStringLiteral("SN-8");
+        QVERIFY(!ContainerDocumentCodec::validate(bad).isEmpty());
+    }
+    void malformedScreenIsDroppedForThatContainerOnly_data()
+    {
+        QTest::addColumn<QJsonValue>("value");
+        QTest::newRow("string") << QJsonValue(QStringLiteral("DELL U2720Q"));
+        QTest::newRow("array") << QJsonValue(QJsonArray{1920, 0, 2560, 1440});
+        QTest::newRow("no geometry") << QJsonValue(QJsonObject{{"name", "A"}, {"serial", ""}});
+        QTest::newRow("geometry of three") << QJsonValue(QJsonObject{{"name", "A"}, {"serial", ""},
+                                                                      {"geometry", QJsonArray{0, 0, 1920}}});
+        QTest::newRow("empty geometry") << QJsonValue(QJsonObject{{"name", "A"}, {"serial", ""},
+                                                                   {"geometry", QJsonArray{0, 0, 0, 0}}});
+        QTest::newRow("name not a string") << QJsonValue(QJsonObject{{"name", 7}, {"serial", ""},
+                                                                      {"geometry", QJsonArray{0, 0, 1920, 1080}}});
+    }
+    void malformedScreenIsDroppedForThatContainerOnly()
+    {
+        QFETCH(QJsonValue, value);
+        WorkspaceDocument doc = sample();
+        ContainerDocument other;
+        other.id = QStringLiteral("other");
+        other.dockMode = DockMode::Floating;
+        other.geometry = QRect(2100, 200, 400, 300);
+        other.screen = SavedScreen{QStringLiteral("B"), QString(), QRect(1920, 0, 1920, 1080)};
+        doc.containers.append(other);
+        QJsonObject root = QJsonDocument::fromJson(ContainerDocumentCodec::encode(doc)).object();
+        QJsonArray containers = root["containers"].toArray();
+        QJsonObject first = containers.first().toObject();
+        first["screen"] = value;
+        containers[0] = first;
+        root["containers"] = containers;
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("unreadable screen")));
+        const DocumentResult decoded = ContainerDocumentCodec::decode(QJsonDocument(root).toJson());
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QCOMPARE(decoded.document, doc);
+        QVERIFY(!decoded.document.containers[0].screen.has_value());
+        QVERIFY(!decoded.document.containers[0].extensions.contains("screen"));
+        QCOMPARE(decoded.document.containers[1].screen, other.screen);
+    }
+    void unreadableGeometryCostsAWindowItsPlaceAndNothingElse()
+    {
+        WorkspaceDocument doc = sample();
+        ContainerDocument other;
+        other.id = QStringLiteral("other");
+        other.dockMode = DockMode::Floating;
+        other.geometry = QRect(2100, 200, 400, 300);
+        doc.containers.append(other);
+        QJsonObject root = QJsonDocument::fromJson(ContainerDocumentCodec::encode(doc)).object();
+        QJsonArray containers = root["containers"].toArray();
+        QJsonObject first = containers.first().toObject();
+        first["geometry"] = QStringLiteral("100,200,300,400");
+        containers[0] = first;
+        root["containers"] = containers;
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("unreadable geometry; it takes a default place")));
+        const DocumentResult decoded = ContainerDocumentCodec::decode(QJsonDocument(root).toJson());
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QCOMPARE(decoded.document.containers.size(), 2);
+        QVERIFY(!decoded.document.containers[0].geometry.isValid());
+        WorkspaceDocument expected = doc;
+        expected.containers[0].geometry = QRect();
+        QCOMPARE(decoded.document, expected);
+        QCOMPARE(decoded.document.containers[1].geometry, other.geometry);
+        // A docked or free container's geometry is still a known field
+        // that is never defaulted.
+        first["dockMode"] = int(DockMode::OverlayDocked);
+        containers[0] = first;
+        root["containers"] = containers;
+        QVERIFY(!ContainerDocumentCodec::decode(QJsonDocument(root).toJson()).ok);
+    }
+    void documentWithoutEdgesStaysByteIdentical()
+    {
+        // A document from before edges: every container on the right, no
+        // arrangement. Neither member is written, so it re-encodes exactly.
+        const QByteArray json = ContainerDocumentCodec::encode(sample());
+        QVERIFY(!json.contains("\"edge\""));
+        QVERIFY(!json.contains("\"arrangement\""));
+        const DocumentResult decoded = ContainerDocumentCodec::decode(json);
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QCOMPARE(decoded.document.containers.first().edge, DockEdge::Right);
+        QVERIFY(decoded.document.arrangement.isEmpty());
+        QCOMPARE(ContainerDocumentCodec::encode(decoded.document), json);
+    }
+    void edgeAndArrangementRoundTrip()
+    {
+        QCOMPARE(int(DockEdge::Left), 0);
+        QCOMPARE(int(DockEdge::Right), 1);
+        QCOMPARE(int(DockEdge::Top), 2);
+        QCOMPARE(int(DockEdge::Bottom), 3);
+        WorkspaceDocument doc = sample();
+        doc.containers[0].dockMode = DockMode::PanelDocked;
+        doc.containers[0].edge = DockEdge::Bottom;
+        EdgeStripLayout left;
+        left.thickness = 300;
+        left.extents = {{"main", 420}, {"other", 210}};
+        left.extensions = {{"futureStrip", QJsonArray{1, 2}}};
+        doc.arrangement.strips.insert(DockEdge::Left, left);
+        EdgeStripLayout top;
+        top.thickness = 112;
+        doc.arrangement.strips.insert(DockEdge::Top, top);
+        doc.arrangement.gridAlignment = true;
+        doc.arrangement.extensions = {{"futureArrangement", "kept"}};
+        const QByteArray json = ContainerDocumentCodec::encode(doc);
+        const QJsonObject root = QJsonDocument::fromJson(json).object();
+        QCOMPARE(root["containers"].toArray().first().toObject()["edge"].toString(), QStringLiteral("Bottom"));
+        QVERIFY(root["arrangement"].toObject()["strips"].toObject().contains("Left"));
+        const DocumentResult decoded = ContainerDocumentCodec::decode(json);
+        QVERIFY2(decoded.ok, qPrintable(decoded.error));
+        QCOMPARE(decoded.document, doc);
+        QCOMPARE(ContainerDocumentCodec::encode(decoded.document), json);
+    }
+    void unknownEdgeIsRejected()
+    {
+        QJsonObject root = QJsonDocument::fromJson(ContainerDocumentCodec::encode(sample())).object();
+        QJsonArray containers = root["containers"].toArray();
+        QJsonObject container = containers.first().toObject();
+        for (const QJsonValue& bad : {QJsonValue("Middle"), QJsonValue(2), QJsonValue("left")}) {
+            container["edge"] = bad;
+            containers[0] = container;
+            root["containers"] = containers;
+            QVERIFY(!ContainerDocumentCodec::decode(QJsonDocument(root).toJson()).ok);
+        }
+        root = QJsonDocument::fromJson(ContainerDocumentCodec::encode(sample())).object();
+        root["arrangement"] = QJsonObject{{"strips", QJsonObject{{"Middle", QJsonObject{{"thickness", 10}}}}}};
+        QVERIFY(!ContainerDocumentCodec::decode(QJsonDocument(root).toJson()).ok);
+        root["arrangement"] = QJsonObject{{"strips", QJsonObject{{"Left", QJsonObject{{"thickness", -4}}}}}};
+        QVERIFY(!ContainerDocumentCodec::decode(QJsonDocument(root).toJson()).ok);
+        WorkspaceDocument doc = sample();
+        doc.containers[0].edge = static_cast<DockEdge>(9);
+        QVERIFY(!ContainerDocumentCodec::validate(doc).isEmpty());
     }
 };
 QTEST_GUILESS_MAIN(TstContainerDocument)

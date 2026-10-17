@@ -21,6 +21,39 @@ class TestP1TxIqWire : public QObject {
     Q_OBJECT
 private slots:
 
+    // The remote microphone consumer asks through RadioConnection. A known
+    // P1 ring must report its current fill, including a sub-zone remainder,
+    // rather than the inherited unknown value or the ring's total length.
+    // These times are hand-derived from the P1 wire rate of 48 samples/ms.
+    void queuedTimeThroughConnectionTracksActualRingFill() {
+        P1RadioConnection conn;
+        RadioConnection* connection = &conn;
+        QCOMPARE(connection->txIqQueuedMs(), 0.0);
+
+        std::vector<float> iq(4032 * 2, 0.25f);
+        connection->sendTxIq(iq.data(), 126);
+        QCOMPARE(connection->txIqQueuedMs(), 2.625);
+        conn.sendTxIqAndCapture(nullptr, 0);
+        QCOMPARE(connection->txIqQueuedMs(), 0.0);
+
+        connection->sendTxIq(iq.data(), 4032);
+        QCOMPARE(connection->txIqQueuedMs(), 84.0);
+        conn.sendTxIqAndCapture(nullptr, 0);
+        QCOMPARE(connection->txIqQueuedMs(), 81.375);
+        for (int frame = 0; frame < 31; ++frame) {
+            conn.sendTxIqAndCapture(nullptr, 0);
+        }
+        QCOMPARE(connection->txIqQueuedMs(), 0.0);
+
+        connection->sendTxIq(iq.data(), 75);
+        QCOMPARE(connection->txIqQueuedMs(), 1.5625);
+        conn.sendTxIqAndCapture(nullptr, 0);
+        QVERIFY(connection->txIqRingDrained());
+        QCOMPARE(connection->txIqQueuedMs(), 0.25);
+        conn.sendTxIqAndCapture(nullptr, 0);
+        QCOMPARE(connection->txIqQueuedMs(), 0.25);
+    }
+
     // ── 1. Unit-pulse test ─────────────────────────────────────────────────
     // Feed 126 samples: sample 0 = (1.0, 0.0), rest = (0.0, 0.0).
     // After sendTxIq, call sendTxIqAndCapture to get a full Metis frame.

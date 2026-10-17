@@ -3,6 +3,14 @@
 // steps, Saturn Mic Tip-Ring, the Red Pitaya's Orion rows and the HL2's
 // Hermes rows; the cap is 24. J.J. Boyd (KG4VCF), AI-assisted via
 // Anthropic Claude Code.
+// 2026-10-06: Audio version 25 (R-SPK-23): Microphone's titles, Outputs'
+// radio speaker rows and their radio bindings; the cap is 25. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-10: Display version 26: Waterfall Defaults' level gates and the
+// allOf form of enabledWhen; the cap is 26. J.J. Boyd (KG4VCF), AI-assisted
+// via Anthropic Claude Code.
+// 2026-10-12: Frozen pre-V29 Display/Appearance payload byte regressions.
+// J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 #include <QtTest>
 #include <QRegularExpression>
 
@@ -29,6 +37,7 @@
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
 
+#include <QCryptographicHash>
 #include <QFile>
 #include <QHostAddress>
 #include <QJsonDocument>
@@ -39,15 +48,67 @@
 #include <memory>
 #include <cmath>
 #include <utility>
+#include <tuple>
 
 using namespace NereusSDR;
 
 namespace {
+// Captured before the V29 projection was implemented, using cb2f35e4a's
+// frozen resources and the baseline fitter. Each interval shares exactly
+// the same emitted compact bytes. These are independent wire expectations.
+QByteArray legacyPayloadHash(const QString& category, int version)
+{
+    struct CapturedHash {
+        const char* category;
+        int firstVersion;
+        int lastVersion;
+        const char* sha256;
+    };
+    static constexpr CapturedHash kCapturedHashes[] = {
+        {"display", 1, 1, "379a63f4e51a935d12d9ef13518d0f362d7f436758cee115174bd9d1458d4750"},
+        {"display", 2, 2, "0213ffb9accd75d654149209b2e4df0366cb82b35b7af5013bf5a692ff382287"},
+        {"display", 3, 3, "d85c0ee1e42b386e20bde5a04973368cb50be4563c53ea8d8efb75c2b4081c57"},
+        {"display", 4, 7, "3495204782186dd4ceb5dbe2053e714d3866e2cdcd2d41b29d875824398ea500"},
+        {"display", 8, 8, "599f6daa369f244873dc36f006289bb53dd7d29c398bab38c17a71b78d2751a7"},
+        {"display", 9, 9, "cddf9a202aefd9bcdfc6695dc299ad89c221c0241f1717d492a52852f0a5306c"},
+        {"display", 10, 10, "755d1a5f74a0abb55b293b7afbec95baef0d6f8a1cb611fbc8b3950408d42556"},
+        {"display", 11, 11, "e8a3e47d2cd8bdd73421ba93c50ab4ed20a43b58391ef44d843d5412c3ffe78a"},
+        {"display", 12, 25, "d44107dd7d600686468f05902fa2f119f0cf10a0f41204a4b553168221cbc8f2"},
+        {"display", 26, 27, "5b40c3833026708a7fc38269671f555c73f336d642cc5a6ecf6727b92e05bca3"},
+        {"display", 28, 28, "08b9d5a8c8b63ae860b2b358fdfdef1e8f526cee0f1b9533d1b83d017cc4deba"},
+        {"appearance", 1, 1, "6ed4bff06fbdb0e74800b5c7f394a37f4264a0bec3418519f74e7bbdfeb7a577"},
+        {"appearance", 2, 2, "e96073dadf9de8a90aa011b42adf6564cf74c18483502998279ab6aeb6c7cede"},
+        {"appearance", 3, 3, "64e404c74cb7330b134deed466923bb62716fff79e361eb910df5adfcc0cdb6e"},
+        {"appearance", 4, 6, "4a65e7bbbe463efb9911a5836be102f8ab5c780ef6dc3d83161f50a6b60d5bc1"},
+        {"appearance", 7, 11, "50bc8c66b84157f0d3dac0fecd739af84e6f2ec424a74712847ec6a84528a8fa"},
+        {"appearance", 12, 26, "d52273646b60c0b86fa3f9d21a5a847b0f25e0a7b391404d57de006c46804793"},
+        {"appearance", 27, 28, "9529f6bdcf4f6f4ce77169b890a527ad846cb3b84abdc100318ca7eb700b0e56"},
+    };
+    for (const CapturedHash& captured : kCapturedHashes) {
+        if (category == QLatin1String(captured.category)
+            && version >= captured.firstVersion && version <= captured.lastVersion) {
+            return QByteArray(captured.sha256);
+        }
+    }
+    return {};
+}
+
 // A category as a peer that declared `version` receives it.
 QJsonObject projectedCategory(const QString& description, int version)
 {
     return QJsonDocument::fromJson(
         SetupDescriptionService::fitCategoryForVersion(description, version).toUtf8()).object();
+}
+
+// The input to the version-specific row validators, frozen before V29.
+// Live-to-old projection is checked separately against independent payload hashes.
+QString legacyCategoryText(const QString& category)
+{
+    QFile file(category == QLatin1String("display")
+        ? QStringLiteral(":/setup/legacy/display-v28.json")
+        : QStringLiteral(":/setup/legacy/appearance-v27.json"));
+    if (!file.open(QIODevice::ReadOnly)) { return {}; }
+    return QString::fromUtf8(file.readAll());
 }
 
 // Controls of a category (0: all; otherwise those needing `version`).
@@ -143,7 +204,10 @@ QJsonArray rowsOf(const QJsonObject& page)
 // The resource's own rows that need `version` (the form the Core validates).
 QList<QJsonObject> resourceRows(const QString& category, int version)
 {
-    QFile file(QStringLiteral(":/setup/%1.json").arg(category));
+    QFile file(version <= 28 && (category == QLatin1String("display") || category == QLatin1String("appearance"))
+        ? (category == QLatin1String("display") ? QStringLiteral(":/setup/legacy/display-v28.json")
+                                                : QStringLiteral(":/setup/legacy/appearance-v27.json"))
+        : QStringLiteral(":/setup/%1.json").arg(category));
     if (!file.open(QIODevice::ReadOnly)) { return {}; }
     const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
     QList<QJsonObject> rows;
@@ -1543,6 +1607,36 @@ private slots:
         }
     }
 
+    // Radio Info's firmware row carries the radio's second firmware number
+    // where the radio reported one, so a phone or a window on this Core can
+    // tell one release from the next (22.14 from 22.15). A radio that
+    // reported none reads as before.
+    void radioInfoFirmwareCarriesTheSecondNumber()
+    {
+        RadioInfo info;
+        info.name = QStringLiteral("Anvelina Pro 3");
+        info.boardType = HPSDRHW::OrionMKII;
+        info.protocol = ProtocolVersion::Protocol2;
+        info.firmwareVersion = 22;
+        info.firmwareBetaVersion = 14;
+        const BoardCapabilities board = BoardCapsTable::forBoard(HPSDRHW::OrionMKII);
+        SetupDescriptionService service;
+        service.setRadioContext(board, HPSDRModel::ANVELINAPRO3, info);
+        const auto firmwareRow = [&service]() {
+            return rowsOf(pageById(projectedCategory(service.hardware(), 13),
+                                   "hardware.radioInfo")).at(4).toObject();
+        };
+        QCOMPARE(firmwareRow().value("id"), QJsonValue("hardware.radioInfo.firmware"));
+        QCOMPARE(firmwareRow().value("value"), QJsonValue("22.14"));
+        const RadioInfoFacts facts = radioInfoFacts(info, board, HPSDRModel::ANVELINAPRO3);
+        QVERIFY2(facts.supportText().contains(QStringLiteral("Firmware: 22.14\n")),
+                 qPrintable(facts.supportText()));
+
+        info.firmwareBetaVersion = 0;
+        service.setRadioContext(board, HPSDRModel::ANVELINAPRO3, info);
+        QCOMPARE(firmwareRow().value("value"), QJsonValue("22"));
+    }
+
     // Version 13: Hardware Config's Radio Info (the Core's radio, as the
     // desktop tab shows it), TX Display Cal and the HL2's N2ADR switch.
     void hardwareV13PublishesRadioInfoCalibrationAndN2adr()
@@ -1945,7 +2039,9 @@ private slots:
             QCOMPARE(current.value("version"), QJsonValue(24));
             QCOMPARE(controlById(current, "audio.txInput.hermesLineInGain"), lineInGain);
             QVERIFY(SetupDescriptionService::validateAudioV24Control(lineInGain));
-            QCOMPARE(projectedCategory(service.audio(), 99), current);
+            // Version 25 keeps the row (audioV25OutputsDescribesTheRadioSpeaker).
+            QCOMPARE(controlById(projectedCategory(service.audio(), 99),
+                                 "audio.txInput.hermesLineInGain"), lineInGain);
 
             // Versions 15 to 23 read version 15: whole decibels from -34.
             const QJsonObject older = projectedCategory(service.audio(), 23);
@@ -1987,6 +2083,185 @@ private slots:
                 QVERIFY2(!SetupDescriptionService::validateAudioV24Control(changed),
                          qPrintable(QJsonDocument(changed).toJson(QJsonDocument::Compact)));
             }
+        }
+    }
+
+    // Version 25 (R-SPK-23): TX Input keeps its id, retitled Microphone, and
+    // its PC Mic section (only Mic Gain) is Mic gain, as on the desktop. A
+    // new station page, Outputs, describes the radio speaker at the Core:
+    // its level, its mute and the amplifier choice, bound to RadioModel and
+    // gated on radioSpeakerVersion 1; the amplifier row is enabled while
+    // the Core reports speakerAmplifierAvailable. A peer below 25 reads
+    // version 24 as before; a later declaration is capped at 25.
+    void audioV25OutputsDescribesTheRadioSpeaker()
+    {
+        const QJsonObject gate{{"capability", "radioSpeakerVersion"}, {"min", 1}};
+        // The tooltips are a remote window's (the speaker at the Core).
+        const QString kAtTheCore = QStringLiteral(
+            "Radio speaker at the Core (shared with every window and the phone)");
+        const QString kAmplifierTip = QStringLiteral(
+            "The radio's built-in amplifier for its speaker jacks. Muting the radio speaker also switches it off. Off while transmitting keeps it on for CW and Tune, so you still hear the sidetone. Switching it can make a pop. Greyed out when the radio has no switchable speaker amplifier.");
+        const auto radio = [](const char* name) {
+            return QJsonObject{{"property", QJsonObject{{"object", "radio"}, {"name", name}}}};
+        };
+        const QJsonArray expected{
+            QJsonObject{{"id", "audio.outputs.radioSpeakerVolume"}, {"label", "Volume:"},
+                        {"tooltip", kAtTheCore}, {"kind", "slider"}, {"binding", radio("radioSpeakerVolume")},
+                        {"applies", "live"}, {"requiresDescriptionVersion", 25}, {"gate", gate},
+                        {"min", 0}, {"max", 100}, {"step", 1}},
+            QJsonObject{{"id", "audio.outputs.radioSpeakerMuted"}, {"label", "Mute radio speaker"},
+                        {"tooltip", kAtTheCore}, {"kind", "toggle"}, {"binding", radio("radioSpeakerMuted")},
+                        {"applies", "live"}, {"requiresDescriptionVersion", 25}, {"gate", gate}},
+            QJsonObject{{"id", "audio.outputs.speakerAmplifierMode"}, {"label", "Speaker amplifier:"},
+                        {"tooltip", kAmplifierTip},
+                        {"kind", "choice"}, {"binding", radio("speakerAmplifierMode")},
+                        {"applies", "live"}, {"requiresDescriptionVersion", 25}, {"gate", gate},
+                        {"options", QJsonArray{QJsonObject{{"value", 0}, {"label", "Normal"}},
+                                               QJsonObject{{"value", 1}, {"label", "Off while transmitting"}},
+                                               QJsonObject{{"value", 2}, {"label", "Always off"}}}},
+                        {"enabledWhen", QJsonObject{{"property", QJsonObject{
+                                                        {"object", "radio"},
+                                                        {"name", "speakerAmplifierAvailable"}}},
+                                                    {"oneOf", QJsonArray{true}}}}}};
+        const QString coverage24 = QStringLiteral(
+            "partial: Devices, VAX, TCI and Advanced are computer-local; desktop TX Input selects "
+            "its authenticated session source with radioMicVersion 2, while device, buffer and "
+            "test remain computer-local; handheld source selection is unavailable");
+        const QString coverage25 = QStringLiteral(
+            "partial: Outputs' computer and headphone devices, Digital modes and Advanced are "
+            "computer-local; desktop Microphone selects its authenticated session source with "
+            "radioMicVersion 2, while device, buffer and test remain computer-local; handheld "
+            "source selection is unavailable");
+        for (const auto& [board, model] : {std::pair{HPSDRHW::Hermes, HPSDRModel::HERMES},
+                                           std::pair{HPSDRHW::Saturn, HPSDRModel::ANAN_G2},
+                                           std::pair{HPSDRHW::HermesLite, HPSDRModel::HERMESLITE},
+                                           std::pair{HPSDRHW::OrionMKII, HPSDRModel::REDPITAYA}}) {
+            SetupDescriptionService service;
+            service.setRadioContext(BoardCapsTable::forBoard(board), model, RadioInfo{});
+            const QJsonObject current = projectedCategory(service.audio(), 25);
+            QCOMPARE(current.value("version"), QJsonValue(25));
+            QCOMPARE(current.value("coverage"), QJsonValue(coverage25));
+            QCOMPARE(pageIdsOf(current),
+                     (QStringList{"audio.txInput", "audio.outputs", "audio.txProfile"}));
+            const QJsonObject input = pageById(current, "audio.txInput");
+            QCOMPARE(input.value("title"), QJsonValue("Microphone"));
+            QCOMPARE(input.value("where"), QJsonValue("mixed"));
+            const QJsonObject gain = input.value("sections").toArray().first().toObject();
+            QCOMPARE(gain.value("title"), QJsonValue("Mic gain"));
+            QCOMPARE(gain.value("controls").toArray().size(), 1);
+            QCOMPARE(gain.value("controls").toArray().first().toObject().value("id"),
+                     QJsonValue("audio.txInput.micGain"));
+            const QJsonObject outputs = pageById(current, "audio.outputs");
+            QCOMPARE(outputs.value("title"), QJsonValue("Outputs"));
+            QCOMPARE(outputs.value("where"), QJsonValue("station"));
+            const QJsonArray sections = outputs.value("sections").toArray();
+            QCOMPARE(sections.size(), 1);
+            QCOMPARE(sections.first().toObject().value("title"), QJsonValue("Radio speaker"));
+            QCOMPARE(sections.first().toObject().value("controls").toArray(), expected);
+            QCOMPARE(projectedCategory(service.audio(), 99), current);
+
+            // Below 25: version 24, with TX Input's old titles and no
+            // Outputs page; nothing else differs.
+            const QJsonObject older = projectedCategory(service.audio(), 24);
+            QCOMPARE(older.value("version"), QJsonValue(24));
+            QCOMPARE(pageIdsOf(older), (QStringList{"audio.txInput", "audio.txProfile"}));
+            QJsonObject reverted = current;
+            reverted.insert("version", 24);
+            reverted.insert("coverage", coverage24);
+            QJsonArray pages = reverted.value("pages").toArray();
+            pages.removeAt(1);
+            QJsonObject oldInput = pages.at(0).toObject();
+            oldInput.insert("title", QStringLiteral("TX Input"));
+            QJsonArray oldSections = oldInput.value("sections").toArray();
+            QJsonObject pcMic = oldSections.at(0).toObject();
+            pcMic.insert("title", QStringLiteral("PC Mic"));
+            oldSections[0] = pcMic;
+            oldInput.insert("sections", oldSections);
+            pages[0] = oldInput;
+            reverted.insert("pages", pages);
+            QCOMPARE(older, reverted);
+            QCOMPARE(projectedCategory(service.audio(), 23).value("version"), QJsonValue(15));
+        }
+
+        // The resource's three rows are closed.
+        const QList<QJsonObject> resource = resourceRows(QStringLiteral("audio"), 25);
+        QCOMPARE(resource.size(), 3);
+        for (const QJsonObject& row : resource) {
+            QVERIFY(SetupDescriptionService::validateAudioV25Control(row));
+            QVERIFY(SetupDescriptionService::validateAudioPropertyBinding(row));
+            for (const QJsonObject& changed : mutationsOf(row)) {
+                QVERIFY2(!SetupDescriptionService::validateAudioV25Control(changed),
+                         qPrintable(QJsonDocument(changed).toJson(QJsonDocument::Compact)));
+            }
+        }
+    }
+
+    // Version 25 (R-SPK-23): a radio binding in Audio is one of the three
+    // writable, Bidirectional radio speaker properties with their kinds and
+    // the radioSpeakerVersion 1 gate. Any other RadioModel property, the
+    // two read-only reports included, is refused.
+    void audioRadioBindingsAreOnlyTheThreeSpeakerProperties()
+    {
+        const QList<QJsonObject> rows = resourceRows(QStringLiteral("audio"), 25);
+        QCOMPARE(rows.size(), 3);
+        QSet<QByteArray> allowed;
+        for (const QJsonObject& row : rows) {
+            QVERIFY(SetupDescriptionService::validateAudioPropertyBinding(row));
+            const QByteArray name = row.value("binding").toObject().value("property").toObject()
+                .value("name").toString().toUtf8();
+            allowed.insert(name);
+            QCOMPARE(MirrorPolicy::directionFor("RadioModel", name), MirrorDirection::Bidirectional);
+        }
+        QCOMPARE(allowed, (QSet<QByteArray>{"radioSpeakerVolume", "radioSpeakerMuted",
+                                            "speakerAmplifierMode"}));
+        const auto withName = [](QJsonObject row, const QString& name) {
+            QJsonObject binding = row.value("binding").toObject();
+            QJsonObject property = binding.value("property").toObject();
+            property.insert("name", name);
+            binding.insert("property", property);
+            row.insert("binding", binding);
+            return row;
+        };
+        const MirrorSchema& schema = MirrorSchema::forMetaObject(&RadioModel::staticMetaObject);
+        int refused = 0;
+        for (const MirrorProperty& property : schema.properties()) {
+            if (allowed.contains(property.name)) { continue; }
+            for (const QJsonObject& row : rows) {
+                QVERIFY2(!SetupDescriptionService::validateAudioPropertyBinding(
+                             withName(row, QString::fromUtf8(property.name))),
+                         property.name.constData());
+            }
+            ++refused;
+        }
+        QVERIFY(refused > 0);
+        for (const char* name : {"radioSpeakerAvailability", "speakerAmplifierAvailable"}) {
+            QVERIFY(schema.byName(name) != nullptr);
+            QVERIFY(!schema.byName(name)->isWritable);
+            for (const QJsonObject& row : rows) {
+                QVERIFY(!SetupDescriptionService::validateAudioPropertyBinding(withName(row, name)));
+            }
+        }
+        for (const QJsonObject& row : rows) {
+            // Another row's property, wrong kind for it.
+            QVERIFY(!SetupDescriptionService::validateAudioPropertyBinding(
+                withName(row, row.value("kind") == QJsonValue("toggle") ? "radioSpeakerVolume"
+                                                                         : "radioSpeakerMuted")));
+            QJsonObject bad = row;
+            bad.remove("gate");
+            QVERIFY(!SetupDescriptionService::validateAudioPropertyBinding(bad));
+            bad = row;
+            bad.insert("gate", QJsonObject{{"capability", "radioSpeakerVersion"}, {"min", 2}});
+            QVERIFY(!SetupDescriptionService::validateAudioPropertyBinding(bad));
+            bad.insert("gate", QJsonObject{{"capability", "radioSpeakerVersion"}, {"min", 1},
+                                           {"transmit", true}});
+            QVERIFY(!SetupDescriptionService::validateAudioPropertyBinding(bad));
+            bad = row;
+            QJsonObject binding = bad.value("binding").toObject();
+            QJsonObject property = binding.value("property").toObject();
+            property.insert("object", "transmit");
+            binding.insert("property", property);
+            bad.insert("binding", binding);
+            QVERIFY(!SetupDescriptionService::validateAudioPropertyBinding(bad));
         }
     }
 
@@ -3619,25 +3894,25 @@ private slots:
             const QJsonObject display = QJsonDocument::fromJson(setupCategoryOnWire(
                 *core.app, "display", SessionMessageKind::ObjectCreate).toUtf8()).object();
             QCOMPARE(display.value("version"),
-                     QJsonValue(expected >= 12 ? 12 : expected >= 11 ? 11 : expected >= 10 ? 10 : expected >= 9 ? 9 : expected >= 8 ? 8 : qMin(expected, 4)));
+                     QJsonValue(expected >= 29 ? 29 : expected >= 28 ? 28 : expected >= 26 ? 26 : expected >= 12 ? 12 : expected >= 11 ? 11 : expected >= 10 ? 10 : expected >= 9 ? 9 : expected >= 8 ? 8 : qMin(expected, 4)));
             int displayControls = 0;
             for (const QJsonValue& page : display.value("pages").toArray()) {
                 for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
                     displayControls += section.toObject().value("controls").toArray().size();
                 }
             }
-            QCOMPARE(displayControls, expected >= 12 ? 100 : expected >= 11 ? 48 : expected >= 10 ? 33 : expected >= 9 ? 29 : expected >= 8 ? 21 : expected >= 4 ? 14 : 11);
-            QCOMPARE(display.value("pages").toArray().size(), expected >= 12 ? 7 : expected >= 11 ? 5 : expected >= 8 ? 4 : 3);
+            QCOMPARE(displayControls, expected >= 29 ? 125 : expected >= 28 ? 101 : expected >= 12 ? 100 : expected >= 11 ? 48 : expected >= 10 ? 33 : expected >= 9 ? 29 : expected >= 8 ? 21 : expected >= 4 ? 14 : 11);
+            QCOMPARE(display.value("pages").toArray().size(), expected >= 29 ? 8 : expected >= 12 ? 7 : expected >= 11 ? 5 : expected >= 8 ? 4 : 3);
             const QJsonObject appearance = QJsonDocument::fromJson(setupCategoryOnWire(
                 *core.app, "appearance", SessionMessageKind::ObjectCreate).toUtf8()).object();
             QCOMPARE(appearance.value("version"),
-                     QJsonValue(expected >= 12 ? 12 : expected >= 7 ? 7 : qMin(expected, 4)));
+                     QJsonValue(expected >= 29 ? 29 : expected >= 27 ? 27 : expected >= 12 ? 12 : expected >= 7 ? 7 : qMin(expected, 4)));
             QCOMPARE(appearance.value("pages").toArray().size(), expected >= 7 ? 2 : 1);
             QCOMPARE(appearance.value("pages").toArray().first().toObject()
                          .value("sections").toArray().size(), expected >= 12 ? 2 : 1);
             QCOMPARE(appearance.value("pages").toArray().first().toObject()
                          .value("sections").toArray().first().toObject()
-                         .value("controls").toArray().size(), 10);
+                         .value("controls").toArray().size(), expected >= 29 ? 9 : expected >= 27 ? 11 : 10);
             if (expected < 4) {
                 for (const QJsonObject& projected : {display, appearance}) {
                     for (const QJsonValue& page : projected.value("pages").toArray()) {
@@ -3745,12 +4020,19 @@ private slots:
         // 21 is CAT & Network's TCI Forget enabledWhen; 22 is the RX
         // buffer sizes' on-the-air lock; 23 is Calibration's Rx1 6m LNA
         // row; 24 is TX Input's Line In Gain steps and Saturn Mic
-        // Tip-Ring, and the cap.
+        // Tip-Ring; 25 is Audio's Outputs page and Microphone title; 26 is
+        // Display's Waterfall Defaults level gates; 27 is Appearance's
+        // Trace Color row; 28 is Display's FFT sizing rows, and the cap.
         check(21, kSessionProtocolMinor, 21);
         check(22, kSessionProtocolMinor, 22);
         check(23, kSessionProtocolMinor, 23);
         check(24, kSessionProtocolMinor, 24);
-        check(25, kSessionProtocolMinor, 24);
+        check(25, kSessionProtocolMinor, 25);
+        check(26, kSessionProtocolMinor, 26);
+        check(27, kSessionProtocolMinor, 27);
+        check(28, kSessionProtocolMinor, 28);
+        check(29, kSessionProtocolMinor, 29);
+        check(30, kSessionProtocolMinor, 29);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }
@@ -4021,7 +4303,10 @@ private slots:
     void displayV12PublishesTheRestOfDisplay()
     {
         SetupDescriptionService service;
-        const QJsonObject display = service.category(QStringLiteral("display"));
+        // The latest Display is version 26 (displayV26GatesWaterfallLevelRows);
+        // this is the version 12 description a phone below 26 is sent.
+        QCOMPARE(QJsonDocument::fromJson(legacyCategoryText(QStringLiteral("display")).toUtf8()).object().value("version"), QJsonValue(28));
+        const QJsonObject display = projectedCategory(service.display(), 12);
         QCOMPARE(display.value("version"), QJsonValue(12));
         const QJsonArray pages = display.value("pages").toArray();
         QStringList pageIds;
@@ -4206,7 +4491,7 @@ private slots:
         // remote window (cal offset, thread priority, the deprecated NF text
         // position), the phone owns its own (line width, D75), no editor kind (TX custom
         // gradient), or hidden as unbuilt (Multimeter holds and averaging).
-        const QString source = service.display();
+        const QString source = legacyCategoryText(QStringLiteral("display"));
         for (const char* key : {"DisplayLineWidth", "DisplayCalOffset",
                                 "DisplayShowNoiseFloorPosition",
                                 "DisplayTxWfGradient", "MultimeterPeakHoldMs",
@@ -4246,11 +4531,867 @@ private slots:
         QCOMPARE(projectedCategory(source, 13), display);
     }
 
-    void appearanceV12PublishesResetColours()
+    // Version 26: Waterfall Defaults' level rows grey out with Clarity, Use
+    // spectrum min/max and AGC, as the desktop page greys them. Five rows
+    // carry the allOf form of enabledWhen.
+    void displayV26GatesWaterfallLevelRows()
+    {
+        SetupDescriptionService service;
+        const QString source = legacyCategoryText(QStringLiteral("display"));
+        const QJsonObject latest = QJsonDocument::fromJson(legacyCategoryText(QStringLiteral("display")).toUtf8()).object();
+        // Version 28 added Sizing (displayV28DescribesFftSizing).
+        QCOMPARE(latest.value("version"), QJsonValue(28));
+        QCOMPARE(controlCount(latest, 0), 101);
+        // The six gated rows, Reset to Smooth Defaults
+        // (displayV26SmoothDefaultsSaysWhatItSets) and Enable Clarity
+        // (displayV26ClaritySaysWhatItDoes).
+        QCOMPARE(controlCount(latest, 26), 8);
+        QCOMPARE(controlCount(latest, 12), 44);
+
+        const QJsonObject clarityOff{{"phone", "ClarityEnabled"}, {"oneOf", QJsonArray{false}}};
+        const QJsonObject minMaxOff{{"phone", "DisplayWfUseSpectrumMinMax"},
+                                    {"oneOf", QJsonArray{false}}};
+        const QJsonObject agcOn{{"phone", "DisplayWfAgc"}, {"oneOf", QJsonArray{true}}};
+        const QJsonObject levels{{"allOf", QJsonArray{clarityOff, minMaxOff}}};
+        const QJsonObject underAgc{{"allOf", QJsonArray{clarityOff, minMaxOff, agcOn}}};
+        const QList<std::pair<QString, QJsonObject>> gates{
+            {"display.waterfallDefaults.highThreshold", levels},
+            {"display.waterfallDefaults.lowThreshold", levels},
+            {"display.waterfallDefaults.agc", levels},
+            {"display.waterfallDefaults.useSpectrumMinMax", clarityOff},
+            {"display.waterfallDefaults.nfAgc", underAgc},
+            {"display.waterfallDefaults.nfAgcOffset", underAgc}};
+
+        // The resource holds exactly the rows the Core's table serves.
+        QList<QJsonObject> resource = resourceRows(QStringLiteral("display"), 26);
+        QCOMPARE(resource.size(), gates.size() + 2);
+        QCOMPARE(resource.takeFirst().value("id"),
+                 QJsonValue("display.spectrumDefaults.smoothDefaults"));
+        QCOMPARE(resource.takeFirst().value("id"),
+                 QJsonValue("display.spectrumDefaults.clarity"));
+        const QJsonObject v12 = projectedCategory(source, 12);
+        QCOMPARE(v12.value("version"), QJsonValue(12));
+        for (int i = 0; i < gates.size(); ++i) {
+            const QString id = gates.at(i).first;
+            const QJsonObject row = resource.at(i);
+            QCOMPARE(row.value("id"), QJsonValue(id));
+            QCOMPARE(row.value("enabledWhen"), QJsonValue(gates.at(i).second));
+            QCOMPARE(controlById(latest, id), row);
+            QVERIFY2(SetupDescriptionService::validateDisplayPhoneBinding(row), qPrintable(id));
+            // Closed: no field may be removed, changed or added.
+            for (const QJsonObject& changed : mutationsOf(row)) {
+                QVERIFY2(!SetupDescriptionService::validateDisplayPhoneBinding(changed),
+                         qPrintable(id));
+            }
+            // The version 12 row is this row with its version 12 gate.
+            QJsonObject older = row;
+            older.insert("requiresDescriptionVersion", 12);
+            if (id == QLatin1String("display.waterfallDefaults.useSpectrumMinMax")) {
+                older.remove("enabledWhen");
+            } else {
+                older.insert("enabledWhen", minMaxOff);
+            }
+            QCOMPARE(controlById(v12, id), older);
+            QVERIFY2(SetupDescriptionService::validateDisplayPhoneBinding(older), qPrintable(id));
+        }
+
+        // The allOf form is closed: at least the row's own terms, each with
+        // phone and oneOf only, never nested, and only on a version 26 row.
+        const QJsonObject high = resource.first();
+        const auto rejects = [&high](const QJsonValue& enabledWhen, const char* what) {
+            QJsonObject changed = high;
+            changed.insert("enabledWhen", enabledWhen);
+            QVERIFY2(!SetupDescriptionService::validateDisplayPhoneBinding(changed), what);
+        };
+        rejects(QJsonObject{{"allOf", QJsonArray{}}}, "no terms");
+        rejects(QJsonObject{{"allOf", QJsonArray{clarityOff}}}, "a term missing");
+        rejects(QJsonObject{{"allOf", QJsonArray{minMaxOff, clarityOff}}}, "terms reordered");
+        rejects(underAgc, "another row's terms");
+        QJsonObject extraKey = clarityOff;
+        extraKey.insert("note", "x");
+        rejects(QJsonObject{{"allOf", QJsonArray{extraKey, minMaxOff}}}, "a term with another key");
+        rejects(QJsonObject{{"allOf", QJsonArray{clarityOff, QJsonObject{
+                    {"allOf", QJsonArray{minMaxOff}}}}}}, "a nested allOf");
+        rejects(QJsonObject{{"allOf", QJsonArray{clarityOff, minMaxOff}},
+                            {"phone", "ClarityEnabled"}, {"oneOf", QJsonArray{false}}},
+                "allOf beside the single form");
+        rejects(QJsonObject{{"allOf", levels}}, "allOf that is not a list");
+        rejects(clarityOff, "the single form on an allOf row");
+        QJsonObject onV12 = high;
+        onV12.insert("requiresDescriptionVersion", 12);
+        QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(onV12));
+        // No other Display row may carry the form.
+        QJsonObject other = controlById(latest, QStringLiteral("display.spectrumDefaults.normalize"));
+        QVERIFY(SetupDescriptionService::validateDisplayPhoneBinding(other));
+        other.insert("enabledWhen", levels);
+        QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(other));
+        other.insert("requiresDescriptionVersion", 26);
+        QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(other));
+
+        // 12 to 25 are sent the same version 12 Display, with no allOf in it;
+        // 26 and 27 are sent the version 26 Display, which is the latest
+        // without Sizing and with the four version 28 rows as they were.
+        const QString v12Text = SetupDescriptionService::fitCategoryForVersion(source, 12);
+        QVERIFY(!v12Text.contains(QLatin1String("allOf")));
+        QVERIFY(!v12Text.contains(QLatin1String("\"requiresDescriptionVersion\":26")));
+        for (int version = 13; version <= 25; ++version) {
+            QCOMPARE(SetupDescriptionService::fitCategoryForVersion(source, version), v12Text);
+        }
+        QCOMPARE(controlCount(v12, 0), 100);
+        QCOMPARE(controlCount(v12, 12), 52);
+        const QJsonObject v26 = projectedCategory(source, 26);
+        QCOMPARE(v26.value("version"), QJsonValue(26));
+        QCOMPARE(projectedCategory(source, 27), v26);
+        QCOMPARE(controlCount(v26, 0), 100);
+        QCOMPARE(controlCount(v26, 26), 8);
+        QCOMPARE(controlCount(v26, 28), 0);
+        for (const auto& gate : gates) {
+            QCOMPARE(controlById(v26, gate.first), controlById(latest, gate.first));
+        }
+        // Below 12 the rows are absent, as before.
+        const QJsonObject v11 = projectedCategory(source, 11);
+        QCOMPARE(v11.value("version"), QJsonValue(11));
+        QCOMPARE(controlCount(v11, 0), 48);
+        for (const auto& gate : gates) {
+            QVERIFY2(controlById(v11, gate.first).isEmpty(), qPrintable(gate.first));
+        }
+    }
+
+    // Rulings wave R7: version 26's Reset to Smooth Defaults says it sets
+    // every panadapter's defaults. A peer below 26 keeps the version 12
+    // sentence, byte for byte.
+    void displayV26SmoothDefaultsSaysWhatItSets()
+    {
+        SetupDescriptionService service;
+        const QString source = legacyCategoryText(QStringLiteral("display"));
+        const QString id = QStringLiteral("display.spectrumDefaults.smoothDefaults");
+        const QJsonObject latest = controlById(QJsonDocument::fromJson(legacyCategoryText(QStringLiteral("display")).toUtf8()).object(), id);
+        const QJsonObject expected{
+            {"id", id},
+            {"label", "Reset to Smooth Defaults"},
+            {"tooltip", "Set every panadapter's default spectrum and waterfall look to the "
+                        "NereusSDR smooth profile: Clarity Blue palette, log-recursive averaging "
+                        "with a 650 ms averaging time, a white trace without fill, waterfall AGC "
+                        "on and a 30 ms waterfall update period. A panadapter you have adjusted "
+                        "from its Display panel keeps its own settings. FFT size, frequency, "
+                        "band stack, and per-band grid ranges are not affected."},
+            {"kind", "button"},
+            {"binding", QJsonObject{{"phone", "smoothDefaults"}}},
+            {"applies", "live"},
+            {"requiresDescriptionVersion", 26},
+            {"confirm", "This will set every panadapter's default Spectrum and Waterfall display "
+                        "settings to the NereusSDR smooth profile. A panadapter you have adjusted "
+                        "from its Display panel keeps its own settings.\n\nYour FFT size, "
+                        "frequency, band stack, and per-band grid ranges are NOT affected.\n\n"
+                        "Continue?"}};
+        QCOMPARE(latest, expected);
+        QCOMPARE(resourceRows(QStringLiteral("display"), 26).first(), expected);
+        QVERIFY(SetupDescriptionService::validateDisplayPhoneBinding(latest));
+        for (const QJsonObject& changed : mutationsOf(latest)) {
+            QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(changed));
+        }
+        // No em dash in either sentence.
+        QVERIFY(!latest.value("tooltip").toString().contains(QChar(0x2014)));
+        QVERIFY(!latest.value("confirm").toString().contains(QChar(0x2014)));
+
+        const QJsonObject older{
+            {"id", id},
+            {"label", "Reset to Smooth Defaults"},
+            {"tooltip", "Overwrite this panadapter's spectrum and waterfall look with the "
+                        "NereusSDR smooth-default profile: Clarity Blue palette, log-recursive "
+                        "averaging with a 650 ms averaging time, a white trace without fill, "
+                        "waterfall AGC on and a 30 ms waterfall update period. FFT size, "
+                        "frequency, band stack, and per-band grid ranges are not affected."},
+            {"kind", "button"},
+            {"binding", QJsonObject{{"phone", "smoothDefaults"}}},
+            {"applies", "live"},
+            {"requiresDescriptionVersion", 12},
+            {"confirm", "This will overwrite your current Spectrum and Waterfall display "
+                        "settings with the NereusSDR smooth-default profile.\n\nYour FFT size, "
+                        "frequency, band stack, and per-band grid ranges are NOT affected.\n\n"
+                        "Continue?"}};
+        for (const int version : {12, 13, 25}) {
+            QCOMPARE(controlById(projectedCategory(source, version), id), older);
+        }
+        QVERIFY(SetupDescriptionService::validateDisplayPhoneBinding(older));
+        QCOMPARE(controlById(projectedCategory(source, 26), id), expected);
+        QVERIFY(controlById(projectedCategory(source, 11), id).isEmpty());
+        // The version 12 sentence does not pass as a version 26 row, nor the
+        // new one as a version 12 row.
+        QJsonObject mixed = older;
+        mixed.insert("requiresDescriptionVersion", 26);
+        QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(mixed));
+        mixed = expected;
+        mixed.insert("requiresDescriptionVersion", 12);
+        QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(mixed));
+    }
+
+    // Follow-up wave F2: version 26's Enable Clarity says what Clarity does
+    // now. A peer below 26 keeps the version 12 sentence, byte for byte.
+    void displayV26ClaritySaysWhatItDoes()
+    {
+        SetupDescriptionService service;
+        const QString source = legacyCategoryText(QStringLiteral("display"));
+        const QString id = QStringLiteral("display.spectrumDefaults.clarity");
+        const QJsonObject latest = controlById(QJsonDocument::fromJson(legacyCategoryText(QStringLiteral("display")).toUtf8()).object(), id);
+        const QJsonObject expected{
+            {"id", id},
+            {"label", "Enable Clarity (adaptive waterfall tuning)"},
+            {"tooltip", "Clarity keeps the waterfall's black point just above the noise floor as "
+                        "band conditions and tuning change. Black Level and Color Gain set how far "
+                        "above the noise the waterfall starts and how much range it shows. When "
+                        "Clarity is off, Low and High set the levels."},
+            {"kind", "toggle"},
+            {"binding", QJsonObject{{"phone", "ClarityEnabled"}}},
+            {"applies", "subscription"},
+            {"requiresDescriptionVersion", 26},
+            {"default", true},
+            {"gate", QJsonObject{{"capability", "displayExtrasVersion"}, {"min", 1}}}};
+        QCOMPARE(latest, expected);
+        QCOMPARE(resourceRows(QStringLiteral("display"), 26).at(1), expected);
+        QVERIFY(SetupDescriptionService::validateDisplayPhoneBinding(latest));
+        for (const QJsonObject& changed : mutationsOf(latest)) {
+            QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(changed));
+        }
+        QVERIFY(!latest.value("tooltip").toString().contains(QChar(0x2014)));
+
+        const QJsonObject older{
+            {"id", id},
+            {"label", "Enable Clarity (adaptive waterfall tuning)"},
+            {"tooltip", QString::fromUtf8(
+                            "Clarity keeps the waterfall thresholds centered on the actual noise "
+                            "floor as band conditions and tuning change. Uses a 30th-percentile "
+                            "estimator with 3-second EWMA smoothing and a \xc2\xb1" "2 dB deadband. "
+                            "When off, thresholds are fixed at their last values.")},
+            {"kind", "toggle"},
+            {"binding", QJsonObject{{"phone", "ClarityEnabled"}}},
+            {"applies", "subscription"},
+            {"requiresDescriptionVersion", 12},
+            {"default", true},
+            {"gate", QJsonObject{{"capability", "displayExtrasVersion"}, {"min", 1}}}};
+        for (const int version : {12, 13, 25}) {
+            QCOMPARE(controlById(projectedCategory(source, version), id), older);
+        }
+        QVERIFY(SetupDescriptionService::validateDisplayPhoneBinding(older));
+        QCOMPARE(controlById(projectedCategory(source, 26), id), expected);
+        QVERIFY(controlById(projectedCategory(source, 11), id).isEmpty());
+        // The version 12 sentence does not pass as a version 26 row, nor the
+        // new one as a version 12 row.
+        QJsonObject mixed = older;
+        mixed.insert("requiresDescriptionVersion", 26);
+        QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(mixed));
+        mixed = expected;
+        mixed.insert("requiresDescriptionVersion", 12);
+        QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(mixed));
+    }
+
+    // Live V29 is a new exact contract. Older payload checks below remain
+    // pinned independently, so regrouping cannot replace their fixtures.
+    void displayV29PublishesTheApprovedPagesAndGroups()
+    {
+        SetupDescriptionService service;
+        const QJsonObject display = service.category(QStringLiteral("display"));
+        QCOMPARE(display.value("version"), QJsonValue(29));
+        const QStringList titles{
+            "Spectrum", "Levels", "Waterfall", "View", "Peaks & Markers",
+            "FFT & Engine", "Transmit Display", "Multimeter"};
+        const QList<QStringList> groups{
+            {"Trace", "Fill", "Peak hold", "Grid", "Scales and labels", "Calibration", "Readouts", "Reset"},
+            {"Spectrum scale", "Waterfall levels", "While transmitting"},
+            {"Drawing", "Smoothing", "Overlays", "Time"},
+            {"View", "3D", "3D floor", "Background"},
+            {"Peak trace", "Peak markers", "Peak value", "Noise floor line", "Bin width"},
+            {"FFT size", "Frame rate", "This computer"},
+            {"FFT", "Panadapter", "Transmit scale", "Waterfall", "Waterfall Amplitude Scale"},
+            {"Multimeter", "Signal Units", "Signal History"}};
+        const QJsonArray pages = display.value("pages").toArray();
+        QCOMPARE(pages.size(), titles.size());
+        for (int i = 0; i < pages.size(); ++i) {
+            QCOMPARE(pages.at(i).toObject().value("title").toString(), titles.at(i));
+            QStringList actualGroups;
+            for (const QJsonValue& raw : pages.at(i).toObject().value("sections").toArray()) {
+                const QJsonObject section = raw.toObject();
+                const QString title = section.value("title").toString();
+                if (!title.isEmpty()) { actualGroups.append(title); }
+                if (section.contains("owner")) {
+                    QVERIFY((QStringList{"station", "phone", "pan"})
+                                .contains(section.value("owner").toString()));
+                }
+                if (section.value("controls").toArray().isEmpty()) {
+                    QCOMPARE(titles.at(i), QStringLiteral("Levels"));
+                    QCOMPARE(title, QStringLiteral("While transmitting"));
+                    QCOMPARE(section.value("note"), QJsonValue(
+                        "A pan that transmits is drawn with the transmit scale and the transmit "
+                        "levels until it stops. Transmit Display →"));
+                }
+            }
+            QCOMPARE(actualGroups, groups.at(i));
+        }
+        const QJsonObject spectrum = pages.first().toObject();
+        const QJsonArray fill = spectrum.value("sections").toArray().at(1).toObject()
+            .value("controls").toArray();
+        QStringList fillIds;
+        for (const QJsonValue& raw : fill) { fillIds.append(raw.toObject().value("id").toString()); }
+        QCOMPARE(fillIds, (QStringList{
+            "display.spectrumDefaults.panFill", "display.spectrumDefaults.fillAlpha",
+            "display.spectrum.fillColor", "display.spectrumDefaults.gradient"}));
+        for (const char* id : {"display.spectrumDefaults.clarity", "display.waterfallDefaults.agc",
+                               "display.waterfallDefaults.nfAgc", "display.waterfallDefaults.useSpectrumMinMax"}) {
+            QVERIFY(controlById(display, QString::fromLatin1(id)).isEmpty());
+        }
+        const QJsonObject trace = controlById(display, QStringLiteral("display.spectrum.traceColor"));
+        const QJsonObject fillColour = controlById(display, QStringLiteral("display.spectrum.fillColor"));
+        QCOMPARE(trace.value("binding"), QJsonValue(QJsonObject{{"phone", "DisplayTraceColor"}}));
+        QCOMPARE(fillColour.value("binding"), QJsonValue(QJsonObject{{"phone", "DisplayFillColor"}}));
+        QCOMPARE(trace.value("owner"), QJsonValue("pan"));
+        QCOMPARE(fillColour.value("owner"), QJsonValue("pan"));
+    }
+
+    void displayV29CompositeChoicesAreClosedLocalTokens()
+    {
+        SetupDescriptionService service;
+        const QJsonObject display = service.category(QStringLiteral("display"));
+        const QList<std::tuple<QString, QString, QJsonArray, QString>> expected{
+            {QStringLiteral("display.levels.waterfallMode"), QStringLiteral("DisplayWaterfallLevelsMode"),
+             QJsonArray{QJsonObject{{"value", "Clarity"}, {"label", "Clarity"}},
+                        QJsonObject{{"value", "Auto"}, {"label", "Auto"}},
+                        QJsonObject{{"value", "Floor"}, {"label", "Floor"}},
+                        QJsonObject{{"value", "Manual"}, {"label", "Manual"}},
+                        QJsonObject{{"value", "Scale"}, {"label", "Scale"}}}, QStringLiteral("Clarity")},
+            {QStringLiteral("display.levels.scaleMode"), QStringLiteral("DisplaySpectrumScaleMode"),
+             QJsonArray{QJsonObject{{"value", "Manual"}, {"label", "Manual"}},
+                        QJsonObject{{"value", "TrackFloor"}, {"label", "Track floor"}}}, QStringLiteral("Manual")}};
+        for (const auto& [id, key, options, defaultValue] : expected) {
+            const QJsonObject row = controlById(display, id);
+            QVERIFY2(!row.isEmpty(), qPrintable(id));
+            QCOMPARE(row.value("binding"), QJsonValue(QJsonObject{{"phone", key}}));
+            QCOMPARE(row.value("kind"), QJsonValue("choice"));
+            QCOMPARE(row.value("applies"), QJsonValue("subscription"));
+            QCOMPARE(row.value("requiresDescriptionVersion"), QJsonValue(29));
+            QCOMPARE(row.value("options"), QJsonValue(options));
+            QCOMPARE(row.value("default"), QJsonValue(defaultValue));
+            QCOMPARE(row.value("owner"), QJsonValue("pan"));
+            QVERIFY(!row.contains("choices"));
+            QVERIFY(SetupDescriptionService::validateDisplayPhoneBinding(row));
+            const auto rejects = [&row](const QString& field, const QJsonValue& value) {
+                QJsonObject changed = row;
+                changed.insert(field, value);
+                QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(changed));
+            };
+            rejects(QStringLiteral("requiresDescriptionVersion"), 28);
+            rejects(QStringLiteral("binding"), QJsonObject{{"setting", key}});
+            rejects(QStringLiteral("default"), "UnknownMode");
+            rejects(QStringLiteral("owner"), "station");
+            rejects(QStringLiteral("unexpected"), true);
+            QJsonArray changedOptions = options;
+            QJsonObject changedOption = changedOptions.first().toObject();
+            changedOption.insert("value", "UnknownMode");
+            changedOptions[0] = changedOption;
+            rejects(QStringLiteral("options"), changedOptions);
+        }
+    }
+
+    void displayV29GradientEditorsAndEffectiveReadoutsAreClosed()
+    {
+        SetupDescriptionService service;
+        const QJsonObject display = service.category(QStringLiteral("display"));
+        const QList<std::tuple<QString, QString, QString>> editors{
+            {QStringLiteral("display.waterfall.customGradient"), QStringLiteral("editReceiveGradient"),
+             QStringLiteral("receiveGradient")},
+            {QStringLiteral("display.transmit.customGradient"), QStringLiteral("editTransmitGradient"),
+             QStringLiteral("transmitGradient")}};
+        for (const auto& [id, action, editor] : editors) {
+            const QJsonObject row = controlById(display, id);
+            QVERIFY2(!row.isEmpty(), qPrintable(id));
+            QCOMPARE(row.value("binding"), QJsonValue(QJsonObject{{"phone", action}}));
+            QCOMPARE(row.value("kind"), QJsonValue("button"));
+            QCOMPARE(row.value("applies"), QJsonValue("subscription"));
+            QCOMPARE(row.value("requiresDescriptionVersion"), QJsonValue(29));
+            QCOMPARE(row.value("editor"), QJsonValue(editor));
+            QCOMPARE(row.value("owner"), QJsonValue("phone"));
+            QVERIFY(SetupDescriptionService::validateDisplayPhoneBinding(row));
+            for (const QString& invalid : {QStringLiteral("UnknownEditor"),
+                                           editor == QLatin1String("receiveGradient")
+                                               ? QStringLiteral("transmitGradient")
+                                               : QStringLiteral("receiveGradient")}) {
+                QJsonObject changed = row;
+                changed.insert("editor", invalid);
+                QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(changed));
+            }
+            QJsonObject changed = row;
+            changed.insert("requiresDescriptionVersion", 28);
+            QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(changed));
+            changed = row;
+            changed.insert("unexpected", true);
+            QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(changed));
+        }
+        const QList<std::tuple<QString, QString, QString>> readouts{
+            {QStringLiteral("display.waterfallDefaults.lowThreshold"), QStringLiteral("waterfallLow"), QStringLiteral("pan")},
+            {QStringLiteral("display.waterfallDefaults.highThreshold"), QStringLiteral("waterfallHigh"), QStringLiteral("pan")},
+            {QStringLiteral("display.gridScales.dbMax"), QStringLiteral("spectrumMax"), QStringLiteral("station")},
+            {QStringLiteral("display.gridScales.dbMin"), QStringLiteral("spectrumMin"), QStringLiteral("station")}};
+        for (const auto& [id, readout, owner] : readouts) {
+            const QJsonObject row = controlById(display, id);
+            QCOMPARE(row.value("readout"), QJsonValue(readout));
+            QCOMPARE(row.value("owner"), QJsonValue(owner));
+            QCOMPARE(row.value("requiresDescriptionVersion"), QJsonValue(29));
+            QVERIFY(SetupDescriptionService::validateDisplayPhoneBinding(row));
+            QJsonObject changed = row;
+            changed.insert("readout", "UnknownReadout");
+            QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(changed));
+            changed = row;
+            changed.insert("owner", "mixed");
+            QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(changed));
+            changed = row;
+            changed.insert("requiresDescriptionVersion", 28);
+            QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(changed));
+        }
+    }
+
+    void appearanceV29KeepsOnlyItsNineColours()
     {
         SetupDescriptionService service;
         const QJsonObject appearance = service.category(QStringLiteral("appearance"));
-        QCOMPARE(appearance.value("version"), QJsonValue(12));
+        QCOMPARE(appearance.value("version"), QJsonValue(29));
+        QVERIFY(controlById(appearance, QStringLiteral("appearance.colorsTheme.traceColor")).isEmpty());
+        QVERIFY(controlById(appearance, QStringLiteral("appearance.colorsTheme.traceFillColor")).isEmpty());
+        QVERIFY(controlById(appearance, QStringLiteral("display.spectrum.traceColor")).isEmpty());
+        QVERIFY(controlById(appearance, QStringLiteral("display.spectrum.fillColor")).isEmpty());
+        const QJsonArray swatches = appearance.value("pages").toArray().first().toObject()
+            .value("sections").toArray().first().toObject().value("controls").toArray();
+        QStringList keys;
+        for (const QJsonValue& raw : swatches) {
+            const QJsonObject row = raw.toObject();
+            QCOMPARE(row.value("owner"), QJsonValue("phone"));
+            keys.append(row.value("binding").toObject().value("phone").toString());
+            QVERIFY(SetupDescriptionService::validateAppearanceColourBinding(row));
+            QJsonObject changed = row;
+            changed.insert("owner", "pan");
+            QVERIFY(!SetupDescriptionService::validateAppearanceColourBinding(changed));
+        }
+        QCOMPARE(keys, (QStringList{"DisplayGridColor", "DisplayGridFineColor", "DisplayHGridColor",
+            "DisplayGridTextColor", "DisplayBandEdgeColor", "DisplayRxZeroLineColor",
+            "DisplayTxZeroLineColor", "DisplayRxFilterColor", "DisplayTxFilterColor"}));
+    }
+
+    void displayV29BareNavigationGroupsHaveDistinctClosedRows()
+    {
+        SetupDescriptionService service;
+        const QJsonObject display = service.category(QStringLiteral("display"));
+        QCOMPARE(display.value("version"), QJsonValue(29));
+        const QHash<QString, QStringList> expectedIds{
+            {"Spectrum", {"display.navigation.peaks", "display.navigation.multimeter"}},
+            {"Peaks & Markers", {"display.navigation.spectrumFromPeaks"}},
+            {"Multimeter", {"display.navigation.spectrumFromMultimeter"}}};
+        const QHash<QString, QString> expectedActions{
+            {"display.navigation.peaks", "openDisplayPeaks"},
+            {"display.navigation.multimeter", "openDisplayMultimeter"},
+            {"display.navigation.spectrumFromPeaks", "openDisplaySpectrum"},
+            {"display.navigation.spectrumFromMultimeter", "openDisplaySpectrum"}};
+        int found = 0;
+        for (const QJsonValue& rawPage : display.value("pages").toArray()) {
+            const QJsonObject page = rawPage.toObject();
+            for (const QJsonValue& rawSection : page.value("sections").toArray()) {
+                const QJsonObject section = rawSection.toObject();
+                if (!section.value("title").toString().isEmpty()) { continue; }
+                const QString title = page.value("title").toString();
+                QVERIFY(expectedIds.contains(title));
+                QStringList ids;
+                for (const QJsonValue& raw : section.value("controls").toArray()) {
+                    const QJsonObject row = raw.toObject();
+                    const QString id = row.value("id").toString();
+                    ids.append(id);
+                    QCOMPARE(row.value("kind"), QJsonValue("button"));
+                    QCOMPARE(row.value("requiresDescriptionVersion"), QJsonValue(29));
+                    QCOMPARE(row.value("binding"), QJsonValue(QJsonObject{{"phone", expectedActions.value(id)}}));
+                    QVERIFY(SetupDescriptionService::validateDisplayPhoneBinding(row));
+                    QJsonObject changed = row;
+                    changed.insert("binding", QJsonObject{{"phone", "openUnknownDisplayPage"}});
+                    QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(changed));
+                    changed = row;
+                    changed.insert("unexpected", true);
+                    QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(changed));
+                }
+                QCOMPARE(ids, expectedIds.value(title));
+                ++found;
+            }
+        }
+        QCOMPARE(found, 3);
+    }
+
+    void everyV29RowAndEnvelopeRejectsUnknownOrChangedMetadata()
+    {
+        SetupDescriptionService service;
+        for (const QString& category : {QStringLiteral("display"), QStringLiteral("appearance")}) {
+            const QJsonObject root = service.category(category);
+            QCOMPARE(root.value("version"), QJsonValue(29));
+            for (const QJsonValue& page : root.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    for (const QJsonValue& value : section.toObject().value("controls").toArray()) {
+                        const QJsonObject row = value.toObject();
+                        const auto accepts = [&category](const QJsonObject& candidate) {
+                            if (category == QLatin1String("display")) {
+                                return SetupDescriptionService::validateDisplayPhoneBinding(candidate)
+                                    || SetupDescriptionService::validateDisplaySettingBinding(candidate);
+                            }
+                            return SetupDescriptionService::validateAppearanceColourBinding(candidate)
+                                || SetupDescriptionService::validateAppearanceMeterStyleBinding(candidate)
+                                || SetupDescriptionService::validateAppearanceResetColours(candidate);
+                        };
+                        QVERIFY2(accepts(row), qPrintable(row.value("id").toString()));
+                        for (const QJsonObject& changed : mutationsOf(row)) {
+                            QVERIFY2(!accepts(changed), qPrintable(row.value("id").toString()));
+                        }
+                    }
+                }
+            }
+            QJsonObject changed = root;
+            changed.insert("unexpected", true);
+            QVERIFY(SetupDescriptionService::fitCategoryForVersion(
+                QString::fromUtf8(QJsonDocument(changed).toJson()), 29).isEmpty());
+            changed = root;
+            QJsonArray pages = changed.value("pages").toArray();
+            QJsonObject page = pages.first().toObject();
+            QJsonArray sections = page.value("sections").toArray();
+            QJsonObject section = sections.first().toObject();
+            section.insert("owner", "station");
+            sections[0] = section;
+            page.insert("sections", sections);
+            pages[0] = page;
+            changed.insert("pages", pages);
+            QVERIFY(SetupDescriptionService::fitCategoryForVersion(
+                QString::fromUtf8(QJsonDocument(changed).toJson()), 29).isEmpty());
+        }
+    }
+
+    void liveV29KeepsEveryOlderDescriptionByte()
+    {
+        SetupDescriptionService service;
+        for (const QString& category : {QStringLiteral("display"), QStringLiteral("appearance")}) {
+            const QString source = category == QLatin1String("display") ? service.display() : service.appearance();
+            const QJsonObject latest = service.category(category);
+            QCOMPARE(latest.value("version"), QJsonValue(29));
+            for (int version = 1; version <= 28; ++version) {
+                const QByteArray text = SetupDescriptionService::fitCategoryForVersion(source, version).toUtf8();
+                QCOMPARE(QCryptographicHash::hash(text, QCryptographicHash::Sha256).toHex(),
+                         legacyPayloadHash(category, version));
+            }
+            QCOMPARE(projectedCategory(source, 29), latest);
+            QCOMPARE(projectedCategory(source, 99), latest);
+        }
+    }
+
+    // Frozen at cb2f35e4a before the V29 regrouping. The raw resources and
+    // emitted bytes are independently pinned; the regression below also
+    // exercises a changed input tree.
+    void legacyDisplayAndAppearanceBaselineBytes()
+    {
+        SetupDescriptionService service;
+        const QList<std::tuple<QString, QString, QByteArray>> fixtures{
+            {QStringLiteral("display"), QStringLiteral(":/setup/legacy/display-v28.json"),
+             QByteArray("9a292f1a97ad73d86ab905f71cc13c9c9388c95f65a59f700f6443e07310b00e")},
+            {QStringLiteral("appearance"), QStringLiteral(":/setup/legacy/appearance-v27.json"),
+             QByteArray("9b0e9c6ca81307a61539600728c866e8013967b891e16c70c999d4fa76c4fbff")}};
+        for (const auto& [category, path, expectedHash] : fixtures) {
+            QFile fixture(path);
+            QVERIFY(fixture.open(QIODevice::ReadOnly));
+            const QByteArray frozen = fixture.readAll();
+            QCOMPARE(QCryptographicHash::hash(frozen, QCryptographicHash::Sha256).toHex(),
+                     expectedHash);
+            const QString baseline = QString::fromUtf8(frozen);
+            const QString live = category == QLatin1String("display")
+                ? service.display() : service.appearance();
+            for (int version = 1; version <= 28; ++version) {
+                const QString fitted = SetupDescriptionService::fitCategoryForVersion(baseline, version);
+                QVERIFY(!fitted.isEmpty());
+                QCOMPARE(SetupDescriptionService::fitCategoryForVersion(live, version), fitted);
+                QCOMPARE(QCryptographicHash::hash(fitted.toUtf8(),
+                                                 QCryptographicHash::Sha256).toHex(),
+                         legacyPayloadHash(category, version));
+            }
+        }
+    }
+
+    // A new resource moves pages/sections, drops replaced rows, and changes
+    // closed reset metadata. An older peer must still receive the exact
+    // baseline text, not the surviving rows in the new tree's order.
+    void hypotheticalV29RegroupingKeepsEveryOlderPayload_data()
+    {
+        QTest::addColumn<QString>("category");
+        QTest::addColumn<int>("version");
+        for (const QString& category : {QStringLiteral("display"), QStringLiteral("appearance")}) {
+            for (int version = 1; version <= 28; ++version) {
+                const QByteArray name = QStringLiteral("%1-v%2").arg(category).arg(version).toUtf8();
+                QTest::newRow(name.constData()) << category << version;
+            }
+        }
+    }
+
+    void hypotheticalV29RegroupingKeepsEveryOlderPayload()
+    {
+        QFETCH(QString, category);
+        QFETCH(int, version);
+        {
+            const QString path = category == QLatin1String("display")
+                ? QStringLiteral(":/setup/legacy/display-v28.json")
+                : QStringLiteral(":/setup/legacy/appearance-v27.json");
+            QFile fixture(path);
+            QVERIFY(fixture.open(QIODevice::ReadOnly));
+            const QString baseline = QString::fromUtf8(fixture.readAll());
+            QJsonObject changed = QJsonDocument::fromJson(baseline.toUtf8()).object();
+            changed.insert("version", 29);
+            QJsonArray pages = changed.value("pages").toArray();
+            if (category == QLatin1String("display")) {
+                QJsonObject spectrum = pages.at(0).toObject();
+                spectrum.insert("title", "Spectrum");
+                QJsonArray sections = spectrum.value("sections").toArray();
+                const QJsonObject fft = sections.at(1).toObject();
+                sections.removeAt(1);
+                QJsonObject profile = sections.at(0).toObject();
+                QJsonArray rows = profile.value("controls").toArray();
+                QJsonObject reset = rows.at(0).toObject();
+                reset.insert("requiresDescriptionVersion", 29);
+                reset.insert("confirm", "Every pan takes the smooth profile.");
+                rows[0] = reset;
+                profile.insert("controls", rows);
+                sections[0] = profile;
+                spectrum.insert("sections", sections);
+                QJsonObject levels = pages.at(3).toObject();
+                levels.insert("title", "Levels");
+                QJsonObject view = pages.at(6).toObject();
+                view.insert("title", "View");
+                QJsonObject peaks = pages.at(1).toObject();
+                peaks.insert("title", "Peaks & Markers");
+                QJsonObject waterfall = pages.at(2).toObject();
+                waterfall.insert("title", "Waterfall");
+                QJsonArray waterfallSections = waterfall.value("sections").toArray();
+                waterfallSections.removeAt(0);
+                waterfallSections.removeAt(0);
+                waterfall.insert("sections", waterfallSections);
+                QJsonObject transmit = pages.at(5).toObject();
+                transmit.insert("title", "Transmit Display");
+                const QJsonObject engine{
+                    {"id", "display.fftEngine"}, {"title", "FFT & Engine"},
+                    {"where", "station"}, {"sections", QJsonArray{fft}}};
+                pages = QJsonArray{spectrum, levels, waterfall, view, peaks, engine,
+                                   transmit, pages.at(4)};
+            } else {
+                QJsonObject colours = pages.at(0).toObject();
+                QJsonArray sections = colours.value("sections").toArray();
+                QJsonObject swatches = sections.at(0).toObject();
+                QJsonArray rows = swatches.value("controls").toArray();
+                rows.removeAt(0); // Trace Color moved to Display.
+                rows.removeAt(0); // Fill Color moved to Display.
+                swatches.insert("controls", rows);
+                sections[0] = swatches;
+                QJsonObject resetSection = sections.at(1).toObject();
+                QJsonArray resetRows = resetSection.value("controls").toArray();
+                QJsonObject reset = resetRows.at(0).toObject();
+                reset.insert("requiresDescriptionVersion", 29);
+                reset.insert("confirm", "Reset the nine remaining colors?");
+                resetRows[0] = reset;
+                resetSection.insert("controls", resetRows);
+                sections[1] = resetSection;
+                colours.insert("sections", sections);
+                pages[0] = colours;
+            }
+            changed.insert("pages", pages);
+            const QString hypothetical = QString::fromUtf8(
+                QJsonDocument(changed).toJson(QJsonDocument::Compact));
+            const QString expected = SetupDescriptionService::fitCategoryForVersion(baseline, version);
+            const QString actual = SetupDescriptionService::fitCategoryForVersion(hypothetical, version);
+            QCOMPARE(QCryptographicHash::hash(actual.toUtf8(), QCryptographicHash::Sha256).toHex(),
+                     legacyPayloadHash(category, version));
+            QVERIFY2(actual == expected,
+                     qPrintable(QStringLiteral("%1 V%2 payload changed after V29 regrouping")
+                                    .arg(category).arg(version)));
+            // Groundwork deliberately rearranged an incomplete hypothetical
+            // tree. Now that V29 is a closed contract, this shape must fail
+            // admission at 29; accepted live29/cap99 identity is tested above.
+            QVERIFY(SetupDescriptionService::fitCategoryForVersion(hypothetical, 29).isEmpty());
+        }
+    }
+
+    // Version 28: the FFT sizing mode (design D38) is described. Sizing
+    // leads the Fast Fourier Transform group, Size is live in Fixed only,
+    // Hz/bin Target in Hz/bin only and without its "Off" value, and the two
+    // averaging times run from 1 ms in steps of 1. A peer below 28 is sent
+    // what it was sent before, byte for byte.
+    void displayV28DescribesFftSizing()
+    {
+        SetupDescriptionService service;
+        const QString source = legacyCategoryText(QStringLiteral("display"));
+        const QJsonObject latest = QJsonDocument::fromJson(legacyCategoryText(QStringLiteral("display")).toUtf8()).object();
+        QCOMPARE(latest.value("version"), QJsonValue(28));
+        QCOMPARE(controlCount(latest, 0), 101);
+        QCOMPARE(controlCount(latest, 28), 5);
+
+        const auto heldUnless = [](const char* token) {
+            return QJsonObject{{"setting", "DisplayFftSizingMode"},
+                               {"oneOf", QJsonArray{QString::fromLatin1(token)}}};
+        };
+        const QJsonObject sizing{
+            {"id", "display.spectrumDefaults.fftSizing"},
+            {"label", "Sizing"},
+            {"tooltip", "How the FFT size is chosen. Auto: the zoom picks the size to keep the "
+                        "picture sharp. Hz/bin: the size follows the bin width you set. Fixed: "
+                        "the FFT Size slider sets the size and zoom does not change it."},
+            {"kind", "choice"},
+            {"binding", QJsonObject{{"setting", "DisplayFftSizingMode"}}},
+            {"applies", "subscription"},
+            {"requiresDescriptionVersion", 28},
+            {"options", QJsonArray{QJsonObject{{"value", "Auto"}, {"label", "Auto"}},
+                                   QJsonObject{{"value", "HzPerBin"}, {"label", "Hz/bin"}},
+                                   QJsonObject{{"value", "Fixed"}, {"label", "Fixed"}}}},
+            {"default", "Auto"}};
+        QCOMPARE(controlById(latest, QStringLiteral("display.spectrumDefaults.fftSizing")), sizing);
+
+        // What a peer below 28 is sent for the four rows that changed.
+        const QJsonObject v27 = projectedCategory(source, 27);
+        QCOMPARE(v27.value("version"), QJsonValue(26));
+        const auto older = [&v27](const char* id) {
+            return controlById(v27, QString::fromLatin1(id));
+        };
+
+        // Size: the same row, live in Fixed only.
+        QJsonObject size = older("display.spectrumDefaults.fftSize");
+        QCOMPARE(size.value("requiresDescriptionVersion"), QJsonValue(4));
+        QVERIFY(!size.contains("enabledWhen"));
+        size.insert("requiresDescriptionVersion", 28);
+        size.insert("enabledWhen", heldUnless("Fixed"));
+        QCOMPARE(controlById(latest, QStringLiteral("display.spectrumDefaults.fftSize")), size);
+
+        // Hz/bin Target: a bin width from one step up, live in Hz/bin only.
+        QJsonObject target = older("display.spectrumDefaults.hzPerBinTarget");
+        QVERIFY(!target.contains("requiresDescriptionVersion"));
+        QCOMPARE(target.value("min"), QJsonValue(0));
+        QCOMPARE(target.value("default"), QJsonValue(0));
+        QVERIFY(target.value("tooltip").toString().startsWith(QLatin1String("Auto-zoom override")));
+        target.insert("requiresDescriptionVersion", 28);
+        target.insert("min", 0.5);
+        target.insert("default", 200);
+        target.insert("tooltip", "The bin width to hold at every zoom. The FFT size follows it: "
+                                 "sample rate divided by bin width, rounded up to a power of two, "
+                                 "within the size limits.");
+        target.insert("enabledWhen", heldUnless("HzPerBin"));
+        const QJsonObject latestTarget =
+            controlById(latest, QStringLiteral("display.spectrumDefaults.hzPerBinTarget"));
+        QCOMPARE(latestTarget, target);
+        QCOMPARE(latestTarget.value("label"), QJsonValue("Hz/bin Target"));
+        QCOMPARE(latestTarget.value("max"), QJsonValue(200));
+        QCOMPARE(latestTarget.value("step"), QJsonValue(0.5));
+
+        // The averaging times: 1 ms in steps of 1; defaults stay 30 and 120.
+        for (const auto& [id, defaultMs] : {std::pair<const char*, int>{
+                 "display.spectrumDefaults.averageTime", 30},
+                 {"display.waterfallDefaults.averageTime", 120}}) {
+            QJsonObject time = older(id);
+            QCOMPARE(time.value("requiresDescriptionVersion"), QJsonValue(8));
+            QCOMPARE(time.value("min"), QJsonValue(10));
+            QCOMPARE(time.value("step"), QJsonValue(10));
+            QCOMPARE(time.value("default"), QJsonValue(defaultMs));
+            time.insert("requiresDescriptionVersion", 28);
+            time.insert("min", 1);
+            time.insert("step", 1);
+            const QJsonObject row = controlById(latest, QString::fromLatin1(id));
+            QCOMPARE(row, time);
+            QCOMPARE(row.value("min"), QJsonValue(1));
+            QCOMPARE(row.value("step"), QJsonValue(1));
+            QCOMPARE(row.value("max"), QJsonValue(9999));
+        }
+
+        // The resource holds exactly the five rows the Core's table serves,
+        // and each is closed: no field may be removed, changed or added.
+        const QList<QJsonObject> resource = resourceRows(QStringLiteral("display"), 28);
+        QStringList resourceIds;
+        for (const QJsonObject& row : resource) {
+            const QString id = row.value("id").toString();
+            resourceIds << id;
+            QCOMPARE(controlById(latest, id), row);
+            QVERIFY2(SetupDescriptionService::validateDisplaySettingBinding(row)
+                         || SetupDescriptionService::validateDisplayPhoneBinding(row),
+                     qPrintable(id));
+            for (const QJsonObject& changed : mutationsOf(row)) {
+                QVERIFY2(!SetupDescriptionService::validateDisplaySettingBinding(changed)
+                             && !SetupDescriptionService::validateDisplayPhoneBinding(changed),
+                         qPrintable(id));
+            }
+        }
+        QCOMPARE(resourceIds, (QStringList{
+            "display.spectrumDefaults.fftSizing", "display.spectrumDefaults.fftSize",
+            "display.spectrumDefaults.hzPerBinTarget", "display.spectrumDefaults.averageTime",
+            "display.waterfallDefaults.averageTime"}));
+        // A row of the older form marked 28, or a 28 row marked older, is
+        // not a row.
+        QJsonObject mixed = older("display.spectrumDefaults.hzPerBinTarget");
+        mixed.insert("requiresDescriptionVersion", 28);
+        QVERIFY(!SetupDescriptionService::validateDisplaySettingBinding(mixed));
+        mixed = latestTarget;
+        mixed.remove("requiresDescriptionVersion");
+        QVERIFY(!SetupDescriptionService::validateDisplaySettingBinding(mixed));
+        mixed = older("display.spectrumDefaults.averageTime");
+        mixed.insert("min", 1);
+        QVERIFY(!SetupDescriptionService::validateDisplayPhoneBinding(mixed));
+
+        // The group reads Sizing, Size, Hz/bin Target, Window from 28, and
+        // Size, Window, Hz/bin Target before it.
+        const auto fftGroupIds = [](const QJsonObject& category) {
+            QStringList ids;
+            for (const QJsonValue& section : category.value("pages").toArray().at(0).toObject()
+                     .value("sections").toArray()) {
+                if (section.toObject().value("title") != QJsonValue("Fast Fourier Transform")) {
+                    continue;
+                }
+                for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                    ids << raw.toObject().value("id").toString();
+                }
+            }
+            return ids;
+        };
+        QCOMPARE(fftGroupIds(latest), (QStringList{
+            "display.spectrumDefaults.fftSizing", "display.spectrumDefaults.fftSize",
+            "display.spectrumDefaults.hzPerBinTarget", "display.spectrumDefaults.window"}));
+        const QStringList olderOrder{
+            "display.spectrumDefaults.fftSize", "display.spectrumDefaults.window",
+            "display.spectrumDefaults.hzPerBinTarget"};
+        QCOMPARE(fftGroupIds(v27), olderOrder);
+        QCOMPARE(fftGroupIds(projectedCategory(source, 12)), olderOrder);
+
+        // 28 and anything later are sent the latest.
+        QCOMPARE(projectedCategory(source, 28), latest);
+        QCOMPARE(projectedCategory(source, 29), latest);
+
+        // A peer below 28: the bytes it was sent before version 28 existed,
+        // pinned from the Core at 7add62ff2 (SHA-256 of the fitted text).
+        // 26 and 27 are sent the version 26 Display, 12 to 25 the version
+        // 12 Display, and 11 and 3 what they always were.
+        const auto sent = [&source](int version) {
+            return QCryptographicHash::hash(
+                SetupDescriptionService::fitCategoryForVersion(source, version).toUtf8(),
+                QCryptographicHash::Sha256).toHex();
+        };
+        QCOMPARE(sent(27), QByteArray(
+            "5b40c3833026708a7fc38269671f555c73f336d642cc5a6ecf6727b92e05bca3"));
+        QCOMPARE(sent(26), sent(27));
+        QCOMPARE(sent(25), QByteArray(
+            "d44107dd7d600686468f05902fa2f119f0cf10a0f41204a4b553168221cbc8f2"));
+        QCOMPARE(sent(12), sent(25));
+        QCOMPARE(sent(11), QByteArray(
+            "e8a3e47d2cd8bdd73421ba93c50ab4ed20a43b58391ef44d843d5412c3ffe78a"));
+        QCOMPARE(sent(3), QByteArray(
+            "d85c0ee1e42b386e20bde5a04973368cb50be4563c53ea8d8efb75c2b4081c57"));
+        const QString v27Text = SetupDescriptionService::fitCategoryForVersion(source, 27);
+        QVERIFY(!v27Text.contains(QLatin1String("fftSizing")));
+        QVERIFY(!v27Text.contains(QLatin1String("DisplayFftSizingMode")));
+        QVERIFY(!v27Text.contains(QLatin1String("\"requiresDescriptionVersion\":28")));
+    }
+
+    void appearanceV12PublishesResetColours()
+    {
+        SetupDescriptionService service;
+        const QJsonObject appearance = projectedCategory(service.appearance(), 27);
+        QCOMPARE(appearance.value("version"), QJsonValue(27));
+        QCOMPARE(projectedCategory(service.appearance(), 12).value("version"), QJsonValue(12));
         const QJsonArray sections = appearance.value("pages").toArray().first().toObject()
             .value("sections").toArray();
         QCOMPARE(sections.size(), 2);
@@ -4285,6 +5426,83 @@ private slots:
                          .value("sections").toArray().size(), 1);
         }
         QVERIFY(!service.appearance().contains(QStringLiteral("waterfallLowColor")));
+    }
+
+    // Rulings wave R3: Appearance 27 has Trace Color beside Fill Color, with
+    // the desktop page's own sentences. A peer below 27 is sent the one
+    // "Trace & Fill Color:" row it was built for, exactly as it was.
+    void appearanceV27PublishesTraceAndFillColours()
+    {
+        SetupDescriptionService service;
+        const auto spectrumRows = [](const QJsonObject& appearance) {
+            return appearance.value("pages").toArray().first().toObject()
+                .value("sections").toArray().first().toObject().value("controls").toArray();
+        };
+        const QJsonObject latest = QJsonDocument::fromJson(legacyCategoryText(QStringLiteral("appearance")).toUtf8()).object();
+        QCOMPARE(latest.value("version"), QJsonValue(27));
+        const QJsonArray rows = spectrumRows(latest);
+        QCOMPARE(rows.size(), 11);
+        const QJsonObject trace = rows.at(0).toObject();
+        QCOMPARE(trace, (QJsonObject{
+            {"id", "appearance.colorsTheme.traceColor"},
+            {"label", "Trace Color:"},
+            {"tooltip", "Click to choose the spectrum trace line color. Until you choose one, "
+                        "the trace uses the fill color."},
+            {"kind", "colour"},
+            {"binding", QJsonObject{{"phone", "DisplayTraceColor"}}},
+            {"applies", "live"},
+            {"requiresDescriptionVersion", 27},
+            {"default", "#00E5FFFF"}}));
+        QVERIFY(SetupDescriptionService::validateAppearanceColourBinding(trace));
+        for (const QString& field : trace.keys()) {
+            QJsonObject changed = trace;
+            changed.remove(field);
+            QVERIFY2(!SetupDescriptionService::validateAppearanceColourBinding(changed),
+                     qPrintable(field));
+        }
+        QJsonObject otherKey = trace;
+        otherKey.insert("binding", QJsonObject{{"phone", "DisplayFillColor"}});
+        QVERIFY(!SetupDescriptionService::validateAppearanceColourBinding(otherKey));
+        const QJsonObject fill = rows.at(1).toObject();
+        QCOMPARE(fill, (QJsonObject{
+            {"id", "appearance.colorsTheme.traceFillColor"},
+            {"label", "Fill Color:"},
+            {"tooltip", "Click to choose the spectrum fill color. The color picker lets you "
+                        "adjust alpha for the fill opacity."},
+            {"kind", "colour"},
+            {"binding", QJsonObject{{"phone", "DisplayFillColor"}}},
+            {"applies", "live"},
+            {"default", "#00E5FFFF"}}));
+        QCOMPARE(projectedCategory(service.appearance(), 27), latest);
+        QCOMPARE(projectedCategory(legacyCategoryText(QStringLiteral("appearance")), 99), latest);
+
+        // Below 27: no trace row, and the single row as it always was.
+        const QJsonObject oldRow{
+            {"id", "appearance.colorsTheme.traceFillColor"},
+            {"label", "Trace & Fill Color:"},
+            {"tooltip", "Click to choose the spectrum trace line and fill color. The color "
+                        "picker lets you adjust alpha for the fill opacity."},
+            {"kind", "colour"},
+            {"binding", QJsonObject{{"phone", "DisplayFillColor"}}},
+            {"applies", "live"},
+            {"default", "#00E5FFFF"}};
+        for (int version = 4; version <= 26; ++version) {
+            const QJsonObject older = projectedCategory(service.appearance(), version);
+            QCOMPARE(older.value("version"),
+                     QJsonValue(version >= 12 ? 12 : version >= 7 ? 7 : 4));
+            const QJsonArray olderRows = spectrumRows(older);
+            QCOMPARE(olderRows.size(), 10);
+            QCOMPARE(olderRows.at(0).toObject(), oldRow);
+            for (int i = 1; i < 10; ++i) {
+                QCOMPARE(olderRows.at(i), rows.at(i + 1));
+            }
+            QVERIFY(!QJsonDocument(older).toJson(QJsonDocument::Compact)
+                         .contains("DisplayTraceColor"));
+        }
+        // Below 4 the row has no default, as every row of that age.
+        QJsonObject oldest = oldRow;
+        oldest.remove("default");
+        QCOMPARE(spectrumRows(projectedCategory(service.appearance(), 3)).at(0).toObject(), oldest);
     }
 
     void displayV9PublishesClosedLocalRendererControls()
@@ -4431,10 +5649,10 @@ private slots:
     void displayDescriptionKeepsVersionFourFftOptions()
     {
         SetupDescriptionService service;
-        const QJsonObject display = service.category(QStringLiteral("display"));
-        QCOMPARE(display.value("version"), QJsonValue(12));
+        const QJsonObject display = QJsonDocument::fromJson(legacyCategoryText(QStringLiteral("display")).toUtf8()).object();
+        QCOMPARE(display.value("version"), QJsonValue(28));
         QCOMPARE(display.value("pages").toArray().size(), 7);
-        const QString source = service.display();
+        const QString source = legacyCategoryText(QStringLiteral("display"));
         for (int version = 1; version <= 12; ++version) {
             const QJsonObject fitted = QJsonDocument::fromJson(
                 SetupDescriptionService::fitCategoryForVersion(source, version).toUtf8()).object();

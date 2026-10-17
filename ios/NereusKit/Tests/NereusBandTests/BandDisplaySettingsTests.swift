@@ -66,6 +66,33 @@ import Testing
         #expect(payload["waterfallAverageTimeMs"] == .number(120))
     }
 
+    /// The phone never asks a Core for an averaging time below the one it
+    /// offered: a time kept from a Core that averages from 1 ms goes to
+    /// another Core as that Core's 10 ms.
+    @Test func anAveragingTimeIsNeverBelowWhatTheCoreOffered() throws {
+        var settings = BandDisplaySettings.desktopDefaults
+        settings.spectrumAverageTimeMs = 1
+        settings.waterfallAverageTimeMs = 4
+        let older = try #require(settings.extrasRequest(gates: Self.open))
+        #expect(older.averageTimeFloorMs == 10)
+        #expect(older.averageTimeMs == 10 && older.waterfallAverageTimeMs == 10)
+        try older.validate()
+        let newer = try #require(settings.extrasRequest(gates: Self.open, averageTimeFloorMs: 1))
+        #expect(newer.averageTimeFloorMs == 1)
+        #expect(newer.averageTimeMs == 1 && newer.waterfallAverageTimeMs == 4)
+        try newer.validate()
+        let applied = settings.applied(to: Self.subscription(), gates: Self.open, averageTimeFloorMs: 1)
+        #expect(applied.extras == newer)
+        try DisplayEndpointRequest.validate(applied, gates: Self.open)
+        let payload = DisplayEndpointRequest.subscribe(applied, connectionId: "c", gates: Self.open)
+        #expect(payload["averageTimeMs"] == .number(1) && payload["waterfallAverageTimeMs"] == .number(4))
+        #expect(payload["averageTimeFloorMs"] == nil)
+        // The defaults are untouched by either floor.
+        let defaults = BandDisplaySettings.desktopDefaults
+        #expect(defaults.extrasRequest(gates: Self.open, averageTimeFloorMs: 1)?.averageTimeMs == 30)
+        #expect(defaults.extrasRequest(gates: Self.open)?.waterfallAverageTimeMs == 120)
+    }
+
     @Test func nothingIsAskedWhileTheCoreOffersNoExtras() throws {
         #expect(BandDisplaySettings.desktopDefaults.extrasRequest(gates: Self.closed) == nil)
         #expect(!BandDisplaySettings.extrasAvailable(gates: Self.closed))
@@ -146,6 +173,43 @@ import Testing
         #expect(try #require(settings.extrasRequest(gates: Self.open)).peakBlobs == nil)
     }
 
+    /// Second pass S2: the phone's panel gained a Fill color picker. The
+    /// two colours are kept under the names they always had, so settings
+    /// kept before it load with the same colours.
+    @Test func theTraceAndFillColoursAreKeptUnderTheirEarlierNames() throws {
+        let suite = "band-settings-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = BandDisplaySettingsStore(defaults: defaults)
+
+        // Kept by an earlier build with only the one colour: it is the
+        // fill's, and the line follows it.
+        defaults.set(Data(##"{"desktopValuesVersion":1,"traceColour":"#112233"}"##.utf8),
+                     forKey: BandDisplaySettingsStore.keyPrefix + "one")
+        #expect(store.settings(forPan: "one").traceColour == "#112233")
+        #expect(store.settings(forPan: "one").traceLineColour == nil)
+        #expect(store.settings(forPan: "one").traceLineColourDrawn == "#112233")
+
+        // Kept with both: each loads as it was.
+        defaults.set(Data(##"{"desktopValuesVersion":1,"traceColour":"#112233","traceLineColour":"#445566"}"##.utf8),
+                     forKey: BandDisplaySettingsStore.keyPrefix + "both")
+        #expect(store.settings(forPan: "both").traceColour == "#112233")
+        #expect(store.settings(forPan: "both").traceLineColour == "#445566")
+        #expect(store.settings(forPan: "both").traceLineColourDrawn == "#445566")
+
+        // What is kept now carries those same two names, and reads back.
+        var chosen = BandDisplaySettings.desktopDefaults
+        chosen.traceColour = "#0A0B0C"
+        chosen.traceLineColour = "#0D0E0F"
+        store.setSettings(chosen, forPan: "now")
+        let data = try #require(defaults.data(forKey: BandDisplaySettingsStore.keyPrefix + "now"))
+        let kept = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(kept["traceColour"] as? String == "#0A0B0C")
+        #expect(kept["traceLineColour"] as? String == "#0D0E0F")
+        #expect(kept["fillColour"] == nil)
+        #expect(store.settings(forPan: "now") == chosen)
+    }
+
     @Test func eachPanKeepsItsOwnSettingsOnThePhone() throws {
         let suite = "band-settings-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -165,7 +229,22 @@ import Testing
         expected.traceColour = "#00FF00"
         #expect(store.settings(forPan: "pan-3") == expected)
         store.reset(pan: "pan-1")
-        #expect(store.settings(forPan: "pan-1") == .desktopDefaults)
+        // Approved picture reset inherits its master, retaining the existing
+        // band-plan/view preference outside the closed picture inventory.
+        var resetExpected = BandDisplaySettings.desktopDefaults
+        resetExpected.bandPlanSize = .huge
+        #expect(store.settings(forPan: "pan-1") == resetExpected)
+        // Rulings wave R3: the trace line has no colour of its own until one
+        // is chosen, so settings kept before it read as none and follow the
+        // fill; a chosen one is kept.
+        #expect(BandDisplaySettings.desktopDefaults.traceLineColour == nil)
+        #expect(store.settings(forPan: "pan-3").traceLineColour == nil)
+        #expect(store.settings(forPan: "pan-3").traceLineColourDrawn == "#00FF00")
+        changed.traceLineColour = "#0000FF"
+        store.setSettings(changed, forPan: "pan-1")
+        #expect(store.settings(forPan: "pan-1").traceLineColour == "#0000FF")
+        #expect(store.settings(forPan: "pan-1").traceLineColourDrawn == "#0000FF")
+        #expect(store.settings(forPan: "pan-1").traceColour == "#FF0000")
     }
 
     /// JJ, 2026-09-28: as on the desktop, the transmit filter shows on the
@@ -243,16 +322,18 @@ import Testing
         #expect(store.settings(forPan: "1").traceWidthPoints == 1.0 / 3)
     }
 
-    @Test func theTracesWidthRunsFromOneScreenPixelToThreePointsAndIsNeverThinnerThanAPixel() {
-        #expect(BandDisplaySettings.traceWidthRange(scale: 3) == (1.0 / 3)...3)
-        #expect(BandDisplaySettings.traceWidthRange(scale: 2) == 0.5...3)
+    @Test func theApprovedPixelDomainConvertsToPointsWithoutChangingStoredDefaults() {
+        // Accepted V29 supersedes the previous1pixel...3point paint clamp;
+        // the preceding test still protects default/storage/restart behavior.
+        #expect(BandDisplaySettings.traceWidthRange(scale: 3) == (0.1 / 3)...(5.0 / 3))
+        #expect(BandDisplaySettings.traceWidthRange(scale: 2) == 0.05...2.5)
         var settings = BandDisplaySettings.desktopDefaults
         #expect(settings.traceWidthPixels(scale: 3) == 1.5)
-        #expect(settings.traceWidthPixels(scale: 1) == 1)
+        #expect(settings.traceWidthPixels(scale: 1) == 0.5)
         settings.traceWidthPoints = 3
-        #expect(settings.traceWidthPixels(scale: 3) == 9)
+        #expect(settings.traceWidthPixels(scale: 3) == 5)
         settings.traceWidthPoints = 0.1
-        #expect(settings.traceWidthPixels(scale: 3) == 1)
+        #expect(abs(settings.traceWidthPixels(scale: 3) - 0.3) < 0.00001)
     }
 
     // MARK: The band plan's size (D79)

@@ -127,7 +127,7 @@ bool ownerFromStored(const QJsonValue& value, QByteArray* id)
 
 bool isRadeMode(DSPMode mode)
 {
-    return mode == DSPMode::RADE_U || mode == DSPMode::RADE_L;
+    return isRadeDspMode(mode);
 }
 
 bool validateAndResolveOwner(const QList<ReceiveSliceState>& slices,

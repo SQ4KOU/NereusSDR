@@ -184,7 +184,7 @@ QString StationRadios::savedChoice() const
 void StationRadios::saveChoice(const QString& mac)
 {
     m_settings.setValue(QLatin1String(kChoiceKey), normalized(mac));
-    m_settings.save();
+    m_settings.saveInBackground();
 }
 
 void StationRadios::confirmChoice(const QString& mac)
@@ -408,7 +408,7 @@ bool StationRadios::setModel(const QString& mac, int model, QString* reason)
     // The local Edit radio's override: saved for this radio, applied at its
     // next connect.
     m_settings.setModelOverride(normalized(mac), static_cast<HPSDRModel>(model));
-    m_settings.save();
+    m_settings.saveInBackground();
     emit entriesChanged();
     return true;
 }
@@ -429,7 +429,7 @@ bool StationRadios::forget(const QString& mac, QString* reason)
     if (savedChoice() == key) {
         m_settings.remove(QLatin1String(kChoiceKey));
     }
-    m_settings.save();
+    m_settings.saveInBackground();
     for (int i = m_visible.size() - 1; i >= 0; --i) {
         if (sameMac(m_visible.at(i).macAddress, key)) {
             m_visible.removeAt(i);

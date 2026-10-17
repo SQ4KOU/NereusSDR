@@ -15,6 +15,9 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10): the RF-Kit's
 //                                    connection counts. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-10-11  J.J. Boyd / KG4VCF  The timed save writes the file on the
+//                                    settings writer thread. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "core/StationAccessoryData.h"
@@ -23,6 +26,7 @@
 #include "core/ConnectionDiagnostics.h"
 #include "core/FaultLog.h"
 #include "core/Rf2ksConnection.h"
+#include "core/SettingsFileWriter.h"
 #include "core/TuneMemoryStore.h"
 #include "core/TxInterlockPolicy.h"
 #include "models/AccessoryDataModel.h"
@@ -56,7 +60,9 @@ StationAccessoryData::StationAccessoryData(AccessoryDataModel* model, const Sour
 {
     m_saveTimer.setSingleShot(true);
     m_saveTimer.setInterval(kSaveDelayMs);
-    connect(&m_saveTimer, &QTimer::timeout, this, &StationAccessoryData::saveNow);
+    connect(&m_saveTimer, &QTimer::timeout, this, &StationAccessoryData::saveInBackground);
+    connect(AppSettings::instance().backgroundSaveNotifier(), &SettingsFileWriter::finished,
+            this, &StationAccessoryData::onBackgroundSaveFinished);
     for (FaultLog* log : { m_sources.pgxlFaults, m_sources.tgxlFaults, m_sources.rfkitFaults }) {
         if (log != nullptr) {
             connect(log, &FaultLog::changed, this, &StationAccessoryData::publishFaults);
@@ -120,8 +126,31 @@ void StationAccessoryData::scheduleSave()
 
 void StationAccessoryData::saveNow()
 {
+    // This save replaces a timed one still with the writer thread.
+    m_backgroundSaveTicket = 0;
     QString error;
     if (!AppSettings::instance().save(&error)) {
+        qCWarning(lcStationAccessoryData) << "Could not save the accessory records:" << error;
+    }
+}
+
+void StationAccessoryData::saveInBackground()
+{
+    // The timer fires on the Core's main thread, which also sends the
+    // receive audio and must not wait for the disk.
+    m_backgroundSaveTicket = AppSettings::instance().saveInBackground();
+}
+
+void StationAccessoryData::onBackgroundSaveFinished(quint64 ticket, bool saved,
+                                                    const QString& error)
+{
+    // Nothing awaited, or a save older than the one awaited. A later save
+    // answers for this one: it replaced it and wrote the same records.
+    if (m_backgroundSaveTicket == 0 || ticket < m_backgroundSaveTicket) {
+        return;
+    }
+    m_backgroundSaveTicket = 0;
+    if (!saved) {
         qCWarning(lcStationAccessoryData) << "Could not save the accessory records:" << error;
     }
 }

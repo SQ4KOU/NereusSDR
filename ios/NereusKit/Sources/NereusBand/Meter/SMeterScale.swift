@@ -76,9 +76,10 @@ public struct SMeterScale: Equatable, Sendable {
     /// Where a transmit reading sits on `mode`'s scale; power on the
     /// catalogue's power scale (0 without one).
     public static func transmitFraction(_ value: Double, mode: SMeterTxMode,
-                                        power: StationCatalog.Meters.RfPower?) -> Double {
+                                        power: StationCatalog.Meters.RfPower?, rule: TransmitMeterRule? = nil) -> Double {
         switch mode {
         case .power:
+            if let rule, rule.amplifying { return clampUnit(value / rule.scaleTopW) }
             guard let power, power.maxW > power.minW else {
                 return 0
             }
@@ -140,9 +141,15 @@ public struct SMeterScale: Equatable, Sendable {
 
     /// `mode`'s transmit scale, power on the catalogue's power scale.
     public static func transmit(_ mode: SMeterTxMode, power: StationCatalog.Meters.RfPower?,
-                                style: Style) -> SMeterScale {
+                                style: Style, rule: TransmitMeterRule? = nil) -> SMeterScale {
         switch mode {
         case .power:
+            if let rule, rule.amplifying {
+                return steppedScale(range: 0...rule.scaleTopW, redFrom: rule.displayLimitW, style: style,
+                    classicValues: [0, 500, 1000, 1500, 2000], vintageStep: 100, vintageMajorEvery: 5) {
+                        wattsLabel(Int($0))
+                    }
+            }
             return powerScale(power, style: style)
         case .swr:
             return steppedScale(range: swrRange, redFrom: swrRedFrom, style: style,

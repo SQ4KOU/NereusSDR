@@ -24,6 +24,10 @@ public struct StackedTraceHistory: Equatable, Sendable {
 
     private var storage: [Float] = []
     private var windows: [BandCoverage?] = []
+    private var quietLevels: [Float?] = []
+    /// Captured coverage is independent of finite measured data: a bad
+    /// measured bin must not be replaced by quiet even in an overhang.
+    private var captured: [Float] = []
     private var times: [Double] = []
     private var head = 0
 
@@ -35,6 +39,7 @@ public struct StackedTraceHistory: Equatable, Sendable {
         lhs.columns == rhs.columns && lhs.count == rhs.count && lhs.rowsAppended == rhs.rowsAppended
             && lhs.layoutGeneration == rhs.layoutGeneration && lhs.head == rhs.head && lhs.windows == rhs.windows
             && lhs.times == rhs.times && lhs.storage.map(\.bitPattern) == rhs.storage.map(\.bitPattern)
+            && lhs.quietLevels == rhs.quietLevels && lhs.captured == rhs.captured
     }
 
     /// Adds `frame`'s waterfall line as a row when the frame advances the
@@ -53,6 +58,8 @@ public struct StackedTraceHistory: Equatable, Sendable {
             columns = max(1, wanted)
             storage = Array(repeating: .nan, count: columns * capacity)
             windows = Array(repeating: nil, count: capacity)
+            quietLevels = Array(repeating: nil, count: capacity)
+            captured = Array(repeating: 0, count: columns * capacity)
             times = Array(repeating: 0, count: capacity)
             head = 0
             count = 0
@@ -66,13 +73,19 @@ public struct StackedTraceHistory: Equatable, Sendable {
             let low = window.lowHz + Double(column) * columnHz
             let middle = low + columnHz / 2
             var value = Float.nan
+            var covered: Float = 0
             if middle >= coverage.lowHz, middle < coverage.highHz {
                 value = Self.peak(frame.waterfallDbm, over: coverage, from: low, to: low + columnHz)
+                covered = 1
             } else if let wideLine, middle >= wideLine.lowHz, middle < wideLine.highHz {
                 value = Self.peak(frame.wideDbm, over: wideLine, from: low, to: low + columnHz)
+                covered = 1
             }
             storage[start + column] = value
+            captured[start + column] = covered
         }
+        // Store from the real folded exact row before existing resampling.
+        quietLevels[head] = StackedQuietOverhang.quiet(from: frame.waterfallDbm)
         windows[head] = window
         times[head] = time
         head = (head + 1) % capacity
@@ -86,12 +99,41 @@ public struct StackedTraceHistory: Equatable, Sendable {
     static func peak(_ samples: [Float], over coverage: BandCoverage, from low: Double, to high: Double) -> Float {
         let binHz = coverage.spanHz / Double(samples.count)
         let first = min(max(Int(((low - coverage.lowHz) / binHz).rounded(.down)), 0), samples.count - 1)
-        let last = min(max(Int(((high - coverage.lowHz) / binHz).rounded(.down)), first + 1), samples.count)
+        // Keep every source-bin interval overlapping this retained column.
+        // The upper index is exclusive: flooring it discarded a carrier in
+        // a partially overlapping final bin. Native DssRenderer.cpp:125–128
+        // uses floor/ceil bounds for the same captured peak reduction.
+        let last = min(max(Int(((high - coverage.lowHz) / binHz).rounded(.up)), first + 1), samples.count)
         var best = -Float.infinity
         for index in first..<last where samples[index].isFinite && samples[index] > best {
             best = samples[index]
         }
         return best.isFinite ? best : .nan
+    }
+
+    /// The retained row's known quiet baseline, independent of current scale/floor.
+    public func quiet(age: Int) -> Float? {
+        guard age >= 0, age < count else { return nil }
+        return quietLevels[storageRow(age: age)]
+    }
+    func packedStorageLine(_ row: Int) -> [Float] {
+        let start = row * columns
+        return (0..<columns).flatMap { [storage[start + $0], captured[start + $0]] }
+    }
+    func sample(age: Int, frequencyHz: Double, view: BandCoverage, currentFloor: Float) -> StackedHistorySample {
+        guard age >= 0, age < count, view.spanHz > 0, frequencyHz.isFinite else {
+            return .init(dbm: currentFloor, covered: false)
+        }
+        var measured: Float?
+        if let window = window(age: age), window.spanHz > 0,
+           frequencyHz >= window.lowHz, frequencyHz < window.highHz, columns > 0 {
+            let column = min(max(Int((frequencyHz - window.lowHz) / window.spanHz * Double(columns)), 0), columns - 1)
+            let index = storageRow(age: age) * columns + column
+            if captured[index] > 0 { measured = storage[index] }
+        }
+        let result = StackedQuietOverhang.sample(unit: Float((frequencyHz - view.lowHz) / view.spanHz),
+            exact: measured, wide: nil, quiet: quiet(age: age), currentFloor: currentFloor)
+        return result.dbm.isFinite ? result : .init(dbm: currentFloor, covered: false)
     }
 
     /// The storage row of the row `age` lines old (0 the newest).
@@ -137,6 +179,8 @@ public struct StackedTraceHistory: Equatable, Sendable {
         }
         storage = []
         windows = []
+        quietLevels = []
+        captured = []
         times = []
         columns = 0
         head = 0

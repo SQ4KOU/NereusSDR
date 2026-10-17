@@ -53,6 +53,10 @@
 //   2026-10-02: offline regressions for carrier readiness and a cancelled
 //               cycle's settle callback. J.J. Boyd (KG4VCF), AI-assisted
 //               via OpenAI Codex.
+//   2026-10-15: the cancelled-cycle settle case lengthens the settle and
+//               waits for A's own settle callback instead of a wall-clock
+//               window, so machine load cannot fail its setup. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -70,7 +74,6 @@
 #include "models/SliceModel.h"
 
 #include <QHostAddress>
-#include <QElapsedTimer>
 #include <QPointer>
 #include <QSignalSpy>
 #include <QTcpServer>
@@ -649,19 +652,53 @@ private slots:
         QTest::newRow("next cycle waits for interlock") << false;
     }
 
-    // Cycle A gets the interlock grant and arms the 150 ms settle. End A
-    // and start B before that deadline; A's callback must not send B an
+    // Cycle A gets the interlock grant and arms its settle. End A and
+    // start B before that settle fires; A's callback must not send B an
     // autotune while B has no carrier gate (standby or interlock pending).
+    // The settle is lengthened here (release: 150 ms) so this setup cannot
+    // outrun it under load, and the test waits for A's actual callback
+    // rather than a wall-clock guess at when it fires. 450 ms stays below
+    // every bound that can end B or open its gate: the listener's 500 ms
+    // interlock ACK timeout (a coarse timer, so as early as 475 ms) and
+    // the 1.5 s PGXL standby wait. The listener's 400 ms interlock repeat
+    // can fire first, but it only resends the state and cannot end B. A's
+    // settle, armed earlier with a shorter interval, therefore always
+    // comes due before any of those bounds. B's state is recorded at that
+    // moment and checked.
     void cancelledCycleSettleCannotAutotuneNextCycle()
     {
         QFETCH(bool, waitForStandby);
         Core core;
         allowTransmit(core);
         core.model->setTuneOffSettleMsForTest(0);
+        constexpr int kSettleMs = 450;
+        core.model->setTgxlRfSettleMsForTest(kSettleMs);
         TxChannel tx{WdspEngine::kTxChannelId};
+        // Each settle callback: whether it found its cycle stale, and the
+        // next cycle's state at that moment. `autotunesAfter` is read by a
+        // queued call, so after the callback itself has returned.
+        struct Settle {
+            bool stale{false};
+            bool cycleInProgress{false};
+            bool rfGateOpen{true};
+            int autotunesAtStart{-1};
+            int autotunesAfter{-1};
+        };
+        QList<Settle> settles;
+        QObject observation;
+        QSignalSpy autotunes(core.model->tgxlConnection(), &TgxlConnection::autotuneSent);
+        core.model->setTgxlSettleFiredObserverForTest([&](quint64, bool stale) {
+            settles.append({stale, core.model->isTgxlAutotuneInProgress(), tx.isRfGateOpen(),
+                            static_cast<int>(autotunes.count()), -1});
+            const qsizetype at = settles.size() - 1;
+            QMetaObject::invokeMethod(&observation, [&settles, &autotunes, at]() {
+                settles[at].autotunesAfter = static_cast<int>(autotunes.count());
+            }, Qt::QueuedConnection);
+        });
         core.model->injectTxChannelForTest(&tx);
         core.model->wireTxChannelKeyingForTest();
         const auto detachTx = qScopeGuard([&]() {
+            core.model->setTgxlSettleFiredObserverForTest({});
             tx.closeRfGate();
             core.model->injectTxChannelForTest(nullptr);
         });
@@ -673,7 +710,7 @@ private slots:
         tuner.lan.echo = LanClient::Echo::Off;
         QVERIFY(startTuner(core, tuner));
         SmartSdrApiListener* listener = core.model->smartSdrListener();
-        // Establish transport before A's short settle window. Register
+        // Establish transport before A's settle window. Register
         // only after A stops, so B has a genuinely unacknowledged amp.
         LanClient waitingAmp;
         if (!waitForStandby) {
@@ -684,15 +721,12 @@ private slots:
         QTRY_VERIFY(listener->hasInterlockedAmp());
         MoxController* mox = core.model->moxController();
         QSignalSpy ready(mox, &MoxController::txReady);
-        QElapsedTimer settleAge;
-        QObject observation;
-        connect(listener, &SmartSdrApiListener::interlockGranted, &observation,
-                [&settleAge](const QString&) { settleAge.start(); });
+        QSignalSpy grants(listener, &SmartSdrApiListener::interlockGranted);
         QVERIFY(core.invoke(appA, "tx.tunerTune", {kOn}).value(QStringLiteral("accepted")).toBool());
         QVERIFY(QTest::qWaitFor([&ready]() { return ready.count() == 1; }, 1000));
         QVERIFY(!tx.isRfGateOpen());
         tuner.lan.send(QStringLiteral("interlock ready 1"));
-        QVERIFY(QTest::qWaitFor([&settleAge]() { return settleAge.isValid(); }, 1000));
+        QVERIFY(QTest::qWaitFor([&grants]() { return grants.count() == 1; }, 1000));
         QVERIFY(tx.isRfGateOpen());
 
         QVERIFY(core.invoke(appA, "tx.tunerTune", {kOff}).value(QStringLiteral("accepted")).toBool());
@@ -719,22 +753,36 @@ private slots:
         } else {
             QVERIFY(QTest::qWaitFor([&ready]() { return ready.count() == 2; }, 1000));
         }
-        QVERIFY2(settleAge.elapsed() < 150, "test setup missed cycle A's settle window");
+        // B started while A's settle was still armed: its callback has not
+        // run yet, so it can only run against cycle B.
+        QVERIFY2(settles.isEmpty(), "test setup missed cycle A's settle window");
+        QCOMPARE(autotunes.count(), 0);
         QCOMPARE(tuner.count(QStringLiteral("autotune")), 0);
 
-        // This timer is an observation deadline for a negative assertion,
-        // not a sleep while waiting for a state change. End the wait early
-        // if the prohibited socket command arrives.
-        QTimer deadline;
-        deadline.setSingleShot(true);
-        deadline.setTimerType(Qt::PreciseTimer);
-        QSignalSpy elapsed(&deadline, &QTimer::timeout);
-        deadline.start(static_cast<int>(200 - settleAge.elapsed()));
-        QTRY_VERIFY_WITH_TIMEOUT(!elapsed.isEmpty() || tuner.count(QStringLiteral("autotune")) > 0, 1000);
+        // Wait for A's own settle callback to have run and returned, not a
+        // wall-clock deadline. At that moment B was current with its gate
+        // closed; the callback found its cycle stale and sent nothing.
+        // `autotunes` records the Core's own write of the command, so it
+        // does not depend on the socket delivering it to the fake tuner.
+        QVERIFY(QTest::qWaitFor([&settles]() {
+            return !settles.isEmpty() && settles.first().autotunesAfter >= 0;
+        }, kSettleMs + 3000));
+        QCOMPARE(settles.size(), 1);
+        const Settle settleA = settles.first();
+        QVERIFY2(settleA.stale, "cycle A's settle callback ran as if A were current");
+        QVERIFY2(settleA.cycleInProgress, "cycle B ended before A's settle callback ran");
+        QVERIFY2(!settleA.rfGateOpen, "cycle B's RF gate was open when A's settle callback ran");
+        QCOMPARE(settleA.autotunesAtStart, 0);
+        QCOMPARE(settleA.autotunesAfter, 0);
         QCOMPARE(tuner.count(QStringLiteral("autotune")), 0);
-        QVERIFY(!tx.isRfGateOpen());
-        QVERIFY(core.invoke(appA, "tx.tunerTune", {kOff}).value(QStringLiteral("accepted")).toBool());
+        // B's own bound can end it in the same timer pass under load; then
+        // there is nothing left to stop.
+        if (core.model->isTgxlAutotuneInProgress()) {
+            QVERIFY(!tx.isRfGateOpen());
+            QVERIFY(core.invoke(appA, "tx.tunerTune", {kOff}).value(QStringLiteral("accepted")).toBool());
+        }
         QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QCOMPARE(autotunes.count(), 0);
     }
 
     void noTxChannelRefusesDeviceAutotuneWithoutKeying()

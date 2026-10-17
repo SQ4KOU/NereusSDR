@@ -20,6 +20,8 @@
 //  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-13 — Opt-in ASIO buffer logging; no visible diagnostics change.
+//                J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-04-30 — Created for Phase 3Q sub-PR-3 (shell-chrome redesign).
 //                NereusSDR-original code (no Thetis port; no upstream
 //                attribution required). J.J. Boyd (KG4VCF), with
@@ -33,27 +35,47 @@
 //                Packet gap and UDP seen are measured for a local radio
 //                (RadioLinkStats) and shown. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - The Connection status word reads
+//                WorkspacePreview::statusColourName() (the status colour
+//                choice). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-10-09 - The section headers read WorkspacePreview::roleColourName()
+//                (title-text) with the preview on. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-10-14 - The Audio Backend row names the engine in use in the
+//                words of Settings > Audio's "Sound system" line
+//                (SoundSystemLine::describeEngine), not the build's
+//                platform. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include "gui/NetworkDiagnosticsDialog.h"
 #include "StyleConstants.h"
+#include "gui/styles/WorkspacePreview.h"
 #include <optional>
 #include "models/RadioModel.h"
 #include "core/AudioEngine.h"
 #include "core/RadioConnection.h"
+#include "gui/setup/SoundSystemLine.h"
 
 #if defined(Q_OS_LINUX)
 #  include "core/audio/LinuxAudioBackend.h"
 #endif
 
 #include <QDialogButtonBox>
+#include <QDateTime>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLoggingCategory>
 #include <QPushButton>
 #include <QVBoxLayout>
 
 namespace NereusSDR {
+
+// Explicitly off by default, including outside the application's filter.
+// Opt in with QT_LOGGING_RULES="nereus.audio.asio.buffer.debug=true".
+Q_LOGGING_CATEGORY(lcAsioBufferDiagnostics, "nereus.audio.asio.buffer", QtWarningMsg)
 
 // ─── styling constants ────────────────────────────────────────────────────────
 // Color palette matches the shell-chrome redesign (docs/architecture/
@@ -107,7 +129,10 @@ QLabel* NetworkDiagnosticsDialog::makeFieldLabel(const QString& text)
 static void addSectionHeader(QGridLayout* grid, int row, const QString& title)
 {
     QLabel* hdr = new QLabel(title);
-    hdr->setStyleSheet(QString::fromUtf8(kSectionHeaderStyle));
+    // The header blue is decoration: the header text with the preview on.
+    hdr->setStyleSheet(QString::fromUtf8(kSectionHeaderStyle)
+                           .replace(QStringLiteral("#5fa8ff"),
+                                    WorkspacePreview::roleColourName("#5fa8ff", "title-text")));
     grid->addWidget(hdr, row, 0, 1, 4);
 }
 
@@ -163,6 +188,9 @@ void NetworkDiagnosticsDialog::buildAudioSection(QGridLayout* grid, int& row)
     };
 
     addRow(tr("Backend"),    m_audioBackendLabel);
+    // The Sound system line's words can be a sentence (PipeWire, older
+    // drivers in use); wrap rather than widen the dialog.
+    m_audioBackendLabel->setWordWrap(true);
     addRow(tr("Buffer"),     m_audioBufferLabel);
     addRow(tr("Underruns"),  m_underrunLabel);
     addRow(tr("Packet gap"), m_packetGapLabel);
@@ -341,13 +369,16 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
 
 void NetworkDiagnosticsDialog::refresh()
 {
+    logAsioBufferDiagnostics();
     // ── Connection section ────────────────────────────────────────────────────
     if (m_statusLabel) {
         const bool connected = m_model && m_model->isConnected();
         m_statusLabel->setText(
             connected
-                ? QStringLiteral("<span style='color:#5fff8a;'>&#x25cf; Connected</span>")
-                : QStringLiteral("<span style='color:#ff6060;'>&#x25cf; Disconnected</span>"));
+                ? QStringLiteral("<span style='color:%1;'>&#x25cf; Connected</span>")
+                      .arg(WorkspacePreview::statusColourName("#5fff8a", "ok"))
+                : QStringLiteral("<span style='color:%1;'>&#x25cf; Disconnected</span>")
+                      .arg(WorkspacePreview::statusColourName("#ff6060", "danger")));
         m_statusLabel->setTextFormat(Qt::RichText);
     }
 
@@ -450,19 +481,11 @@ void NetworkDiagnosticsDialog::refresh()
 
     // ── Audio section ─────────────────────────────────────────────────────────
     if (m_audioBackendLabel) {
-        QString backend = QStringLiteral("—");
-        if (m_audio) {
-#if defined(Q_OS_LINUX)
-            backend = NereusSDR::toString(m_audio->linuxBackend());
-#elif defined(Q_OS_MACOS)
-            backend = QStringLiteral("CoreAudio");
-#elif defined(Q_OS_WIN)
-            backend = QStringLiteral("WASAPI");
-#else
-            backend = QStringLiteral("—");
-#endif
-        }
-        m_audioBackendLabel->setText(backend);
+        // The engine in use, named as Settings > Audio > Outputs' "Sound
+        // system" line names it (the device catalogue's system, ASIO and
+        // the older drivers the saved choices use).
+        m_audioBackendLabel->setText(m_audio ? SoundSystemLine::describeEngine(m_audio.data())
+                                             : QStringLiteral("—"));
     }
 
     if (m_audioBufferLabel) {
@@ -494,6 +517,100 @@ void NetworkDiagnosticsDialog::refresh()
     // (sub-PR-4 will wire RadioConnection::adcOverloadChanged if needed.)
     if (m_adcOvlLabel) {
         m_adcOvlLabel->setText(tr("None"));
+    }
+}
+
+void NetworkDiagnosticsDialog::logAsioBufferDiagnostics()
+{
+    if (!lcAsioBufferDiagnostics().isDebugEnabled()) {
+        // Re-enabling starts new baselines: disabled time is not a delta.
+        for (AsioBaseline& baseline : m_asioBaselines) {
+            baseline.valid = false;
+        }
+        m_asioLastLogNs = 0;
+        return; // no clock, bus snapshot, provider or device query
+    }
+    const std::int64_t nowNs = audioProbeNowNs();
+    if (nowNs <= 0 || (m_asioLastLogNs != 0 && nowNs < m_asioLastLogNs)) {
+        for (AsioBaseline& baseline : m_asioBaselines) {
+            baseline.valid = false;
+        }
+        m_asioLastLogNs = nowNs > 0 ? nowNs : 0;
+        return; // invalid/backward clock: no query or unsigned subtraction
+    }
+    constexpr std::int64_t kLogIntervalNs = 1'000'000'000;
+    if (m_asioLastLogNs != 0 && nowNs >= m_asioLastLogNs
+        && nowNs - m_asioLastLogNs < kLogIntervalNs) {
+        return;
+    }
+    m_asioLastLogNs = nowNs;
+    const QString pollUtc = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+    constexpr std::array<AudioRole, 2> kRoles{AudioRole::Speakers, AudioRole::Headphones};
+    for (std::size_t i = 0; i < kRoles.size(); ++i) {
+        AsioBaseline& baseline = m_asioBaselines[i];
+        const char* role = i == 0 ? "speakers" : "headphones";
+        const std::optional<AudioEngine::AsioOutputSnapshot> snapshot =
+            m_audio ? m_audio->asioOutputSnapshotNow(kRoles[i]) : std::nullopt;
+        if (!snapshot) {
+            if (baseline.valid) {
+                ++baseline.generation;
+            }
+            baseline.valid = false;
+            qCDebug(lcAsioBufferDiagnostics).nospace()
+                << "asio-buffer role=" << role << " available=false baselineGeneration="
+                << baseline.generation << " counters=unavailable deltaValid=false"
+                << " pollUtc=" << pollUtc << " pollMonoNs=" << nowNs
+                << " moxObserved=unavailable";
+            continue;
+        }
+        const DeviceRateMatcherStats& stats = snapshot->matcher;
+        const bool deltaValid = baseline.valid
+            && baseline.instanceId == snapshot->instanceId
+            && baseline.roleGeneration == snapshot->roleGeneration
+            && snapshot->capturedNs >= baseline.capturedNs
+            && stats.dryRuns >= baseline.dryRuns && stats.overruns >= baseline.overruns;
+        if (!deltaValid) {
+            ++baseline.generation;
+        }
+        // Never subtract across a missing bus, changed lifetime or counter
+        // rollback. Baseline means no interval measured, not zero events.
+        const QString dryDelta = deltaValid ? QString::number(stats.dryRuns - baseline.dryRuns)
+                                             : QStringLiteral("unavailable");
+        const QString overDelta = deltaValid ? QString::number(stats.overruns - baseline.overruns)
+                                              : QStringLiteral("unavailable");
+        qCDebug(lcAsioBufferDiagnostics).nospace()
+            << "asio-buffer role=" << role << " available=true utc=" << snapshot->capturedUtc
+            << " captureMonoNs=" << snapshot->capturedNs << " backend=" << snapshot->backend
+            << " openDeviceId=" << (snapshot->openDeviceId.isEmpty()
+                ? QStringLiteral("unknown") : snapshot->openDeviceId)
+            << " instanceId=" << snapshot->instanceId << " roleGeneration=" << snapshot->roleGeneration
+            << " baselineGeneration=" << baseline.generation << " baseline=" << !deltaValid
+            << " deltaValid=" << deltaValid << " intervalStartMonoNs="
+            << (deltaValid ? QString::number(baseline.capturedNs) : QStringLiteral("unavailable"))
+            << " previousMoxObserved=" << (deltaValid
+                ? QString::number(baseline.moxObserved) : QStringLiteral("unavailable"))
+            << " moxObserved=" << snapshot->moxObserved
+            << " dryRuns=" << stats.dryRuns << " dryRunsDelta=" << dryDelta
+            << " overruns=" << stats.overruns << " overrunsDelta=" << overDelta
+            << " queuedOutputFrames=" << stats.queuedFrames << " fillOutputFrames=" << stats.fillFrames
+            << " fillBasis=" << (stats.controlActive ? "averaged" : "instantaneous")
+            << " logicalOutputFrames=" << stats.rsizeFrames << " capacityOutputFrames=" << stats.capacityFrames
+            << " delayStepMs=" << stats.delayStepMs << " ratio=" << QString::number(stats.ratio, 'g', 17)
+            << " controlActive=" << stats.controlActive << " appliedPacketInputFrames=" << stats.packetFrames
+            << " busInputRateHz=" << snapshot->busInputFormat.sampleRate
+            << " busInputChannels=" << snapshot->busInputFormat.channels
+            << " busInputSample=" << static_cast<int>(snapshot->busInputFormat.sample)
+            << " atomicTuple=noncoherent intervalMaySpanTxRx=true moxIsNotRxResume=true"
+            << " counterScope=matcher dryRunsUnit=readerCallsLackingRequestedFrames"
+            << " overrunsUnit=matcherDropOrSkipEvents driverUnderruns=unmeasured"
+            << " appliedPacketZeroDoesNotProveBlock=true";
+        baseline.valid = true;
+        baseline.instanceId = snapshot->instanceId;
+        baseline.roleGeneration = snapshot->roleGeneration;
+        baseline.dryRuns = stats.dryRuns;
+        baseline.overruns = stats.overruns;
+        baseline.capturedNs = snapshot->capturedNs;
+        baseline.moxObserved = snapshot->moxObserved;
     }
 }
 

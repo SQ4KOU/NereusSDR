@@ -1,6 +1,6 @@
-// no-port-check: NereusSDR-original test. The Spectrum Peaks settings are
-// stored once for every pan; a Setup change must reach every pan at once,
-// not only the pan Setup points at (and not only after a restart).
+// no-port-check: NereusSDR-original test. Spectrum Peaks uses Setup's All
+// pans master; a Setup change must reach every provided pan at once, not
+// only the model's primary pan (and not only after a restart).
 //
 // Modification history (NereusSDR):
 //   2026-09-28  J.J. Boyd / KG4VCF  Created. AI-assisted via Anthropic
@@ -9,6 +9,7 @@
 #include <QtTest/QtTest>
 
 #include "core/AppSettings.h"
+#include "core/settings/PanDisplayKeys.h"
 #include "gui/ColorSwatchButton.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/setup/SpectrumPeaksPage.h"
@@ -53,6 +54,9 @@ private slots:
                                 "DisplayPeakBlobsFallDbPerSec", "DisplayPeakBlobColor",
                                 "DisplayPeakBlobTextColor"}) {
             s.remove(QLatin1String(key));
+            for (int pan = 0; pan < 4; ++pan) {
+                s.remove(PanDisplayKeys::panKey(QString::fromLatin1(key), pan));
+            }
         }
     }
 
@@ -62,8 +66,19 @@ private slots:
         SpectrumWidget first;
         SpectrumWidget second;
         auto third = std::make_unique<SpectrumWidget>();
-        model.setSpectrumWidget(&first);   // Setup points at the first pan
+        first.setPanIndex(0);
+        second.setPanIndex(1);
+        third->setPanIndex(2);
+        for (SpectrumWidget* pan : {&first, &second, third.get()}) {
+            pan->loadSettingsForTest();
+        }
+        model.setSpectrumWidget(&first);
         SpectrumPeaksPage page(&model);
+        SetupDisplayProviders providers;
+        providers.panWidgets = [&first, &second, &third]() {
+            return QList<SpectrumWidget*>{&first, &second, third.get()};
+        };
+        page.setDisplayProviders(providers);
 
         for (const SpectrumWidget* pan : {&first, &second, third.get()}) {
             QVERIFY(!pan->activePeakHoldEnabled());

@@ -250,6 +250,9 @@ void TstCalibrationTab::levelCalLocalIdleState()
     QVERIFY(!c.cancel->toolTip().isEmpty());
     QCOMPARE(c.progress->value(), 0);
     QVERIFY(c.status->text().isEmpty());
+    // With nothing to say the message takes no row: Level Cal ends under
+    // its progress bar (JJ, 2026-10-10).
+    QVERIFY(c.status->isHidden());
 }
 
 // From Thetis setup.cs:6516-6523 [v2.10.3.15]: Start asks whether the
@@ -375,6 +378,11 @@ void TstCalibrationTab::levelCalFollowsTheCoresRunInARemoteWindow()
                                             QStringLiteral("Level calibration finished.")));
     QVERIFY(model.applyStationLevelCalValue("levelCalRunning", false));
     QCOMPARE(c.status->text(), QStringLiteral("Level calibration finished."));
+    // The message has its row back while there is one.
+    QVERIFY(!c.status->isHidden());
+    model.clearStationLevelCal();
+    QVERIFY(c.status->text().isEmpty());
+    QVERIFY(c.status->isHidden());
 }
 
 // Level Cal 2: the hosting desktop's own slice active: Start names the

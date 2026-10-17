@@ -33,6 +33,8 @@
 #include <QString>
 #include <QWidget>
 
+#include "gui/styles/WorkspacePreview.h"
+
 namespace NereusSDR::Style {
 
 // Core Theme (from AetherSDR source + STYLEGUIDE.md)
@@ -117,41 +119,46 @@ constexpr auto kStatusSep       = "#304050";
 // Shared Stylesheet Fragments
 inline QString buttonBaseStyle()
 {
-    return QStringLiteral(
+    // Workspace preview: the Longpath look; unchanged when the switch is off.
+    return WorkspacePreview::lookQss(QStringLiteral(
         "QPushButton {"
         "  background: %1; border: 1px solid %2; border-radius: 3px;"
         "  color: %3; font-size: 10px; font-weight: bold; padding: 2px 4px;"
         "}"
         "QPushButton:hover { background: %4; }"
-    ).arg(kButtonBg, kBorder, kTextPrimary, kButtonAltHover);
+    ).arg(kButtonBg, kBorder, kTextPrimary, kButtonAltHover));
 }
 
 inline QString greenCheckedStyle()
 {
-    return QStringLiteral(
+    // Workspace preview: the Longpath look; unchanged when the switch is off.
+    return WorkspacePreview::lookQss(QStringLiteral(
         "QPushButton:checked { background: %1; color: %2; border: 1px solid %3; }"
-    ).arg(kGreenBg, kGreenText, kGreenBorder);
+    ).arg(kGreenBg, kGreenText, kGreenBorder));
 }
 
 inline QString blueCheckedStyle()
 {
-    return QStringLiteral(
+    // Workspace preview: the Longpath look; unchanged when the switch is off.
+    return WorkspacePreview::lookQss(QStringLiteral(
         "QPushButton:checked { background: %1; color: %2; border: 1px solid %3; }"
-    ).arg(kBlueBg, kBlueText, kBlueBorder);
+    ).arg(kBlueBg, kBlueText, kBlueBorder));
 }
 
 inline QString amberCheckedStyle()
 {
-    return QStringLiteral(
+    // Workspace preview: the Longpath look; unchanged when the switch is off.
+    return WorkspacePreview::lookQss(QStringLiteral(
         "QPushButton:checked { background: %1; color: %2; border: 1px solid %3; }"
-    ).arg(kAmberBg, kAmberText, kAmberBorder);
+    ).arg(kAmberBg, kAmberText, kAmberBorder));
 }
 
 inline QString redCheckedStyle()
 {
-    return QStringLiteral(
+    // Workspace preview: the Longpath look; unchanged when the switch is off.
+    return WorkspacePreview::lookQss(QStringLiteral(
         "QPushButton:checked { background: %1; color: %2; border: 1px solid %3; }"
-    ).arg(kRedBg, kRedText, kRedBorder);
+    ).arg(kRedBg, kRedText, kRedBorder));
 }
 
 // DSP toggle — brighter green than the kGreenBg action buttons.
@@ -165,14 +172,16 @@ constexpr auto kDspToggleText   = "#80ff80";
 
 inline QString dspToggleStyle()
 {
-    return QStringLiteral(
+    // Workspace preview: the Longpath look; unchanged when the switch is off.
+    return WorkspacePreview::lookQss(QStringLiteral(
         "QPushButton:checked { background: %1; color: %2; border: 1px solid %3; }"
-    ).arg(kDspToggleBg, kDspToggleText, kDspToggleBorder);
+    ).arg(kDspToggleBg, kDspToggleText, kDspToggleBorder));
 }
 
 inline QString sliderHStyle()
 {
-    return QStringLiteral(
+    // Workspace preview: the Longpath look; unchanged when the switch is off.
+    return WorkspacePreview::lookQss(QStringLiteral(
         "QSlider::groove:horizontal {"
         "  height: 4px; background: %1; border-radius: 2px;"
         "}"
@@ -180,12 +189,13 @@ inline QString sliderHStyle()
         "  width: 10px; height: 10px; margin: -3px 0;"
         "  background: %2; border-radius: 5px;"
         "}"
-    ).arg(kGroove, kAccent);
+    ).arg(kGroove, kAccent));
 }
 
 inline QString sliderVStyle()
 {
-    return QStringLiteral(
+    // Workspace preview: the Longpath look; unchanged when the switch is off.
+    return WorkspacePreview::lookQss(QStringLiteral(
         "QSlider::groove:vertical {"
         "  width: 4px; background: %1; border-radius: 2px;"
         "}"
@@ -193,17 +203,18 @@ inline QString sliderVStyle()
         "  height: 10px; width: 16px; margin: 0 -6px;"
         "  background: %2; border-radius: 5px;"
         "}"
-    ).arg(kGroove, kAccent);
+    ).arg(kGroove, kAccent));
 }
 
 inline QString insetValueStyle()
 {
-    return QStringLiteral(
+    // Workspace preview: the Longpath look; unchanged when the switch is off.
+    return WorkspacePreview::lookQss(QStringLiteral(
         "QLabel {"
         "  font-size: 10px; background: %1; border: 1px solid %2;"
         "  border-radius: 3px; padding: 1px 2px; color: %3;"
         "}"
-    ).arg(kInsetBg, kInsetBorder, kTextPrimary);
+    ).arg(kInsetBg, kInsetBorder, kTextPrimary));
 }
 
 inline QString titleBarStyle()
@@ -325,7 +336,8 @@ inline QString darkPageDisabledRules()
 inline void applyDarkPageStyle(QWidget* w)
 {
     if (!w) { return; }
-    w->setStyleSheet(QStringLiteral(
+    // Workspace preview: the Longpath look; unchanged when the switch is off.
+    w->setStyleSheet(WorkspacePreview::lookQss(QStringLiteral(
         "QWidget { background: %1; color: %2; }"
         "QGroupBox { color: %7; font-size: 11px;"
         "  border: 1px solid %3; border-radius: 4px;"
@@ -359,7 +371,7 @@ inline void applyDarkPageStyle(QWidget* w)
         "QPushButton:hover { background: %6; }"
         "QPushButton:pressed { background: %5; color: %1; }"
     ).arg(kAppBg, kTextPrimary, kBorder, kButtonBg, kAccent, kButtonHover, kTextSecondary)
-     + darkPageDisabledRules());
+     + darkPageDisabledRules(), w));
 }
 
 // ── TX / RX filter overlay palette ────────────────────────────────────────────

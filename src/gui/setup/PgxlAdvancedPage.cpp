@@ -76,6 +76,9 @@
 //               spaces is offered with underscores, so the one-word box
 //               takes edits. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-10-09: "Identity && Status", "Pairing && Band Source" and "Save &&
+//               Reboot Amp" double their ampersand so Qt draws it. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "PgxlAdvancedPage.h"
@@ -386,7 +389,7 @@ PgxlAdvancedPage::~PgxlAdvancedPage() = default;
 
 void PgxlAdvancedPage::buildIdentitySection(QVBoxLayout* topLay)
 {
-    auto* box = new QGroupBox(QStringLiteral("Identity & Status"));
+    auto* box = new QGroupBox(QStringLiteral("Identity && Status"));
     auto* form = new QFormLayout(box);
     form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
@@ -638,7 +641,7 @@ void PgxlAdvancedPage::buildNetworkSection(QVBoxLayout* topLay)
 
 void PgxlAdvancedPage::buildPairingSection(QVBoxLayout* topLay)
 {
-    auto* box = new QGroupBox(QStringLiteral("Pairing & Band Source"));
+    auto* box = new QGroupBox(QStringLiteral("Pairing && Band Source"));
     auto* lay = new QVBoxLayout(box);
 
     auto* form = new QFormLayout;
@@ -1106,7 +1109,7 @@ void PgxlAdvancedPage::buildFooter(QVBoxLayout* topLay)
     row->addStretch();
 
     m_revertBtn = new QPushButton(QStringLiteral("Revert"));
-    m_saveAndRebootBtn = new QPushButton(QStringLiteral("Save & Reboot Amp"));
+    m_saveAndRebootBtn = new QPushButton(QStringLiteral("Save && Reboot Amp"));
     m_saveAndRebootBtn->setEnabled(false);
 
     row->addWidget(m_revertBtn);

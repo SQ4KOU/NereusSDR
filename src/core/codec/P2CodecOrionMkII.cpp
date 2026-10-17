@@ -57,6 +57,17 @@
 //                attenuator range above 31 dB on Alex boards (value + 2,
 //                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-06 - Radio speaker (R-SPK-09): high-priority byte 1400 bit 1, the
+//                speaker amplifier mute (Thetis network.c:1028 [v2.10.3.15]).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-12 - Anvelina Pro 3: the third and fourth streams take DDC5 and
+//                DDC6, DDC4 last. The radio's DDC4 stream arrived damaged on
+//                the bench; the gateware's receivers are identical instances
+//                (Orion.v:1921-1956 [@8e86a61]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-10-15 - The Anvelina note gives the gateware's tested rate budget.
+//                Comment only. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/console.cs header (lines 1-50) ===
@@ -284,10 +295,17 @@ void P2CodecOrionMkII::composeCmdHighPriority(const CodecContext& ctx, quint8 bu
     // From Thetis ChannelMaster/network.c:1030-1031 [v2.10.3.15]
     //   // Open Collector Outputs
     //   packetbuf[1401] = (prn->oc_output << 1) & 0xfe;
-    // (The byte before it, not ported here, carries its own tag:
-    //   packetbuf[1400] = xvtr_enable | (!audioamp_enable) << 1 | atu_tune << 2; //MW0LGE_22b  // user_dig_in was gettin overwritten by 1025 packet read
-    // network.c:1028 [v2.10.3.15].)
     buf[1401] = static_cast<quint8>((ctx.ocByte << 1) & 0xfe);
+
+    // R-SPK-09: the speaker amplifier mute. Bit 1 only: bit 0 (transverter
+    // out) and bit 2 (ATU tune) stay zero, as they always have here.
+    // From Thetis ChannelMaster/network.c:1026-1028 [v2.10.3.15]
+    //   // Enable transverter T/R relay 8   Mute Audio Amp bit 1 from J16 pin 9 IO4---DLE
+    //   //packetbuf[1400] = xvtr_enable | ((!(prn->user_dig_in & 0x01)) << 1 | atu_tune << 2);
+    //   packetbuf[1400] = xvtr_enable | (!audioamp_enable) << 1 | atu_tune << 2; //MW0LGE_22b  // user_dig_in was gettin overwritten by 1025 packet read
+    // From piHPSDR src/alex.h:129 [@4aa95c5] (the bit's name)
+    //   ANAN7000_HIPRIO1400_SPKR_MUTE  0x00000002   //  Enable/mute audio (1 = mute)
+    buf[1400] = ctx.p2SpeakerAmpOff ? 0x02 : 0x00;
 
     // From Thetis network.c:1037-1038 [@501e3f5] — Mercury Attenuator
     buf[1403] = static_cast<quint8>(ctx.p2Rx1Preamp << 1 | ctx.rxPreamp[0]);
@@ -1175,6 +1193,8 @@ DdcAssignment P2CodecOrionMkII::applyDdcAssignment(
     //   Slice C (index 2) -> DDC4    [NereusSDR extension: idle Thetis DDC4 slot]
     //   Slice D (index 3) -> DDC5    [NereusSDR extension: idle Thetis DDC5 slot]
     //   Slice E (index 4) -> DDC6    [NereusSDR extension: idle Thetis DDC6 slot]
+    // On an Anvelina Pro 3 the three extension streams take DDC5, DDC6 and
+    // DDC4 in that order (kAnvelinaStreamToDdc below, with the bench note).
     // DDC0/DDC1 reserved for PS feedback pair or Diversity sync pair.
     //
     // From Thetis console.cs:8199 [v2.10.3.15]:
@@ -1200,6 +1220,32 @@ DdcAssignment P2CodecOrionMkII::applyDdcAssignment(
     // [2.10.3.13]MW0LGE p1 !  [verbatim from console.cs:8247 — P1-only Rate[0] path]
     static constexpr int kStreamToDdc[5] = {2, 3, 4, 5, 6};
 
+    // Anvelina Pro 3: the third and fourth streams take DDC5 and DDC6, and
+    // DDC4 is used last. NereusSDR's own order, not a Thetis port (Thetis
+    // never enables DDC4 to DDC6 on this family).
+    //
+    // Bench, 2026-10-11 (KG4VCF's Anvelina Pro 3, Protocol 2, four
+    // receivers at 1,536 kHz): the DDC4 stream arrived with bits 20 and 21
+    // of the 24-bit sample set on about 13 percent of its non-negative I
+    // and Q values, while DDC2, DDC3 and DDC5 in the same capture had none.
+    // A display shows that as a comb over a floor about 58 dB too high, on
+    // every band. The same picture came back on 2026-10-12 from a third
+    // receiver, the stream the family table above puts on DDC4; that
+    // capture records no rate. Four receivers at 1,536 kHz is past what the
+    // gateware's notes say runs without Seq errors, two receivers at that
+    // rate (Orion.v:632 [@8e86a61]).
+    //
+    // The choice is free on the wire. The gateware builds receivers 1 to
+    // NR-1 as identical instances of one module (n1gp Anvelina_PROIII
+    // Orion.v:1921-1956 [@8e86a61], NR = 8 at Orion.v:958), each with its
+    // own FIFO (Orion.v:1337-1363 [@8e86a61]), and reads every receiver's
+    // ADC and rate the same way (Rx_specific_C&C.v:218-221 [@8e86a61]).
+    // DDC6 has not been captured on this radio. DDC4 stays in the table so
+    // a fifth stream still has a receiver.
+    static constexpr int kAnvelinaStreamToDdc[5] = {2, 3, 5, 6, 4};
+    const int* const streamToDdc = (ctx.model == HPSDRModel::ANVELINAPRO3)
+        ? kAnvelinaStreamToDdc : kStreamToDdc;
+
     // ADC control from Thetis console.cs:8249 [v2.10.3.15]:
     //   cntrl1 = rx_adc_ctrl1 & 0xff;  (default rx_adc_ctrl1=4, console.cs:15099)
     //   cntrl2 = rx_adc_ctrl2 & 0x3f;  (default rx_adc_ctrl2=0, console.cs:15135)
@@ -1215,10 +1261,11 @@ DdcAssignment P2CodecOrionMkII::applyDdcAssignment(
     // Populate DDC assignments for active streams.
     // For stream 0 -> DDC2: matches Thetis's rx1 on DDC2.
     // For stream 1 -> DDC3: matches Thetis's rx2_enabled DDC3 addendum.
-    // For streams 2-4 -> DDC4-6: NereusSDR extension into Thetis's idle slots.
+    // For streams 2-4 -> DDC4-6: NereusSDR extension into Thetis's idle slots
+    // (DDC5, DDC6, DDC4 on an Anvelina Pro 3; see kAnvelinaStreamToDdc).
     for (int i = 0; i < 5; ++i) {
         if (!slices[i].live) { continue; }
-        const int ddc = kStreamToDdc[i];
+        const int ddc = streamToDdc[i];
         // Phase 3F Sub-Epic I Task 7b: publish the mapping explicitly.
         a.streamDdc[i] = ddc;
         a.ddcEnable |= (1 << ddc);

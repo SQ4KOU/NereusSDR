@@ -84,6 +84,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 — J.J. Boyd (KG4VCF), gate experimental RADE V2 opt-in;
+//                AI-assisted implementation via OpenAI Codex.
 //   2026-09-30  J.J. Boyd / KG4VCF  Fix wave (RADE EOO): queueEndOfOver
 //                 encodes held speech first, never waits for the decoder.
 //                                    AI-assisted via Anthropic Claude Code.
@@ -178,6 +180,7 @@
 // =================================================================
 
 #include "core/RadeChannel.h"
+#include "core/RadeV2Feature.h"
 
 #include <QFile>
 #include <QLoggingCategory>
@@ -277,7 +280,12 @@ RadeChannel::RadeChannel(QObject* parent)
     // AutoConnection queues it and rxTextDecoded's receivers never run
     // under the codec lock. A direct connection would run them there.
     connect(m_textChannel.get(), &RadeText::textDecoded, this,
-            [this](const QString& callsign) { emit rxTextDecoded(callsign, QString()); });
+            [this](const QString& callsign) {
+                // Pending V1 text can arrive after stop/version selection.
+                if (m_version == Version::V1) {
+                    emit rxTextDecoded(callsign, QString());
+                }
+            });
 }
 
 RadeChannel::~RadeChannel()
@@ -285,6 +293,20 @@ RadeChannel::~RadeChannel()
     // RADE threads: join the decoder thread before the codec it runs goes.
     stopRxWorker();
     stop();
+}
+
+void RadeChannel::setVersion(Version version)
+{
+    if (isActive()) {
+        qCWarning(lcRade) << "RadeChannel: version must be selected before start";
+        return;
+    }
+    m_version.store(version, std::memory_order_release);
+}
+
+RadeChannel::Version RadeChannel::version() const
+{
+    return m_version.load(std::memory_order_acquire);
 }
 
 // From AetherSDR src/core/RADEEngine.cpp:27-78 [@0cd4559]
@@ -307,6 +329,10 @@ RadeChannel::~RadeChannel()
 bool RadeChannel::start(const QString& modelPath)
 {
     std::lock_guard<std::mutex> lock(m_codecMutex);  // RADE threads
+    if (version() == Version::V2 && !RadeV2Feature::enabled()) {
+        qCWarning(lcRade) << "Experimental RADE V2 requires NEREUS_ENABLE_RADE_V2=1";
+        return false;
+    }
     if (m_active) {
         // Idempotent: a second start() with the same channel already
         // running is a no-op success (matches AetherSDR's `if (m_rade)
@@ -329,8 +355,11 @@ bool RadeChannel::start(const QString& modelPath)
     rade_initialize();
 
     const QByteArray modelPathUtf8 = modelPath.toUtf8();
-    m_rade = rade_open(const_cast<char*>(modelPathUtf8.constData()),
-                       RADE_USE_C_ENCODER | RADE_USE_C_DECODER | RADE_VERBOSE_0);
+    // From rade_c src/rade_api.h:97-102 [@c8a3dc1]: V1 is the default;
+    // RADE_MODE_V2 selects the V2 waveform and dynamic frame dimensions.
+    const int flags = RADE_USE_C_ENCODER | RADE_USE_C_DECODER | RADE_VERBOSE_0
+        | (m_version == Version::V2 ? RADE_MODE_V2 : 0);
+    m_rade = rade_open(const_cast<char*>(modelPathUtf8.constData()), flags);
     if (!m_rade) {
         qCWarning(lcRade) << "RadeChannel: rade_open() failed for" << modelPath;
         rade_finalize();
@@ -512,6 +541,7 @@ int RadeChannel::txFeatureAccumSizeForTest() const
 
 void RadeChannel::startRxWorker()
 {
+    if (version() == Version::V2 && !RadeV2Feature::enabled()) { return; }
     if (!m_rxWorker) {
         m_rxWorker = std::make_unique<RadeRxWorker>(
             [this](const QByteArray& iq) { return decodeRxBlock(iq); });
@@ -626,6 +656,9 @@ QByteArray RadeChannel::decodeRxBlock(const QByteArray& iqSamples)
             }
         }
     } endOfOverWake{this};
+    const quint64 observationToken = m_speechWaveform.bindingToken();
+    const qint64 observationNs = observationToken != 0 ? waveformNowNs() : 0;
+    QByteArray observedSpeech;
     // RADE threads: what to emit once m_codecMutex is released.
     QByteArray speechOut;
     bool syncEdge = false;
@@ -740,8 +773,10 @@ QByteArray RadeChannel::decodeRxBlock(const QByteArray& iqSamples)
         std::vector<float> eoo_out(n_eoo_bits);
 
         auto* rx_in = reinterpret_cast<RADE_COMP*>(m_rxAccum.data());
+        // From rade_c src/rade_api.c:216-229 [@c8a3dc1]: has_eoo must
+        // remain nonnull in V2; rade_n_eoo_bits returns zero for that mode.
         const int n_out = rade_rx(m_rade, features_out.data(), &has_eoo,
-                                  eoo_out.data(), rx_in);
+                                  n_eoo_bits > 0 ? eoo_out.data() : nullptr, rx_in);
         ++m_radeRxCallCount;
 
         // Remove consumed samples.
@@ -752,7 +787,11 @@ QByteArray RadeChannel::decodeRxBlock(const QByteArray& iqSamples)
         // goes to the text channel (rade_text_rx there, RadeText here).
         if (has_eoo) {
             // Handle RX of bits from EOO.  [original inline comment from RADEReceiveStep.cpp:238]
-            m_textChannel->processRxEooBits(eoo_out.data(), n_eoo_bits);
+            // From rade_c src/rade_api.h:145-181 [@c8a3dc1]: V2 EOO
+            // has no V1 callsign bits; streaming text is not integrated.
+            if (m_version == Version::V1 && n_eoo_bits > 0) {
+                m_textChannel->processRxEooBits(eoo_out.data(), n_eoo_bits);
+            }
             nin = rade_nin(m_rade);
             continue;
         }
@@ -796,6 +835,8 @@ QByteArray RadeChannel::decodeRxBlock(const QByteArray& iqSamples)
         QByteArray tmp = m_up16to24->processMonoToStereo(
             reinterpret_cast<const float*>(speech16k.constData()),
             speech16k.size() / static_cast<int>(sizeof(float)));
+        // Implicit shared ownership only under the codec lock; publish after unlock.
+        if (observationToken != 0) { observedSpeech = tmp; }
         m_rxOutAccum.append(tmp);
     }
 
@@ -886,6 +927,11 @@ QByteArray RadeChannel::decodeRxBlock(const QByteArray& iqSamples)
     }
     }  // RADE threads: m_codecMutex released
 
+    if (!observedSpeech.isEmpty()) {
+        m_speechWaveform.appendFloat(observationToken,
+            reinterpret_cast<const float*>(observedSpeech.constData()),
+            observedSpeech.size() / int(2 * sizeof(float)), 2, observationNs, true);
+    }
     emit rxSpeechReady(speechOut);
     if (syncEdge) {
         emit syncChanged(syncedNow);
@@ -1189,8 +1235,12 @@ RadeChannel::EndOfOverRun RadeChannel::runPendingEndOfOver()
         // FreeDV leaves it in its FIFO.
         encodeSpeechLocked(modemOut);
 
-        m_textChannel->setOurCallsign(callsign);
-        m_textChannel->pushTxCallsign(m_rade);
+        // From rade_c src/rade_api.h:145-161 [@c8a3dc1]: only V1 has
+        // EOO text bits. V2 still sends rade_tx_eoo below.
+        if (m_version == Version::V1 && rade_n_eoo_bits(m_rade) > 0) {
+            m_textChannel->setOurCallsign(callsign);
+            m_textChannel->pushTxCallsign(m_rade);
+        }
 
         const int numEOOSamples = rade_n_tx_eoo_out(m_rade);
         if (numEOOSamples <= 0) {

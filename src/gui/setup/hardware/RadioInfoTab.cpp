@@ -43,6 +43,12 @@
 //                 (BoardCapsTable::effectiveReceiverCount, read in
 //                 radioInfoFacts), the count the stream pool uses. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-10-08  J.J. Boyd (KG4VCF): Qt 6.11.0 Cocoa accessibility cache
+//               repair on a live item view (QtCocoaAccessibleTableCache).
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-15  J.J. Boyd (KG4VCF): rows change after a real model reset
+//               (resetItemsBeforeRowChange), so accessibility cannot read a
+//               deleted cell. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -91,6 +97,7 @@
 //============================================================================================//
 
 #include "RadioInfoTab.h"
+#include "gui/QtCocoaAccessibleTableCache.h"
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
@@ -291,6 +298,7 @@ void RadioInfoTab::populate(const RadioInfo& info, const BoardCapabilities& caps
     const int fallbackRate = defaultSampleRate(info.protocol, caps, model);
     {
         QSignalBlocker blocker(m_sampleRateRx1Combo);
+        resetItemsBeforeRowChange(m_sampleRateRx1Combo);
         m_sampleRateRx1Combo->clear();
         for (int rate : allowed) {
             m_sampleRateRx1Combo->addItem(QStringLiteral("%1").arg(rate), rate);

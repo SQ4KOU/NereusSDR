@@ -151,14 +151,15 @@ private slots:
         const QString mac = QStringLiteral("11:22:33:44:55:66");
         s.saveRadio(makeRadioInfo(mac), /*pinToMac=*/true, /*autoConnect=*/false);
 
-        // 10 fields with a default (FIRST/no-override) modelOverride --
-        // that field is conditional; the non-default case (an 11th fire)
+        // 11 fields with a default (FIRST/no-override) modelOverride --
+        // that field is conditional; the non-default case (a 12th fire)
         // is covered by the second phase below.
         const QStringList expectedSuffixes = {
             QStringLiteral("name"), QStringLiteral("ipAddress"),
             QStringLiteral("port"), QStringLiteral("macAddress"),
             QStringLiteral("boardType"), QStringLiteral("protocol"),
-            QStringLiteral("firmwareVersion"), QStringLiteral("pinToMac"),
+            QStringLiteral("firmwareVersion"), QStringLiteral("firmwareBetaVersion"),
+            QStringLiteral("pinToMac"),
             QStringLiteral("autoConnect"), QStringLiteral("lastSeen"),
         };
         QCOMPARE(log.size(), expectedSuffixes.size());
@@ -168,8 +169,8 @@ private slots:
         }
 
         // Second phase: a non-default modelOverride makes saveRadio()'s
-        // conditional 11th field write fire too. Separate mac + a
-        // cleared log so this doesn't disturb the 10-field assertion
+        // conditional 12th field write fire too. Separate mac + a
+        // cleared log so this doesn't disturb the 11-field assertion
         // above. hookFiresOnSetModelOverride (below) pins the standalone
         // setModelOverride() path; this pins saveRadio()'s own
         // conditional branch specifically, which is a different call
@@ -180,7 +181,7 @@ private slots:
         infoWithOverride.modelOverride = HPSDRModel::ANAN_G2;
         s.saveRadio(infoWithOverride, /*pinToMac=*/false, /*autoConnect=*/false);
 
-        QCOMPARE(log.size(), 11);
+        QCOMPARE(log.size(), 12);
         const QString overridePrefix = QStringLiteral("radios/%1/").arg(macWithOverride);
         QVERIFY2(log.contains(overridePrefix + QStringLiteral("modelOverride")),
                  qPrintable(overridePrefix + QStringLiteral("modelOverride")));
@@ -202,7 +203,7 @@ private slots:
         installRecorder(s, log);
         s.forgetRadio(mac);
 
-        QCOMPARE(log.size(), 10); // same 10 fields saveRadio wrote above
+        QCOMPARE(log.size(), 11); // same 11 fields saveRadio wrote above
         const QString prefix = QStringLiteral("radios/%1/").arg(mac);
         for (const QString& key : log) {
             QVERIFY2(key.startsWith(prefix), qPrintable(key));
@@ -225,7 +226,7 @@ private slots:
         installRecorder(s, log);
         s.clearSavedRadios();
 
-        QCOMPARE(log.size(), 20); // 10 fields x 2 radios
+        QCOMPARE(log.size(), 22); // 11 fields x 2 radios
         for (const QString& key : log) {
             QVERIFY2(key.startsWith(QStringLiteral("radios/")), qPrintable(key));
             QVERIFY2(key.mid(7).contains(QLatin1Char('/')), qPrintable(key));

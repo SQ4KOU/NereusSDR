@@ -60,6 +60,11 @@ mw0lge@grange-lane.co.uk
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+// Modification history (NereusSDR):
+//   2026-10-12 - Floor painted scale text independently of chosen colors.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
+#include "gui/styles/WorkspacePreview.h"
 #include "gui/widgets/GradientPickerWidget.h"
 
 #include <QByteArray>
@@ -974,6 +979,7 @@ void GradientPickerWidget::drawTextCentered(QPainter& painter,
                                              const QString& s,
                                              int x) const
 {
+    painter.setFont(WorkspacePreview::readableFont(painter.font(), painter.device()));
     const QFontMetrics fm(painter.font());
     const int w = fm.horizontalAdvance(s);
     const QColor textColor = isEnabled() ? QColor(Qt::black) : QColor(Qt::gray);

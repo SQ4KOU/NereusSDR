@@ -68,6 +68,7 @@ private slots:
         QSignalSpy spinSpy(row.spin, qOverload<int>(&QSpinBox::valueChanged));
         row.spin->setValue(70);
         QCOMPARE(spinSpy.count(), 1);
+        QCOMPARE(spy.count(), 2);
 
         delete row.container;
     }
@@ -97,11 +98,14 @@ private slots:
     void doubleSliderRow_bidirectionalSync()
     {
         SliderRowD row = makeDoubleSliderRow(-30.0, 30.0, 0.0, 1);
+        QSignalSpy changes(row.slider, &QSlider::valueChanged);
         row.spin->setValue(12.5);
         QCOMPARE(row.slider->value(), 125);
+        QCOMPARE(changes.count(), 1);
 
         row.slider->setValue(-75);
         QCOMPARE(row.spin->value(), -7.5);
+        QCOMPARE(changes.count(), 2);
 
         delete row.container;
     }

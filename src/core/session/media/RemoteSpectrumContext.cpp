@@ -4,6 +4,9 @@
 // no-port-check: NereusSDR-original.  See RemoteSpectrumContext.h.
 //
 // Modification history (NereusSDR):
+//   2026-10-11 : R-DISP-RETUNE (third wave): the `pictureGeneration` field,
+//                 for a peer that declared spectrumPictureVersion. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-26 : Parity Task 28 (R-R3-49, A11): the `transmit` field, for a
 //                 peer that declared txDisplayVersion. J.J. Boyd (KG4VCF),
 //                 AI-assisted implementation via Anthropic Claude Code.
@@ -148,20 +151,29 @@ QJsonObject encodeRemoteSpectrumContext(const SpectrumContextMessage& message,
     if (message.transmit) {
         payload.insert(QStringLiteral("transmit"), *message.transmit);
     }
+    // R-DISP-RETUNE: and one more for a peer that declared the picture value
+    // (spectrumPictureVersion); every other peer's context is unchanged.
+    if (message.pictureGeneration) {
+        payload.insert(QStringLiteral("pictureGeneration"),
+                       static_cast<qint64>(*message.pictureGeneration));
+    }
     return payload;
 }
 
 std::optional<SpectrumContextMessage> decodeRemoteSpectrumContext(const QJsonObject& payload,
                                                                   bool grantNegotiated,
-                                                                  bool transmitNegotiated)
+                                                                  bool transmitNegotiated,
+                                                                  bool pictureNegotiated)
 {
     const bool hasWideband = payload.contains(QStringLiteral("wideband"));
     // Parity Task 28: `transmit` rides only on the grant shape (minor 11).
-    if (transmitNegotiated && !grantNegotiated) {
+    // R-DISP-RETUNE: and so does `pictureGeneration`.
+    if ((transmitNegotiated || pictureNegotiated) && !grantNegotiated) {
         return std::nullopt;
     }
     const qsizetype expectedKeys = kLegacyContextKeys + (hasWideband ? 1 : 0)
-        + (grantNegotiated ? kGrantKeys : 0) + (transmitNegotiated ? 1 : 0);
+        + (grantNegotiated ? kGrantKeys : 0) + (transmitNegotiated ? 1 : 0)
+        + (pictureNegotiated ? 1 : 0);
     const QJsonValue op = payload.value(QStringLiteral("op"));
     const QJsonValue connectionId = payload.value(QStringLiteral("connectionId"));
     // With the key count fixed, every expected key present and valid means
@@ -251,6 +263,13 @@ std::optional<SpectrumContextMessage> decodeRemoteSpectrumContext(const QJsonObj
             return std::nullopt;
         }
         message.transmit = transmit.toBool();
+    }
+    if (pictureNegotiated) {
+        double picture = 0;
+        if (!number(payload, "pictureGeneration", 1, kMaxU32, picture, true)) {
+            return std::nullopt;
+        }
+        message.pictureGeneration = static_cast<quint32>(picture);
     }
     return message;
 }

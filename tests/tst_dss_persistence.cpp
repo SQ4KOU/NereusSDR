@@ -18,6 +18,15 @@
 //     one. See design doc
 //     docs/architecture/2026-08-08-3d-stacked-trace-spectrum-design.md §6.
 //
+// Display pill plan Task 1 (2026-10-10): the per-pan keys go through
+// core/settings/PanDisplayKeys. A pan's own value is "<base>_<N>", pan 0
+// included; the bare key is the Setup default, which a pan reads when it
+// has no value of its own and never writes. Three cases read pan 0's value
+// back from the bare key and now read "<base>_0":
+// booleansPersistAsTrueFalseStrings,
+// dssFloorDepthIsNotPersistedBySpectrumWidget and
+// dssRowDividerKey_roundTripsPerPan.
+//
 // Isolation: AppSettings::instance() is a process-wide in-memory singleton
 // with no automatic load()/save() in this test process (TestSandboxInit.cpp
 // also sandboxes QStandardPaths so nothing here can reach the developer's
@@ -95,11 +104,8 @@ private slots:
     // false" from "wrote nothing, defaulted false" -- reading the raw
     // value can).
     //
-    // Pan index 0 maps to the BARE key (no "_0" / "_pan0" suffix) per
-    // settingsKey()'s own convention (see the "if (panIndex == 0) return
-    // base;" branch) -- confirmed against every existing per-pan key
-    // in this file (e.g. tst_pan_display_settings_inherit.cpp's
-    // "DisplayGridMax" for pan 0 vs "DisplayGridMax_1" for pan 1).
+    // Pan index 0's own key is "<base>_0" (PanDisplayKeys::panKey); the
+    // bare key is the Setup default and a pan's save never writes it.
     void booleansPersistAsTrueFalseStrings()
     {
         SpectrumWidget w;
@@ -107,9 +113,10 @@ private slots:
         w.setThreeDSliceDepth(true);
         w.saveSettings();
         QCOMPARE(AppSettings::instance()
-                     .value(QStringLiteral("Display3DSliceShadow"))
+                     .value(QStringLiteral("Display3DSliceShadow_0"))
                      .toString(),
                  QStringLiteral("True"));
+        QVERIFY(!AppSettings::instance().contains(QStringLiteral("Display3DSliceShadow")));
     }
 
     // Catches: dssFloorDepth accidentally folded into SpectrumWidget's
@@ -126,7 +133,7 @@ private slots:
         w.setDssGain(80);
         w.saveSettings();
 
-        QVERIFY(AppSettings::instance().contains(QStringLiteral("Display3DGain")));
+        QVERIFY(AppSettings::instance().contains(QStringLiteral("Display3DGain_0")));
         QVERIFY(!AppSettings::instance().contains(QStringLiteral("Display3DFloorDepth")));
         QVERIFY(!AppSettings::instance().contains(QStringLiteral("Display3DFloorDepth_0")));
     }
@@ -154,7 +161,8 @@ private slots:
         w1.setDssRowDivider(9);
         w1.saveSettings();
 
-        QCOMPARE(AppSettings::instance().value(QStringLiteral("Display3DSpeed")).toInt(), 6);
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("Display3DSpeed_0")).toInt(), 6);
+        QVERIFY(!AppSettings::instance().contains(QStringLiteral("Display3DSpeed")));
         QCOMPARE(AppSettings::instance().value(QStringLiteral("Display3DSpeed_1")).toInt(), 9);
 
         SpectrumWidget r0;

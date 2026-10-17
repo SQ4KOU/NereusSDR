@@ -36,6 +36,9 @@ warren@wpratt.com
 
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-14: Consumer snapshots share existing input ownership with
+//                 the producer. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via OpenAI Codex.
 //   2026-04-29 — Initial port for NereusSDR by J.J. Boyd (KG4VCF),
 //                 Phase 3M-1c TX pump architecture redesign v3, with
 //                 AI-assisted implementation via Anthropic Claude
@@ -136,7 +139,8 @@ public:
     /// `dst` must point to 2 * kBlockFrames doubles (interleaved I/Q
     /// pairs).  The Q channel is always zeroed (mic input is mono;
     /// matches Thetis network.c:769 `prn->TxReadBufp[2 * i + 1] = 0.0`).
-    /// Thread-safe (acquires m_csOut).  Must follow a successful
+    /// Thread-safe (acquires m_csIn, then m_csOut, for a coherent snapshot).
+    /// Must follow a successful
     /// waitForBlock().
     void drainBlock(double* dst);
 

@@ -30,6 +30,13 @@ private struct SlowPAC: SystemProxyPACEvaluating {
 /// present and report the certificate, whatever the trust.
 extension PACEvaluatingSuites {
     @Suite struct WebSocketLinkTransportTests {
+        // None of these tests is about how long an opening or a delivery over
+        // loopback takes, and each of those ends as soon as its task runs, so
+        // the openings' deadlines and the waits for deliveries are the test
+        // process's backstop. An opening's deadline counts from the call, and
+        // a busy runner can keep the opening's task from starting until a
+        // short one has run out (ProxyTransportIntegrationTests' 2 s opening,
+        // in PR 532's run 38834527225).
         @Test func queuedMediaDroppedBeforeWebSocketUpgradeDoesNotCount() async throws {
             let listener = try SilentTLSListener(address: "127.0.0.1")
             let port = try await listener.start()
@@ -37,9 +44,9 @@ extension PACEvaluatingSuites {
             let counter = TrafficCounter()
             let transport = WebSocketLinkTransport(
                 endpoint: StationEndpoint(host: "127.0.0.1", port: port), trust: .pairing,
-                openDeadline: .seconds(3), proxyResolver: SystemProxyResolver(), traffic: counter)
+                openDeadline: TestBackstop.hang, proxyResolver: SystemProxyResolver(), traffic: counter)
             let opening = Task { try? await transport.open { _ in } }
-            let deadline = ContinuousClock.now + .seconds(2)
+            let deadline = ContinuousClock.now + TestBackstop.hang
             while listener.receivedRequests.isEmpty && ContinuousClock.now < deadline {
                 try await Task.sleep(for: .milliseconds(10))
             }
@@ -58,7 +65,7 @@ extension PACEvaluatingSuites {
             let endpoint = try await station.start()
             defer { station.stop() }
             let transport = WebSocketLinkTransport(endpoint: endpoint, trust: .pairing,
-                                                   openDeadline: .seconds(3), proxyResolver: SystemProxyResolver(),
+                                                   openDeadline: TestBackstop.hang, proxyResolver: SystemProxyResolver(),
                                                    traffic: counter)
             let frame = Data([2] + Array(repeating: UInt8(7), count: 17))
             #expect(!transport.send("before open"))
@@ -66,7 +73,7 @@ extension PACEvaluatingSuites {
             #expect(counter.reading.bytesOut == 0)
             _ = try await transport.open { _ in }
             #expect(transport.send("count this text"))
-            let deadline = ContinuousClock.now + .seconds(2)
+            let deadline = ContinuousClock.now + TestBackstop.hang
             while !station.receivedTexts.contains("count this text") && ContinuousClock.now < deadline {
                 try await Task.sleep(for: .milliseconds(10))
             }
@@ -77,7 +84,7 @@ extension PACEvaluatingSuites {
             let sent = counter.reading.bytesOut
             #expect(sent == UInt64("count this text".utf8.count))
             #expect(transport.sendBinary(frame))
-            let binaryDeadline = ContinuousClock.now + .seconds(2)
+            let binaryDeadline = ContinuousClock.now + TestBackstop.hang
             while station.receivedBinaryFrames == 0 && ContinuousClock.now < binaryDeadline {
                 try await Task.sleep(for: .milliseconds(10))
             }
@@ -89,7 +96,7 @@ extension PACEvaluatingSuites {
             transport.setBinaryReceiver { _ in incoming.record(true) }
             let beforeIncoming = counter.reading.bytesIn
             station.sendBinary(frame)
-            let incomingDeadline = ContinuousClock.now + .seconds(2)
+            let incomingDeadline = ContinuousClock.now + TestBackstop.hang
             while incoming.value == nil && ContinuousClock.now < incomingDeadline {
                 try await Task.sleep(for: .milliseconds(10))
             }
@@ -113,7 +120,7 @@ extension PACEvaluatingSuites {
             defer { station.stop() }
             let counter = TrafficCounter()
             let transport = WebSocketLinkTransport(endpoint: endpoint, trust: .pairing,
-                                                   openDeadline: .seconds(3), proxyResolver: SystemProxyResolver(),
+                                                   openDeadline: TestBackstop.hang, proxyResolver: SystemProxyResolver(),
                                                    traffic: counter)
             let binary = BinaryCount()
             transport.setBinaryReceiver { _ in binary.received() }
@@ -128,7 +135,7 @@ extension PACEvaluatingSuites {
             let outbound = "é日本語"
             transport.send(outbound)
             let clock = ContinuousClock()
-            let deadline = clock.now + .seconds(2)
+            let deadline = clock.now + TestBackstop.hang
             while (transport.trafficObservation?.acceptedPayloadBytes != UInt64(outbound.utf8.count)
                    || !station.receivedTexts.contains(outbound))
                     && clock.now < deadline {
@@ -139,7 +146,7 @@ extension PACEvaluatingSuites {
             #expect(counter.reading.bytesOut == UInt64(outbound.utf8.count))
             station.sendBinary(Data([2] + Array(repeating: 0, count: 17)))
             transport.ping()
-            let carrierDeadline = clock.now + .seconds(2)
+            let carrierDeadline = clock.now + TestBackstop.hang
             while (binary.count == 0 || station.pingCount == 0) && clock.now < carrierDeadline {
                 try await Task.sleep(for: .milliseconds(10))
             }
@@ -166,7 +173,7 @@ extension PACEvaluatingSuites {
             let resolver = SystemProxyResolver(settingsProvider: { settings.value }, pacEvaluator: SlowPAC())
             let transport = WebSocketLinkTransport(
                 endpoint: StationEndpoint(host: "core.invalid", port: corePort), trust: .pairing,
-                openDeadline: .seconds(1), proxyResolver: resolver)
+                openDeadline: TestBackstop.hang, proxyResolver: resolver)
             let task = Task { try await transport.open { _ in } }
             try await Task.sleep(for: .milliseconds(20))
             transport.close()
@@ -187,10 +194,10 @@ extension PACEvaluatingSuites {
             let resolver = SystemProxyResolver(settingsProvider: { settings.value }, pacEvaluator: CFNetworkPACEvaluator())
             let transport = WebSocketLinkTransport(
                 endpoint: StationEndpoint(host: "core.invalid", port: corePort), trust: .pairing,
-                openDeadline: .seconds(3), proxyResolver: resolver)
+                openDeadline: TestBackstop.hang, proxyResolver: resolver)
             let task = Task { try await transport.open { _ in } }
             let clock = ContinuousClock()
-            let deadline = clock.now + .seconds(2)
+            let deadline = clock.now + TestBackstop.hang
             while core.receivedRequests.isEmpty && clock.now < deadline {
                 try await Task.sleep(for: .milliseconds(20))
             }
@@ -216,7 +223,7 @@ extension PACEvaluatingSuites {
             #expect(wrongPin != core.pin)
             let transport = WebSocketLinkTransport(
                 endpoint: StationEndpoint(host: "core.invalid", port: localEndpoint.port),
-                trust: .certificate(pinSHA256: wrongPin), openDeadline: .seconds(3), proxyResolver: resolver)
+                trust: .certificate(pinSHA256: wrongPin), openDeadline: TestBackstop.hang, proxyResolver: resolver)
             await #expect(throws: LinkTransportError.certificateMismatch) {
                 _ = try await transport.open { _ in }
             }

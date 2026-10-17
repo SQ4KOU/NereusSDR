@@ -48,7 +48,10 @@ import Testing
     @Test func theTracesPeakSitsAtItsBinAndLevel() throws {
         let target = try Offscreen(width: Self.width, height: Self.height)
         let renderer = try BandRenderer(device: target.device)
-        let settings = Self.plain()
+        var settings = Self.plain()
+        // This test isolates frequency/level placement at an explicit1px;
+        // V29 default0.5pt@1x no longer receives the old1pixel clamp.
+        settings.traceWidthPoints = 1
         var trace = Self.flat(200)
         trace[57] = -60
         let frame = BandFixtures.frame(trace: trace)
@@ -102,8 +105,10 @@ import Testing
     }
 
     @Test func theTracesVerticesAreTheLinesWidthApart() {
+        // Approved V29 clamps converted pixel geometry to0.1...5; point
+        // representation still produces1.5px from the established0.5pt/3x.
         var vertices: [BandRenderer.ColourVertex] = []
-        for (points, scale, pixels) in [(0.5, 3.0, 1.5), (3.0, 3.0, 9.0), (0.25, 3.0, 1.0)] {
+        for (points, scale, pixels) in [(0.5, 3.0, 1.5), (3.0, 3.0, 5.0), (0.25, 3.0, 0.75)] {
             var settings = BandDisplaySettings.desktopDefaults
             settings.traceWidthPoints = points
             vertices.removeAll()
@@ -124,6 +129,8 @@ import Testing
         let renderer = try BandRenderer(device: target.device)
         var settings = Self.plain()
         settings.traceFill = false
+        // Isolate projection with1px geometry; do not relax the XY/empty-edge assertions.
+        settings.traceWidthPoints = 1
         let greys = try BandFixtures.palette(id: 7, [(0, "#000000"), (1, "#FFFFFF")])
         var trace = Self.flat(200, -135)
         trace[100] = -60
@@ -520,6 +527,37 @@ import Testing
         #expect(stroke.r > 200 && stroke.g < 40 && stroke.b < 60)
     }
 
+    /// Rulings wave R3: the trace line has its own colour (the desktop's
+    /// Trace Color); the fill under it keeps the fill's. Until a trace
+    /// colour is chosen the line follows the fill's, as the desktop's does.
+    @Test func theTraceLineTakesItsOwnColourAndTheFillKeepsTheFills() throws {
+        let target = try Offscreen(width: Self.width, height: Self.height)
+        let renderer = try BandRenderer(device: target.device)
+        var settings = Self.plain()
+        settings.traceColour = "#FF0000"
+        settings.traceFill = true
+        settings.traceFillOpacity = 1
+        let frame = BandFixtures.frame(trace: Self.flat(200, -60))
+        let y = Int(Self.geometry(settings).y(forDbm: -60))
+        let below = Int(Self.geometry(settings).y(forDbm: -80))
+        #expect(settings.traceLineColour == nil && settings.traceLineColourDrawn == "#FF0000")
+        let following = try target.render(renderer, frame: frame, history: WaterfallHistory(capacity: 1), extras: nil,
+                                          overlays: Self.overlays(settings))
+        let followingStroke = try #require((y - 1...y).map { following.pixel(100, $0) }.max { $0.r < $1.r })
+        #expect(followingStroke.r > 200 && followingStroke.g < 40 && followingStroke.b < 60, "\(followingStroke)")
+
+        settings.traceLineColour = "#00FF00"
+        #expect(settings.traceLineColourDrawn == "#00FF00")
+        let own = try target.render(renderer, frame: frame, history: WaterfallHistory(capacity: 1), extras: nil,
+                                    overlays: Self.overlays(settings))
+        let stroke = try #require((y - 1...y).map { own.pixel(100, $0) }.max { $0.g < $1.g })
+        #expect(stroke.g > 200 && stroke.r < 120, "the line \(stroke)")
+        // The fill is still the fill's red, at four tenths over the background.
+        let fill = own.pixel(100, below)
+        #expect(fill.r > 80 && fill.g < 40, "the fill \(fill)")
+        #expect(fill == following.pixel(100, below))
+    }
+
     @Test func theFillChangesBelowTheTrace() throws {
         let target = try Offscreen(width: Self.width, height: Self.height)
         let renderer = try BandRenderer(device: target.device)
@@ -565,6 +603,17 @@ import Testing
     /// band draw is paired with a reference draw into a target of the same
     /// size, timed in the same loop: contention slows both, a slower
     /// renderer slows only the band.
+    ///
+    /// The two are compared by what each draw costs, close to how the app's
+    /// 3D pacer counts a frame: the encoding, which the pacer times by the
+    /// wall clock and the test on its own thread's CPU clock, plus the GPU's
+    /// own time for the command buffer. Neither of the test's clocks runs
+    /// while the draw waits: for a core that other suites hold,
+    /// behind their work on the GPU, or for the test thread to wake once
+    /// the GPU is done. By the wall clock a busy host did not slow the two
+    /// alike: on a hosted runner a band frame went from its usual 3.7 ms or
+    /// so to 12.1 ms while the reference went from 2.9 to 5.3 ms. A
+    /// renderer that does more work still costs more.
     @Test func aPhoneWideBandDrawsInUnderEightMilliseconds() throws {
         let width = 1179
         let height = 1200
@@ -586,8 +635,24 @@ import Testing
         var generator = SystemRandomNumberGenerator()
         var times: [Double] = []
         var referenceTimes: [Double] = []
+        var encodings: [Double] = []
+        var referenceEncodings: [Double] = []
+        var gpuTimes: [Double] = []
+        var referenceGpuTimes: [Double] = []
+        var costs: [Double] = []
+        var referenceCosts: [Double] = []
         func milliseconds(since start: UInt64) -> Double {
             Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6
+        }
+        func cpuMilliseconds(since start: UInt64) -> Double {
+            Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - start) / 1e6
+        }
+        // The GPU's own time, none where the device reports none (as the renderer counts it).
+        func gpuMilliseconds(_ buffer: (any MTLCommandBuffer)?) -> Double {
+            guard let buffer, buffer.gpuEndTime > buffer.gpuStartTime else {
+                return 0
+            }
+            return (buffer.gpuEndTime - buffer.gpuStartTime) * 1e3
         }
         for sequence in 1...90 {
             let trace = (0..<width).map { _ in Float.random(in: -135 ... -95, using: &generator) }
@@ -598,20 +663,32 @@ import Testing
                                                       levels: (-130, -70)),
                           manualLevels: settings.manualLevels)
             var start = DispatchTime.now().uptimeNanoseconds
+            var cpuStart = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
             let buffer = renderer.draw(frame: state.frame, history: state.history, extras: state.frameExtras,
                                        overlays: overlays, into: target.texture)
+            let encoding = cpuMilliseconds(since: cpuStart)
             buffer?.waitUntilCompleted()
             let elapsed = milliseconds(since: start)
             start = DispatchTime.now().uptimeNanoseconds
-            try reference.draw()
+            cpuStart = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+            let referenceBuffer = try reference.draw()
+            let referenceEncoding = cpuMilliseconds(since: cpuStart)
+            referenceBuffer.waitUntilCompleted()
             let referenceElapsed = milliseconds(since: start)
             if sequence > 10 {
                 times.append(elapsed)
                 referenceTimes.append(referenceElapsed)
+                encodings.append(encoding)
+                referenceEncodings.append(referenceEncoding)
+                gpuTimes.append(gpuMilliseconds(buffer))
+                referenceGpuTimes.append(gpuMilliseconds(referenceBuffer))
+                costs.append(encoding + gpuMilliseconds(buffer))
+                referenceCosts.append(referenceEncoding + gpuMilliseconds(referenceBuffer))
             }
         }
         times.sort()
         referenceTimes.sort()
+        func middle(_ values: [Double]) -> Double { values.sorted()[values.count / 2] }
         let median = times[times.count / 2]
         let worst = times[times.count - 1]
         let mean = times.reduce(0, +) / Double(times.count)
@@ -620,20 +697,44 @@ import Testing
         let kept = times.prefix(times.count - times.count / 20)
         let trimmedMean = kept.reduce(0, +) / Double(kept.count)
         let referenceMedian = referenceTimes[referenceTimes.count / 2]
-        let ratio = median / referenceMedian
+        let wallRatio = median / referenceMedian
+        let cost = middle(costs)
+        let referenceCost = middle(referenceCosts)
+        let ratio = cost / referenceCost
         func ms(_ value: Double) -> String { String(format: "%.2f", value) }
         print("BandRenderer 1179 x 1200 px on \(target.device.name): median \(ms(median)) ms, "
               + "mean of the fastest \(kept.count) \(ms(trimmedMean)) ms, mean \(ms(mean)) ms, "
               + "worst \(ms(worst)) ms over \(times.count) frames; reference median \(ms(referenceMedian)) ms, "
-              + "ratio \(ms(ratio))")
-        #expect(ratio < Self.speedRatioLimit, "the band's median against the reference draw's")
-        // A backstop for a renderer slow whatever the host is doing.
+              + "wall ratio \(ms(wallRatio)); cost median \(ms(cost)) ms (encoding \(ms(middle(encodings))) ms, "
+              + "GPU \(ms(middle(gpuTimes))) ms), reference cost median \(ms(referenceCost)) ms "
+              + "(encoding \(ms(middle(referenceEncodings))) ms, GPU \(ms(middle(referenceGpuTimes))) ms), ratio \(ms(ratio))")
+        // Where the device reports no GPU times, the costs are the encodings
+        // alone, and a slower GPU side would not move them: said where the
+        // results show it, not only in the log. Times for one draw and not
+        // the other would compare unlike costs.
+        let bandGpuTimed = gpuTimes.contains { $0 > 0 }
+        let referenceGpuTimed = referenceGpuTimes.contains { $0 > 0 }
+        if !bandGpuTimed && !referenceGpuTimed {
+            Issue.record("\(target.device.name) reported no GPU times: the ratio compares the encodings alone",
+                         severity: .warning)
+        }
+        #expect(bandGpuTimed == referenceGpuTimed, "GPU times for one draw and not the other")
+        #expect(ratio < Self.speedRatioLimit, "the band's cost against the reference draw's")
+        // A backstop by the wall clock, for a renderer slow whatever the host
+        // is doing and for one that waits inside its draw, which costs it no
+        // CPU time.
         #expect(median < Self.speedCeilingMs)
     }
 
-    /// Measured on an M5 Max on 2026-09-25: the renderer as built ran at
-    /// 1.06 to 1.41 times the reference (load averages 13 to 134), and one
-    /// doing three times its drawing work ran at 2.20 to 3.32.
+    /// Measured on an M5 Max on 2026-09-25, by the wall clock: the renderer
+    /// as built ran at 1.06 to 1.41 times the reference (load averages 13 to
+    /// 134), and one doing three times its drawing work ran at 2.20 to 3.32.
+    /// By cost, on the iPhone 17 simulator on the same Mac on 2026-10-15:
+    /// the renderer as built cost 1.40 to 1.66 times the reference, 1.44 to
+    /// 1.56 while another command queue kept the GPU busy, and 1.11 to 1.45
+    /// with waits added to both draws like those of a busy hosted runner;
+    /// one doing its drawing twice cost 2.59 to 2.78, and one drawing each
+    /// frame twice 2.75 to 2.92.
     static let speedRatioLimit = 1.8
     static let speedCeilingMs = 25.0
 }
@@ -641,9 +742,10 @@ import Testing
 /// A fixed reference draw for the speed test, shaped like a band frame:
 /// a fixed amount of vertex building on the CPU, copied into a buffer, then
 /// a full-target clear and one trivial pass over a target of the band's
-/// size, committed and waited for. The band's time is mostly the CPU's
-/// encoding plus the wait for the GPU, so the reference has both: a busy
-/// CPU or a shared GPU slows it as it slows the band.
+/// size, committed, as the band's draw is, for the test to wait for. The
+/// band's time is mostly the CPU's encoding plus the wait for the GPU, so
+/// the reference has both: a busy CPU or a shared GPU slows it as it slows
+/// the band.
 @MainActor
 final class ReferenceDraw {
     private let queue: any MTLCommandQueue
@@ -689,7 +791,8 @@ final class ReferenceDraw {
         self.pipeline = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
     }
 
-    func draw() throws {
+    /// Returns the committed command buffer, as the band's draw does.
+    func draw() throws -> any MTLCommandBuffer {
         vertices.removeAll(keepingCapacity: true)
         for index in 0..<Self.vertexCount {
             let x = Float(index) / Float(Self.vertexCount)
@@ -711,7 +814,7 @@ final class ReferenceDraw {
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
         commands.commit()
-        commands.waitUntilCompleted()
+        return commands
     }
 }
 

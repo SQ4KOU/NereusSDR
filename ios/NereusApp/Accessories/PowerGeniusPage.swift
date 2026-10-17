@@ -1,6 +1,7 @@
 // NereusSDR for iOS: the Power Genius XL's page: OPERATE, its readings, the band it follows, the TX interlock and its records
 // SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-NereusSDR-AppStore-permission
 
+import NereusModels
 import SwiftUI
 
 /// The Power Genius XL (spec section 5.4 item 2, picture 11): on the
@@ -40,12 +41,12 @@ struct PowerGeniusPage: View {
                         .accessibilityIdentifier("pgxlPowerCapAlert")
                 }
                 AccessoryChrome.Card {
-                    LinearGauge(scale: .ampPower, value: amp.forwardW)
-                    LinearGauge(scale: .ampSwr, value: amp.swr)
-                    LinearGauge(scale: .ampTemperature, value: amp.temperatureC)
+                    LinearGauge(scale: .ampPower, value: model.powerGeniusReadings.forwardW, readout: MeterReadout.power(model.powerGeniusReadings.forwardW))
+                    LinearGauge(scale: .reflectedPower, value: model.powerGeniusReadings.reflectedW, readout: MeterReadout.power(model.powerGeniusReadings.reflectedW))
+                    LinearGauge(scale: .ampSwr, value: model.powerGeniusReadings.swr, readout: MeterReadout.swr(model.powerGeniusReadings.swr))
+                    LinearGauge(scale: .ampTemperature, value: model.powerGeniusReadings.temperatureC, readout: MeterReadout.temperature(model.powerGeniusReadings.temperatureC))
                 }
                 AccessoryChrome.Card {
-                    AccessoryChrome.ValueRow(label: "Output", value: String(format: "%.0f W", amp.forwardW))
                     AccessoryChrome.ValueRow(label: "MEffA", value: amp.efficiency.isEmpty ? "-" : amp.efficiency)
                     AccessoryChrome.ValueRow(label: "Band",
                                              value: AccessoryStatusLine.ampBand(amp, bandLabel: model.bandLabel))

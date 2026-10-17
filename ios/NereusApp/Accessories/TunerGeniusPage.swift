@@ -1,6 +1,7 @@
 // NereusSDR for iOS: the Tuner Genius XL's page: OPERATE, TUNE, its relays, the three antennas and its tune memory
 // SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-NereusSDR-AppStore-permission
 
+import NereusModels
 import SwiftUI
 
 /// The Tuner Genius XL (spec section 5.4 item 3, picture 11): on the
@@ -35,8 +36,9 @@ struct TunerGeniusPage: View {
                     AccessoryChrome.Note(text: tuner.link.error)
                 }
                 AccessoryChrome.Card {
-                    LinearGauge(scale: .ampPower, value: tuner.forwardW)
-                    LinearGauge(scale: .ampSwr, value: tuner.swr)
+                    LinearGauge(scale: .ampPower, value: model.tunerGeniusReadings.forwardW, readout: MeterReadout.power(model.tunerGeniusReadings.forwardW))
+                    LinearGauge(scale: .reflectedPower, value: model.tunerGeniusReadings.reflectedW, readout: MeterReadout.power(model.tunerGeniusReadings.reflectedW))
+                    LinearGauge(scale: .ampSwr, value: model.tunerGeniusReadings.swr, readout: MeterReadout.swr(model.tunerGeniusReadings.swr))
                     ForEach(0..<3, id: \.self) { (relay: Int) in
                         relayRow(relay, value: tuner.relays[relay])
                     }

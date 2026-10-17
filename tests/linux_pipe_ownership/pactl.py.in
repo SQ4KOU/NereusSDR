@@ -1,0 +1,101 @@
+#!@Python3_EXECUTABLE@
+"""Private, deliberately small pactl boundary double. Never contacts audio."""
+import fcntl
+import json
+import os
+from pathlib import Path
+import shlex
+import stat
+import sys
+
+ROOT = Path("@FIXTURE_ROOT@").resolve(strict=True)
+
+
+def owned(path):
+    result = Path(path).resolve()
+    if result == ROOT or ROOT not in result.parents:
+        raise ValueError("refusing path outside private fixture root")
+    return result
+
+
+def main():
+    state_path = owned(os.environ["NEREUS_PIPE_FIXTURE_STATE"])
+    log_path = owned(os.environ["NEREUS_PIPE_FIXTURE_LOG"])
+    args = sys.argv[1:]
+    # The lock/state/log are all inside the compile-time private root. The
+    # double never runs subprocesses or consults a PulseAudio environment.
+    with owned(str(state_path) + ".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        state = json.loads(state_path.read_text())
+        with log_path.open("a") as log:
+            log.write(json.dumps({"argv": args, "pid": os.getpid()}) + "\n")
+        modules = state["modules"]
+        if args == ["list", "modules", "short"]:
+            if state.get("list_failure"):
+                return 1
+            for module in modules:
+                print(f'{module["index"]}\t{module["name"]}\t'
+                      + " ".join(module["arguments"]) + "\t0")
+            return 0
+        if args and args[0] == "load-module":
+            if len(args) < 3 or args[1] not in ("module-pipe-source", "module-pipe-sink"):
+                raise ValueError("unsupported module load")
+            files = [shlex.split(item)[0][5:] for item in args[2:] if item.startswith("file=")]
+            if len(files) != 1:
+                raise ValueError("load requires one owned FIFO")
+            fifo = owned(files[0])
+            # Native module-pipe-{source,sink} creates its FIFO when absent.
+            if not fifo.exists():
+                os.mkfifo(fifo, 0o600)
+            if not stat.S_ISFIFO(fifo.lstat().st_mode):
+                raise ValueError("module file is not a FIFO")
+            mode = state.get("load_result", "normal")
+            if mode == "failure":
+                return 1
+            if mode == "empty-no-module":
+                # The request may still be pending at the server. Its eventual
+                # module is supplied later by the behavioral test.
+                return 0
+            if mode == "timeout-no-module":
+                # Block in a real private FIFO open with no writer. This
+                # launches no helper, sleeps for no fixed interval and cannot
+                # create a module. QProcess owns and terminates this child.
+                blocker = owned(str(state_path.parent / "load-timeout.blocker"))
+                os.mkfifo(blocker, 0o600)
+                with log_path.open("a") as log:
+                    log.write(json.dumps({"event": "load-blocked", "pid": os.getpid(),
+                                          "blocker": str(blocker)}) + "\n")
+                fcntl.flock(lock, fcntl.LOCK_UN)
+                os.open(blocker, os.O_RDONLY)
+                raise ValueError("private timeout blocker unexpectedly acquired a writer")
+            index = state.get("next_index", 101)
+            if any(item["index"] == index for item in modules):
+                raise ValueError("fixture index collision")
+            modules.append({"index": index, "name": args[1], "arguments": args[2:], "file": str(fifo)})
+            state["next_index"] = index + 1
+            if state.get("replace_fifo_on_load"):
+                fifo.unlink()
+                fifo.write_text("replacement owned by another generation")
+            state_path.write_text(json.dumps(state))
+            if mode == "normal":
+                print(index)
+            elif mode == "malformed":
+                print("not-a-module-index")
+            elif mode != "empty":
+                raise ValueError("unknown load_result")
+            return 0
+        if len(args) == 2 and args[0] == "unload-module":
+            index = int(args[1])
+            if state.get("unload_failure"):
+                return 1
+            state["modules"] = [item for item in modules if item["index"] != index]
+            state_path.write_text(json.dumps(state))
+            return 0
+        raise ValueError("unsupported pactl command")
+
+
+try:
+    sys.exit(main())
+except (OSError, ValueError, KeyError) as error:
+    print(f"private pactl fixture rejected command: {error}", file=sys.stderr)
+    sys.exit(90)

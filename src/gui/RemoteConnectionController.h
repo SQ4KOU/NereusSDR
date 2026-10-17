@@ -2,6 +2,7 @@
 // no-port-check: NereusSDR-original. R3 Core session presentation and actions.
 #include "core/ConnectionState.h"
 #include "core/session/RemoteStationOptions.h"
+#include "gui/NereusGuiExport.h"
 #include <QFrame>
 #include <QObject>
 #include <QPointer>
@@ -43,7 +44,7 @@ enum class CoreStopNotice {
 
 // Uses session state, never radio connectivity, to decide whether an
 // operator can connect or cancel. The same controller backs all surfaces.
-class RemoteConnectionController final : public QObject {
+class NEREUS_GUI_EXPORT RemoteConnectionController final : public QObject {
     Q_OBJECT
 public:
     RemoteConnectionController(StationClient* client, RadioModel* model,

@@ -25,6 +25,9 @@ public protocol SetupPhoneKeys: AnyObject {
     /// id of `openSetupPage`, or the text of a copy button. False when the
     /// phone cannot.
     func perform(_ action: String, argument: String?) -> Bool
+    /// Runs an admitted local action using its frozen description-row version.
+    /// Only actions whose existing meaning changed need override this seam.
+    func perform(_ action: String, argument: String?, descriptionVersion: Int) -> Bool
     /// The desktop's name of the band a per-band row edits now, or nil
     /// before the Core names one.
     var perBandName: String? { get }
@@ -43,6 +46,9 @@ public extension SetupPhoneKeys {
     func canPerform(_ action: String) -> Bool { false }
     func perform(_ action: String) -> Bool { false }
     func perform(_ action: String, argument: String?) -> Bool { perform(action) }
+    func perform(_ action: String, argument: String?, descriptionVersion: Int) -> Bool {
+        perform(action, argument: argument)
+    }
     var perBandName: String? { nil }
     var screenRefreshRate: Int? { nil }
     func unavailableOptions(forPhoneKey key: String) -> [Int64: String] { [:] }

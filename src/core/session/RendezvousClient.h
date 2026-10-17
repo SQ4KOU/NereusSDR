@@ -61,6 +61,7 @@
 //               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
+#include "core/NereusCoreExport.h"
 #include "core/session/RendezvousWire.h"
 
 #include <QByteArray>
@@ -97,7 +98,7 @@ struct RendezvousIntroduction {
     QString offer;
 };
 
-class RendezvousClient : public QObject {
+class NEREUS_CORE_EXPORT RendezvousClient : public QObject {
     Q_OBJECT
 
 public:

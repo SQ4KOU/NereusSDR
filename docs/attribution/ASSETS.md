@@ -85,7 +85,9 @@ branding.
 
 GLSL shaders for Qt6 QRhi-based spectrum, waterfall, meter, and 3DSS
 rendering. Most are original NereusSDR work; `waterfall.frag` inherits
-its ring-buffer UV-offset sampling pattern from AetherSDR
+its ring-buffer UV-offset sampling pattern, and since 2026-10-11 its
+four-row cubic B-spline row reconstruction with each tap clamped to the
+rows held (`texturedquad.frag` at `a9a83e66`), from AetherSDR
 (ten9876/AetherSDR, GPLv3) and is annotated as such in its file header
 per `docs/attribution/HOW-TO-PORT.md` rule 6 (project-level citation —
 AetherSDR has no per-file shader headers to copy verbatim). `dss_mesh.vert`
@@ -103,7 +105,7 @@ ported from Thetis (which uses GDI+/WinForms rendering).
 | `overlay.vert` | Vertex shader for the overlay layer | GPL-2.0-or-later |
 | `spectrum.frag` | Fragment shader for the spectrum trace (filled gradient trace + peak hold) | GPL-2.0-or-later |
 | `spectrum.vert` | Vertex shader for spectrum trace geometry | GPL-2.0-or-later |
-| `waterfall.frag` | Fragment shader for the waterfall display (color-maps dBm to palette); UV-fract sampling pattern derived from AetherSDR `texturedquad.frag` (GPLv3) | GPL-2.0-or-later (NereusSDR contributions) + GPLv3 (AetherSDR-derived line) |
+| `waterfall.frag` | Fragment shader for the waterfall display (color-maps dBm to palette); UV-fract sampling pattern, four-row cubic B-spline row reconstruction and tap clamp derived from AetherSDR `texturedquad.frag` (GPLv3) | GPL-2.0-or-later (NereusSDR contributions) + GPLv3 (AetherSDR-derived lines) |
 | `waterfall.vert` | Vertex shader for waterfall geometry | GPL-2.0-or-later |
 | `meter_geometry.frag` | Fragment shader for MeterWidget vector-geometry pipeline (bar meters, needle arcs) | GPL-2.0-or-later |
 | `meter_geometry.vert` | Vertex shader for meter geometry pipeline | GPL-2.0-or-later |

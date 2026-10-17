@@ -6,6 +6,19 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-09 - Core speaker: RadioModel coreSpeakerVolume,
+//                 coreSpeakerMuted, coreSpeakerDevice and coreSpeakerDetails
+//                 Bidirectional, coreSpeakerDevices and coreSpeakerState
+//                 Outbound, all six gated on coreSpeaker (coreSpeakerVersion
+//                 1) (native audio plan Task 21, R-AUD-25, R-AUD-28). J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-06 - Radio speaker: RadioModel radioSpeakerVolume,
+//                 radioSpeakerMuted and speakerAmplifierMode
+//                 Bidirectional, radioSpeakerAvailability and
+//                 speakerAmplifierAvailable Outbound, all five gated on
+//                 radioSpeaker (radioSpeakerVersion 1) (R-SPK-13,
+//                 R-SPK-14). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-09-30 - RADE reason: SliceModel radeReason Outbound, gated on
 //                 radeReason (radeReasonVersion 1). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
@@ -205,6 +218,16 @@
 //   2026-09-28 - Slice control plan Task 4: SliceAccess, sliceId and
 //                 incarnation ConstantSnapshot, the rest Outbound. J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-07 - CAT setup from a connected desktop: StationCatModel, every
+//                 property Outbound. J.J. Boyd (KG4VCF). AI tooling: Claude
+//                 Code.
+//   2026-10-08 - Rotor control plan Task 4b: RotorModel, all Outbound.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - TransmitState's six peak readings (micPeakDb .. cfcPeakDb)
+//                 Outbound (txReadingsVersion 4). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-10-12 - SliceAccess receiverHolderDeviceId Outbound. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -828,6 +851,15 @@ const MirrorPolicy::Entry kEntries[] = {
     { "StationTciModel", "forgetRx2VfoBOnDisconnect", MirrorDirection::Outbound },
     { "StationTciModel", "useRx1VfoaForRx2Vfoa", MirrorDirection::Outbound },
     { "StationTciModel", "copyRx2VfobToVfoa", MirrorDirection::Outbound },
+    // CAT setup from a connected desktop (stationCatVersion 1): the Core's
+    // CAT, read-only; changed only through its four commands.
+    { "StationCatModel", "global", MirrorDirection::Outbound },
+    { "StationCatModel", "channel1", MirrorDirection::Outbound },
+    { "StationCatModel", "channel2", MirrorDirection::Outbound },
+    { "StationCatModel", "channel3", MirrorDirection::Outbound },
+    { "StationCatModel", "channel4", MirrorDirection::Outbound },
+    { "StationCatModel", "platform", MirrorDirection::Outbound },
+    { "StationCatModel", "lastTest", MirrorDirection::Outbound },
 
     // iPhone app plan Task 25 (vaxVersion 1): the station computer's VAX.
     // The slices, device names and transmit slice are the Core's; the
@@ -948,6 +980,36 @@ const MirrorPolicy::Entry kEntries[] = {
     { "AccessorySettingsModel", "tgxlAnswerAccepted", MirrorDirection::Outbound },
     { "AccessorySettingsModel", "tgxlAnswerCount", MirrorDirection::Outbound },
 
+    // Rotor control plan Task 4b (remoteRotorControlVersion 1): the Core's
+    // antenna rotor, read-only. A window turns, sets up and stops it only
+    // through the rotor commands.
+    { "RotorModel", "connectionPhase", MirrorDirection::Outbound },
+    { "RotorModel", "connectionError", MirrorDirection::Outbound },
+    { "RotorModel", "driver", MirrorDirection::Outbound },
+    { "RotorModel", "label", MirrorDirection::Outbound },
+    { "RotorModel", "serialPort", MirrorDirection::Outbound },
+    { "RotorModel", "baud", MirrorDirection::Outbound },
+    { "RotorModel", "host", MirrorDirection::Outbound },
+    { "RotorModel", "port", MirrorDirection::Outbound },
+    { "RotorModel", "serialPorts", MirrorDirection::Outbound },
+    { "RotorModel", "axes", MirrorDirection::Outbound },
+    { "RotorModel", "rangeDeg", MirrorDirection::Outbound },
+    { "RotorModel", "endStop", MirrorDirection::Outbound },
+    { "RotorModel", "spanPositionDeg", MirrorDirection::Outbound },
+    { "RotorModel", "travelDeg", MirrorDirection::Outbound },
+    { "RotorModel", "routeKnown", MirrorDirection::Outbound },
+    { "RotorModel", "offsetDeg", MirrorDirection::Outbound },
+    { "RotorModel", "hamlibModel", MirrorDirection::Outbound },
+    { "RotorModel", "rotctldAvailable", MirrorDirection::Outbound },
+    { "RotorModel", "positionFresh", MirrorDirection::Outbound },
+    { "RotorModel", "azimuthDeg", MirrorDirection::Outbound },
+    { "RotorModel", "elevationDeg", MirrorDirection::Outbound },
+    { "RotorModel", "targetAzimuthDeg", MirrorDirection::Outbound },
+    { "RotorModel", "targetElevationDeg", MirrorDirection::Outbound },
+    { "RotorModel", "motion", MirrorDirection::Outbound },
+    { "RotorModel", "presets", MirrorDirection::Outbound },
+    { "RotorModel", "fault", MirrorDirection::Outbound },
+
     // iPhone app Task 13 (R-IOS-08, deviceAdminVersion 1): the Core's paired
     // devices, label, claim, token and key backup, read-only. A device
     // changes them only through devices.revoke, station.rename,
@@ -1035,6 +1097,9 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceAccess", "activeRxDeviceIds", MirrorDirection::Outbound },
     { "SliceAccess", "txSelected", MirrorDirection::Outbound },
     { "SliceAccess", "onAir", MirrorDirection::Outbound },
+    // Ruling 6.3: who holds the receiver the slice is on, whose its C-Tune
+    // setting is. A peer that does not know the name ignores it.
+    { "SliceAccess", "receiverHolderDeviceId", MirrorDirection::Outbound },
 
     // iPhone app plan Task 39 (D14, R-IOS-13, txStateVersion 1): the Core's
     // transmitter, read-only. It changes only as the radio keys, unkeys and
@@ -1092,6 +1157,13 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TransmitState", "cfcGainDb", MirrorDirection::Outbound },
     { "TransmitState", "alcGainDb", MirrorDirection::Outbound },
     { "TransmitState", "alcGroupDb", MirrorDirection::Outbound },
+    // txReadingsVersion 4: the container meter bars' peak readings.
+    { "TransmitState", "micPeakDb", MirrorDirection::Outbound },
+    { "TransmitState", "alcPeakDb", MirrorDirection::Outbound },
+    { "TransmitState", "compressionPeakDb", MirrorDirection::Outbound },
+    { "TransmitState", "eqPeakDb", MirrorDirection::Outbound },
+    { "TransmitState", "levelerPeakDb", MirrorDirection::Outbound },
+    { "TransmitState", "cfcPeakDb", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },
@@ -1105,7 +1177,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (35 entries) ----
+    // ---- RadioModel (49 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },
@@ -1182,6 +1254,28 @@ const MirrorPolicy::Entry kEntries[] = {
     { "RadioModel", "rxFilter0LowPassReason", MirrorDirection::Outbound },
     { "RadioModel", "rxFilter0LowPassSlice", MirrorDirection::Outbound },
     { "RadioModel", "diversityState", MirrorDirection::Outbound },
+    // Radio speaker (R-SPK-13, radioSpeakerVersion 1): the RADIO level, its
+    // mute and the speaker amplifier choice are the first writable
+    // RadioModel properties, so a remote window or the phone changes the
+    // Core's value and every other window follows; the two reports are
+    // Core to window only. All five only to a peer that declared
+    // radioSpeaker (StationServer::fitPeerOnlyProperties).
+    { "RadioModel", "radioSpeakerVolume", MirrorDirection::Bidirectional },
+    { "RadioModel", "radioSpeakerMuted", MirrorDirection::Bidirectional },
+    { "RadioModel", "speakerAmplifierMode", MirrorDirection::Bidirectional },
+    { "RadioModel", "radioSpeakerAvailability", MirrorDirection::Outbound },
+    { "RadioModel", "speakerAmplifierAvailable", MirrorDirection::Outbound },
+    // Core speaker (native audio plan Task 21, coreSpeakerVersion 1): the
+    // Core's own sound card output. A window sets the level, mute, device
+    // and the settable details, which the Core applies and saves; the
+    // card list and the state are Core to window only. All six only to a
+    // peer that declared coreSpeaker (StationServer::fitPeerOnlyProperties).
+    { "RadioModel", "coreSpeakerVolume", MirrorDirection::Bidirectional },
+    { "RadioModel", "coreSpeakerMuted", MirrorDirection::Bidirectional },
+    { "RadioModel", "coreSpeakerDevice", MirrorDirection::Bidirectional },
+    { "RadioModel", "coreSpeakerDevices", MirrorDirection::Outbound },
+    { "RadioModel", "coreSpeakerState", MirrorDirection::Outbound },
+    { "RadioModel", "coreSpeakerDetails", MirrorDirection::Bidirectional },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },
@@ -1294,6 +1388,23 @@ const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
         // declared rxFilterLowPass 1.
         {"RadioModel", "rxFilter0LowPassReason", "rxFilterLowPass", 1},
         {"RadioModel", "rxFilter0LowPassSlice", "rxFilterLowPass", 1},
+        // Radio speaker (R-SPK-14, radioSpeakerVersion 1): the RADIO level,
+        // mute, amplifier choice and the two reports, to a peer that
+        // declared radioSpeaker 1 (StationServer::fitPeerOnlyProperties).
+        {"RadioModel", "radioSpeakerVolume", "radioSpeaker", 1},
+        {"RadioModel", "radioSpeakerMuted", "radioSpeaker", 1},
+        {"RadioModel", "speakerAmplifierMode", "radioSpeaker", 1},
+        {"RadioModel", "radioSpeakerAvailability", "radioSpeaker", 1},
+        {"RadioModel", "speakerAmplifierAvailable", "radioSpeaker", 1},
+        // Core speaker (native audio plan Task 21, coreSpeakerVersion 1):
+        // the six, to a peer that declared coreSpeaker 1
+        // (StationServer::fitPeerOnlyProperties).
+        {"RadioModel", "coreSpeakerVolume", "coreSpeaker", 1},
+        {"RadioModel", "coreSpeakerMuted", "coreSpeaker", 1},
+        {"RadioModel", "coreSpeakerDevice", "coreSpeaker", 1},
+        {"RadioModel", "coreSpeakerDevices", "coreSpeaker", 1},
+        {"RadioModel", "coreSpeakerState", "coreSpeaker", 1},
+        {"RadioModel", "coreSpeakerDetails", "coreSpeaker", 1},
     };
     return gates;
 }

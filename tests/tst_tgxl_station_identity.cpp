@@ -1,5 +1,8 @@
 // no-port-check: NereusSDR-original. R-R3-22/25 Core accessory admission.
 // Loopback TCP peers and captured discovery/info grammar; no RF or hardware.
+// 2026-10-11: a desktop window that runs its own radio shares its Tuner
+// Genius at the typed address, for its own Connect and a client's. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 // 2026-09-24: R-R3-47 / R-R3-22: a window's requests for the tuner's own
 // settings reach the (fake) tuner as the local page's own commands. J.J.
 // Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -236,6 +239,63 @@ private slots:
         QVERIFY(!model.tunerModel()->isPresent());
         QVERIFY(!model.tunerModel()->hasDirectConnection());
         QCOMPARE(model.tunerModel()->antennaA(), 0);
+    }
+
+    // 2026-10-11: a desktop window running its own radio shares its Tuner
+    // Genius. Its link is dialed and used as that window always used it:
+    // what answers at the typed address is the tuner, with no announcement
+    // waited for. The window's own Connect and a client's work the one
+    // connection, through the one controller.
+    void desktopSharesTheTunerGeniusAtTheTypedAddress()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+        RadioModel model;
+        model.enableStationAccessoryIdentity(StationAccessoryAdmission::TypedAddress);
+        RadioInfo radio;
+        radio.macAddress = QStringLiteral("aa:bb:cc:dd:ee:45");
+        model.setLastRadioInfoForTest(radio);
+        model.setConnectionStateForTest(ConnectionState::Connected);
+        model.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
+        QVERIFY(model.stationAccessoryIdentityEnabled());
+        QVERIFY(!model.tgxlConnection()->identityAdmissionRequired());
+        auto* tuner = model.tunerModel();
+        const auto answer = [&]() -> QTcpSocket* {
+            if (!QTest::qWaitFor([&] { return server.hasPendingConnections(); }, 2000)) {
+                return nullptr;
+            }
+            QTcpSocket* peer = server.nextPendingConnection();
+            peer->write("V1.2.17\n");
+            peer->flush();
+            return peer;
+        };
+
+        // The window's own Connect.
+        model.connectTgxlFromWindow(QStringLiteral("127.0.0.1"), server.serverPort());
+        QCOMPARE(tuner->connectionPhase(), TunerModel::ConnectionPhase::Connecting);
+        QVERIFY(answer());
+        QTRY_VERIFY(model.tgxlConnection()->isConnected());
+        QCOMPARE(tuner->connectionPhase(), TunerModel::ConnectionPhase::Connected);
+        QVERIFY(tuner->hasDirectConnection());
+        QCOMPARE(tuner->tgxlIp(), QStringLiteral("127.0.0.1"));
+        QVERIFY(identityDiscovery(model) == nullptr);
+
+        // A client's Disconnect and Connect reach the same connection.
+        QString reason;
+        QVERIFY(model.disconnectTgxlForStation(&reason));
+        QVERIFY(!model.tgxlConnection()->isConnected());
+        QCOMPARE(tuner->connectionPhase(), TunerModel::ConnectionPhase::Disconnected);
+        QVERIFY2(model.configureTgxlForStation(QStringLiteral("127.0.0.1"), server.serverPort(),
+                                               &reason), qPrintable(reason));
+        QVERIFY(answer());
+        QTRY_VERIFY(model.tgxlConnection()->isConnected());
+        QCOMPARE(tuner->connectionPhase(), TunerModel::ConnectionPhase::Connected);
+        QVERIFY(identityDiscovery(model) == nullptr);
+
+        // And the window's Disconnect ends it for the client too.
+        model.disconnectTgxlFromWindow();
+        QVERIFY(!model.tgxlConnection()->isConnected());
+        QCOMPARE(tuner->connectionPhase(), TunerModel::ConnectionPhase::Disconnected);
     }
 
     void rejectsWrongIdentity_data()

@@ -6,6 +6,8 @@
 // notes and design reference.
 //
 // Modification history (NereusSDR):
+//   2026-10-14 Preserve saved TX intent until roster restoration completes.
+//              J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-25 iPhone app plan Task 34 (R-IOS-03): the handoff while keyed
 //              waits for the unkey gate. J.J. Boyd (KG4VCF), AI-assisted via
 //              Anthropic Claude Code.
@@ -178,9 +180,8 @@ void TxSliceArbiter::syncToSliceList()
     if (m_remote) { return; }
 
     if (!m_slices || m_slices->isEmpty()) {
-        // No slices, so no binding to hold. The restored ID is left alone: it
-        // may be carrying a value load() restored, and the first slice to
-        // arrive should honour it.
+        // No slices, so no binding to hold. Pending restore intent stays
+        // separate from the live cache until roster admission completes.
         return;
     }
 
@@ -326,6 +327,8 @@ bool TxSliceArbiter::requestHandoffFrom(int sliceId, const QByteArray& requester
         return false;
     }
 
+    // An accepted live choice supersedes startup intent, including an A no-op.
+    cancelRestore();
     if (target->isTxSlice()) {
         m_txBoundSliceId = sliceId;
         setPending(-1, QByteArray());   // a waiting move to elsewhere is dropped
@@ -399,6 +402,7 @@ void TxSliceArbiter::releaseBinding()
     if (m_remote) {
         return;
     }
+    cancelRestore();
     setPending(-1, QByteArray());
     if (!self) { return; }
     const int old = m_txBoundSliceId;
@@ -495,9 +499,36 @@ void TxSliceArbiter::flipTo(SliceModel* target)
     emit txBoundSliceChanged(oldId, sliceId);
 }
 
+void TxSliceArbiter::cancelRestore()
+{
+    m_restoredSliceId = -1;
+    ++m_restoreRevision;
+}
+
+void TxSliceArbiter::finishRestore()
+{
+    if (m_remote || m_restoredSliceId < 0) { return; }
+    const QPointer<TxSliceArbiter> self(this);
+    const int restoredId = m_restoredSliceId;
+    // Consume before callbacks: an accepted choice, reload or scope change
+    // during the ownership lookup must win, even an already-bound A no-op.
+    m_restoredSliceId = -1;
+    const quint64 revision = m_restoreRevision;
+    const bool eligible = sliceWithId(restoredId)
+        && pendingMayLand(restoredId, QByteArray());
+    if (!self || m_restoreRevision != revision) { return; }
+    if (eligible && sliceWithId(restoredId)) {
+        requestHandoff(restoredId);
+        return;
+    }
+    // The completed roster cannot supply the saved target. Retain the live
+    // flag (or repair the normal initial fallback), without future replay.
+    syncToSliceList();
+}
+
 void TxSliceArbiter::save()
 {
-    if (m_mac.isEmpty()) { return; }
+    if (m_mac.isEmpty() || m_restoredSliceId >= 0) { return; }
     auto& s = AppSettings::instance();
     const QString key = QStringLiteral("hardware/%1/TxBoundSliceId").arg(m_mac);
     s.setValue(key, m_txBoundSliceId);
@@ -505,7 +536,8 @@ void TxSliceArbiter::save()
 
 void TxSliceArbiter::load()
 {
-    if (m_mac.isEmpty()) { return; }
+    if (m_remote || m_mac.isEmpty()) { return; }
+    cancelRestore();
     auto& s = AppSettings::instance();
     const QString idKey = QStringLiteral("hardware/%1/TxBoundSliceId").arg(m_mac);
     const QString legacyKey =
@@ -537,7 +569,9 @@ void TxSliceArbiter::load()
         if (liveId) {
             requestHandoff(restoredId);
         } else {
-            m_txBoundSliceId = restoredId;
+            // The legacy desktop's remaining slices arrive in a queued batch.
+            // Keep intent separate: sync must still describe the live TX flag.
+            m_restoredSliceId = restoredId;
         }
     }
     syncToSliceList();

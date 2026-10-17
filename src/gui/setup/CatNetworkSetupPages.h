@@ -1,7 +1,13 @@
 #pragma once
+#include "core/cat/CatConfiguration.h"
+#include "core/cat/CatControl.h"
+#include <functional>
+#include <vector>
+class QFormLayout;
 
 #include "gui/SetupPage.h"
 #include "gui/setup/RemoteStationPage.h"
+#include "gui/NereusGuiExport.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -19,32 +25,52 @@
 #include <QWidget>
 
 namespace NereusSDR { class TciServer; }
-namespace NereusSDR { class RadioModel; }
+namespace NereusSDR { class RadioModel; class CatControl; }
 
 namespace NereusSDR {
 
 // ---------------------------------------------------------------------------
 // CAT > Serial Ports
 // Four identical port sections, each with: port combo, baud combo,
-// enable toggle, and status label. All controls are NYI / disabled.
+// enabled state, exact format, stable bindings and actual transport status.
 // ---------------------------------------------------------------------------
-class CatSerialPortsPage : public SetupPage {
-    Q_OBJECT
-
+// Native controls call the single service configuration writer and block model echoes.
+class CatChannelSetupPage : public SetupPage {
 public:
-    explicit CatSerialPortsPage(QWidget* parent = nullptr);
-
+    void syncFromModel() override;
+protected:
+    CatChannelSetupPage(RadioModel*, bool serial, QWidget*);
+    bool eventFilter(QObject*, QEvent*) override;
+    void showEvent(QShowEvent*) override;
 private:
-    struct PortRow {
-        QComboBox*  portCombo{nullptr};
-        QComboBox*  baudCombo{nullptr};
-        QCheckBox*  enableCheck{nullptr};
-        QLabel*     statusLabel{nullptr};
+    struct Row {
+        QCheckBox* enabled{}; QComboBox* device{}; QComboBox* baud{};
+        QComboBox* parity{}; QComboBox* bits{}; QComboBox* stops{};
+        QComboBox* primary{}; QComboBox* secondary{};
+        QLineEdit* address{}; QSpinBox* port{}; QCheckBox* pty{};
+        QLabel* status{}; QLabel* path{};
+        QCheckBox* rigctld{}; QLineEdit* rigAddress{}; QSpinBox* rigPort{};
+        QComboBox* dialect{}; QLabel* rigStatus{};
     };
-
-    PortRow m_ports[4];
-
-    void buildUI();
+    Row m_rows[4];
+    QGroupBox* m_groups[4]{};
+    QPointer<CatControl> m_control;
+    QLabel* m_unavailable{};
+    bool m_serial{false}; bool m_syncing{false};
+    /// `rebind`: the slice bindings the operator just picked.
+    void apply(int, CatRebind rebind = {});
+    /// What the computer running CAT offers; a device path typed and not
+    /// finished stays (`keepTyped`).
+    void syncPlatform(bool keepTyped);
+    /// A serial row's Enable tick waits for a device: unticked with a blank
+    /// Device box it cannot be ticked, and its tooltip says why. A ticked
+    /// box can always be unticked.
+    void syncEnableWaits(int row);
+};
+class CatSerialPortsPage : public CatChannelSetupPage {
+    Q_OBJECT
+public:
+    explicit CatSerialPortsPage(RadioModel* model = nullptr, QWidget* parent = nullptr);
 };
 
 // ---------------------------------------------------------------------------
@@ -204,19 +230,60 @@ private:
 // Enable toggle, bind IP, port spinner, status label.
 // All controls are NYI / disabled.
 // ---------------------------------------------------------------------------
-class CatTcpIpPage : public SetupPage {
+class CatTcpIpPage : public CatChannelSetupPage {
     Q_OBJECT
-
 public:
-    explicit CatTcpIpPage(QWidget* parent = nullptr);
-
-private:
-    QCheckBox* m_enableCheck{nullptr};
-    QLineEdit* m_bindIpEdit{nullptr};
-    QSpinBox*  m_portSpin{nullptr};
-    QLabel*    m_statusLabel{nullptr};
-
-    void buildUI();
+    explicit CatTcpIpPage(RadioModel* model = nullptr, QWidget* parent = nullptr);
+};
+class CatGlobalSetupPage : public SetupPage {
+public:
+    void syncFromModel() override;
+protected:
+    CatGlobalSetupPage(const QString&, RadioModel*, QWidget*);
+    bool eventFilter(QObject*, QEvent*) override;
+    QCheckBox* addCheck(QFormLayout*, const QString&, const QString&, bool CatGlobalConfig::*);
+    QComboBox* addChoice(QFormLayout*, const QString&, const QString&, const QStringList&, QString CatGlobalConfig::*);
+    QLineEdit* addText(QFormLayout*, const QString&, const QString&, QString CatGlobalConfig::*);
+    QSpinBox* addNumber(QFormLayout*, const QString&, const QString&, int, int, int CatGlobalConfig::*);
+    QPointer<CatControl> m_control;
+    QLabel* m_status{};
+    QLabel* m_unavailable{};
+    QLabel* m_refused{};
+    QLabel* m_noSerialNote{};
+    QGroupBox* m_serialGroup{};
+    QComboBox* m_parity{};
+    QComboBox* m_stops{};
+    /// Input PTT's Enable tick and the four controls it waits for.
+    QCheckBox* m_pttEnabled{};
+    QComboBox* m_pttSource{};
+    QCheckBox* m_pttCts{};
+    QCheckBox* m_pttDsr{};
+    QLineEdit* m_pttDevice{};
+    std::vector<QWidget*> m_controls;
+    std::vector<std::function<void(const CatGlobalConfig&)>> m_updates;
+    void applyConfiguration(const CatGlobalConfig&);
+    /// What the computer running CAT offers, and the PTT state: each
+    /// leaves the other controls (and text typed in them) alone.
+    void syncPlatform();
+    void syncPtt();
+    /// Input PTT's Enable tick waits for a source, a CTS or DSR input and,
+    /// for a physical source, a device: unticked without them it cannot be
+    /// ticked, and its tooltip names the first one missing. A ticked box can
+    /// always be unticked.
+    void syncPttEnableWaits();
+    bool m_syncing{false};
+};
+class NEREUS_GUI_EXPORT CatOptionsSetupPage : public CatGlobalSetupPage {
+    Q_OBJECT
+public:
+    explicit CatOptionsSetupPage(RadioModel*, QWidget* parent = nullptr);
+signals:
+    void showLogRequested();
+};
+class CatPttSetupPage : public CatGlobalSetupPage {
+    Q_OBJECT
+public:
+    explicit CatPttSetupPage(RadioModel*, QWidget* parent = nullptr);
 };
 
 // ---------------------------------------------------------------------------

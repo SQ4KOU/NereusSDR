@@ -65,6 +65,9 @@ void Rf2ksAppletLayoutTest::gaugesUpdateFromPowerSnapshot() {
     QCOMPARE(a.fwdGaugeValueForTesting(),  850);
     QCOMPARE(a.swrGaugeValueForTesting(),  1.4f);
     QCOMPARE(a.tempGaugeValueForTesting(), 38.0f);
+    QVERIFY(a.fwdHasValueForTesting());
+    QVERIFY(a.swrHasValueForTesting());
+    QVERIFY(a.tempHasValueForTesting());
     QVERIFY(a.telemetryStripTextForTesting().contains("48 V"));
     QVERIFY(a.telemetryStripTextForTesting().contains("18.2 A"));
 }

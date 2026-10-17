@@ -131,6 +131,14 @@
 //   2026-10-01 - VFO flag crash lane fix round: createSliceFlag's comment
 //                covers Slice A's flag. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-10-11 - J.J. Boyd (KG4VCF). A pan shows the stream of its own
+//                slice: streamShownOnPan, panShowsStream, sliceIsOffPanStream,
+//                showOwnStreamOnPan, panIdOfSpectrum, m_panShownStream.
+//                AI-assisted via Anthropic Claude Code.
+//   2026-10-15 - J.J. Boyd (KG4VCF). A remote window's rigctld:
+//                m_remoteRigctl, refreshRigctlRemoteTransmit,
+//                applyRemoteRigctldSettings. AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -203,6 +211,7 @@
 // QObject parent to own it through, unlike the pointer members this header
 // otherwise forward-declares), so the complete type is needed here rather
 // than just in MainWindow.cpp.
+#include "core/ControlRanges.h"
 #include "core/spectrum/FftTopology.h"
 // Remote-daemon R2 Task 20: by value in the constructor overload and in
 // m_station below, so it cannot be forward-declared.
@@ -212,6 +221,7 @@
 #include "gui/ReceiverStopNotices.h"
 #include "gui/RemoteReceiverAudioNote.h"
 #include "gui/DesktopStationController.h"
+#include "gui/NereusGuiExport.h"
 
 class QProgressDialog;
 class QSplitter;
@@ -248,10 +258,17 @@ class PanadapterStack;
 class ClarityController;
 class PanClarityRegistry;
 class ContainerManager;
+class EdgeDockArea;
+class ProfileRail;
+class ProfileRailDock;
+class WorkspaceProfiles;
 class MeterWidget;
 class MeterPoller;
 class TitleBar;
 class VaxFirstRunDialog;
+enum class FirstRunScenario;
+struct DetectedCable;
+class AudioEngine;
 class PsForm;
 class DiversityDialog;
 // Remote-daemon R2 Task 20 fix round 2: createSetupDialog() returns this,
@@ -265,6 +282,7 @@ struct CoreSettingsContext;
 class RemoteMediaController;
 // Phase 3J-2 H1: Tools menu modeless singletons.
 class SpotHubDialog;
+class SpotBeamTurner;
 class FreeDVReporterDialog;
 
 class RxDashboard;
@@ -291,7 +309,7 @@ class ClientChainApplet;
 // Phase 3J-1 closeout Item 2 (2026-05-12): TciLogWindow viewer.
 class TciLogWindow;
 
-class MainWindow : public QMainWindow {
+class NEREUS_GUI_EXPORT MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
@@ -347,6 +365,62 @@ public:
     void setDesktopStationController(DesktopStationController* controller);
     void refreshDesktopStationState();
     FftEnginePool* fftEnginePoolForTest() const { return m_fftEnginePool; }
+    // Display pill plan Task 9: the window's per-band pan models.
+    PanModels* panModels() const { return m_panModels; }
+
+    /// Display pill plan Task 7 (R-DSP-30): sizes stream `streamIndex`'s
+    /// FFT engine for the pans that show it. Each pan plans
+    /// ControlRanges::planAutoZoomFft from the engine's baseline and Hz/bin
+    /// target and its own widget's sample rate and span; the engine gets
+    /// the largest of those plans, unless that is within [0.66, 1.5] of the
+    /// size it runs. Every pan's zoom calls it (ensureOverlayPanels). Does
+    /// nothing for a stream with no engine or no pan.
+    void replanFftForStream(int streamIndex);
+
+    /// The FFT Size control's choice: saves DisplayFftSize. In the Fixed
+    /// sizing mode every stream then runs exactly `size` (now and for
+    /// engines made later); in Auto and Hz/bin the stored size plays no part
+    /// and nothing that runs changes (design D38). A size that is not one of
+    /// the control's seven (4096 to 262144) changes nothing.
+    void applyFftBaseline(int size);
+
+    /// The Sizing control's choice, for every stream and every pan (design
+    /// D38, D39): saves DisplayFftSizingMode (and DisplayHzPerBinTarget as
+    /// an older client reads it: the target in HzPerBin, 0 otherwise), gives
+    /// the mode to the engine pool, replans every stream, sets the FFT size
+    /// offset for the mode and restarts each noise-floor tracker's fast
+    /// attack once (R-DSP-67), then brings every pill and an open Setup up
+    /// to date. Entering HzPerBin restores the remembered target; with none
+    /// remembered it starts from `hzPerBinIfNoneRemembered`, or, when that
+    /// is not above 0, from the bin width the active pan runs now
+    /// (ControlRanges::hzPerBinTargetForBinWidth). A station that cannot be
+    /// reached changes nothing. In a remote window the keys go to the Core
+    /// and the pan requests follow on their own.
+    void applyDisplayFftSizingMode(ControlRanges::DisplayFftSizingMode mode,
+                                   double hzPerBinIfNoneRemembered = 0.0);
+
+    /// Display pill plan Task 18 (D25, D26): the station's other FFT
+    /// settings, each for every stream and every pan. Like
+    /// applyFftBaseline, each gives the value to the engine pool (engines
+    /// running now and made later), saves the station key once, and brings
+    /// every pan's Display pill up to date. A value out of range, or a
+    /// station that cannot be reached, changes nothing. In a remote window
+    /// the key goes to the Core and the pan requests follow on their own.
+    /// Frames per second, also every pan's own drawing rate.
+    void applyDisplayFps(int fps);
+    /// A ControlRanges::kDisplayFftWindows value.
+    void applyDisplayFftWindow(int windowType);
+    /// The Hz/bin control's value, through the sizing mode: above 0 sets
+    /// the mode HzPerBin with that target; 0 sets Auto (a Fixed mode is left
+    /// alone, as the Core's rule for an older client leaves it). Replans
+    /// every stream.
+    void applyDisplayHzPerBinTarget(double hz);
+    /// 1 to 16. It has no saved key (it is the engines' own), and a remote
+    /// window's Core must offer it.
+    void applyDisplayDecimation(int decimation);
+    /// Every pan's pill shows the station's FFT settings as they stand.
+    /// Call it after changing one from anywhere else.
+    void refreshDisplayPillFftStates();
     int miniProducerCountForTest() const { return int(m_miniProducers.size()); }
     // Slice control plan Task 15 fix round 1: drops the hosting slice
     // requests so a test reaches selectSliceForWindow's fallback path.
@@ -366,8 +440,21 @@ signals:
     void connectionsRequested();
     void hostedInitialConnectionRequested();
     void setupDialogCreated(NereusSDR::SetupDialog* dialog);
+    /// One of the station's FFT settings took a new value through this
+    /// window (applyFftBaseline, applyDisplayFps, applyDisplayFftWindow,
+    /// applyDisplayHzPerBinTarget, applyDisplayDecimation) or, in a remote
+    /// window, arrived from the Core. An open Setup dialog shows its FFT
+    /// rows again from it. Emitted on the GUI thread, after the value is in
+    /// place.
+    void stationFftSettingsChanged();
 
 public:
+    // Workspace preview only: the profile rail, collapsed to the active
+    // badge just left of the title in the top status strip.
+    ProfileRailDock* profileRailDock() const { return m_profileRailDock; }
+    WorkspaceProfiles* workspaceProfiles() const { return m_workspaceProfiles; }
+    void showWorkspaceProfilesDialog();
+
     /// Ruling U1 and U2's reveal (revealSliceInWindow), for tests.
     void revealSliceInWindowForTest(int sliceId) { revealSliceInWindow(sliceId); }
 
@@ -405,6 +492,10 @@ public:
     /// indirectly through applyPanLayout, which needs a constructed
     /// MainWindow the test harness cannot build.
     static QStringList panIdsForLayout(const QString& layoutId);
+    /// The FFTW wisdom progress dialog, styled and set up but not shown
+    /// (the wisdomProgress handler shows it). Public so the visual
+    /// preview can build the real dialog without generating wisdom.
+    static QProgressDialog* buildWisdomProgressDialog(QWidget* parent);
     /// Parity Task 18: how many pans Pan Layout and +PAN offer. The slice
     /// limit is RadioModel::maxSlices(), which is the Core's advertised
     /// limit in a remote window and the board's own locally, capped by the
@@ -542,6 +633,7 @@ public slots:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void moveEvent(QMoveEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
 
@@ -588,7 +680,8 @@ private slots:
 
     /// Parity Task 18: the Display flyout and the Clarity Re-tune of one
     /// pan's strip act on that pan's own display (they were wired on
-    /// pan-0's strip only).
+    /// pan-0's strip only). Display pill plan Task 18: it builds the pan's
+    /// DisplayPillHooks and hands them to wireDisplayPill.
     void wirePanDisplayFlyout(class SpectrumOverlayPanel* panel,
                               class SpectrumWidget* sw, const QString& panId);
     void reconcileClarityBindings();
@@ -685,6 +778,10 @@ private slots:
     /// wireSpectrumSliceControls below, because pan-0 needs those and does not
     /// come through here.
     void wireSpectrumForPan(class SpectrumWidget* sw, const QString& panId);
+
+    /// replanFftForStream() for every stream `panId` shows; what a zoom on
+    /// that pan runs.
+    void replanFftForPan(const QString& panId);
 
     /// Wire the four spectrum controls that act on a slice: click-to-tune,
     /// filter-edge drag, pan drag, CTUN toggle.
@@ -816,6 +913,11 @@ private slots:
     /// program's transmit to the Core while the Core takes this window's
     /// keys, and not otherwise.
     void refreshTciRemoteTransmit();
+    // 2026-10-15: the remote window's own rigctld (RemoteRigctlServer):
+    // its forwarder follows the TCI server's, and it listens while
+    // RemoteRigctld/Enabled says so.
+    void refreshRigctlRemoteTransmit();
+    void applyRemoteRigctldSettings();
     // Group B fix wave: whether BYPS (RX bypass on TX) may change the
     // radio's relay setting, and why not.
     bool rxBypassPermitted() const;
@@ -887,6 +989,10 @@ private slots:
     // both dialogs are single-instance for the lifetime of MainWindow.
     void openSpotHub();
     void openFreeDVReporter();
+    /// Rotor control plan Task 8: the window's one SpotBeamTurner (made on
+    /// first use), behind every pan's spot menu, the Spot Hub and
+    /// auto-turn. Its refusals are toasted.
+    SpotBeamTurner* spotBeamTurner();
     /// Task B4 (bottom-banner + pan-menu epic): +PAN icon click handler.
     /// Also the View > Pan Layout… (Ctrl+L) menu action's target. Gated on
     /// m_radioModel->isConnected(); opens PanLayoutDialog sized to
@@ -942,6 +1048,8 @@ private slots:
     // Phase 23: open Setup dialog at "TCI Server" page.  Wired to
     // tciAction triggered + m_tciIndicator click + TciApplet::setupRequested.
     void openTciSetupPage();
+    void openCatSetupPage();
+    void showCatLog();
 
     // Phase 3P-II Phase 4 Task 90: generic navigation entry point for applet
     // right-click menus. Maps a pageKey string to a SetupDialog tree label:
@@ -1016,17 +1124,22 @@ private slots:
     /// Phase 3F Sub-Epic I Task 8: fan one stream's FFT frame out to every
     /// pan subscribed to it. Connected to every pooled FFTEngine's
     /// fftReadyLinear; the streamIndex argument is the engine's receiver id.
+    /// inputGeneration is the generation of the last FFT input purge
+    /// before the frame's samples (FftEnginePool::inputGeneration).
     void dispatchFftFrameToPans(int streamIndex,
                                 const QVector<float>& binsLinear,
                                 double windowEnb,
-                                double dbmOffset);
+                                double dbmOffset,
+                                quint64 inputGeneration);
     /// R-R3-46 / R-R3-11: every pan's receive offset from the ADC of the
     /// stream it shows (slice A's for a pan fed nothing yet).
     void pushSpectrumCalToPans();
 
 private:
+    friend class ImdPanelTestAccess;
 #ifdef NEREUS_BUILD_TESTS
     friend class TxLetterTakeWindowAccess;
+    friend class DisplaySettingsCorrectnessAccess;
 #endif
     // Parity Task 21 (R-IOS-18, B6.2, B6.3): the Core's radio from a remote
     // window: Setup > This Core opened on what the menu asked for.
@@ -1119,6 +1232,15 @@ private:
     /// pointer member), and calling a method on it needs the complete type.
     FFTEngine* primaryFftEngine() const;
 
+    /// Gives the engine pool the station's FFT sizing as stored
+    /// (readDisplayFftSizing): the mode, the size its control chose and the
+    /// target in force. With `replan`, every stream is then replanned (a
+    /// local window); without, the pool alone follows (a remote window,
+    /// whose engines are idle). The one place a mode, size or target change
+    /// reaches the engines, so the FFT size offset and the fast attack
+    /// follow each of them.
+    void applyFftSizingFromSettings(bool replan);
+
     /// Fix round 1 finding 1 (coordinator spec review): re-reads the four
     /// display AppSettings keys (DisplaySpectrumFps / DisplayFftSize /
     /// DisplayFftWindow / DisplayHzPerBinTarget) into an FftPoolConfig.
@@ -1164,6 +1286,27 @@ private:
     /// SpectrumWidget so visibleBinRange maps its bins against the right
     /// window. No-op for a stream we have never seen a centre for.
     void applyStreamWindowToPan(const QString& panId, int streamIndex);
+
+    /// The stream a pan shows: its own slice's. A pan has one view and one
+    /// DDC center, and it can host slices on several streams (two bands on
+    /// one pan, or a slice a layout change moved onto it), so exactly one
+    /// stream is the one it draws, follows and drags. -1 when nothing picks
+    /// one (no bound slice of its own yet, or a remote window, whose pans
+    /// take the Core's geometry); the pan then takes every stream it is
+    /// subscribed to, as it always did.
+    int streamShownOnPan(const QString& panId) const;
+    bool panShowsStream(const QString& panId, int streamIndex) const;
+    /// The id of the pan a spectrum widget belongs to (empty for none).
+    QString panIdOfSpectrum(const SpectrumWidget* sw) const;
+    /// True for a slice this pan hosts on a stream it does not show. Such a
+    /// slice is a flag and, off the span, its own edge marker there: it
+    /// never moves the pan's view, VFO or DDC center.
+    bool sliceIsOffPanStream(const QString& panId, const SliceModel* slice) const;
+    /// Put a pan on the stream of its own slice. Moves the view only when
+    /// that stream changed since the last pass or is one of `gained` (the
+    /// subscriptions this routing pass added), and re-marks the pan's
+    /// slices as shown or edge markers either way.
+    void showOwnStreamOnPan(const QString& panId, const QList<int>& gained = {});
 
     /// Re-derive the entire pan-to-stream topology from the current slice
     /// set. Cheap (one pass) and called on slice add / remove / migration
@@ -1224,8 +1367,9 @@ private:
     // under MainWindowGeometry / MainWindowState (base64 of Qt's native
     // QByteArray blobs). restoreMainWindowGeometry() returns true if a
     // valid saved geometry was applied, false otherwise (first launch
-    // or corrupted blob); buildUI() uses the return to decide whether
-    // to keep the 1280×800 default. Multi-screen safety clamp: if the
+    // or corrupted blob), in which case the 1280×800 default set in
+    // buildUI() stays. The constructor calls it last, after the pans exist
+    // (issue #525). Multi-screen safety clamp: if the
     // restored geometry sits entirely outside every connected screen
     // (monitor disconnected since last save), fall back to centering
     // on the primary screen at the default size.
@@ -1272,6 +1416,9 @@ private:
     // audio/LastDetectedCables fingerprint and pops the
     // VaxFirstRunDialog in the appropriate scenario.
     void checkVaxFirstRun();
+    // Opens the dialog that check asked for (VaxFirstRunCheck::dialogWanted).
+    void showVaxFirstRunDialog(AudioEngine* vaxEngine, FirstRunScenario scenario,
+                               const QVector<DetectedCable>& payload);
 
     // Remote-daemon R2 Task 20. MUST be declared before m_radioModel: the
     // initializer list reads it to pick the model's Role, and a member
@@ -1338,6 +1485,13 @@ private:
     // slice, else its pan key, else the window pan that lists it. Empty
     // when this window does not show it.
     QString windowPanFor(const SliceModel* slice) const;
+    // The spectrum whose trace measures `slice`'s Max Bin: the window pan
+    // that shows the slice, while that pan displays the slice's own
+    // receiver. Null when no pan of this window does (a marker on another
+    // receiver's pan may not borrow its trace). The one rule for the
+    // container meters, a remote window's S-meter and flags, and a local
+    // window's flags.
+    SpectrumWidget* maxBinSpectrumFor(const SliceModel* slice) const;
     // Move a slice's flag onto the pan that shows it (spectrumForSlice).
     void rehostSliceView(SliceModel* slice);
     // Ruling U1 and U2: show `sliceId` in this window. A pan that shows it
@@ -1346,9 +1500,21 @@ private:
     // fits, else the operator picks a pan. Nothing is added or moved for
     // any other slice.
     void revealSliceInWindow(int sliceId);
+    /// The end of every reveal: the slice becomes the one its pan shows,
+    /// and a pan whose view does not hold the slice's frequency moves onto
+    /// it, keeping its span. A view that already holds the slice stays.
+    void showSliceOnItsPan(SliceModel* slice);
     // A placement for a slice this window no longer only listens to is
     // dropped; one it now controls takes the placement as its pan.
     void reconcileListenPlacements();
+    // A slice this window controls whose pan key names a pan this window
+    // does not show goes onto the window's first pan, as a layout change
+    // rehomes it (ruling U7). A remote window waits for the Core's settings.
+    void rehomeSlicesOffWindowPans();
+    // A slice keyed to a pan a layout change just made (one this window
+    // shows now and did not show in shownBefore) goes onto that pan with its
+    // flag.
+    void attachSlicesToNewPans(const QStringList& shownBefore);
     // A layout change placed this slice (m_markerOnlyPlacement) and this
     // window still shows it there.
     bool markerOnlyPlacement(int sliceId) const;
@@ -1389,6 +1555,10 @@ private:
     // R-R3-44: this computer's VAX channels, fed from the Core's receiver
     // streams. Remote windows only; deleted right after m_remoteMedia.
     class RemoteVaxRouter* m_remoteVax{nullptr};
+    // 2026-10-15: this computer's rigctld acting as the window (WSJT-X CAT
+    // and VAX). Remote windows only; deleted before m_remoteMedia.
+    class RemoteRigctlServer* m_remoteRigctl{nullptr};
+    bool m_rigctlRemoteTransmitInstalled{false};
     // R-R3-42, R-R3-44 fix wave: one toast per receiver-audio stop across
     // TCI and the VAX channels.
     ReceiverStopNotices m_receiverStopNotices;
@@ -1460,6 +1630,7 @@ private:
     // preserves geometry / table state). Both members are accessed by
     // the H1 test seam below.
     QPointer<SpotHubDialog>        m_spotHubDialog;
+    SpotBeamTurner*                m_spotBeamTurner{nullptr};  // Qt child; rotor plan Task 8
     QPointer<FreeDVReporterDialog> m_freeDVReporterDialog;
 
     // Status bar widgets (double-height AetherSDR design, 46px)
@@ -1564,6 +1735,36 @@ private:
     QPointer<QAction> m_displayDuplexAction;
     void setDisplayDuplexSetting(bool on);
     void applyDisplayDuplex();
+    void wireImdMeasurementForwarding();
+    void refreshImdMeasurementForwarding();
+    void onImdPureSignalStatusChanged();
+    void setImdMeasurementsShown(bool shown);
+    void hideImdMeasurements();
+    void enableImdDisplayDuplex();
+    void refreshImdRailControls();
+    QPointer<class PureSignalSessionFacade> m_imdObservedFacade;
+    bool m_imdStatusBaselineKnown{false};
+    bool m_imdLastCorrectionsApplied{false};
+    // Display pill plan Task 13: what a key edge does beyond m_moxDisplay's
+    // own pans. wireDisplayKeyEdges gives m_moxDisplay each pan's band and
+    // purges every FFT engine's input on keyedChanged; called wherever
+    // m_moxDisplay is made. refreshLocalFftShapes gives each pan of a
+    // window running its own FFT the size, decimation and rate of the
+    // engine it shows (SpectrumWidget::setLocalFftShape), the longest hold
+    // when it shows several; it does nothing in a window with no engines.
+    void wireDisplayKeyEdges();
+    void refreshLocalFftShapes();
+    // Display pill plan Task 18: what each pan's Display pill is told.
+    // displayPillFftState is the station's FFT settings with that pan's
+    // running size and rate. refreshDisplayPillStationGates tells every
+    // pill whether the station's rows can be changed and whether this is a
+    // remote window whose Core offers Decimation. refreshDisplayPillBandGrid
+    // gives one pill the band its pan is on and that band's stored dB Max
+    // and Min. Clarity's state is not here: PanClarityRegistry tells each
+    // pill that.
+    DisplayPillFftState displayPillFftState(const QString& panId) const;
+    void refreshDisplayPillStationGates();
+    void refreshDisplayPillBandGrid(const QString& panId);
     std::unique_ptr<class LocalTxDisplaySource> m_localTxDisplaySource;
     std::unique_ptr<class RemoteTxDisplaySource> m_remoteTxDisplaySource;
 
@@ -1678,6 +1879,13 @@ private:
     // Container infrastructure (Phase 3G-1)
     ContainerManager* m_containerManager{nullptr};
     QSplitter* m_mainSplitter{nullptr};
+    // Workspace preview only: the four-edge area around the spectrum.
+    EdgeDockArea* m_edgeDockArea{nullptr};
+    // Workspace preview only: named profiles and their rail.
+    WorkspaceProfiles* m_workspaceProfiles{nullptr};
+    ProfileRailDock* m_profileRailDock{nullptr};
+    void setupWorkspaceProfiles();
+    void connectProfileRail();
     int m_hDelta{0};
     int m_vDelta{0};
 
@@ -1690,6 +1898,10 @@ private:
     // or manage already-created containers from the menu bar.
     QMenu* m_editContainerMenu{nullptr};
     void rebuildEditContainerSubmenu();
+    // Containers > Hidden (both looks), rebuilt on every workspace
+    // commit.
+    QMenu* m_hiddenMenu{nullptr};
+    void rebuildHiddenSubmenu();
     void resetDefaultLayout();
 
     // Meter system (Phase 3G-2)
@@ -1710,10 +1922,10 @@ private:
     /// the status-bar light and this item never disagree.
     QAction*      m_tnfAction = nullptr;
 
-    // Mode menu actions (14 modes: 12 Thetis + NereusSDR-native
-    // RADE-U / RADE-L from Phase 3R L3; mutual exclusion via
-    // QActionGroup).
-    QAction*      m_modeActions[14]  = {};
+    // Mode menu actions (16 modes: 12 Thetis + NereusSDR-native
+    // RADE-U / RADE-L from Phase 3R L3 + experimental RADE2-U / RADE2-L;
+    // mutual exclusion via QActionGroup).
+    QAction*      m_modeActions[16]  = {};
     QActionGroup* m_modeActionGroup  = nullptr;
 
     // AGC menu action group (Task 12)
@@ -1954,7 +2166,9 @@ private:
     class CwxApplet*        m_cwxApplet{nullptr};
     class DvkApplet*        m_dvkApplet{nullptr};
     class CatApplet*        m_catApplet{nullptr};
+    QPointer<class CatLogWindow> m_catLogWindow;
     class TunerApplet*      m_tunerApplet{nullptr};
+    class RotorApplet*      m_rotorApplet{nullptr};
 
     // Phase 3P-III Task 14: RF-Kit RF2K-S applet.
     class Rf2ksApplet*      m_rfKitApplet{nullptr};

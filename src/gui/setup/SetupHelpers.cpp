@@ -1,3 +1,7 @@
+// no-port-check: NereusSDR-original Setup control factories.
+// Modification history (NereusSDR):
+//   2026-10-12 - Typed numbers reach the slider's model connection once.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 #include "SetupHelpers.h"
 
 #include <cmath>
@@ -50,7 +54,8 @@ SliderRow makeSliderRow(int min, int max, int initial,
     });
     QObject::connect(spin, qOverload<int>(&QSpinBox::valueChanged),
                      slider, [slider](int v) {
-        QSignalBlocker block(slider);
+        // The slider is the model's source of truth. Its existing callback
+        // blocks the spin reflection, so keyboard edits emit once too.
         slider->setValue(v);
     });
 
@@ -92,7 +97,8 @@ SliderRowD makeDoubleSliderRow(double min, double max, double initial,
     });
     QObject::connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged),
                      slider, [slider, scale](double v) {
-        QSignalBlocker block(slider);
+        // As with whole numbers, the slider announces a typed edit once;
+        // its reflected spin value is already guarded above.
         slider->setValue(static_cast<int>(v * scale));
     });
 

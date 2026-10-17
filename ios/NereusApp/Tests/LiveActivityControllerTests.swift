@@ -781,3 +781,19 @@ struct LiveActivityControllerTests {
         return condition()
     }
 }
+
+@MainActor
+extension LiveActivityControllerTests {
+    @Test("Live Activity unavailable telemetry survives encoding and legacy numeric decoding")
+    func optionalMeterTelemetryRoundTrip() throws {
+        let unavailable = StationActivityAttributes.ContentState(keyed: true, forwardWatts: nil, swr: nil)
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let decoded = try decoder.decode(StationActivityAttributes.ContentState.self, from: encoder.encode(unavailable))
+        #expect(decoded.forwardWatts == nil && decoded.swr == nil)
+        #expect(ActivityWords.telemetry(watts: decoded.forwardWatts, swr: decoded.swr) == "Fwd -- \u{00B7} SWR --")
+        let legacyNumeric = StationActivityAttributes.ContentState(keyed: true, forwardWatts: 2300, swr: 1.12)
+        let numeric = try decoder.decode(StationActivityAttributes.ContentState.self, from: encoder.encode(legacyNumeric))
+        #expect(numeric.forwardWatts == 2300 && numeric.swr == 1.12)
+    }
+}

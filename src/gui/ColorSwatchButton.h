@@ -4,6 +4,7 @@
 #include <QColor>
 #include <QPushButton>
 #include <QString>
+#include "gui/NereusGuiExport.h"
 
 namespace NereusSDR {
 
@@ -16,7 +17,7 @@ namespace NereusSDR {
 ///
 /// Persistence helpers colorToHex/colorFromHex round-trip through the
 /// AppSettings "#RRGGBBAA" string format.
-class ColorSwatchButton : public QPushButton
+class NEREUS_GUI_EXPORT ColorSwatchButton : public QPushButton
 {
     Q_OBJECT
 

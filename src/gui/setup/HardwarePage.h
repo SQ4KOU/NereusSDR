@@ -18,6 +18,8 @@
 //                 calibration follow transmitSettingsVersion 8, User Dig Out
 //                 the transmit settings gate. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - applyBoardTabs and applySavedBoardTabs. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -172,6 +174,11 @@ private:
     // from whether the window's Core takes them (transmitSettingsVersion 8;
     // always in a local window) and whether the radio is on the air.
     void applyTransmitHardwareGates();
+    // Tab visibility and the OC tab's title and N2ADR pointer for a board.
+    void applyBoardTabs(const BoardCapabilities& caps);
+    // With no connection, the tab set of the last connected radio's saved
+    // board (AppSettings saved radios); every tab when none is saved.
+    void applySavedBoardTabs();
 
     RadioModel*  m_model{nullptr};
     QTabWidget*  m_tabs{nullptr};

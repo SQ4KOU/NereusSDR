@@ -29,6 +29,11 @@
 //                 readings are read once the receive lane has filled the
 //                 meter cache. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-10-16 -- pumpWritesTheLiveChannelsReadings stops the pump
+//                 before the connect, not after: its timer published the
+//                 live channel's readings during a slow connect. J.J.
+//                 Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -60,6 +65,14 @@
 #include "models/SliceModel.h"
 
 using namespace NereusSDR;
+
+// MinGW imports a static constexpr member of an exported class by address
+// when it is bound to a reference (QCOMPARE does), and the Core DLL never
+// exports one, so this test did not link on Windows. It reads these
+// copies by value instead.
+namespace {
+constexpr double kNoReadingDbm = NereusSDR::SliceMeterPump::kNoReadingDbm;
+} // namespace
 using NereusSDR::Test::ConnectableRadioModel;
 using NereusSDR::Test::LoopbackTransport;
 
@@ -71,11 +84,11 @@ const char* const kReadings[] = {
 
 void expectNoReadings(const SliceModel* slice)
 {
-    QCOMPARE(slice->adcPeakDbfs(), SliceMeterPump::kNoReadingDbm);
-    QCOMPARE(slice->adcAverageDbfs(), SliceMeterPump::kNoReadingDbm);
-    QCOMPARE(slice->agcGainDb(), SliceMeterPump::kNoReadingDbm);
-    QCOMPARE(slice->agcPeakDb(), SliceMeterPump::kNoReadingDbm);
-    QCOMPARE(slice->agcAverageDb(), SliceMeterPump::kNoReadingDbm);
+    QCOMPARE(slice->adcPeakDbfs(), kNoReadingDbm);
+    QCOMPARE(slice->adcAverageDbfs(), kNoReadingDbm);
+    QCOMPARE(slice->agcGainDb(), kNoReadingDbm);
+    QCOMPARE(slice->agcPeakDb(), kNoReadingDbm);
+    QCOMPARE(slice->agcAverageDb(), kNoReadingDbm);
 }
 
 std::unique_ptr<RadioModel> makeStationRadioModel()
@@ -195,20 +208,34 @@ private slots:
         QCOMPARE(SliceMeterPump::thetisAgcGainReading(12.5), -12.5);
         // WDSP's -400 before its first measurement stays no reading, never
         // a 400 dB gain.
-        QCOMPARE(SliceMeterPump::thetisAgcGainReading(-400.0), SliceMeterPump::kNoReadingDbm);
-        QCOMPARE(SliceMeterPump::thetisAgcGainReading(qQNaN()), SliceMeterPump::kNoReadingDbm);
+        QCOMPARE(SliceMeterPump::thetisAgcGainReading(-400.0), kNoReadingDbm);
+        QCOMPARE(SliceMeterPump::thetisAgcGainReading(qQNaN()), kNoReadingDbm);
     }
 
     // Readings present: the pump writes the live channel's five meters,
     // and clears them with the S-meter readings on a lost link.
     void pumpWritesTheLiveChannelsReadings()
     {
-        std::unique_ptr<ConnectableRadioModel> harness = ConnectableRadioModel::create();
+        // The pump starts with its RadioModel (RadioModel.cpp:2161) on a
+        // 100 ms timer, and create() runs the event loop until the link is
+        // Connected and both lanes are idle. Two ticks in that wait (one to
+        // ask the lane for a reading, one to publish it) wrote the channel's
+        // real readings, so the first expectNoReadings() below failed
+        // whenever the connect took longer than about 200 ms. A silent
+        // channel's ADC peak is a real reading, WDSP's 10 * mlog10(0 +
+        // 1.0e-40) (third_party/wdsp/src/meter.c:97), about -400.000145,
+        // not the -400 no-reading value. The pump is stopped before the
+        // connect, so this test makes every poll itself.
+        std::unique_ptr<ConnectableRadioModel> harness = ConnectableRadioModel::create(
+            10000, RadioModel::Role::Local, [](RadioModel& m) {
+                if (SliceMeterPump* p = m.sliceMeterPump()) {
+                    p->stop();
+                }
+            });
         QVERIFY(harness != nullptr);
         RadioModel& model = harness->model();
         SliceMeterPump* pump = model.sliceMeterPump();
         QVERIFY(pump != nullptr);
-        pump->stop();
         SliceModel* slice = model.sliceById(0);
         QVERIFY(slice != nullptr);
         RxChannel* ch = model.wdspEngine()->rxChannel(slice->sliceIndex());
@@ -248,7 +275,7 @@ private slots:
         model.setConnectionStateForTest(ConnectionState::LinkLost);
         pump->poll();
         expectNoReadings(slice);
-        QCOMPARE(slice->signalPeakDbm(), SliceMeterPump::kNoReadingDbm);
+        QCOMPARE(slice->signalPeakDbm(), kNoReadingDbm);
 
         // Back to Connected: the channel's readings again.
         seed();

@@ -34,6 +34,10 @@ using ReadBuffer = std::array<char, kReadBufferBytes>;
 // Below absolute zero is a driver error, not a measurement.
 constexpr qint64 kMinimumMilliCelsius = -273150;
 
+// Core numbers past this are not a computer's (the kernel's own CPU lists
+// stop well short of it); a line for one is ignored rather than sized for.
+constexpr quint64 kMaxCoreNumber = 4095;
+
 // The largest integer JSON carries exactly; a larger KiB count is not real.
 constexpr quint64 kMaxExactJsonInteger = 9007199254740991ULL;
 
@@ -150,26 +154,31 @@ bool parseCpuTimes(const char* p, const char* end, SystemTimes* times)
     return true;
 }
 
-// What readProcStat() found: the aggregate "cpu" line and the watched
-// cores' "cpuN" lines summed.
+// What readProcStat() found in the aggregate "cpu" line. Each core's
+// "cpuN" line goes into the caller's per-core storage.
 struct ProcStatTimes {
     bool systemRead = false;
     SystemTimes system;
-    bool watchedRead = false;
-    SystemTimes watched;
 };
 
 // Reads proc/stat's cpu lines through `buffer` a chunk at a time, keeping
 // any part line for the next chunk, so a computer with many cores (one
-// line each) is read whole; nothing is allocated. The aggregate line must
-// be the first line. The watched cores' lines are summed; the set reads as
-// absent when any of them has no line (an offline core) or is unreadable.
+// line each) is read whole. The aggregate line must be the first line.
+// Every core's line is stored in `cores` by core number; a core with no
+// line (an offline core) or an unreadable one is left marked unread, so
+// any set holding it reads as absent. `cores` grows only when a higher
+// core number appears than any before; otherwise nothing is allocated.
 // Reading stops at the first line after the cpu lines (the next, "intr",
 // can itself be longer than the buffer). A line cut off at the end of the
-// file, or one longer than the buffer, is not trusted.
-ProcStatTimes readProcStat(const QByteArray& path, ReadBuffer& buffer, const QList<int>& cpus)
+// file, or one longer than the buffer, is not trusted: then no core is
+// read.
+ProcStatTimes readProcStat(const QByteArray& path, ReadBuffer& buffer,
+                           QVector<HostCoreTimes>& cores)
 {
     ProcStatTimes result;
+    for (HostCoreTimes& core : cores) {
+        core.read = false;
+    }
     if (path.isEmpty()) { return result; }
 #ifdef Q_OS_UNIX
     int fd = -1;
@@ -196,9 +205,6 @@ ProcStatTimes readProcStat(const QByteArray& path, ReadBuffer& buffer, const QLi
     bool eof = false;
     bool firstLine = true;
     bool pastCpuLines = false;
-    bool watchedBad = false;
-    int found = 0;
-    SystemTimes sum;
     qsizetype filled = 0;
     while (!failed && !pastCpuLines) {
         while (!eof && filled < kReadBufferBytes) {
@@ -230,18 +236,16 @@ ProcStatTimes readProcStat(const QByteArray& path, ReadBuffer& buffer, const QLi
                        && line[3] >= '0' && line[3] <= '9') {
                 const char* p = line + 3;
                 quint64 number = 0;
-                if (parseUnsigned(p, newline, &number)
-                    && number <= quint64(std::numeric_limits<int>::max())
-                    && cpus.contains(static_cast<int>(number))) {
-                    SystemTimes core;
-                    if (!parseCpuTimes(p, newline, &core)
-                        || sum.total > std::numeric_limits<quint64>::max() - core.total) {
-                        watchedBad = true;
-                    } else {
-                        sum.total += core.total;
-                        sum.idle += core.idle;
-                        ++found;
+                if (parseUnsigned(p, newline, &number) && number <= kMaxCoreNumber) {
+                    const auto index = static_cast<qsizetype>(number);
+                    if (index >= cores.size()) {
+                        cores.resize(index + 1);
                     }
+                    SystemTimes times;
+                    HostCoreTimes& core = cores[index];
+                    core.read = parseCpuTimes(p, newline, &times);
+                    core.total = times.total;
+                    core.idle = times.idle;
                 }
             } else {
                 pastCpuLines = true;
@@ -264,11 +268,10 @@ ProcStatTimes readProcStat(const QByteArray& path, ReadBuffer& buffer, const QLi
     ::close(fd);
 #endif
     if (failed) {
+        for (HostCoreTimes& core : cores) {
+            core.read = false;
+        }
         return ProcStatTimes{};
-    }
-    result.watchedRead = !cpus.isEmpty() && !watchedBad && found == cpus.size();
-    if (result.watchedRead) {
-        result.watched = sum;
     }
     return result;
 }
@@ -355,6 +358,12 @@ void HostTelemetrySampler::reset()
 {
     m_systemBaseline.reset();
     m_processBaseline.reset();
+    for (HostCoreTimes& core : m_coreTimes) {
+        core.read = false;
+    }
+    for (HostCoreTimes& core : m_previousCoreTimes) {
+        core.read = false;
+    }
     if (m_enabled) {
         discoverThermalZones();
     }
@@ -367,8 +376,38 @@ void HostTelemetrySampler::setWatchedCpus(const QList<int>& cpus)
     sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
     if (sorted == m_watchedCpus) { return; }
     m_watchedCpus = sorted;
-    m_watchedBaseline.reset();
-    m_watchedCpuPercent.reset();
+}
+
+std::optional<double> HostTelemetrySampler::watchedCpuPercent() const
+{
+    return cpuPercentFor(m_watchedCpus);
+}
+
+std::optional<double> HostTelemetrySampler::cpuPercentFor(const QList<int>& cpus) const
+{
+    if (cpus.isEmpty()) { return std::nullopt; }
+    quint64 total = 0;
+    quint64 idle = 0;
+    for (int cpu : cpus) {
+        if (cpu < 0 || cpu >= m_coreTimes.size() || cpu >= m_previousCoreTimes.size()) {
+            return std::nullopt;
+        }
+        const HostCoreTimes& now = m_coreTimes.at(cpu);
+        const HostCoreTimes& before = m_previousCoreTimes.at(cpu);
+        // A counter that went backwards is not a measurement.
+        if (!now.read || !before.read || now.total < before.total || now.idle < before.idle) {
+            return std::nullopt;
+        }
+        const quint64 coreTotal = now.total - before.total;
+        const quint64 coreIdle = now.idle - before.idle;
+        if (coreIdle > coreTotal || total > std::numeric_limits<quint64>::max() - coreTotal) {
+            return std::nullopt;
+        }
+        total += coreTotal;
+        idle += coreIdle;
+    }
+    if (total == 0) { return std::nullopt; }
+    return percent(total - idle, total);
 }
 
 void HostTelemetrySampler::discoverThermalZones()
@@ -402,24 +441,11 @@ StationHostTelemetry HostTelemetrySampler::sample()
     if (!m_enabled) { return host; }
     ReadBuffer buffer;
 
-    const ProcStatTimes stat = readProcStat(m_procStatPath, buffer, m_watchedCpus);
+    // The latest sample becomes the previous one; no copy, no allocation.
+    m_previousCoreTimes.swap(m_coreTimes);
+    const ProcStatTimes stat = readProcStat(m_procStatPath, buffer, m_coreTimes);
     const SystemTimes& system = stat.system;
-    const SystemTimes& watched = stat.watched;
     const bool systemRead = stat.systemRead;
-    const bool watchedRead = stat.watchedRead;
-    m_watchedCpuPercent.reset();
-    if (watchedRead && m_watchedBaseline && watched.total > m_watchedBaseline->total
-        && watched.idle >= m_watchedBaseline->idle
-        && watched.idle - m_watchedBaseline->idle <= watched.total - m_watchedBaseline->total) {
-        m_watchedCpuPercent = percent(
-            (watched.total - m_watchedBaseline->total) - (watched.idle - m_watchedBaseline->idle),
-            watched.total - m_watchedBaseline->total);
-    }
-    if (watchedRead) {
-        m_watchedBaseline = SystemBaseline{watched.total, watched.idle};
-    } else {
-        m_watchedBaseline.reset();
-    }
     quint64 processTicks = 0;
     const bool processRead = readProcessTicks(m_procSelfStatPath, buffer, &processTicks);
 
@@ -498,15 +524,30 @@ SharedHostSampler::SharedHostSampler(std::unique_ptr<HostTelemetrySampler> sampl
     }
 }
 
-void SharedHostSampler::setGovernorCpus(const QList<int>& cpus)
+void SharedHostSampler::setGovernorCpus(const QList<int>& housekeeping,
+                                        const QList<int>& spectrumOnly)
 {
-    m_sampler->setWatchedCpus(cpus);
+    // Sorted, each core once. The governor passes the same sets every tick,
+    // already sorted, so nothing is copied while they stay the same.
+    const auto store = [](QList<int>& into, const QList<int>& cpus) {
+        if (cpus == into) { return; }
+        into = cpus;
+        std::sort(into.begin(), into.end());
+        into.erase(std::unique(into.begin(), into.end()), into.end());
+    };
+    store(m_governorHousekeeping, housekeeping);
+    store(m_governorSpectrumOnly, spectrumOnly);
 }
 
 std::optional<double> SharedHostSampler::governorCpuPercent()
 {
     reading();
-    return m_sampler->watchedCpuPercent();
+    const std::optional<double> housekeeping = m_sampler->cpuPercentFor(m_governorHousekeeping);
+    const std::optional<double> spectrumOnly = m_sampler->cpuPercentFor(m_governorSpectrumOnly);
+    if (housekeeping && spectrumOnly) {
+        return std::max(*housekeeping, *spectrumOnly);
+    }
+    return housekeeping ? housekeeping : spectrumOnly;
 }
 
 std::optional<qint64> SharedHostSampler::cpuSampleBeganMsAgo() const

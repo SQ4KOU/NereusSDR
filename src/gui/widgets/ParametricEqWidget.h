@@ -80,6 +80,7 @@ mw0lge@grange-lane.co.uk
 #include <QTimer>
 #include <QVector>
 #include <QWidget>
+#include "gui/NereusGuiExport.h"
 
 class QPaintEvent;
 class QPainter;
@@ -99,7 +100,7 @@ class ParametricEqJsonTester;          // Batch 5
 
 namespace NereusSDR {
 
-class ParametricEqWidget : public QWidget {
+class NEREUS_GUI_EXPORT ParametricEqWidget : public QWidget {
     Q_OBJECT
     friend class ::ParametricEqAxisTester;        // for tst_parametric_eq_widget_axis
     friend class ::ParametricEqPaintTester;       // for tst_parametric_eq_widget_paint

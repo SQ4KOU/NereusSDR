@@ -7,6 +7,9 @@
 // that reports Core's grant.
 //
 // Modification history (NereusSDR):
+//   2026-10-11 : R-DISP-RETUNE (third wave): the `pictureGeneration` field,
+//                 only for a peer that declared spectrumPictureVersion. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-26 : Parity Task 28 (R-R3-49, A11): the `transmit` field, only
 //                 for a peer that declared txDisplayVersion. J.J. Boyd
 //                 (KG4VCF), AI-assisted implementation via Anthropic Claude
@@ -405,6 +408,65 @@ private slots:
             QVERIFY(!decodeRemoteSpectrumContext(today, true, true).has_value());
             message.transmit.reset();
             QVERIFY(!decodeRemoteSpectrumContext(today, true)->transmit.has_value());
+        }
+    }
+
+    // R-DISP-RETUNE (third wave): `pictureGeneration` travels only to a peer
+    // that declared spectrumPictureVersion, on the grant shape, with or
+    // without `transmit`; without it the encoding is byte for byte today's.
+    void pictureGenerationIsOneMoreFieldOnlyWhereDeclared()
+    {
+        for (const bool withWideband : {false, true}) {
+            for (const bool withTransmit : {false, true}) {
+                SpectrumContextMessage message = sampleMessage(withWideband, true);
+                if (withTransmit) { message.transmit = false; }
+                const QJsonObject today = encodeRemoteSpectrumContext(message, true);
+                QVERIFY(!today.contains(QStringLiteral("pictureGeneration")));
+                // Not written for a peer below the grant report either.
+                message.pictureGeneration = 40;
+                QVERIFY(!encodeRemoteSpectrumContext(message, false)
+                             .contains(QStringLiteral("pictureGeneration")));
+                for (const quint32 picture : {quint32(1), quint32(40), quint32(42),
+                                              std::numeric_limits<quint32>::max()}) {
+                    message.pictureGeneration = picture;
+                    const QJsonObject declared = encodeRemoteSpectrumContext(message, true);
+                    QCOMPARE(declared.size(), today.size() + 1);
+                    QCOMPARE(declared.value(QStringLiteral("pictureGeneration")).toDouble(),
+                             double(picture));
+                    QJsonObject stripped = declared;
+                    stripped.remove(QStringLiteral("pictureGeneration"));
+                    QCOMPARE(compact(stripped), compact(today));
+                    const auto decoded =
+                        decodeRemoteSpectrumContext(declared, true, withTransmit, true);
+                    QVERIFY(decoded.has_value());
+                    compareMessages(*decoded, message);
+                    QCOMPARE(decoded->pictureGeneration, std::optional<quint32>(picture));
+                    QCOMPARE(decoded->transmit.has_value(), withTransmit);
+                    // A peer that did not declare it refuses the extra key, and
+                    // the field never rides on the minor-8 shape.
+                    QVERIFY(!decodeRemoteSpectrumContext(declared, true, withTransmit)
+                                 .has_value());
+                    QVERIFY(!decodeRemoteSpectrumContext(declared, false, false, true)
+                                 .has_value());
+                }
+                const QJsonObject declared = encodeRemoteSpectrumContext(message, true);
+                for (const QJsonValue& bad : {QJsonValue(0), QJsonValue(-1), QJsonValue(1.5),
+                                              QJsonValue(4294967296.0),
+                                              QJsonValue(QStringLiteral("40")),
+                                              QJsonValue(true), QJsonValue()}) {
+                    QJsonObject defect = declared;
+                    defect.insert(QStringLiteral("pictureGeneration"), bad);
+                    QVERIFY(!decodeRemoteSpectrumContext(defect, true, withTransmit, true)
+                                 .has_value());
+                }
+                // A declared peer refuses a context without the field.
+                QVERIFY(!decodeRemoteSpectrumContext(today, true, withTransmit, true)
+                             .has_value());
+                const auto undeclared =
+                    decodeRemoteSpectrumContext(today, true, withTransmit);
+                QVERIFY(undeclared.has_value());
+                QVERIFY(!undeclared->pictureGeneration.has_value());
+            }
         }
     }
 

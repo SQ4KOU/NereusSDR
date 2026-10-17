@@ -211,7 +211,7 @@ bool StationTciController::setEnabled(bool enabled, int port, QString* reason)
     auto& settings = AppSettings::instance();
     settings.setValue(enabledKey(), enabled ? QStringLiteral("True") : QStringLiteral("False"));
     settings.setValue(portKey(), QString::number(port));
-    settings.save();
+    settings.saveInBackground();
     resetRetry();   // a request tries at once, from the first delay again
     apply();
     if (reason) {
@@ -240,7 +240,7 @@ void StationTciController::setOptions(bool emulateExpertSdr3, bool emulateSunSdr
     settings.setValue(QStringLiteral("TciCwluBecomesCw"), flag(cwluBecomesCw));
     settings.setValue(QStringLiteral("TciSendInitialFrequencyStateOnConnect"),
                       flag(sendInitialState));
-    settings.save();
+    settings.saveInBackground();
     qCInfo(lcTci) << "Station TCI server options: ExpertSDR3" << emulateExpertSdr3
                   << "SunSDR2 PRO" << emulateSunSdr2Pro << "CWL/CWU as CW" << cwluBecomesCw
                   << "initial state" << sendInitialState;
@@ -294,7 +294,7 @@ bool StationTciController::setSettings(const QVariantMap& changes, QString* reas
         settings.setValue(QString::fromLatin1(setting->key), text);
         qCInfo(lcTci) << "Station TCI server setting" << setting->name << "=" << text;
     }
-    settings.save();
+    settings.saveInBackground();
 #ifdef HAVE_WEBSOCKETS
     if (m_server) {
         // As the page does for a window's own server: these two reach the

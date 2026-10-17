@@ -25,6 +25,15 @@ struct LinearGauge: View {
                 && lhs.ticks.map(\.label) == rhs.ticks.map(\.label)
         }
 
+        static let reflectedPower = Scale(title: "Ref Pwr", min: 0, max: 500,
+            yellowFrom: .infinity, redFrom: .infinity,
+            ticks: [(0, "0"), (100, "100"), (200, "200"), (300, "300"), (400, "400"), (500, "500")])
+        static func selectedPower(_ rule: TransmitMeterRule, meter: StationCatalog.Meters.RfPower?) -> Scale {
+            guard rule.amplifying else { return rfPower(meter) }
+            return Scale(title: "RF Pwr", min: 0, max: rule.scaleTopW, yellowFrom: rule.displayLimitW,
+                         redFrom: rule.displayLimitW, ticks: [(0, "0"), (500, "500"), (1000, "1000"), (1500, "1500"), (2000, "2000")])
+        }
+
         /// The microphone's level, -40 to +10 dB, yellow from -10 and red from 0.
         static let micLevel = Scale(title: "Mic level", min: -40, max: 10, yellowFrom: -10, redFrom: 0,
                                     ticks: [(-40, "-40dB"), (-30, "-30"), (-20, "-20"), (-10, "-10"), (0, "0"),
@@ -61,6 +70,7 @@ struct LinearGauge: View {
 
     let scale: Scale
     let value: Double?
+    var readout: String? = nil
 
     /// Nil is unavailable; finite values outside the scale clamp only the meter fill.
     var filledFraction: Double? { value.map(fraction) }
@@ -74,7 +84,7 @@ struct LinearGauge: View {
         .frame(height: Self.height)
         .accessibilityElement()
         .accessibilityLabel(scale.title)
-        .accessibilityValue(value.map(Self.spoken) ?? "--")
+        .accessibilityValue(readout ?? value.map(Self.spoken) ?? "--")
     }
 
     private func fraction(_ number: Double) -> Double {
@@ -112,7 +122,7 @@ struct LinearGauge: View {
             }
         }
         // The title inside the bar.
-        let title = Text(value == nil ? scale.title + " --" : scale.title).font(.system(size: 8, weight: .bold)).foregroundStyle(ChromeColours.textBright)
+        let title = Text(readout.map { scale.title + " " + $0 } ?? (value == nil ? scale.title + " --" : scale.title)).font(.system(size: 8, weight: .bold)).foregroundStyle(ChromeColours.textBright)
         var shadowed = context
         shadowed.addFilter(.shadow(color: .black, radius: 1.5))
         shadowed.draw(title, at: CGPoint(x: bar.midX, y: bar.midY), anchor: .center)

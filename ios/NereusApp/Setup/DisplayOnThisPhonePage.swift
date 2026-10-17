@@ -46,7 +46,7 @@ struct DisplayOnThisPhonePage: View {
 
     /// The level modes in the order the page lists them, with their names.
     static let levelModes: [(mode: BandDisplaySettings.WaterfallLevelMode, title: String)] = [
-        (.clarity, "Clarity"), (.agc, "Auto"), (.noiseFloorAgc, "Noise floor"), (.manual, "Manual"),
+        (.clarity, "Clarity"), (.agc, "Auto"), (.noiseFloorAgc, "Floor"), (.manual, "Manual"), (.scale, "Scale"),
     ]
 
     // The desktop's ranges (src/gui/setup/DisplaySetupPages.cpp and
@@ -66,7 +66,7 @@ struct DisplayOnThisPhonePage: View {
     static let blobCountRange: ClosedRange<Double> = 1...20
     static let percentRange: ClosedRange<Double> = 0...100
     static let colorGainRange: ClosedRange<Double> = 0...100
-    static let blackLevelRange: ClosedRange<Double> = 0...125
+    static let blackLevelRange: ClosedRange<Double> = 0...100
     static let spectrumHeightRange: ClosedRange<Double> = BandDisplaySettings.spectrumShareRange
 
     static let planNote = "The plan is the Core's: the desktop and every device follow it. Its size is kept on this phone."
@@ -86,7 +86,7 @@ struct DisplayOnThisPhonePage: View {
 
     /// The level mode: any but Manual only while the Core computes the extras.
     func setLevelMode(_ mode: BandDisplaySettings.WaterfallLevelMode) {
-        guard mode == .manual || extras else {
+        guard mode == .manual || mode == .scale || extras else {
             return
         }
         change { $0.waterfallLevelMode = mode }
@@ -133,6 +133,36 @@ struct DisplayOnThisPhonePage: View {
         return String(format: "#%02X%02X%02X", byte(red), byte(green), byte(blue))
     }
 
+    // MARK: Trace and fill colours
+
+    // The two pickers, as the desktop's Trace Color and Fill Color. In
+    // BandDisplaySettings the fill's colour is the field named
+    // `traceColour` (its name is the key it is kept under, so it stays) and
+    // the line's is `traceLineColour`.
+
+    /// What "Trace color" shows: the line's own colour, and the fill's
+    /// until one is chosen, which is what the line is drawn in.
+    static func traceColourShown(_ settings: BandDisplaySettings) -> String {
+        settings.traceLineColourDrawn
+    }
+
+    /// "Trace color" sets the line's colour and leaves the fill's alone.
+    static func setTraceColour(_ hex: String, in settings: inout BandDisplaySettings) {
+        settings.traceLineColour = hex
+    }
+
+    /// What "Fill color" shows: the colour under the trace.
+    static func fillColourShown(_ settings: BandDisplaySettings) -> String {
+        settings.traceColour
+    }
+
+    /// "Fill color" sets the fill's colour and leaves a chosen trace colour
+    /// alone. Until one is chosen the line follows the fill, as the
+    /// desktop's does.
+    static func setFillColour(_ hex: String, in settings: inout BandDisplaySettings) {
+        settings.traceColour = hex
+    }
+
     // MARK: The page
 
     var body: some View {
@@ -160,6 +190,8 @@ struct DisplayOnThisPhonePage: View {
         } message: {
             Text(Self.resetMessage)
         }
+        .modifier(DisplayV29Presentation(main: main, model: display))
+        .onAppear { main.displayEditScope = .pan }
         .navigationTitle("Display")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -204,13 +236,12 @@ struct DisplayOnThisPhonePage: View {
                 Text(BandPalette.customPaletteName).tag(BandPalette.customPaletteId)
             }
             .accessibilityIdentifier("displayPalette")
-            Picker("Levels", selection: Binding(get: { extras ? settings.waterfallLevelMode : .manual },
+            Picker("Levels", selection: Binding(get: { settings.waterfallLevelMode },
                                                 set: { setLevelMode($0) })) {
                 ForEach(Self.levelModes, id: \.mode) { entry in
                     Text(entry.title).tag(entry.mode)
                 }
             }
-            .disabled(!extras)
             .accessibilityIdentifier("waterfallLevels")
             SetupNumberRow(title: "High level", value: settings.waterfallHighDbm, range: Self.levelRange, step: 1,
                            unit: "dBm", id: "waterfallHigh") { setHighLevel($0) }
@@ -253,24 +284,31 @@ struct DisplayOnThisPhonePage: View {
                 HStack {
                     Text("Line")
                     Spacer(minLength: 8)
-                    Text(DisplaySheetModel.lineText(display.line))
+                    Text(DisplaySheetModel.lineText(display.line(scale: displayScale)))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
             } onIncrement: {
-                display.setLine(display.line + line.step, scale: displayScale)
+                display.setLine(display.line(scale: displayScale) + line.step, scale: displayScale)
             } onDecrement: {
-                display.setLine(display.line - line.step, scale: displayScale)
+                display.setLine(display.line(scale: displayScale) - line.step, scale: displayScale)
             }
-            .accessibilityValue(DisplaySheetModel.lineText(display.line))
+            .accessibilityValue(DisplaySheetModel.lineText(display.line(scale: displayScale)))
             .accessibilityIdentifier("traceLine")
             SetupNumberRow(title: "Spectrum height", value: display.spectrumHeight, range: Self.spectrumHeightRange,
                            step: 5, unit: "%", id: "setupSpectrumHeight") { display.setSpectrumHeight($0) }
-            ColorPicker("Trace color", selection: Binding(get: { BandColours.slice(settings.traceColour) },
-                                                           set: { colour in
-                                                               change { $0.traceColour = Self.hex(colour) }
-                                                           }), supportsOpacity: false)
+            ColorPicker("Trace color",
+                        selection: Binding(get: { BandColours.slice(Self.traceColourShown(settings)) },
+                                           set: { colour in
+                                               change { Self.setTraceColour(Self.hex(colour), in: &$0) }
+                                           }), supportsOpacity: false)
                 .accessibilityIdentifier("traceColour")
+            ColorPicker("Fill color",
+                        selection: Binding(get: { BandColours.slice(Self.fillColourShown(settings)) },
+                                           set: { colour in
+                                               change { Self.setFillColour(Self.hex(colour), in: &$0) }
+                                           }), supportsOpacity: false)
+                .accessibilityIdentifier("fillColour")
             ColorPicker("Passband color", selection: Binding(get: { BandColours.slice(settings.passbandColour) },
                                                               set: { colour in
                                                                   change { $0.passbandColour = Self.hex(colour) }

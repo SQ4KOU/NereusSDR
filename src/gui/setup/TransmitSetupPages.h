@@ -99,6 +99,7 @@
 #include "gui/SetupPage.h"
 #include "models/TransmitModel.h"   // DrivePowerSource enum (Issue #175 Task 8)
 #include "core/HpsdrModel.h"        // HPSDRModel enum + spinbox helpers (Issue #175 Task 8)
+#include "gui/NereusGuiExport.h"
 
 class QSlider;
 class QComboBox;
@@ -273,7 +274,7 @@ private:
 // 3M-3a-i Batch 5 surface; the per-stage Setup pages it cross-links into
 // land in 3M-3a-ii (CFC / Phrot / CESSB) and 3M-3a-iii (VOX / DEXP).
 // ---------------------------------------------------------------------------
-class SpeechProcessorPage : public SetupPage {
+class NEREUS_GUI_EXPORT SpeechProcessorPage : public SetupPage {
     Q_OBJECT
 public:
     explicit SpeechProcessorPage(RadioModel* model, QWidget* parent = nullptr);

@@ -42,6 +42,10 @@
 //   2026-09-29 - Level Cal: the unused level offset (cal/levelOffset) is
 //                 removed; the meter and display offsets live on RadioModel.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-14 - The frequency correction factors and the 10 MHz choice are
+//                 atomics: the P1 EP2 sender and the P2 connection thread
+//                 read them while the main thread sets them. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -163,26 +167,26 @@ CalibrationController::CalibrationController(QObject* parent)
 // Source: setup.cs:5137-5144 HPSDRFreqCorrectFactorViaAutoCalibration [@501e3f5]
 double CalibrationController::freqCorrectionFactor() const
 {
-    return m_freqCorrectionFactor;
+    return m_freqCorrectionFactor.load();
 }
 
 void CalibrationController::setFreqCorrectionFactor(double factor)
 {
-    if (m_freqCorrectionFactor == factor) { return; }
-    m_freqCorrectionFactor = factor;
+    if (m_freqCorrectionFactor.load() == factor) { return; }
+    m_freqCorrectionFactor.store(factor);
     emit changed();
 }
 
 // Source: setup.cs:22704 udHPSDRFreqCorrectFactor10MHz_ValueChanged [@501e3f5]
 double CalibrationController::freqCorrectionFactor10M() const
 {
-    return m_freqCorrectionFactor10M;
+    return m_freqCorrectionFactor10M.load();
 }
 
 void CalibrationController::setFreqCorrectionFactor10M(double factor)
 {
-    if (m_freqCorrectionFactor10M == factor) { return; }
-    m_freqCorrectionFactor10M = factor;
+    if (m_freqCorrectionFactor10M.load() == factor) { return; }
+    m_freqCorrectionFactor10M.store(factor);
     emit changed();
 }
 
@@ -190,13 +194,13 @@ void CalibrationController::setFreqCorrectionFactor10M(double factor)
 //   udHPSDRFreqCorrectFactor10MHz.Enabled = chkUsing10MHzRef.Checked [@501e3f5]
 bool CalibrationController::using10MHzRef() const
 {
-    return m_using10MHzRef;
+    return m_using10MHzRef.load();
 }
 
 void CalibrationController::setUsing10MHzRef(bool on)
 {
-    if (m_using10MHzRef == on) { return; }
-    m_using10MHzRef = on;
+    if (m_using10MHzRef.load() == on) { return; }
+    m_using10MHzRef.store(on);
     emit changed();
 }
 
@@ -209,7 +213,10 @@ void CalibrationController::setUsing10MHzRef(bool on)
 //   [@501e3f5]
 double CalibrationController::effectiveFreqCorrectionFactor() const
 {
-    return m_using10MHzRef ? m_freqCorrectionFactor10M : m_freqCorrectionFactor;
+    // Called off the main thread (the P1 EP2 sender, the P2 connection
+    // thread): atomic loads only.
+    return m_using10MHzRef.load() ? m_freqCorrectionFactor10M.load()
+                                  : m_freqCorrectionFactor.load();
 }
 
 // ── RX1 / RX2 6m LNA gain offsets ────────────────────────────────────────────
@@ -444,9 +451,9 @@ void CalibrationController::load()
     auto& s = AppSettings::instance();
     const QString base = QStringLiteral("hardware/%1/cal/").arg(m_mac);
 
-    m_freqCorrectionFactor   = s.value(base + QStringLiteral("freqFactor"),   QStringLiteral("1.0")).toDouble();
-    m_freqCorrectionFactor10M = s.value(base + QStringLiteral("freqFactor10M"), QStringLiteral("1.0")).toDouble();
-    m_using10MHzRef          = s.value(base + QStringLiteral("using10M"),      QStringLiteral("False")).toString() == QStringLiteral("True");
+    m_freqCorrectionFactor.store(s.value(base + QStringLiteral("freqFactor"),   QStringLiteral("1.0")).toDouble());
+    m_freqCorrectionFactor10M.store(s.value(base + QStringLiteral("freqFactor10M"), QStringLiteral("1.0")).toDouble());
+    m_using10MHzRef.store(s.value(base + QStringLiteral("using10M"),      QStringLiteral("False")).toString() == QStringLiteral("True"));
     // Thetis's 13 dB where nothing is stored (setup.designer.cs:12070-12074,
     // 12112-12116 [v2.10.3.15]); a stored value, 0 included, is kept.
     m_rx1_6mLnaOffset        = s.value(base + QStringLiteral("rx1_6mLna"),     QStringLiteral("13")).toDouble();
@@ -542,11 +549,11 @@ void CalibrationController::save()
             s.setValue(key, value);
         }
     };
-    store(base + QStringLiteral("freqFactor"),      QString::number(m_freqCorrectionFactor, 'g', 15),
+    store(base + QStringLiteral("freqFactor"),      QString::number(m_freqCorrectionFactor.load(), 'g', 15),
           QString::number(1.0, 'g', 15));
-    store(base + QStringLiteral("freqFactor10M"),   QString::number(m_freqCorrectionFactor10M, 'g', 15),
+    store(base + QStringLiteral("freqFactor10M"),   QString::number(m_freqCorrectionFactor10M.load(), 'g', 15),
           QString::number(1.0, 'g', 15));
-    store(base + QStringLiteral("using10M"),        m_using10MHzRef ? QStringLiteral("True") : QStringLiteral("False"),
+    store(base + QStringLiteral("using10M"),        m_using10MHzRef.load() ? QStringLiteral("True") : QStringLiteral("False"),
           QStringLiteral("False"));
     store(base + QStringLiteral("rx1_6mLna"),       QString::number(m_rx1_6mLnaOffset),     QString::number(13.0));
     store(base + QStringLiteral("rx2_6mLna"),       QString::number(m_rx2_6mLnaOffset),     QString::number(13.0));
