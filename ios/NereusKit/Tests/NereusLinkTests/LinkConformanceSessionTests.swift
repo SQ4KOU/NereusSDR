@@ -27,7 +27,7 @@ import Testing
 
     @Test func theAppRunsTheFixturesMarkedForIt() throws {
         let fixtures = try Self.appFixtures()
-        #expect(fixtures.count == 85)
+        #expect(fixtures.count == 87)
         #expect(Set(fixtures.map(\.id)).count == fixtures.count)
         for id in Self.diversityProducerSessions {
             #expect(fixtures.contains { $0.id == id }, "\(id)")
@@ -86,6 +86,9 @@ import Testing
             #expect(fixtures.contains { $0.id == id }, "\(id)")
         }
         #expect(fixtures.contains { $0.id == "session-connect-connectable" })
+        // The Core's antenna rotor (remoteRotorControlVersion 1): the rotor
+        // object and its eight commands, played with no rotor set up.
+        #expect(fixtures.contains { $0.id == "session-verbs-rotor" })
         // The Settings Validation panel (settingsHygiene 2) and a Setup
         // description at version 1, run once the app declares them.
         for id in ["session-verbs-settings-hygiene", "session-settings-hygiene-token", "session-verbs-two-tone-preset"] {
@@ -163,12 +166,14 @@ import Testing
             #expect(ids.contains(id), "\(id)")
         }
         #expect(LinkFeatures.app == ["deviceAuth": 1, "sessionHolder": 1, "remoteTx": 1,
-                                     "setupDescription": 24, "settingsHygiene": 2, "radioAntennaRows": 1, "vax": 1, "txEqCurve": 2,
+                                     "setupDescription": 29, "settingsHygiene": 2, "radioAntennaRows": 1, "vax": 1, "txEqCurve": 2,
                                   "diversityPattern": 1, "diversityControl": 1, "logCategoryList": 1, "radioModels": 1, "band2m": 1, "coreAddresses": 1,
                                   "radeStatus": 1, "stationTciSettings": 1, "txInhibitReason": 1, "alexLpf": 1, "mediaDirect": 1,
                                   "sliceAccess": 3, "cfcProfile": 1, "paProfiles": 1,
                                   "levelCalibration": 1, "adcAttenuators": 1, "rx2Attenuator": 1, "radioMic": 1,
-                                  "rxFilterLowPass": 1, "radeReason": 1, "audioQuality": 1])
+                                  "rxFilterLowPass": 1, "radeReason": 1, "audioQuality": 1, "stationCat": 1,
+                                  "radioSpeaker": 1, "coreSpeaker": 1,
+                                  "spectrumPicture": 1, "firmwareBeta": 1])
     }
 
     /// JSON inside a string (section 16.1): an app's runner sends the

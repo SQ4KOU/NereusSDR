@@ -134,6 +134,9 @@ void SpectrumReducer::reduce(const QVector<float>& binsLinear,
                           0.0,
                           static_cast<double>(sliceCount),
                           0.0);
+    if (m_cfg.averageMode == SpectrumAvenger::kTimeWindowMode) {
+        m_avenger.setNumAverage(m_cfg.averageFrames);
+    }
     m_avenger.apply(m_linearPixels,
                     m_cfg.averageMode,
                     m_cfg.averageAlpha,

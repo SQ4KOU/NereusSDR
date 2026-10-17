@@ -34,6 +34,10 @@
 //               does, and away devices (setAwayDevices, isAwaySlice) for
 //               Amendment 8a. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-10-12: receiverHoldersChanged() from each place a receiver's
+//               holder is written (a slice added, closed, moved to another
+//               receiver, or changing hands). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/SliceOwnership.h"
@@ -90,11 +94,17 @@ void SliceOwnership::noteSliceAdded(int sliceId)
     // Task 74: bound before it was noted, it claimed its receiver for
     // nobody; it is the first there, so the receiver is its owner's.
     const auto stream = m_streamOf.constFind(sliceId);
+    bool anchored = false;
     if (stream != m_streamOf.cend() && m_anchor.value(*stream).isEmpty()
         && m_joinOrder.value(*stream).value(0, -1) == sliceId) {
         m_anchor.insert(*stream, mark.subject());
+        anchored = true;
     }
+    const QPointer<SliceOwnership> self(this);
     emit activeChanged();
+    if (self && anchored) {
+        emit receiverHoldersChanged();
+    }
 }
 
 void SliceOwnership::beginRemove(int sliceId)
@@ -115,6 +125,7 @@ void SliceOwnership::beginRemove(int sliceId)
 void SliceOwnership::endRemove(int sliceId)
 {
     const ActiveRxWatch watch(this);
+    const bool wasOnReceiver = m_streamOf.contains(sliceId);
     leaveStream(sliceId);
     m_removing.remove(sliceId);
     m_order.removeAll(sliceId);
@@ -128,6 +139,10 @@ void SliceOwnership::endRemove(int sliceId)
     }
     if (m_mostRecent == sliceId) {
         m_mostRecent = -1;
+    }
+    if (wasOnReceiver) {
+        // The receiver it was on may have passed to another device.
+        emit receiverHoldersChanged();
     }
 }
 
@@ -484,6 +499,7 @@ bool SliceOwnership::changeMark(int sliceId, const Mark& requested, const QByteA
     // Task 74: the anchor goes with the slice to its new owner when it was
     // the old owner's only slice on the receiver.
     const auto stream = m_streamOf.constFind(sliceId);
+    bool anchorMoved = false;
     if (stream != m_streamOf.cend() && before.subject() != next.subject()
         && m_anchor.value(*stream) == before.subject()) {
         bool otherOfOld = false;
@@ -507,6 +523,7 @@ bool SliceOwnership::changeMark(int sliceId, const Mark& requested, const QByteA
                 }
             }
             m_anchor.insert(*stream, nextAnchor);
+            anchorMoved = true;
         }
     }
     // Task 1 (slice control plan): each change of owner is one control
@@ -528,6 +545,9 @@ bool SliceOwnership::changeMark(int sliceId, const Mark& requested, const QByteA
         if (!self) { return true; }
     }
     emit activeChanged();
+    if (self && anchorMoved) {
+        emit receiverHoldersChanged();
+    }
     return true;
 }
 
@@ -710,16 +730,16 @@ void SliceOwnership::noteStream(int sliceId, int stream)
         return;
     }
     leaveStream(sliceId);
-    if (stream < 0) {
-        return;
+    if (stream >= 0) {
+        QList<int>& order = m_joinOrder[stream];
+        if (order.isEmpty()) {
+            // Ruling 6.2: this slice claimed the receiver (NewStream).
+            m_anchor.insert(stream, subjectOf(sliceId));
+        }
+        order.append(sliceId);
+        m_streamOf.insert(sliceId, stream);
     }
-    QList<int>& order = m_joinOrder[stream];
-    if (order.isEmpty()) {
-        // Ruling 6.2: this slice claimed the receiver (NewStream).
-        m_anchor.insert(stream, subjectOf(sliceId));
-    }
-    order.append(sliceId);
-    m_streamOf.insert(sliceId, stream);
+    emit receiverHoldersChanged();
 }
 
 QByteArray SliceOwnership::anchorOf(int stream) const

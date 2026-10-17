@@ -40,6 +40,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-15 - wireMox(): the MOX state the wire carries, unkeyed while
+//                 the transmit is cut. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-14 - Share the four command construction boundaries with
+//                 focused in-memory tests. J.J. Boyd (KG4VCF), AI-assisted
+//                 via OpenAI Codex. NereusSDR-original.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -119,6 +125,9 @@
 //                the microphone frame sequence number to the TX pump's wake
 //                watch, and its figures in txSendStats. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-06 - Radio speaker (R-SPK-09, R-SPK-15): the speaker amplifier
+//                setters. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 /*
@@ -342,6 +351,11 @@ public slots:
     void setHpfBypassOnPs(bool on) override;
     void setAlexHpfBypass(bool on) override;
     void setPaDisabled(bool disabled) override;
+    // The speaker amplifier inputs: stored, and sent at once while running
+    // (byte 1400 bit 1, buildCodecContext).
+    void setSpeakerAmplifierMode(int mode) override;
+    void setRadioSpeakerMuted(bool muted) override;
+    void setSidetoneExpected(bool expected) override;
     void setAlexHpfEdges(const codec::alex::AlexHpfEdges& edges) override;
     // The Alex-1 low-pass rows (stored for the next selection) and
     // 6m/ByPass on RX (re-selects at once).
@@ -546,6 +560,11 @@ private:
     void composeCmdRx(char buf[1444]) const;                  // network.c:1066 (1444 == kBufLen)
     void composeCmdTx(char buf[60]) const;                    // network.c:1181
 
+    QByteArray buildCmdGeneralPacket();
+    QByteArray buildCmdHighPriorityPacket();
+    QByteArray buildCmdRxPacket();
+    QByteArray buildCmdTxPacket();
+
     // --- Command senders (compose + UDP dispatch) ---
     void sendCmdGeneral();       // network.c:821 → port 1024
     void sendCmdHighPriority();  // network.c:913 → port 1027
@@ -717,6 +736,11 @@ private:
     // sendTxIq() call, not once per sample, so the ordering cost is
     // irrelevant next to the surrounding ring arithmetic.
     std::atomic<bool> m_mox{false};
+    // The MOX state every compose site puts on the wire: m_mox, read as
+    // unkeyed while the transmit is cut (RadioConnection::transmitCut), so
+    // the window before the cut's own setMox(false) runs carries no PTT bit.
+    // Atomic reads only, so the TX I/Q send thread may call it too.
+    bool wireMox() const noexcept { return m_mox.load() && !transmitCut(); }
 
     // --- PureSignal DDC pair (Phase 3M-4 bench-fix 2026-05-23) ───────────
     //
@@ -1270,6 +1294,11 @@ public:
         m_hardwareProfile.effectiveBoard = board;
         selectCodec();
     }
+    QByteArray cmdGeneralPacketForTest() { return buildCmdGeneralPacket(); }
+    QByteArray cmdHighPriorityPacketForTest() { return buildCmdHighPriorityPacket(); }
+    QByteArray cmdRxPacketForTest() { return buildCmdRxPacket(); }
+    QByteArray cmdTxPacketForTest() { return buildCmdTxPacket(); }
+
     // Expose compose methods for regression-freeze capture (Task 1) and gate test (Task 7).
     void composeCmdGeneralForTest(quint8 buf[60]) const {
         char tmp[60];

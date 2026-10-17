@@ -54,6 +54,10 @@
 #include "core/RadioConnection.h"
 #include "core/TxAnalyzer.h"
 #include "core/TxChannel.h"
+#include "core/TxDisplayFeed.h"
+#include "core/MoxController.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
 #include "core/WdspEngine.h"
 #include "core/wdsp_api.h"
 
@@ -174,7 +178,9 @@ public:
     void connectToRadio(const NereusSDR::RadioInfo&) override {}
     void disconnect() override {}
     void setReceiverFrequency(int, quint64) override {}
-    void setTxFrequency(quint64) override {}
+    void setTxFrequency(quint64 hz) override { txFrequencyHz = hz; ++txFrequencyWrites; }
+    int txFrequencyWrites{0};
+    quint64 txFrequencyHz{0};
     void setActiveReceiverCount(int) override {}
     void setSampleRate(int) override {}
     void setAttenuator(int) override {}
@@ -216,6 +222,113 @@ class TestTxAnalyzerSkirt : public QObject {
 private slots:
     void init() { AppSettings::instance().clear(); }
     void cleanup() { RealtimeTestLoad::printLoadAverageIfFailed(); }
+
+    void tuneFrameRfAxisMatchesCompensatedNco_data()
+    {
+        QTest::addColumn<int>("mode");
+        QTest::addColumn<double>("toneHz");
+        QTest::addColumn<bool>("alreadyKeyed");
+        QTest::newRow("DIGU") << int(DSPMode::DIGU) << 600.0 << false;
+        QTest::newRow("DIGL") << int(DSPMode::DIGL) << -600.0 << false;
+        QTest::newRow("DIGU-already-keyed") << int(DSPMode::DIGU) << 600.0 << true;
+        QTest::newRow("DIGL-already-keyed") << int(DSPMode::DIGL) << -600.0 << true;
+    }
+
+    void tuneFrameRfAxisMatchesCompensatedNco()
+    {
+        QFETCH(int, mode);
+        QFETCH(double, toneHz);
+        QFETCH(bool, alreadyKeyed);
+        constexpr quint64 kDial = 14'074'000;
+        RadioModel model;
+        MockConnection conn;
+        model.setCapsForTest(false);
+        model.injectConnectionForTest(&conn);
+        model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        model.setTuneOffSettleMsForTest(0);
+        model.addSlice();
+        SliceModel* slice = model.activeSlice();
+        QVERIFY(slice);
+        slice->setDspMode(static_cast<DSPMode>(mode));
+        slice->setFrequency(kDial);
+        // Settle the existing 100 ms connect-frequency seed before testing
+        // the frame axis. Its ordering under Tune is covered separately.
+        conn.txFrequencyWrites = 0;
+        QTRY_VERIFY_WITH_TIMEOUT(conn.txFrequencyWrites > 0, 1000);
+
+        DspControlThread lane(DspLane::Transmit);
+        lane.start();
+        WdspEngine engine;
+        engine.m_initialized = true;
+        engine.setTransmitLane(&lane);
+        TxChannel* tx = engine.createTxChannel(kTxId, kTxInSize,
+            WdspEngine::kTxDspBufferSize, kInRate, kDspRate, kInRate);
+        QVERIFY(tx);
+        QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+        tx->setConnection(&conn);
+        auto analyzer = std::make_unique<TxAnalyzer>(kDisp, nullptr, &lane);
+        configureForTune(*analyzer, tx->dspBlockFrames());
+        QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+        model.injectTxChannelForTest(tx);
+        model.setTxAnalyzer(analyzer.get());
+        TxDisplayFeed* feed = model.txDisplayFeed();
+        QVERIFY(feed);
+        feed->addViewer(kDial, 8000.0, kPixels, true);
+        if (alreadyKeyed) {
+            model.moxController()->onMoxButton(true);
+            QTRY_VERIFY(feed->isKeyed());
+        }
+        model.setTune(true);
+        QTRY_VERIFY(model.isTune() && feed->isKeyed());
+        // The isolated model has no production worker/keying connections.
+        tx->setRunningAsync(true);
+        QTRY_VERIFY_WITH_TIMEOUT(tx->isRunning(), kLaneIdleTimeoutMs);
+        QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+        QTRY_COMPARE_WITH_TIMEOUT(feed->currentView().carrierHz,
+            static_cast<double>(conn.txFrequencyHz), 1000);
+        analyzer->stop(); // Read the actual siphon frame directly below.
+        const TxDisplayView view = feed->currentView();
+        const double miniOriginHz = feed->miniView().carrierHz;
+        const TxAnalyzerArgs args = analyzer->currentArgs();
+        const quint64 wireHz = conn.txFrequencyHz;
+        std::vector<double> mic(static_cast<std::size_t>(2 * kTxInSize), 0.0);
+        std::vector<float> pix;
+        const bool gotFrame = grabFrame(kDisp, args.nPix, 5, pix, [&]() {
+            for (int i = 0; i < 16; ++i) {
+                tx->pumpDexp(mic.data());
+                tx->driveOneTxBlockFromInterleaved(mic.data());
+            }
+        });
+        const Skirt measured = measure(pix, args);
+        const double displayedHz = view.carrierHz + measured.peakHz;
+        const double rfHz = static_cast<double>(wireHz) + measured.peakHz;
+        qInfo("TUNE: dial=%llu wire=%llu axis=%.0f baseband=%.2f RF=%.2f displayed=%.2f",
+              kDial, wireHz, view.carrierHz, measured.peakHz, rfHz, displayedHz);
+
+        model.setTune(false);
+        for (int i = 0; i < 8; ++i) {
+            QCoreApplication::processEvents();
+        }
+        model.setTxAnalyzer(nullptr);
+        model.injectTxChannelForTest(nullptr);
+        model.injectConnectionForTest(nullptr);
+        tx->setRunningAsync(false);
+        QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+        analyzer.reset();
+        QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+        engine.shutdown();
+        engine.setTransmitLane(nullptr);
+        lane.stop();
+
+        QVERIFY(gotFrame);
+        QVERIFY2(std::abs(measured.peakHz - toneHz) < 3.0 * hzPerPixel(args),
+                 describe(measured).constData());
+        QCOMPARE(wireHz, quint64(qint64(kDial) - qint64(toneHz)));
+        QCOMPARE(miniOriginHz, static_cast<double>(wireHz));
+        QVERIFY(std::abs(rfHz - kDial) < 3.0 * hzPerPixel(args));
+        QVERIFY2(std::abs(displayedHz - rfHz) < 3.0 * hzPerPixel(args),
+                 "TX frame RF axis must use the compensated NCO, not the unadjusted dial");
+    }
 
     // Case 1: a continuous synthetic tone straight into Spectrum0.
     void syntheticToneHasNoSkirt_data()

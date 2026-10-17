@@ -105,6 +105,7 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
+#include <QHash>
 #include <QRegularExpression>
 #include <QSet>
 #include <QString>
@@ -486,12 +487,24 @@ struct ThisComputerPage {
 
 // Every `registerPage(parent, "Label", SetupScope::ThisComputer, ...)` in
 // SetupDialog.cpp, with the classes its factory constructs (`new Class(`
-// up to the next registration).
+// up to the next registration). Display's composed factories return a
+// class kept in m_displaySourcePages, so resolve those source-map entries
+// too instead of treating the factory as classless.
 QList<ThisComputerPage> thisComputerPages(const QString& setupDialogSource)
 {
     static const QRegularExpression registration(QStringLiteral(
         "registerPage\\(\\s*[\\w>-]+\\s*,\\s*\"([^\"]+)\"\\s*,\\s*SetupScope::(\\w+)"));
     static const QRegularExpression constructed(QStringLiteral("\\bnew\\s+([A-Z]\\w+)\\s*[({;]"));
+    static const QRegularExpression sourceEntry(QStringLiteral(
+        "m_displaySourcePages\\.insert\\(\\s*QStringLiteral\\(\"([^\"]+)\"\\)\\s*,\\s*new\\s+([A-Z]\\w+)"));
+    static const QRegularExpression sourceValue(QStringLiteral(
+        "m_displaySourcePages\\.value\\(\\s*QStringLiteral\\(\"([^\"]+)\"\\)"));
+    QHash<QString, QString> displaySourceClasses;
+    auto sourceEntries = sourceEntry.globalMatch(setupDialogSource);
+    while (sourceEntries.hasNext()) {
+        const QRegularExpressionMatch entry = sourceEntries.next();
+        displaySourceClasses.insert(entry.captured(1), entry.captured(2));
+    }
     QList<QRegularExpressionMatch> matches;
     auto it = registration.globalMatch(setupDialogSource);
     while (it.hasNext()) { matches << it.next(); }
@@ -502,12 +515,18 @@ QList<ThisComputerPage> thisComputerPages(const QString& setupDialogSource)
         const qsizetype end = (i + 1 < matches.size()) ? matches.at(i + 1).capturedStart(0)
                                                         : setupDialogSource.size();
         ThisComputerPage page{matches.at(i).captured(1), {}};
-        auto classes = constructed.globalMatch(setupDialogSource.mid(begin, end - begin));
+        const QString factory = setupDialogSource.mid(begin, end - begin);
+        auto classes = constructed.globalMatch(factory);
         while (classes.hasNext()) {
             const QString name = classes.next().captured(1);
             if (!name.startsWith(QLatin1Char('Q')) && !page.classes.contains(name)) {
                 page.classes << name;
             }
+        }
+        auto sourceValues = sourceValue.globalMatch(factory);
+        while (sourceValues.hasNext()) {
+            const QString name = displaySourceClasses.value(sourceValues.next().captured(1));
+            if (!name.isEmpty() && !page.classes.contains(name)) { page.classes << name; }
         }
         pages << page;
     }
@@ -602,6 +621,12 @@ private slots:
         QTest::newRow("RemoteVax/<core>/Slice1/Channel is OperatorLocal (this computer's VAX)")
             << QStringLiteral("RemoteVax/3f1a9c0d22b4e6f7/Slice1/Channel")
             << int(SettingsScope::OperatorLocal);
+        // A remote window's own rigctld listens on this computer, for this
+        // computer's programs (RemoteRigctlServer).
+        QTest::newRow("RemoteRigctld/Enabled is OperatorLocal (this computer's rigctld)")
+            << QStringLiteral("RemoteRigctld/Enabled") << int(SettingsScope::OperatorLocal);
+        QTest::newRow("RemoteRigctld/Port is OperatorLocal (this computer's rigctld)")
+            << QStringLiteral("RemoteRigctld/Port") << int(SettingsScope::OperatorLocal);
         QTest::newRow("Slice1/VaxChannel is Station (the Core's own VAX)")
             << QStringLiteral("Slice1/VaxChannel") << int(SettingsScope::Station);
         QTest::newRow("audio/Vax1/RxGain is OperatorLocal (this computer's VAX gain)")
@@ -625,6 +650,10 @@ private slots:
             << QStringLiteral("DisplayFftWindow") << int(SettingsScope::Station);
         QTest::newRow("DisplayHzPerBinTarget is Station (FftPoolConfig)")
             << QStringLiteral("DisplayHzPerBinTarget") << int(SettingsScope::Station);
+        QTest::newRow("DisplayFftSizingMode is Station (which control sets the FFT size)")
+            << QStringLiteral("DisplayFftSizingMode") << int(SettingsScope::Station);
+        QTest::newRow("DisplayHzPerBinLastTarget is Station (the remembered target)")
+            << QStringLiteral("DisplayHzPerBinLastTarget") << int(SettingsScope::Station);
         QTest::newRow("DisplaySpectrumFps is Station (the straddle -- see SettingsScope.cpp)")
             << QStringLiteral("DisplaySpectrumFps") << int(SettingsScope::Station);
         // Parity ruling C12: the per-band grid dB max and min are the Core's.
@@ -646,8 +675,8 @@ private slots:
         QTest::newRow("tx/preconnect/Mic_Source is OperatorLocal (local mic device)")
             << QStringLiteral("tx/preconnect/Mic_Source") << int(SettingsScope::OperatorLocal);
 
-        // R-R3-23 / R-R3-36: Setup > Audio > Devices (a ThisComputer page)
-        // and the PC Mic half of TX Input save these in a remote window.
+        // R-R3-23 / R-R3-36 / R-SPK-21: Setup > Audio > Outputs' cards and
+        // Microphone's PC microphone card save these in a remote window.
         // Every field AudioDeviceConfig::saveToSettings writes under the
         // three card prefixes, plus the Headphones enable, must stay on
         // this computer: were one Station, picking a sound card in a
@@ -666,10 +695,20 @@ private slots:
         }
         QTest::newRow("audio/Headphones/Enabled is OperatorLocal (this computer's device)")
             << QStringLiteral("audio/Headphones/Enabled") << int(SettingsScope::OperatorLocal);
+        // R-AUD-20: the one buffer size and rate of this computer's ASIO
+        // session. AudioEngine::setAsioBufferAndRate also writes them into
+        // the cards' BufferSamples and SampleRate above, so they share
+        // those keys' scope. Setup reads them through AudioEngine, so the
+        // sweep sees only the core side; these rows are their cover.
+        for (const char* key : {"audio/Asio/BufferFrames", "audio/Asio/SampleRate"}) {
+            QTest::newRow(qPrintable(QStringLiteral("%1 is OperatorLocal (this computer's ASIO session)")
+                                         .arg(QLatin1String(key))))
+                << QString::fromLatin1(key) << int(SettingsScope::OperatorLocal);
+        }
         // R-R3-45: where MON plays is this computer's choice too.
         QTest::newRow("audio/TxMonitor/Output is OperatorLocal (this computer's output)")
             << QStringLiteral("audio/TxMonitor/Output") << int(SettingsScope::OperatorLocal);
-        // The radio's own microphone input stays with the radio: TX Input's
+        // The radio's own microphone input stays with the radio: Microphone's
         // mic source selector is a Core control in a remote window.
         QTest::newRow("hardware/<mac>/tx/Mic_Source is Station (the radio's mic input)")
             << QStringLiteral("hardware/00:1C:2D:05:37:2A/tx/Mic_Source")
@@ -870,8 +909,12 @@ private slots:
         // Preferences became Mixed when its callsign and grid were
         // connected to the station identity (R3 controls that work), and
         // Filter Presets became a Core page when the presets moved to the
-        // Core (iPhone app Task 19, D40).
-        QVERIFY2(pages.size() >= 20,
+        // Core (iPhone app Task 19, D40). Serial Ports, TCP/IP CAT, CAT
+        // Options and CAT PTT became Core pages when a remote window
+        // started setting up the Core's CAT (PR 488), leaving 19. Spectrum
+        // Peaks, Waterfall Defaults and 3D View moved to the Display pill
+        // (PR 443), leaving 16.
+        QVERIFY2(pages.size() >= 16,
                  qPrintable(QStringLiteral("only %1 ThisComputer registrations found")
                                 .arg(pages.size())));
 
@@ -904,7 +947,7 @@ private slots:
         QStringList seen(keysSeen.cbegin(), keysSeen.cend());
         seen.sort();
         // Most ThisComputer leaves are placeholders or build their keys at
-        // run time (the Devices cards, "audio/<card>/..."), so the literal
+        // run time (the audio device cards, "audio/<card>/..."), so the literal
         // population is small: 4 when this was written. The canary is a key
         // Appearance > Meter Styles writes directly; losing it means the
         // class-body extraction broke, not that the page changed.
@@ -921,7 +964,8 @@ private slots:
     }
 
     // R-R3-44: Audio > VAX is a ThisComputer page, so the sweep above
-    // covers every key its class writes.
+    // covers every key its class writes. R-SPK-21: VAX and TCI are both on
+    // Audio > Digital modes.
     void vaxPageIsSweptAsThisComputers()
     {
         const QString root = QStringLiteral(NEREUS_SOURCE_DIR);
@@ -931,12 +975,13 @@ private slots:
             thisComputerPages(QString::fromUtf8(dialog.readAll()));
         bool found = false;
         for (const ThisComputerPage& page : pages) {
-            if (page.label == QStringLiteral("VAX")) {
+            if (page.label == QStringLiteral("Digital modes")) {
                 found = true;
                 QVERIFY(page.classes.contains(QStringLiteral("AudioVaxPage")));
+                QVERIFY(page.classes.contains(QStringLiteral("AudioTciPage")));
             }
         }
-        QVERIFY2(found, "Audio > VAX is not registered ThisComputer");
+        QVERIFY2(found, "Audio > Digital modes is not registered ThisComputer");
     }
 
     // iPhone app Task 19 (D40): DSP > Filter Presets is a Core page, and

@@ -34,15 +34,23 @@
 //   2026-09-25 -- R-R3-39: wait for the receive lane before reading
 //                 state it owns (NNR tuning, NR slot). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-10-12 -- A connect keeps the saved FFT plans in the folder the
+//                 process was given (DspCacheLocation). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
+#include <QDir>
 #include <QElapsedTimer>
+#include <QFileInfo>
+#include <QScopeGuard>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 
 #include <memory>
 
 #include "core/AppSettings.h"
+#include "core/DspCacheLocation.h"
 #include "core/PureSignal.h"
 #include "core/RxChannel.h"
 #include "core/dsp/DspAssetService.h"
@@ -58,6 +66,52 @@ class TestConnectableRadioModel : public QObject {
     Q_OBJECT
 
 private slots:
+    void nonActiveSliceDspEditsSurviveTheProductionBandCrossingSignals()
+    {
+        AppSettings::instance().clear();
+        auto harness = ConnectableRadioModel::create(
+            10000, RadioModel::Role::Local, {}, HPSDRHW::HermesLite, false);
+        QVERIFY(harness);
+        RadioModel& radio = harness->model();
+        SliceModel* first = radio.slices().first();
+        SliceModel* second = radio.sliceById(radio.addSlice());
+        QVERIFY(second);
+        QVERIFY(radio.setActiveSliceById(second->sliceIndex()));
+        second->setFrequency(14225000.0);
+        second->setFilter(200, 2800);
+        second->setAgcThreshold(-20);
+        radio.requestSettingsSave();
+        radio.flushPendingSettingsSave();
+        const QString prefix = QStringLiteral("Slice%1/").arg(second->sliceIndex());
+        QVERIFY(radio.setActiveSliceById(first->sliceIndex()));
+
+        // No requestSettingsSave seam here: connectToRadio has installed
+        // the actual filter/AGC/frequency handlers for this non-active slice.
+        second->setFilter(350, 2450);
+        second->setAgcThreshold(-37);
+        second->setFrequency(7100000.0);
+        radio.flushPendingSettingsSave();
+
+        AppSettings onDisk(AppSettings::instance().filePath());
+        onDisk.load();
+        QCOMPARE(onDisk.value(prefix + "Band20m/FilterLow").toInt(), 350);
+        QCOMPARE(onDisk.value(prefix + "Band20m/AgcThreshold").toInt(), -37);
+        QCOMPARE(onDisk.value(prefix + "Band20m/Frequency").toDouble(), 14225000.0);
+        QCOMPARE(onDisk.value(prefix + "Band40m/Frequency").toDouble(), 7100000.0);
+        QCOMPARE(onDisk.value(prefix + "LastBand").toString(), QStringLiteral("40m"));
+        QCOMPARE(radio.activeSlice(), first);
+        QCOMPARE(second->frequency(), 7100000.0);
+        QCOMPARE(second->filterLow(), 350);
+        QCOMPARE(second->filterHigh(), 2450);
+        QCOMPARE(second->agcThreshold(), -37);
+        QVERIFY(radio.waitForReceiveLaneForTest());
+        RxChannel* channel = radio.rxChannelForSlice(second->sliceIndex());
+        QVERIFY(channel);
+        QCOMPARE(channel->filterLow(), 350.0);
+        QCOMPARE(channel->filterHigh(), 2450.0);
+        QCOMPARE(channel->agcThreshold(), -37);
+    }
+
     void reconnectPreservesLiveReceivers()
     {
         auto harness = ConnectableRadioModel::create();
@@ -300,6 +354,27 @@ private slots:
         // teardownConnection()) and P1FakeRadio's destructor both run here,
         // under this test's watch, rather than implicitly after the last
         // assertion above.
+        harness.reset();
+    }
+
+    // A background Core started by the app is told where the app keeps its
+    // saved FFT plans (nereusd --dsp-cache-dir). The radio connection has to
+    // look there, or the Core builds every plan again, for minutes, while
+    // the radio waits. The engine makes the folder it is handed and nothing
+    // else makes this one, so its existence after a connect says which
+    // folder the connection asked for.
+    void connectKeepsThePlansInTheFolderTheProcessWasGiven() {
+        QTemporaryDir scratch;
+        QVERIFY(scratch.isValid());
+        const QString folder = QDir(scratch.path()).filePath(QStringLiteral("the app's plans"));
+        DspCacheLocation::setDirectory(folder);
+        const auto restore = qScopeGuard([] { DspCacheLocation::setDirectory({}); });
+        QVERIFY(!QFileInfo::exists(folder));
+
+        std::unique_ptr<ConnectableRadioModel> harness = ConnectableRadioModel::create();
+        QVERIFY(harness != nullptr);
+        QCOMPARE(harness->model().connectionState(), ConnectionState::Connected);
+        QVERIFY2(QFileInfo(folder).isDir(), qPrintable(folder));
         harness.reset();
     }
 };

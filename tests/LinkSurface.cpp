@@ -12,6 +12,31 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12  J.J. Boyd / KG4VCF  The radio's second firmware number: the
+//                                    capture declares firmwareBeta, so the
+//                                    firmwareBeta entry is captured.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-11  J.J. Boyd / KG4VCF  Capture optional native waveform media
+//                                    capability and exact control shapes.
+//                                    AI-assisted via OpenAI Codex.
+//   2026-10-11  J.J. Boyd / KG4VCF  R-DISP-RETUNE (third wave): the
+//                                    capture declares spectrumPicture, so
+//                                    spectrumPictureVersion, the start's
+//                                    declaration and the context's
+//                                    pictureGeneration are captured.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-09  J.J. Boyd / KG4VCF  Core speaker: the capture's model is a
+//                                    Core with its own speaker and the
+//                                    capture declares coreSpeaker, so
+//                                    coreSpeakerVersion and radio's six
+//                                    Core speaker properties are captured
+//                                    (native audio plan Task 21).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-06  J.J. Boyd / KG4VCF  Radio speaker: the capture declares
+//                                    radioSpeaker, so radioSpeakerVersion
+//                                    and radio's five radio speaker
+//                                    properties are captured. AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-10-04  J.J. Boyd / KG4VCF  Complete conditional media fields,
 //                                    legacy nested variants and lossless
 //                                    bitrate refusal shapes. AI-assisted
@@ -190,6 +215,14 @@
 //               sliceAccess 3, so sliceAccessVersion reads 3. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-10-07  J.J. Boyd / KG4VCF  CAT setup from a connected desktop:
+//                                    the capture declares stationCat, so
+//                                    stationCatVersion and the
+//                                    `stationCat` object are captured.
+//                                    AI tooling: Claude Code.
+//   2026-10-08: rotor control plan Task 4b: RotorModel joins the mirrored
+//               classes. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -272,7 +305,9 @@
 #include "models/RadioModel.h"
 #include "models/RfKitModel.h"
 #include "models/SliceModel.h"
+#include "models/StationCatModel.h"
 #include "models/StationTciModel.h"
+#include "models/RotorModel.h"
 #include "models/TransmitModel.h"
 #include "models/TunerModel.h"
 
@@ -577,6 +612,9 @@ std::optional<QList<QByteArray>> liveSessionWire(
     model->setLastRadioInfoForTest(info);
     model->setConnectionStateForTest(ConnectionState::Connected);
     model->addSlice(QStringLiteral("pan-0"));
+    // Core speaker (native audio plan Task 21): a Core has its own speaker
+    // (DaemonApp), so its six properties are on the wire.
+    model->setCoreSpeakerHost(true);
     // iPhone app Task 73: a second slice the Core runs for another device
     // that is away, so the session this peer sees holds a `marker:<id>` as
     // well as its own `slice:<id>`.
@@ -678,6 +716,8 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   // RADE status: each slice's radeSynced
                                   // and radeFreqOffsetHz.
                                   {"radeStatus", 1},
+                                  // Native waveform observation media.
+                                  {"waveform", 1},
                                   // The Alex-1 low-pass in use: radio's
                                   // alexLpfBits.
                                   {"alexLpf", 1},
@@ -708,7 +748,22 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"rxFilterLowPass", 1},
                                   // RADE reason: radeReasonVersion and
                                   // each slice's radeReason.
-                                  {"radeReason", 1}})));
+                                  {"radeReason", 1},
+                                  // CAT setup from a connected desktop:
+                                  // stationCatVersion and `stationCat`.
+                                  {"stationCat", 1},
+                                  // Radio speaker: radioSpeakerVersion and
+                                  // radio's five radio speaker properties.
+                                  {"radioSpeaker", 1},
+                                  // Core speaker: coreSpeakerVersion and
+                                  // radio's six Core speaker properties.
+                                  {"coreSpeaker", 1},
+                                  // R-DISP-RETUNE: spectrumPictureVersion
+                                  // and the context's pictureGeneration.
+                                  {"spectrumPicture", 1},
+                                  // The radio's second firmware number:
+                                  // the firmwareBeta entry.
+                                  {"firmwareBeta", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -745,9 +800,12 @@ QJsonArray captureCapabilities()
     caps.coreBuildInfo = CoreBuildInfo{QStringLiteral("0.5.2"), QStringLiteral("link-surface@fixture")};
     caps.settingsBackupVersion = 1;
     caps.remoteIqVersion = 1;
+    caps.waveformVersion = 1;
     caps.setupDescriptionVersion = 1;
     caps.miniDisplayVersion = 1;
     caps.radioAntennaRowsVersion = 1;
+    // Rotor control plan Task 4b: sent by a Core that owns a rotor.
+    caps.remoteRotorControlVersion = 1;
     // iPhone app plan Task 25: sent to a peer that declared vax.
     caps.vaxEntry = true;
     // R-IOS-13 / R-R3-49: sent to a peer that declared txEqCurve; 2 with
@@ -795,6 +853,19 @@ QJsonArray captureCapabilities()
     caps.rxFilterLowPassVersion = 1;
     // RADE reason: sent to a peer that declared radeReason.
     caps.radeReasonVersion = 1;
+    // CAT setup from a connected desktop: sent to a peer that declared
+    // stationCat.
+    caps.stationCatVersion = 1;
+    // Radio speaker: sent to a peer that declared radioSpeaker.
+    caps.radioSpeakerVersion = 1;
+    // Core speaker: sent to a peer that declared coreSpeaker, from a Core
+    // with its own speaker.
+    caps.coreSpeakerVersion = 1;
+    // R-DISP-RETUNE: sent to a peer that declared spectrumPicture.
+    caps.spectrumPictureVersion = 1;
+    // The radio's second firmware number: sent to a peer that declared
+    // firmwareBeta. The capture's radio reports none, so its value is 0.
+    caps.firmwareBetaEntry = true;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its
@@ -1284,9 +1355,12 @@ QJsonObject guiToCoreOps()
     // once each declared version key is removed.
     ops.insert(QStringLiteral("start"), declaredOp(kMedia, peer, {
         {QStringLiteral("miniDisplayVersion"), {QStringLiteral("miniDisplayVersion")}},
+        // R-DISP-RETUNE: DaemonMediaController.cpp handleStart.
+        {QStringLiteral("spectrumPictureVersion"), {QStringLiteral("spectrumPictureVersion")}},
         {QStringLiteral("audioProfileVersion"), {QStringLiteral("audioProfileVersion")}},
         {QStringLiteral("receiverAudioVersion"), {QStringLiteral("receiverAudioVersion")}},
         {QStringLiteral("remoteIqVersion"), {QStringLiteral("remoteIqVersion")}},
+        {QStringLiteral("waveformVersion"), {QStringLiteral("waveformVersion")}},
         {QStringLiteral("headphonesMixVersion"), {QStringLiteral("headphonesMixVersion")}},
         // DaemonMediaController.cpp:1867-1886; RemoteMediaController.cpp:3977-3986.
         {QStringLiteral("txDisplayVersion"), {QStringLiteral("txDisplayVersion")}},
@@ -1390,6 +1464,11 @@ QJsonObject guiToCoreOps()
                declaredOp(QStringLiteral("remoteIqVersion"),
                           peer + QStringList{QStringLiteral("sliceId"), QStringLiteral("revision"),
                                              QStringLiteral("enabled")}));
+    // DaemonMediaController.cpp handleWaveformStream: a native endpoint kind.
+    ops.insert(QStringLiteral("waveform-stream"),
+               declaredOp(QStringLiteral("waveformVersion"),
+                          peer + QStringList{QStringLiteral("sliceId"), QStringLiteral("kind"),
+                                             QStringLiteral("revision"), QStringLiteral("enabled")}));
     ops.insert(QStringLiteral("receiver-audio"),
                declaredOp(QStringLiteral("receiverAudioVersion"),
                           peer + QStringList{QStringLiteral("sliceId"), QStringLiteral("revision"),
@@ -1446,6 +1525,19 @@ QJsonObject spectrumContextShapes()
             }
             shapes.append({tags, encodeRemoteSpectrumContext(m, grant)});
             if (grant) {
+                // R-DISP-RETUNE: pictureGeneration is one more number on the
+                // grant shape, for a peer that declared
+                // spectrumPictureVersion, with or without `transmit`.
+                {
+                    SpectrumContextMessage stated = m;
+                    stated.pictureGeneration = 1;
+                    const QStringList pictureTags =
+                        tags + QStringList{QStringLiteral("spectrumPictureVersion")};
+                    shapes.append({pictureTags, encodeRemoteSpectrumContext(stated, grant)});
+                    stated.transmit = false;
+                    shapes.append({pictureTags + QStringList{QStringLiteral("txDisplayVersion")},
+                                   encodeRemoteSpectrumContext(stated, grant)});
+                }
                 // RemoteSpectrumContext.cpp:136-151: transmit is an optional
                 // bool on the grant shape; false still carries the field.
                 const QStringList txTags = tags + QStringList{QStringLiteral("txDisplayVersion")};
@@ -1593,6 +1685,15 @@ QJsonObject coreToGuiOps()
                           peer + QStringList{QStringLiteral("sliceId"), QStringLiteral("revision"),
                                              QStringLiteral("enabled"), QStringLiteral("generation"),
                                              QStringLiteral("sampleRateHz"), QStringLiteral("reason")}));
+    // DaemonMediaController.cpp sendWaveformContext: independent source and
+    // delivery generations are canonical decimal strings on the wire.
+    ops.insert(QStringLiteral("waveform-stream-context"),
+               declaredOp(QStringLiteral("waveformVersion"),
+                          peer + QStringList{QStringLiteral("sliceId"), QStringLiteral("kind"),
+                                             QStringLiteral("revision"), QStringLiteral("enabled"),
+                                             QStringLiteral("availability"), QStringLiteral("reason"),
+                                             QStringLiteral("sourceGeneration"), QStringLiteral("deliveryGeneration"),
+                                             QStringLiteral("sampleRateHz")}));
     ops.insert(QStringLiteral("audio-context"), audioContextShapes());
     ops.insert(QStringLiteral("receiver-audio-context"), receiverAudioContextShapes());
     ops.insert(QStringLiteral("headphones-audio-context"), headphonesAudioContextShapes());
@@ -1926,6 +2027,7 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &AmplifierModel::staticMetaObject,
             &RfKitModel::staticMetaObject,
             &StationTciModel::staticMetaObject,
+            &StationCatModel::staticMetaObject,
             &AccessoryDataModel::staticMetaObject,
             &AccessorySettingsModel::staticMetaObject,
             &StationDevicesFacade::staticMetaObject,
@@ -1937,7 +2039,8 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &SliceAccess::staticMetaObject,
             &TransmitState::staticMetaObject,
             &StationVax::staticMetaObject,
-            &PaProfilesFacade::staticMetaObject};
+            &PaProfilesFacade::staticMetaObject,
+            &RotorLink::RotorModel::staticMetaObject};
 }
 
 QJsonObject LinkSurface::capture()

@@ -3,13 +3,14 @@
 // 2026-10-02 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 
 #include "core/session/PathRacer.h"
+#include "gui/NereusGuiExport.h"
 #include <QTimer>
 
 namespace NereusSDR {
 
 /// Proves one explicitly entered listener without signing in or sending frames.
 /// A factory supplies an owned rung; production always uses DirectPathRung.
-class CoreAddressProbe : public QObject {
+class NEREUS_GUI_EXPORT CoreAddressProbe : public QObject {
     Q_OBJECT
 public:
     enum class Outcome { Verified, Refused, TimedOut, Cancelled };

@@ -22,6 +22,8 @@ enum SetupTree {
         case audioOnThisPhone
         case displayOnThisPhone
         case pttButtons
+        /// CAT & Network, Rotor: the Core's rotor, set up as the desktop's Rotor page does.
+        case rotor
         case dataUse
         case coreLogs
         case about
@@ -119,8 +121,10 @@ enum SetupTree {
                  native: [], opensPage: nil),
         Skeleton(coreId: "pa", title: "PA", tag: .core, pageOrder: ["PA Gain", "Watt Meter", "PA Values"],
                  native: [], opensPage: nil),
+        // Outputs and Microphone from Audio 25; a Core before it sends TX Input.
         Skeleton(coreId: "audio", title: "Audio", tag: .both,
-                 pageOrder: ["On this phone", "Devices", "TX Input", "VAX", "TCI", "Advanced", "TX Profile"],
+                 pageOrder: ["On this phone", "Outputs", "Microphone", "Devices", "TX Input", "VAX", "TCI", "Advanced",
+                             "TX Profile"],
                  native: [PageEntry(page: .audioOnThisPhone, title: "On this phone", tag: .thisPhone)],
                  opensPage: nil),
         Skeleton(coreId: "dsp", title: "DSP", tag: .core,
@@ -138,9 +142,11 @@ enum SetupTree {
         Skeleton(coreId: "appearance", title: "Appearance", tag: .thisPhone,
                  pageOrder: ["Colors & Theme", "Meter Styles", "Gradients"], native: [], opensPage: nil),
         Skeleton(coreId: "catNetwork", title: "CAT & Network", tag: .both,
-                 pageOrder: ["Serial Ports", "TCI Server", "Peripherals", "4O3A", "RF-Kit", "TCP/IP CAT",
+                 pageOrder: ["Serial Ports", "TCI Server", "Peripherals", "4O3A", "RF-Kit", "Rotor", "TCP/IP CAT",
                              "MIDI Control", "Data use"],
-                 native: [PageEntry(page: .dataUse, title: "Data use", tag: .thisPhone)], opensPage: nil),
+                 // Rotor sits after RF-Kit, as the desktop registers it (SetupDialog's CAT & Network).
+                 native: [PageEntry(page: .rotor, title: "Rotor", tag: .core),
+                          PageEntry(page: .dataUse, title: "Data use", tag: .thisPhone)], opensPage: nil),
         Skeleton(coreId: "test", title: "Test", tag: .core, pageOrder: ["Two-Tone IMD"], native: [], opensPage: nil),
         Skeleton(coreId: "diagnostics", title: "Diagnostics", tag: .both,
                  pageOrder: ["Radio Status", "Connection Quality", "Settings Validation", "Logs", "Export / Import"],
@@ -229,8 +235,11 @@ enum SetupTree {
     /// The app's own pages and the described ones in the desktop's order.
     /// A described page the desktop's list lacks follows the page before it.
     private static func merged(_ skeleton: Skeleton, description: SetupDescription?) -> [PageEntry] {
+        let pageOrder = skeleton.coreId == "display" && (description?.version ?? 0) >= 29
+            ? ["On this phone", "Spectrum", "Levels", "Waterfall", "View", "Peaks & Markers", "FFT & Engine", "Transmit Display", "Multimeter"]
+            : skeleton.pageOrder
         func rank(_ title: String) -> Double? {
-            skeleton.pageOrder.firstIndex { $0.caseInsensitiveCompare(title) == .orderedSame }.map(Double.init)
+            pageOrder.firstIndex { $0.caseInsensitiveCompare(title) == .orderedSame }.map(Double.init)
         }
         var ranked: [(rank: Double, sequence: Int, entry: PageEntry)] = []
         for (index, entry) in skeleton.native.enumerated() {

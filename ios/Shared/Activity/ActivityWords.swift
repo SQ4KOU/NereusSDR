@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-NereusSDR-AppStore-permission
 
 import Foundation
+import NereusModels
 
 /// The words the lock-screen card and the island show, and how they write
 /// a frequency and a length of time. The board's words (the Lock screen
@@ -55,9 +56,8 @@ enum ActivityWords {
     static let nextIn = "next in "
 
     /// "Fwd 100 W · SWR 1.15".
-    static func telemetry(watts: Double, swr: Double) -> String {
-        let shownWatts = Int(max(0, watts).rounded())
-        return "Fwd \(shownWatts) W \u{00B7} SWR " + String(format: "%.2f", max(1, swr))
+    static func telemetry(watts: Double?, swr: Double?) -> String {
+        "Fwd " + MeterReadout.power(watts) + " \u{00B7} SWR " + MeterReadout.swr(swr)
     }
 
     /// A round trip, "38 ms".

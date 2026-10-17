@@ -79,8 +79,19 @@
 
 #include <QtTest/QtTest>
 #include <QSignalSpy>
+#include <QScopeGuard>
+#include <QFile>
+#include <QtEndian>
+#include <algorithm>
+#include <cmath>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+
+#include "models/RxDspWorker.h"
 
 #include "core/RadeChannel.h"
+#include "core/RadeRxWorker.h"
 #include "core/RxChannel.h"
 #include "core/WdspEngine.h"
 #include "core/WdspTypes.h"
@@ -121,6 +132,84 @@ class TestSliceModelRadeSwap : public QObject {
     };
 
 private slots:
+    void earlyCallbackRetiresLiveRadeLifecycle_data()
+    {
+        QTest::addColumn<bool>("fromCallsign");
+        QTest::addColumn<DSPMode>("finalMode");
+        QTest::addColumn<bool>("awayAndBack");
+        for (bool callsign : {true,false}) {
+            for (DSPMode mode : {DSPMode::AM,DSPMode::RADE_U,DSPMode::RADE_L,DSPMode::RADE2_U,DSPMode::RADE2_L}) {
+                const QByteArray name=(callsign ? QByteArray("callsign-") : QByteArray("sync-"))+SliceModel::modeName(mode).toUtf8();
+                QTest::newRow(name.constData()) << callsign << mode << false;
+            }
+            const QByteArray name=callsign ? QByteArray("callsign-ABA") : QByteArray("sync-ABA");
+            QTest::newRow(name.constData()) << callsign << DSPMode::RADE_U << true;
+        }
+    }
+    void earlyCallbackRetiresLiveRadeLifecycle()
+    {
+        QFETCH(bool,fromCallsign); QFETCH(DSPMode,finalMode); QFETCH(bool,awayAndBack);
+        RxDspWorker worker;
+        RadioFixture fx;
+        fx.radio.attachDspWorkerForTest(&worker);
+        const auto detach=qScopeGuard([&] { fx.radio.attachDspWorkerForTest(nullptr); });
+        RxChannel* const originalRx=fx.engine->rxChannel(0);
+        fx.slice->setDspMode(DSPMode::RADE_U);
+        QPointer<RadeChannel> retired(fx.engine->radeChannel(0));
+        QVERIFY(retired && retired->isActive());
+        QCoreApplication::sendPostedEvents(&worker,QEvent::MetaCall);
+        QCOMPARE(worker.radeRxRouteCount(),1);
+        fx.slice->setLastRadeRxCallsign(QStringLiteral("KG4VCF"));
+        fx.slice->setRadeSynced(true);
+        QObject observations;
+        bool nested=false;
+        int acceptedFilterNotifications=0;
+        QSignalSpy filterSpy(fx.slice,&SliceModel::filterChanged);
+        const auto supersede=[&] {
+            if (!nested) {
+                nested=true;
+                if (awayAndBack) { fx.slice->setDspMode(DSPMode::AM); }
+                fx.slice->setDspMode(finalMode);
+                fx.slice->setFilter(431,2345);
+                acceptedFilterNotifications=filterSpy.count();
+            }
+        };
+        if (fromCallsign) {
+            connect(fx.slice,&SliceModel::lastRadeRxCallsignChanged,&observations,[&](const QString& callsign) {
+                if (callsign.isEmpty()) { supersede(); }
+            });
+        } else {
+            connect(fx.slice,&SliceModel::radeSyncedChanged,&observations,[&](bool synced) {
+                if (!synced) { supersede(); }
+            });
+        }
+        QSignalSpy modeSpy(fx.slice,&SliceModel::dspModeChanged);
+        fx.slice->setDspMode(DSPMode::LSB);
+        QVERIFY(nested);
+        QCOMPARE(fx.slice->dspMode(),finalMode);
+        QCOMPARE(modeSpy.count(),awayAndBack ? 2 : 1);
+        QCOMPARE(fx.slice->filterLow(),431);
+        QCOMPARE(fx.slice->filterHigh(),2345);
+        QCOMPARE(filterSpy.count(),acceptedFilterNotifications);
+        QVERIFY(fx.slice->lastRadeRxCallsign().isEmpty());
+        QVERIFY(!fx.slice->radeSynced());
+        QCOMPARE(fx.engine->rxChannel(0),originalRx);
+        QCoreApplication::sendPostedEvents(&worker,QEvent::MetaCall);
+        const bool finalRade=finalMode==DSPMode::RADE_U || finalMode==DSPMode::RADE_L
+            || finalMode==DSPMode::RADE2_U || finalMode==DSPMode::RADE2_L;
+        QCOMPARE(worker.radeRxRouteCount(),finalRade ? 1 : 0);
+        QVERIFY2(!retired,"The superseded old RADE channel must retire its actual decoder and route.");
+        RadeChannel* const replacement=fx.engine->radeChannel(0);
+        if (finalRade) {
+            QVERIFY(replacement && replacement->isActive());
+            QCOMPARE(replacement->sidebandUpper(),finalMode==DSPMode::RADE_U || finalMode==DSPMode::RADE2_U);
+            QCOMPARE(replacement->version(),finalMode==DSPMode::RADE2_U || finalMode==DSPMode::RADE2_L
+                ? RadeChannel::Version::V2 : RadeChannel::Version::V1);
+        } else {
+            QVERIFY(replacement==nullptr);
+        }
+    }
+
 
     // ── Test 1: switchToRadeUpperKeepsRxChannelAndAddsRadeChannel ──────
     //
@@ -300,6 +389,201 @@ private slots:
     // RADE_L -> LSB at the WDSP API boundary so SetRXAMode never sees
     // a raw enum 12/13 (review finding 2026-05-12, PR #238).  All
     // other modes pass through unchanged.
+    void realSpeechLoopback_data()
+    {
+        QTest::addColumn<int>("modeId");
+        QTest::addColumn<int>("expectedTxCalls");
+        // rade_c src/rade_api.c + rade_tx_v2.c: V1 consumes 12 and V2 4
+        // 10 ms feature frames per call. Four seconds gives 33 or 100 calls.
+        QTest::newRow("V1") << 12 << 33;
+        QTest::newRow("V2") << 14 << 100;
+    }
+
+    void realSpeechLoopback()
+    {
+        QFETCH(int, modeId);
+        QFETCH(int, expectedTxCalls);
+        RadioFixture txFixture;
+        RadeChannel receiver;
+        txFixture.slice->setDspMode(static_cast<DSPMode>(modeId));
+        RadeChannel* tx = txFixture.engine->radeChannel(0);
+        RadeChannel* rx = &receiver;
+        QVERIFY(tx != nullptr);
+        receiver.setVersion(modeId == 14 ? RadeChannel::Version::V2 : RadeChannel::Version::V1);
+        QCOMPARE(tx->version(), receiver.version());
+        QVERIFY(receiver.start(QStringLiteral("dummy")));
+        QVERIFY(tx->isActive());
+        QVERIFY(rx->isActive());
+
+        QFile fixture(QFINDTESTDATA("../third_party/rade/wav/brian_g8sez.wav"));
+        QVERIFY(fixture.open(QIODevice::ReadOnly));
+        const QByteArray wav = fixture.readAll();
+        QCOMPARE(wav.left(4), QByteArrayLiteral("RIFF"));
+        QCOMPARE(wav.mid(8, 4), QByteArrayLiteral("WAVE"));
+        QByteArray speech;
+        bool pcm16Mono = false;
+        for (qsizetype offset = 12; offset + 8 <= wav.size();) {
+            const quint32 length = qFromLittleEndian<quint32>(wav.constData() + offset + 4);
+            QVERIFY(length <= quint32(wav.size() - offset - 8));
+            if (wav.mid(offset, 4) == QByteArrayLiteral("fmt ")) {
+                QVERIFY(length >= 16);
+                const char* format = wav.constData() + offset + 8;
+                pcm16Mono = qFromLittleEndian<quint16>(format) == 1
+                    && qFromLittleEndian<quint16>(format + 2) == 1
+                    && qFromLittleEndian<quint32>(format + 4) == 16000
+                    && qFromLittleEndian<quint16>(format + 14) == 16;
+            } else if (wav.mid(offset, 4) == QByteArrayLiteral("data")) {
+                speech = wav.mid(offset + 8, std::min<qsizetype>(length, 4 * 16000 * 2));
+            }
+            offset += 8 + length + (length & 1);
+        }
+        QVERIFY(pcm16Mono);
+        QCOMPARE(speech.size(), 4 * 16000 * 2);
+#if Q_BYTE_ORDER == Q_BIG_ENDIAN
+        for (qsizetype offset = 0; offset < speech.size(); offset += 2) {
+            std::swap(speech[offset], speech[offset + 1]);
+        }
+#endif
+        QByteArray air;
+        connect(tx, &RadeChannel::txModemReady, this,
+                [&air](const QByteArray& modem) { air.append(modem); });
+        tx->txEncode(speech);
+        QCOMPARE(tx->radeTxCallCountForTest(), expectedTxCalls);
+        QVERIFY(tx->queueEndOfOver(QStringLiteral("KG4VCF")));
+        QVERIFY(tx->endOfOverQueued());
+        // Flush the existing resamplers and allow the EOO detector to finish.
+        air.append(QByteArray(2 * 24000 * 2 * sizeof(float), '\0'));
+        QSignalSpy syncSpy(rx, &RadeChannel::syncChanged);
+        QSignalSpy textSpy(rx, &RadeChannel::rxTextDecoded);
+        bool finite = true;
+        int nonzeroSpeechSamples = 0;
+        connect(rx, &RadeChannel::rxSpeechReady, this,
+                [&](const QByteArray& pcm) {
+                    const float* samples = reinterpret_cast<const float*>(pcm.constData());
+                    for (qsizetype i = 0; i < pcm.size() / qsizetype(sizeof(float)); ++i) {
+                        finite = finite && std::isfinite(samples[i]);
+                        if (std::abs(samples[i]) > 1e-6f) {
+                            ++nonzeroSpeechSamples;
+                        }
+                    }
+                });
+        const float* stereo = reinterpret_cast<const float*>(air.constData());
+        const int frames = int(air.size() / (2 * sizeof(float)));
+        for (int offset = 0; offset < frames; offset += 2048) {
+            const int count = std::min(2048, frames - offset);
+            QByteArray iq(count * 2 * sizeof(float), Qt::Uninitialized);
+            float* output = reinterpret_cast<float*>(iq.data());
+            for (int i = 0; i < count; ++i) {
+                output[2 * i] = stereo[2 * (offset + i)];
+                output[2 * i + 1] = 0.0f;
+            }
+            rx->processIq(iq);
+        }
+        QVERIFY(finite);
+        QVERIFY(nonzeroSpeechSamples > 24000);
+        bool acquiredSync = false;
+        for (const QList<QVariant>& event : syncSpy) {
+            acquiredSync = acquiredSync || event.first().toBool();
+        }
+        QVERIFY(acquiredSync);
+        QVERIFY(!rx->isSynced());
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        if (modeId == 12) {
+            QCOMPARE(textSpy.count(), 1);
+            QCOMPARE(textSpy.first().first().toString(), QStringLiteral("KG4VCF"));
+        } else {
+            QCOMPARE(textSpy.count(), 0);
+        }
+    }
+
+    void versionSwitchRetiresPendingDecode()
+    {
+        RadioFixture fx;
+        fx.slice->setDspMode(DSPMode::RADE_U);
+        RadeChannel* channel = fx.engine->radeChannel(0);
+        QVERIFY(channel != nullptr);
+        QPointer<RadeChannel> retired(channel);
+        fx.slice->setLastRadeRxCallsign(QStringLiteral("KG4VCF"));
+        std::mutex gateMutex;
+        std::condition_variable gateCv;
+        bool released = false;
+        std::atomic<bool> entered{false};
+        const auto release = [&] {
+            {
+                std::lock_guard<std::mutex> lock(gateMutex);
+                released = true;
+            }
+            gateCv.notify_all();
+        };
+        QObject observer;
+        const auto releaseOnExit = qScopeGuard([&] {
+            release();
+            if (retired) {
+                retired->stopRxWorker();
+                retired->setRxDecodeLockedHookForTest({});
+            }
+        });
+        channel->setRxDecodeLockedHookForTest([&] {
+            std::unique_lock<std::mutex> lock(gateMutex);
+            entered.store(true);
+            gateCv.wait(lock, [&] { return released; });
+        });
+        channel->setRxGated(false);
+        channel->startRxWorker();
+        QVERIFY(!channel->rxGated());
+        const auto bridge = channel->rxBridge();
+        std::vector<float> iq(2048 * 2, 0.0f);
+        QVERIFY(bridge->pushInput(bridge->nextEpoch(), 0, iq.data(), 2048));
+        RadeRxWorker::wake(*bridge);
+        QTRY_VERIFY_WITH_TIMEOUT(entered.load(), 5000);
+        // The ordinary mode transition clears old text before joining the
+        // worker. Release that pending real decode at this observed boundary.
+        connect(fx.slice, &SliceModel::lastRadeRxCallsignChanged, &observer,
+                [&](const QString& callsign) {
+                    if (callsign.isEmpty()) {
+                        release();
+                    }
+                });
+        fx.slice->setDspMode(static_cast<DSPMode>(14));
+        QVERIFY(retired.isNull());
+        RadeChannel* replacement = fx.engine->radeChannel(0);
+        QVERIFY(replacement != nullptr);
+        QCOMPARE(replacement->version(), RadeChannel::Version::V2);
+        QVERIFY(replacement->isActive());
+        QVERIFY(fx.slice->lastRadeRxCallsign().isEmpty());
+        QVERIFY(replacement->rxBridge() != bridge);
+    }
+
+    void experimentalModesKeepRxAndCreateDecoder() {
+        RadioFixture fx;
+        RxChannel* original = fx.engine->rxChannel(0);
+        fx.slice->setDspMode(static_cast<DSPMode>(14));
+        RadeChannel* upper = fx.engine->radeChannel(0);
+        QVERIFY(upper != nullptr);
+        QVERIFY(upper->isActive());
+        QCOMPARE(upper->version(), RadeChannel::Version::V2);
+        QVERIFY(upper->sidebandUpper());
+        QCOMPARE(fx.engine->rxChannel(0), original);
+        fx.slice->setDspMode(static_cast<DSPMode>(15));
+        RadeChannel* lower = fx.engine->radeChannel(0);
+        QVERIFY(lower != nullptr);
+        QVERIFY(lower->isActive());
+        QCOMPARE(lower->version(), RadeChannel::Version::V2);
+        QVERIFY(!lower->sidebandUpper());
+        QCOMPARE(fx.engine->rxChannel(0), original);
+        fx.slice->setDspMode(DSPMode::RADE_U);
+        QVERIFY(fx.engine->radeChannel(0) != nullptr);
+        QCOMPARE(fx.engine->radeChannel(0)->version(), RadeChannel::Version::V1);
+        QCOMPARE(fx.engine->rxChannel(0), original);
+        fx.slice->setDspMode(DSPMode::USB);
+        QVERIFY(fx.engine->radeChannel(0) == nullptr);
+    }
+
+    void experimentalRxModesMapToSsb() {
+        QCOMPARE(RxChannel::wdspModeFor(static_cast<DSPMode>(14)), DSPMode::USB);
+        QCOMPARE(RxChannel::wdspModeFor(static_cast<DSPMode>(15)), DSPMode::LSB);
+    }
+
     void wdspModeForMapsRadeToSsb() {
         // RADE sidebands map to their SSB equivalents.
         QCOMPARE(RxChannel::wdspModeFor(DSPMode::RADE_U), DSPMode::USB);
@@ -321,5 +605,5 @@ private slots:
     }
 };
 
-QTEST_APPLESS_MAIN(TestSliceModelRadeSwap)
+QTEST_GUILESS_MAIN(TestSliceModelRadeSwap)
 #include "tst_slice_model_rade_swap.moc"

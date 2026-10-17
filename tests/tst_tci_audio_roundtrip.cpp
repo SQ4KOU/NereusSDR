@@ -344,10 +344,10 @@ void TestTciAudioRoundtrip::synthetic_1khz_tone_arrives_as_binary_frame()
     // dispatch and calls handleAudioSubscribe which creates the resampler.
     client.sendTextMessage(QStringLiteral("audio_start:0;"));
 
-    // Give the subscription time to register: the message crosses the
-    // loopback socket (one round-trip through the OS network stack) and
-    // the slot runs synchronously on the Qt event loop.  50ms is generous.
-    QTest::qWait(50);
+    // Wait until the subscription is registered: a subscriber starts at the
+    // ring's write position, so audio injected before it is never sent. A
+    // fixed 50 ms wait was too short on Windows.
+    QTRY_COMPARE_WITH_TIMEOUT(server.totalResamplerInstances(), 1, 5000);
 
     // ── 4.  Generate ~250 ms of 1 kHz sine at 48 kHz, stereo ─────────────────
     // audioStreamSamples default = 2048 (from TciClientSession defaults).
@@ -382,15 +382,11 @@ void TestTciAudioRoundtrip::synthetic_1khz_tone_arrives_as_binary_frame()
     }
 
     // ── 5.  Wait for drain ticks to flush binary frames to the client ─────────
-    // Drain timer fires every 5ms.  200ms gives ≥40 ticks — well more than
-    // needed to drain 250ms of audio at 2048-sample windows.
-    // The QTest::qWait spins the event loop so timer events are processed.
-    QTest::qWait(200);
-
     // ── 6.  Assert: at least one binary frame arrived ─────────────────────────
-    QVERIFY2(binarySpy.count() >= 1,
+    // Drain timer fires every 5ms; the wait ends at the first frame.
+    QTRY_VERIFY2_WITH_TIMEOUT(binarySpy.count() >= 1,
              qPrintable(QStringLiteral("Expected ≥1 binary frame, got %1")
-                            .arg(binarySpy.count())));
+                            .arg(binarySpy.count())), 5000);
 
     // ── 7.  Decode the first frame ────────────────────────────────────────────
     //

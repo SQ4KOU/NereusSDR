@@ -72,6 +72,7 @@
 
 #include <QObject>
 #include <QString>
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
@@ -89,7 +90,7 @@ namespace NereusSDR {
 //
 // NereusSDR: model-only, no Setup page in this task.  Protocol
 // wire-up (NetworkIO equivalents) deferred to the codec layer.
-class ApolloController : public QObject {
+class NEREUS_CORE_EXPORT ApolloController : public QObject {
     Q_OBJECT
 
 public:

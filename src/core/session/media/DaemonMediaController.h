@@ -1,5 +1,6 @@
 #pragma once
 #include "core/session/media/RemoteIqIngress.h"
+#include "core/session/media/WaveformCodec.h"
 // =================================================================
 // src/core/session/media/DaemonMediaController.h  (NereusSDR)
 // =================================================================
@@ -7,6 +8,30 @@
 // coordination; it contains neither GUI nor radio control policy.
 //
 // Modification history (NereusSDR):
+//   2026-10-16: sendWaveformsOnStationThread: the RADE waveforms stay on
+//               the station thread while the display thread sends the
+//               displays. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-16: DaemonSharedSpectrum::keyEdge takes the display lock;
+//               m_displayKeyed is written under it. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-16: readDisplayExtrasForTest. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
+//   2026-10-15: display send thread (JJ approved 2026-10-15): with a media
+//               peer whose transport sends displays from any thread, a
+//               controller's frames are taken in and its displays sent by
+//               its DaemonSharedSpectrum's display thread, under that
+//               spectrum's display lock; the main thread takes the lock
+//               whenever it runs controller code. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-11: R-DISP-RETUNE (third wave): a start may declare
+//               spectrumPictureVersion. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-10-10: R-AUD-SEND: receive audio is encoded and sent by a thread
+//               of its own (DaemonAudioSendThread), through AudioSendRoute,
+//               one per sender; nothing of it runs on this controller's
+//               thread. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 //   2026-10-01: TX diagnostics lane: unkeyEventLines, one line for each
 //               placed microphone underrun, the first radio ran dry and
 //               each catch-up burst. J.J. Boyd (KG4VCF), AI-assisted via
@@ -96,11 +121,16 @@
 //               selected pair at selection and on change, and its rtt in
 //               the periodic display diagnostics line. Logging only. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: txReceiptHook(epoch) for the remote
+//               transmit cut guard. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/NoiseFloorEstimator.h"
 #include "core/RadioConnection.h"
 #include "core/session/media/DaemonAudioSender.h"
+#include "core/session/media/DaemonAudioSendThread.h"
+#include "core/session/media/DaemonDisplaySendThread.h"
 #include "core/session/media/DaemonSpectrumSource.h"
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayCodec.h"
@@ -109,6 +139,7 @@
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteMicReceiver.h"
 #include "core/session/media/SpectrumEndpoint.h"
+#include "core/spectrum/WidebandSpectrumCache.h"
 #include "core/session/RemoteKeying.h"
 
 #include <QElapsedTimer>
@@ -122,6 +153,7 @@
 #include <QTimer>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -144,6 +176,11 @@ enum class ConnectionState;
 /// highest rate any controller's endpoints on it were granted; each frame
 /// is taken once and handed to every controller. Lives on the station
 /// thread with its controllers.
+///
+/// Display send thread (2026-10-15): while any of its controllers sends
+/// from it (DaemonMediaController::syncDisplayThread), the frames are taken
+/// in and the displays sent by this spectrum's display thread, not the
+/// station thread. Every controller's state is then under displayLock().
 class DaemonSharedSpectrum final : public QObject {
     Q_OBJECT
 public:
@@ -163,13 +200,54 @@ public:
     QList<DaemonMediaController*> members() const;
     void join(DaemonMediaController* controller);
     void leave(DaemonMediaController* controller);
+    /// A MOX edge, told by every controller that hears it: the engines'
+    /// FFT input is cleared once for the edge
+    /// (DaemonSpectrumSource::resetInputHistoryAll), however many
+    /// controllers share them. Takes the display lock.
+    void keyEdge(bool keyed);
+
+    /// The lock over every member's display state (DaemonDisplayLock).
+    const std::shared_ptr<DaemonDisplayLock>& displayLock() const { return m_displayLock; }
+    /// Whether the calling thread is this spectrum's display thread.
+    bool onDisplayThread() const { return m_displayThread.onThisThread(); }
+    /// The display thread runs one turn of that member's sender soon, as
+    /// its timer would. Any thread.
+    void askDisplayTurn(DaemonMediaController* member);
+    /// Starts the display thread, or idles it, after a member moved onto it
+    /// or off it. The station thread, under the display lock.
+    void syncDisplayThread();
+    /// Drops the frames every member holds for the station thread from
+    /// `key`, whose engine was just stopped: one started again under the
+    /// same key counts its generations from one again. Under the display
+    /// lock.
+    void forgetHeldFrames(const MediaSourceKey& key);
 
 private:
     void onFrameAvailable(MediaSourceKey key);
+    /// The station thread: `key`'s waiting frame, taken once and handed
+    /// whole to every member (onSourceFrame). Under the display lock.
+    void takeInOnStationThread(const MediaSourceKey& key);
+    /// The display thread: every frame waiting in the engines, taken once
+    /// and handed to every member. Under the display lock.
+    void takeInOnDisplayThread();
+    /// One pass of the display thread (DaemonDisplaySendThread::Pass).
+    void displayPass(bool timedTurn, bool askedTurn);
+    /// The release hook: each member on the display thread copies the
+    /// station thread's values its turns read.
+    void refreshMemberSnapshots();
 
     DaemonSpectrumSource m_source;
     QMap<MediaSourceKey, SourceRuntime> m_runtimes;
+    /// Written under the display lock; the display thread reads it there.
     QList<QPointer<DaemonMediaController>> m_members;
+    // The last edge the engines were cleared for; empty before the first.
+    // Written under the display lock.
+    std::optional<bool> m_lastKeyEdge;
+    const std::shared_ptr<DaemonDisplayLock> m_displayLock{
+        std::make_shared<DaemonDisplayLock>()};
+    /// Whether any member sends from the display thread (station thread).
+    bool m_displayThreadUsed{false};
+    DaemonDisplaySendThread m_displayThread;
 };
 
 /// Read-only diagnostics for the most recent active daemon audio context.
@@ -177,6 +255,15 @@ private:
 /// not evidence of network delivery. For every context,
 /// attempts = accepted + rejected + inFlight + unresolvedAtRetirement.
 /// Unresolved sends were interrupted by retirement and are not packet loss.
+///
+/// R-AUD-SEND: the sends are made by the sender thread and counted there
+/// (AudioSendRoute). An attempt is a packet a ready transport was asked to
+/// take; rejected is that transport's own refusal, a transport fault to a
+/// reader. A packet that met a transport which was not ready (stopping,
+/// stopped, gone) is not an attempt and is counted nowhere, as when the
+/// controller's thread sent. inFlight is the sends that thread had begun
+/// and whose transport had not yet answered when this was read: 0 or 1 in a
+/// periodic reading.
 struct DaemonAudioDiagnostics {
     quint32 contextGeneration = 0;
     quint32 revision = 0;
@@ -187,6 +274,11 @@ struct DaemonAudioDiagnostics {
     std::uint64_t sendAccepted = 0;
     std::uint64_t sendRejected = 0;
     std::uint64_t sendInFlight = 0;
+    /// R-AUD-SEND: always 0 now. It counted sends the retirement of a
+    /// context cut short on the controller's thread; the context is now
+    /// retired only after the sender's stop(), which returns once the send
+    /// under way has its answer. Kept so the log line and readers keep
+    /// their shape.
     std::uint64_t sendUnresolvedAtRetirement = 0;
 };
 
@@ -211,6 +303,23 @@ struct DaemonDisplayDiagnostics {
     /// message), and those refused by the five-a-second limit.
     quint64 displayKeyframeRequests = 0;
     quint64 displayKeyframeRequestsRefused = 0;
+    /// Frames a newer frame replaced before they were sent, by where they
+    /// waited; each place holds one frame. At the source: frames an FFT
+    /// engine finished for a source one of this peer's pans is sending
+    /// from, which the Core's main thread had not taken when the next one
+    /// came. One per source frame, whatever the number of pans on it. At a
+    /// pan: frames a pan held and would have sent, which no sender turn
+    /// had taken when the next one came (no turn ran, the turn went to
+    /// another pan, the channel was busy, or the display budget had no
+    /// room). One per pan. A frame the pan's own pacing would have dropped
+    /// is not counted.
+    quint64 displaySourceFramesReplaced = 0;
+    quint64 displayPanFramesReplaced = 0;
+    /// The longest time between two turns of the display sender's timer
+    /// while this peer was ready, in microseconds; -1 before two turns.
+    /// The turns are kDisplaySenderIntervalMs apart when the Core's main
+    /// thread is free, and a turn sends one display message at most.
+    qint64 displaySenderGapMaxUs = -1;
 
     bool operator==(const DaemonDisplayDiagnostics&) const = default;
 };
@@ -322,6 +431,14 @@ public:
     /// session runs now (the speakers' mix, the headphones mix, each
     /// receiver stream's), so a test can see none was remade.
     QList<const DaemonAudioSender*> audioSendersForTest() const;
+#ifdef NEREUS_BUILD_TESTS
+    /// Test seam, the thread that feeds the audio engine only, no
+    /// production caller: every sender's capture bridge hands over a block
+    /// a busy sender thread kept it from queueing, as the DSP thread's next
+    /// callback does (DaemonAudioSource::handOverPendingForTest). A test
+    /// that feeds a fixed number of blocks calls it after the last.
+    void handOverPendingAudioForTest();
+#endif
     DaemonAudioDiagnostics audioDiagnostics() const;
     /// The Opus target, bit/s, for the speakers' mix and the headphones mix
     /// this controller sends (R-R3-23: nereusd's audio_bitrate). Applies to
@@ -373,6 +490,10 @@ public:
     /// asked for a route, holds transmit and MON is on).
     TxMonitorRoute txMonitorRoute() const noexcept { return m_monitorApplied; }
     DaemonDisplayDiagnostics displayDiagnostics() const;
+    /// Display send thread: whether this controller's displays leave on its
+    /// hub's display thread now (its peer is ready and gives a display sink)
+    /// rather than on its own thread.
+    bool displaysSentFromThread() const;
     /// R-R3-21: the Core's media clock now (displayNowNs): the clock of
     /// clock-echo times and audio capture, and, without an injected clock,
     /// the producer clock display frames are stamped from.
@@ -384,19 +505,26 @@ public:
     /// The frame rate Core configured on the engine that feeds a live
     /// spectrum endpoint (R-R3-01, R-R3-08). Empty for an unknown endpoint.
     std::optional<int> spectrumSourceFps(quint32 endpointId) const;
-    /// iPhone app follow-up (R-IOS-27): the averaging constants a live
+    /// iPhone app follow-up (R-IOS-27): the averaging constants/depths a live
     /// spectrum endpoint's trace and waterfall planes run with, after
     /// display extras' averageTimeMs and waterfallAverageTimeMs. Empty for
     /// an unknown endpoint.
     struct SpectrumAveraging {
         double traceAlpha{0.0};
         double waterfallAlpha{0.0};
+        int traceWindowFrames{SpectrumAvenger::kMinWindowFrames};
+        int waterfallWindowFrames{SpectrumAvenger::kMinWindowFrames};
     };
     std::optional<SpectrumAveraging> spectrumAveraging(quint32 endpointId) const;
     /// R-IOS-27, R-IOS-06: a live endpoint's display extras, for tests that
     /// drive its computations directly (nullptr for an unknown endpoint or
     /// one that asked for none).
     DisplayExtrasProcessor* displayExtrasForTest(quint32 endpointId);
+    /// Runs read on that endpoint's display extras under the display lock,
+    /// so the display send thread does not run them meanwhile. False, and
+    /// read is not run, for an unknown endpoint or one that asked for none.
+    bool readDisplayExtrasForTest(quint32 endpointId,
+                                  const std::function<void(const DisplayExtrasProcessor&)>& read);
     /// Whether that engine's transforms follow its frame rate: true only
     /// while the display budget is lowered because the Core is busy
     /// (R-R3-08, R-R3-40). Empty for an unknown endpoint.
@@ -468,6 +596,10 @@ private:
     using SourceRuntime = DaemonSharedSpectrum::SourceRuntime;
     /// R-R3-43: one slice's receiver audio request and, while it holds a
     /// receiver stream id, the sender capturing that slice.
+public:
+    struct AudioSendRoute;
+
+private:
     struct ReceiverAudioStream {
         quint32 revision{0};
         bool desiredEnabled{false};
@@ -478,7 +610,44 @@ private:
         int streamIndex{-1};
         bool sending{false};
         std::unique_ptr<DaemonAudioSender> sender;
+        /// R-AUD-SEND: where `sender`'s packets go; made and dropped with it.
+        std::shared_ptr<AudioSendRoute> route;
     };
+    using WaveformKey = std::pair<int, WaveformKind>;
+    struct WaveformStream {
+        bool wanted = false;
+        bool sending = false;
+        quint32 revision = 0;
+        quint64 sourceGeneration = 0;
+        quint64 deliveryGeneration = 0;
+        quint64 packetSerial = 0;
+        quint64 droppedFrames = 0;
+        int sampleRate = 0;
+        WaveformBatch pending;
+        int segmentIndex = 0;
+        int segmentOffset = 0;
+        QString reason;
+    };
+    bool handleWaveformStream(const QJsonObject& control);
+    bool waveformAuthorized(const WaveformKey& key) const;
+    void reconcileWaveforms();
+    void clearWaveforms(bool notify = true, const QString& reason = {}, qint64 retryAtNs = -1);
+    void sendWaveformContext(const WaveformKey& key, const WaveformStream& stream);
+    void acceptWaveformBatch(int sliceId, WaveformKind kind, quint64 source, WaveformBatchPtr batch);
+    bool trySendWaveform(MediaPeer* peer, quint64 epoch, qint64 nowNs);
+    quint64 waveformBytesPerSecond() const;
+    static quint64 waveformCharge(int rate);
+    bool m_waveformNegotiated = false;
+    bool m_waveformFailed = false;
+    qint64 m_waveformRetryAtNs = -1;
+    bool m_reconcilingWaveforms = false;
+    quint64 m_nextWaveformGeneration = 0;
+    std::map<WaveformKey, WaveformStream> m_waveformStreams;
+    QByteArray m_waveformPacket;
+    WaveformKey m_waveformPacketKey{-1, WaveformKind::RawMicrophone};
+    int m_waveformPacketFrames = 0;
+    bool m_waveformPacketDebited = false;
+    qint64 m_waveformBlockedAtNs = -1;
     struct IqStream {
         quint32 revision = 0;
         quint32 generation = 0;
@@ -495,6 +664,13 @@ private:
         qint64 blockedAtNs = -1;
         bool budgetRefused = false;
         quint64 lastBudgetRefusalRevision = 0;
+        /// Display send thread: the end the display thread found for this
+        /// stream, which the station thread carries out (failIqStream).
+        struct Failure {
+            QString reason;
+            bool budgetRefused = false;
+        };
+        std::optional<Failure> failOnMain;
     };
     /// R-R3-45: the headphones mix for a GUI that declared
     /// headphonesMixVersion: its latest request and, while it runs, the
@@ -514,7 +690,47 @@ private:
         quint16 nextSequence{1};
         quint32 nextTimestamp{0};
         std::unique_ptr<DaemonAudioSender> sender;
+        /// R-AUD-SEND: where `sender`'s packets go; made and dropped with it.
+        std::shared_ptr<AudioSendRoute> route;
     };
+public:
+    /// R-AUD-SEND: one sender's way out. Public only so its test can drive
+    /// it; see m_audioRoute below for the contract.
+    struct AudioSendRoute {
+        /// Guards every member but the counters. Taken by deliver() only to
+        /// copy out where one packet goes, never across a send, and by the
+        /// controller's thread only to copy new values in (never while it
+        /// holds another lock). So neither thread waits here for a send.
+        std::mutex mutex;
+        std::shared_ptr<MediaRtpSink> current;
+        QHash<quint32, quint32> rewrite;
+        /// While a replacement is ready: its sink, and the two peers' audio
+        /// SSRCs in stream order (audioSsrcsOf).
+        std::shared_ptr<MediaRtpSink> replacement;
+        QList<quint32> replacementFrom;
+        QList<quint32> replacementTo;
+        /// Sends to the current peer since resetCounters(): written by
+        /// deliver() on the sender thread, read without the lock. attempts is
+        /// raised before the transport is asked and one of the others after
+        /// it answers, so a reader takes accepted and rejected first. A
+        /// transport that answers "not ready" was asked nothing: the attempt
+        /// is taken back and none of the three counts it.
+        std::atomic<std::uint64_t> attempts{0};
+        std::atomic<std::uint64_t> accepted{0};
+        std::atomic<std::uint64_t> rejected{0};
+
+        /// The sender thread. Sends `packet` to the current peer with its
+        /// SSRC as that peer's, and during a replacement to the new peer
+        /// too, with the same sequence number and timestamp and the new
+        /// peer's SSRC. Nothing, and nothing counted, while closed.
+        void deliver(const QByteArray& packet);
+        /// The controller's thread, while the route's sender is stopped.
+        void resetCounters();
+        /// The controller's thread: nothing is sent from here on.
+        void close();
+    };
+
+private:
     struct AdmittedAudioProfile {
         RemoteAudioProfile active{RemoteAudioProfile::Opus};
         std::optional<RemoteAudioProfileRefusal> refusal;
@@ -544,6 +760,86 @@ private:
     bool reconcileWidebandDemand(EndpointEntry& entry);
     std::optional<WidebandDisplayContext> widebandContext(const EndpointEntry& entry) const;
     void onSendTick();
+    /// A turn of the display sender's timer: notes the time since the
+    /// turn before for the display diagnostics, then onSendTick(). With
+    /// the display thread sending, sendWaveformsOnStationThread() only.
+    void onSendTimerTurn();
+    /// The waveform streams' part of a sender turn (a due retry, then up
+    /// to 16 messages), on the station thread while the display thread
+    /// sends the displays: the waveform channel sends only on its owner's
+    /// thread.
+    void sendWaveformsOnStationThread();
+    /// Whether the frame `entry` holds is one a sender turn would send:
+    /// its context is out and its own pacing would take the frame.
+    bool heldFrameWouldBeSent(const EndpointEntry& entry) const;
+
+    // ── Display send thread (2026-10-15) ────────────────────────────────
+    // While this controller's current media peer is ready and its transport
+    // sends displays from any thread (MediaPeer::displaySink), the frames
+    // are taken in and the displays sent by the shared spectrum's display
+    // thread, never this controller's own. Every piece of this controller
+    // the display thread reads or writes is then under the display lock:
+    // the station thread takes it at every entry into controller code
+    // (displayGuard), the display thread for each pass. What only the
+    // station thread may do (a control message, a configure, ending a raw
+    // I/Q stream, reading RadioModel or StationServer) the display thread
+    // leaves to it as one queued call, reading the station thread's values
+    // from a copy (DisplaySnapshot). The receive "tx" keepalives and the
+    // microphone line take no lock: they touch nothing the display thread
+    // does. The transmit display's keyed edge does take it:
+    // MoxController::moxStateChanged reaches recordTransmitPan directly,
+    // so a key or unkey on the station thread can wait out one display
+    // pass, as it waited out a send turn on that thread before. So does
+    // the display extras' key edge, whose copy the lock's release
+    // refreshes. The RADE waveforms stay on the station thread, under the
+    // lock (sendWaveformsOnStationThread).
+    /// Holds the display lock for a scope.
+    DaemonDisplayLockGuard displayGuard() const { return DaemonDisplayLockGuard(m_displayLock); }
+    bool onDisplayThread() const { return m_shared->onDisplayThread(); }
+    /// Logs once for each place that runs without the display lock, which
+    /// only an entry missing its displayGuard() does, and, when
+    /// `stationThreadOnly`, for each that runs on the display thread.
+    void warnIfDisplayLockNotHeld(const char* where, bool stationThreadOnly) const;
+    /// Moves this controller onto the display thread or off it, wherever
+    /// the current peer changes or becomes ready (syncAudioRoutes).
+    void syncDisplayThread();
+    /// The station thread, while on the display thread: copies the values
+    /// the display thread reads. At every release of the display lock by
+    /// the station thread (DaemonSharedSpectrum's release hook), so also
+    /// after each turn of this controller's timer.
+    void refreshDisplaySnapshot();
+    /// The display thread: one source frame, as onSourceFrame() takes it,
+    /// with what needs the station thread queued to it.
+    void takeInOnDisplayThread(const DaemonSpectrumFrame& frame);
+    /// The display thread: one turn of the sender. A timed turn is the
+    /// timer's own and is noted for the display diagnostics; an asked one
+    /// is displayWritable's.
+    void displayThreadTurn(bool timedTurn, bool askedTurn);
+    /// Display diagnostics: the time since the sender's previous turn.
+    void noteSenderTurn(bool peerReady);
+    /// Queues runQueuedFrameWork() to the station thread once.
+    void queueFrameWork();
+    void runQueuedFrameWork();
+    /// The station thread: what a frame the display thread took in needs
+    /// of it (configures, then the noise floors due).
+    void mainWorkForFrame(const DaemonSpectrumFrame& frame);
+    /// The noise-floor messages due on the endpoints of `frame`'s source.
+    /// False when the session or peer changed meanwhile, or this
+    /// controller went: the caller returns at once.
+    bool sendDueNoiseFloors(const DaemonSpectrumFrame& frame, double stationOffsetDb);
+    /// Keeps the newest frame of its source for the station thread.
+    void holdFrameForMain(const DaemonSpectrumFrame& frame);
+    /// Ends raw I/Q stream `sliceId` with `reason`. On the display thread
+    /// it is recorded and left to the station thread.
+    void failIqStream(int sliceId, const QString& reason, bool budgetRefused);
+    /// The current peer's display sends: through m_displaySink while this
+    /// controller is on the display thread, else through the peer.
+    bool peerDisplayReady() const;
+    bool peerDisplayBusy(MediaPeer* peer) const;
+    IMediaTransport::DisplaySendResult peerSubmitDisplay(MediaPeer* peer,
+                                                         const QByteArray& message);
+    bool peerIqBusy(MediaPeer* peer) const;
+    IMediaTransport::DisplaySendResult peerSubmitIq(MediaPeer* peer, const QByteArray& message);
     void onStreamGeometryChanged(int streamIndex, double centreHz, int sampleRateHz);
     void onStreamBindingsChanged(int streamIndex, const QVector<int>& sliceIds);
     void onSliceRemoved(int sliceId);
@@ -651,11 +947,6 @@ private:
     void clearReplacement();
     /// Wires `peer` as the current peer (handleStart's callbacks).
     void wireCurrentPeer(MediaPeer* peer, const QString& connectionId);
-    /// One audio packet (any stream) to the current peer, with its SSRC as
-    /// that peer's, and during a replacement to the new peer too with the
-    /// same sequence number and timestamp and the new peer's SSRC. What the
-    /// current peer accepted.
-    bool sendAudioRtp(MediaPeer* peer, const QByteArray& packet);
     /// A peer's audio SSRCs in stream order: main, receiver 0 to 3,
     /// headphones.
     static QList<quint32> audioSsrcsOf(const MediaPeer* peer);
@@ -670,7 +961,12 @@ private:
     void clearProduction();
     QList<quint32> endpointIds() const;
     void removeEndpoint(quint32 endpointId, bool retainOperation = true);
-    bool reconcileSource(const MediaSourceKey& key);
+    /// `sourceUpdate`, when given, says what an accepted reconcile did to a
+    /// source that was already running (R-DISP-RETUNE): relabeled through
+    /// a retune, or anything else. A caller holding an endpoint outside
+    /// m_endpoints uses it to carry that endpoint over a relabel too.
+    bool reconcileSource(const MediaSourceKey& key,
+                         DaemonSpectrumSourceUpdate* sourceUpdate = nullptr);
     void releaseSourceIfUnused(const MediaSourceKey& key);
     void rebalanceSourceAfterDeparture(const MediaSourceKey& key);
     void configureEndpointFromFrame(EndpointEntry& endpoint,
@@ -711,6 +1007,9 @@ private:
     bool trySendDisplayExtras(MediaPeer* peer, quint64 epoch, qint64 nowNs);
     DisplayExtrasInputs displayExtrasInputs(const EndpointEntry& entry, double binWidthHz,
                                             qint64 nowNs) const;
+    /// The key state the display extras see: m_displayKeyed, or
+    /// TransmitModel's flag when the Core has no MoxController.
+    bool displayKeyed() const;
     void reconcileAudio();
     void stopAudioCapture();
     /// `reason` travels only in a disabled context, and only to a peer that
@@ -734,7 +1033,6 @@ private:
     void retireReceiverSender(ReceiverAudioStream& stream);
     void sendReceiverAudioContext(int sliceId, const ReceiverAudioStream& stream,
                                   bool enabled, RemoteAudioOffReason reason);
-    void onReceiverAudioPacket(int sliceId, DaemonAudioSender* sender, const QByteArray& packet);
     void resetReceiverAudioSession();
     quint32 nextReceiverContextGeneration();
     // R-R3-45: the headphones mix.
@@ -744,7 +1042,6 @@ private:
     std::optional<RemoteAudioOffReason> headphonesBlockedBy() const;
     void stopHeadphonesAudioCapture();
     void sendHeadphonesAudioContext(bool enabled, RemoteAudioOffReason reason);
-    void onHeadphonesAudioPacket(DaemonAudioSender* sender, const QByteArray& packet);
     void resetHeadphonesAudioSession();
     quint32 nextHeadphonesContextGeneration();
     /// Some slice on this Core plays on the headphones now.
@@ -775,6 +1072,12 @@ private:
     QMetaObject::Connection m_listenLevelConnection;
     /// coreBusyLimitsSources() as last applied to the sources.
     bool m_transformsFollowFrameRate = false;
+    // The Core is keyed, as its displays see it: set in the
+    // MoxController::moxStateChanged slot, so it turns on when the walk
+    // into transmit ends and off when the walk out ends. Written under the
+    // display lock and read on the main thread only; the display thread
+    // reads its copy (EndpointEntry::snapshotSlice).
+    bool m_displayKeyed = false;
     NoiseFloorEstimator m_noiseFloorEstimator;
     MediaPeer::TransportFactory m_peerFactory;
     MonotonicClock m_monotonicClock;
@@ -807,6 +1110,33 @@ private:
     std::shared_ptr<MicRoute> m_micRoute{std::make_shared<MicRoute>()};
     void syncMicRoute();
     IMediaTransport::MicPacketSink micRouteSink() const;
+    // Remote transmit cut off the main thread: the hook a peer of media
+    // epoch `epoch` reports its "tx" receipts to (empty without a server).
+    IMediaTransport::TxReceiptHook txReceiptHook(quint64 epoch) const;
+    // R-AUD-SEND: the mirror of MicRoute for receive audio. m_sendThread
+    // drains every sender this controller runs; a sender hands each packet
+    // to its own route's deliver(), on that thread. The route holds what
+    // sending needs, copied in under its lock by this controller's thread
+    // whenever any of it changes (syncAudioRoutes): the current peer's sink
+    // and SSRC rewrite, and while a replacement is ready its sink and SSRC
+    // mapping. deliver() never calls back into this controller. A packet in
+    // delivery holds its own reference to the sinks it copied out, not the
+    // lock, so a sync never waits for a send: the one packet under way may
+    // still go to a sink the sync just took out. A sink is valid for as long
+    // as anything holds it and answers "not ready" once its peer stopped.
+    // What ends a sender's sends for certain is its stop().
+    void attachAudioSender(DaemonAudioSender* sender,
+                           const std::shared_ptr<AudioSendRoute>& route);
+    /// Stops `sender`, closes `route` and takes the sender from the thread:
+    /// when this returns the thread never touches the sender again.
+    void detachAudioSender(DaemonAudioSender* sender,
+                           const std::shared_ptr<AudioSendRoute>& route);
+    void syncAudioRoutes();
+    // The media connections already warned about for having no audio send
+    // off the transport's own thread: said once for each, not at every sync.
+    QSet<QString> m_noAudioSinkWarned;
+    std::shared_ptr<AudioSendRoute> m_audioRoute{std::make_shared<AudioSendRoute>()};
+    DaemonAudioSendThread m_sendThread;
     // What the current peer's start negotiated, which a replacement keeps.
     bool m_startOfferedLossless{false};
     /// Task 29 step 2b: the media start declared the tunnel.
@@ -843,6 +1173,9 @@ private:
     // Parity Task 28: this session's start declared txDisplayVersion.
     bool m_txDisplayNegotiated{false};
     bool m_miniDisplayNegotiated{false};
+    // R-DISP-RETUNE: this session's start declared spectrumPictureVersion,
+    // so each of its spectrum contexts carries pictureGeneration.
+    bool m_spectrumPictureNegotiated{false};
     // Parity Task 31: the version it declared (3 and above: `duplex`), and
     // the device whose DUP this controller last told RadioModel is on.
     quint32 m_txDisplayDeclared{0};
@@ -927,6 +1260,47 @@ private:
     QElapsedTimer m_mediaPathChecked;
     DaemonDisplayDiagnostics m_displayDiagnostics;
     DaemonDisplayDiagnostics m_displayDiagnosticsLogged;
+    /// When the display sender's timer last turned with this peer ready
+    /// (displayNowNs), and the longest gap between two such turns since
+    /// the last display diagnostics line (-1: none), which that line
+    /// carries and takes.
+    std::optional<qint64> m_lastSenderTurnNs;
+    qint64 m_senderGapMaxSinceLoggedUs{-1};
+    // Display send thread (see displayGuard()). The lock is the shared
+    // spectrum's, held here too so a guard outlives neither.
+    std::shared_ptr<DaemonDisplayLock> m_displayLock;
+    /// Whether this controller sends from the display thread, and the
+    /// current peer's display sink while it does.
+    bool m_displayThreadMode{false};
+    std::shared_ptr<MediaDisplaySink> m_displaySink;
+    /// The peer that sink is from. Only compared with m_peer, never
+    /// dereferenced, so a sink kept past its peer is never used for the
+    /// next one (peerDisplayReady).
+    MediaPeer* m_displaySinkPeer{nullptr};
+    /// The display channel took its held message: one turn soon.
+    std::atomic<bool> m_displayTurnAsked{false};
+    /// The station thread's values a display thread turn reads.
+    struct DisplaySnapshot {
+        bool sending{false};
+        bool pacingRequired{false};
+        bool ps3Here{false};
+        bool iqFits{false};
+        bool keyedNow{false};
+        double duplexOffsetDb{0.0};
+        QHash<int, double> offsetByStream;
+        std::array<std::optional<WidebandSpectrumFrame>, WidebandSpectrumCache::kMaxSources>
+            widebandByAdc;
+    };
+    DisplaySnapshot m_displaySnapshot;
+    /// Frames the display thread took in for the station thread: one per
+    /// source whose endpoints wait on a configure or a noise floor, and,
+    /// while this controller is not on the display thread, every frame.
+    QMap<MediaSourceKey, DaemonSpectrumFrame> m_framesForMain;
+    QMap<MediaSourceKey, DaemonSpectrumFrame> m_pendingSourceFrames;
+    bool m_frameWorkQueued{false};
+    /// Diagnostics: the places warnIfDisplayLockNotHeld() has logged.
+    mutable std::mutex m_unguardedWarnedMutex;
+    mutable QSet<QByteArray> m_unguardedWarned;
     QSet<QString> m_loggedTransportErrorKinds;
     int m_roundRobinCursor{0};
     QList<QByteArray> m_ps3CurrentChunks;

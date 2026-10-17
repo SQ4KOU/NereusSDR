@@ -31,6 +31,15 @@
 
 using namespace NereusSDR;
 
+// MinGW imports a static constexpr member of an exported class by address
+// when it is bound to a reference (QCOMPARE does), and the Core DLL never
+// exports one, so this test did not link on Windows. It reads these
+// copies by value instead.
+namespace {
+constexpr double kLineInBoostMax = NereusSDR::TransmitModel::kLineInBoostMax;
+constexpr double kLineInBoostMin = NereusSDR::TransmitModel::kLineInBoostMin;
+} // namespace
+
 class TstTransmitModelMicJackFlags : public QObject {
     Q_OBJECT
 private slots:
@@ -301,25 +310,25 @@ private slots:
     void lineInBoost_clampBelowMin() {
         TransmitModel t;
         t.setLineInBoost(-100.0);
-        QCOMPARE(t.lineInBoost(), TransmitModel::kLineInBoostMin);
+        QCOMPARE(t.lineInBoost(), kLineInBoostMin);
     }
 
     void lineInBoost_clampAboveMax() {
         TransmitModel t;
         t.setLineInBoost(100.0);
-        QCOMPARE(t.lineInBoost(), TransmitModel::kLineInBoostMax);
+        QCOMPARE(t.lineInBoost(), kLineInBoostMax);
     }
 
     void lineInBoost_clampAtMinBoundary() {
         TransmitModel t;
-        t.setLineInBoost(TransmitModel::kLineInBoostMin);
-        QCOMPARE(t.lineInBoost(), TransmitModel::kLineInBoostMin);
+        t.setLineInBoost(kLineInBoostMin);
+        QCOMPARE(t.lineInBoost(), kLineInBoostMin);
     }
 
     void lineInBoost_clampAtMaxBoundary() {
         TransmitModel t;
-        t.setLineInBoost(TransmitModel::kLineInBoostMax);
-        QCOMPARE(t.lineInBoost(), TransmitModel::kLineInBoostMax);
+        t.setLineInBoost(kLineInBoostMax);
+        QCOMPARE(t.lineInBoost(), kLineInBoostMax);
     }
 
     void lineInBoost_clampSignalCarriesClampedValue() {
@@ -328,14 +337,14 @@ private slots:
         QSignalSpy spy(&t, &TransmitModel::lineInBoostChanged);
         t.setLineInBoost(-200.0);
         QCOMPARE(spy.count(), 1);
-        QCOMPARE(spy.first().at(0).toDouble(), TransmitModel::kLineInBoostMin);
+        QCOMPARE(spy.first().at(0).toDouble(), kLineInBoostMin);
     }
 
     void lineInBoost_constants_haveExpectedValues() {
         // kLineInBoostMin = -34.5, kLineInBoostMax = 12.0 per Thetis
         // setup.designer.cs:46898-46907 [v2.10.3.13].
-        QCOMPARE(TransmitModel::kLineInBoostMin, -34.5);
-        QCOMPARE(TransmitModel::kLineInBoostMax,  12.0);
+        QCOMPARE(kLineInBoostMin, -34.5);
+        QCOMPARE(kLineInBoostMax,  12.0);
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

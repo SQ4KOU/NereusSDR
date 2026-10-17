@@ -2,6 +2,13 @@
 // no-port-check: NereusSDR-original atomic presentation arrangement.
 // Modification history (NereusSDR):
 //   2026-10-02 — J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-08 - Workspace preview only: the header's hide button hides the
+//                 entry or container (Containers > Hidden brings it back).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - Workspace preview only: setEntryConfig, an entry's own
+//                 settings changed from its widget (the dial's right-click
+//                 menu). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 #include "ContainerDocument.h"
 #include <QObject>
 namespace NereusSDR
@@ -24,6 +31,15 @@ class ContainerArrangeController : public QObject
     ArrangeResult popOut(const QString& entryId);
     ArrangeResult returnEntry(const QString& entryId);
     ArrangeResult closeContainer(const QString& containerId);
+    // Workspace preview: an entry's saved visibility (the header's hide
+    // button, Containers > Hidden). Hiding refuses a locked container.
+    // Showing always works and also shows the entry's container, so the
+    // entry is seen where it was.
+    ArrangeResult setEntryVisible(const QString& entryId, bool visible);
+    // Workspace preview: an entry's config, as its widget's own controls
+    // changed it (ContentConfigNotifier). A setting, not the arrangement:
+    // a locked container accepts it.
+    ArrangeResult setEntryConfig(const QString& entryId, const QJsonObject& config);
     ArrangeResult removeContainer(const QString& containerId);
     ArrangeResult duplicateEntry(const QString& entryId, const QString& destinationId,
                                  int insertionIndex);

@@ -44,6 +44,7 @@ private slots:
     void serializesRadeUpperRoundTrip();
     void serializesRadeLowerRoundTrip();
     void legacySingularRadeMigratesToUpper();
+    void serializesExperimentalModes();
 };
 
 void TestDspModeRade::serializesRadeUpperRoundTrip() {
@@ -64,6 +65,15 @@ void TestDspModeRade::legacySingularRadeMigratesToUpper() {
     // existing slice persistence does not break on upgrade.
     QCOMPARE(SliceModel::modeFromName(QStringLiteral("RADE")),
              DSPMode::RADE_U);
+}
+
+void TestDspModeRade::serializesExperimentalModes()
+{
+    // Appended wire IDs must persist distinctly from V1 and ordinary SSB.
+    QCOMPARE(SliceModel::modeName(static_cast<DSPMode>(14)), QStringLiteral("RADE2-U"));
+    QCOMPARE(SliceModel::modeName(static_cast<DSPMode>(15)), QStringLiteral("RADE2-L"));
+    QCOMPARE(SliceModel::modeFromName(QStringLiteral("RADE2-U")), static_cast<DSPMode>(14));
+    QCOMPARE(SliceModel::modeFromName(QStringLiteral("RADE2-L")), static_cast<DSPMode>(15));
 }
 
 QTEST_GUILESS_MAIN(TestDspModeRade)

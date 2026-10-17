@@ -27,6 +27,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-11  J.J. Boyd / KG4VCF  Guard native waveform context reply
+//                                    fields with planted drift controls.
+//                                    AI-assisted via OpenAI Codex.
 //   2026-10-04  J.J. Boyd / KG4VCF  Operation-scoped media fields, codec
 //                                    combinations and legacy nested shapes.
 //                                    AI-assisted via OpenAI Codex.
@@ -1625,6 +1628,7 @@ void TstLinkSurfaceManifest::mediaInlineAndMonitorRepliesAreExact()
     const QJsonObject replies = media.value(QStringLiteral("coreToGui")).toObject();
     QString error;
     for (const auto& [op, function] : {qMakePair(QStringLiteral("iq-stream-context"), QStringLiteral("DaemonMediaController::sendIqContext")),
+                                      qMakePair(QStringLiteral("waveform-stream-context"), QStringLiteral("DaemonMediaController::sendWaveformContext")),
                                       qMakePair(QStringLiteral("replace"), QStringLiteral("DaemonMediaController::finishReplacement"))}) {
         const QSet<QString> keys = mediaInlineReply(source, function, op, &error);
         QVERIFY2(error.isEmpty(), qPrintable(error));

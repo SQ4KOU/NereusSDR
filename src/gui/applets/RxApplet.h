@@ -148,6 +148,7 @@
 #include "gui/widgets/TriBtn.h"
 #include "gui/widgets/VfoWidget.h"
 #include "models/Band.h"
+#include "gui/NereusGuiExport.h"
 
 #include <QHash>
 #include <QList>
@@ -199,7 +200,7 @@ class SliceModel;
 //  15. RIT toggle + offset + zero (NYI)
 //  16. XIT toggle + offset + zero (NYI)
 //  17. Step size + up/down (NYI)
-class RxApplet : public AppletWidget {
+class NEREUS_GUI_EXPORT RxApplet : public AppletWidget {
     Q_OBJECT
 public:
     explicit RxApplet(SliceModel* slice, RadioModel* model,
@@ -307,7 +308,10 @@ private:
 #endif
 
 signals:
+    // AUTO was clicked and the slice shown was set to `on`.
     void autoAgcToggled(bool on);
+    // The applet shows another slice (or none).
+    void sliceChanged();
     void openSetupRequested();
     // Phase 3F (Bug 3): a slice tab was clicked; MainWindow routes this to
     // RadioModel::setActiveSlice. Mirrors AetherSDR

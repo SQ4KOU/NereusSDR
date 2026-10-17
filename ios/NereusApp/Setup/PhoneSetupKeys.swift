@@ -55,19 +55,28 @@ final class PhoneSetupKeys: SetupPhoneKeys {
     static let filterPresetsModeDefault = "SetupFilterPresetsMode"
     static let filterPresetsModeStart: Int64 = 1
 
-    /// Colours kept here without their own alpha: the trace, drawn opaque.
-    static let opaqueColourKeys: Set<String> = ["DisplayFillColor"]
+    /// The app-owned Display grid choices, in hertz. These describe the
+    /// phone's drawing and are independent of the connected radio.
+    static let frequencyGridSpacingChoices = [0, 1000, 2000, 5000, 10000, 25000, 50000, 100000]
+
+    /// Colours kept here without their own alpha: the trace's fill and its
+    /// line, drawn opaque.
+    static let opaqueColourKeys: Set<String> = ["DisplayFillColor", "DisplayTraceColor"]
 
     var changes: AnyPublisher<Void, Never> {
         let existing = Publishers.Merge4(main.band.$settings.map { _ in () }, main.sMeter.$state.map { _ in () },
                                           $filterPresetsMode.map { _ in () }, $paTempUnit.map { _ in () })
+            .merge(with: main.$displayEditScope.map { _ in () })
+            .merge(with: main.$displayBandChoice.map { _ in () })
+            .merge(with: main.band.$transmit.map { _ in () })
+            .merge(with: main.band.$showsTransmit.map { _ in () })
             .eraseToAnyPublisher()
         guard let paValues else { return existing }
         return existing.merge(with: paValues.objectWillChange.map { _ in () }).eraseToAnyPublisher()
     }
 
     func value(forPhoneKey key: String) -> SetupValue? {
-        let settings = main.band.settings
+        let settings = main.displayEditingSettings
         if let path = Self.switches[key] {
             return .bool(settings[keyPath: path])
         }
@@ -85,13 +94,34 @@ final class PhoneSetupKeys: SetupPhoneKeys {
         }
         let meter = main.sMeter.state.settings
         switch key {
+        case "DisplayFreqGridSpacing": return .integer(Int64(settings.frequencyGridSpacingHz))
+        case "DisplayFreqScaleFontPx": return .integer(Int64(settings.frequencyScaleFontPoints))
+        case "Display3DSpeed": return .integer(Int64(settings.threeDSpeed))
+        case "DisplayShowNoiseFloorPosition":
+            return OverlayCorner.allCases.firstIndex(of: settings.noiseFloorPosition).map { .integer(Int64($0)) }
+        case "WaterfallBlankingEnabled": return .bool(settings.waterfallBlanking)
+        case "WaterfallBlankingThresholdDb": return .integer(Int64(settings.waterfallBlankingThresholdDb))
+        case "DisplayBackgroundEnabled": return .bool(settings.backgroundEnabled)
+        case "DisplayBackgroundColor": return Self.rgba(settings.backgroundColour)
+        case "DisplayBackgroundOpacity": return .integer(Int64(settings.backgroundOpacityPercent))
+        case "DisplayCalOffset": return .decimal(settings.calibrationOffsetDb)
+        case "DisplayWaterfallLevelsMode":
+            return .text(Self.levelToken(settings.waterfallLevelMode))
+        case "DisplaySpectrumScaleMode":
+            return .text(settings.gridFollowsNoiseFloor ? "TrackFloor" : "Manual")
+        case "DisplayLineWidth":
+            return .decimal(Double(settings.traceWidthPixels(scale: UIScreen.main.scale)))
+        case "DisplayWfBlackLevel": return .integer(Int64(settings.waterfallBlackLevel))
+        case "DisplayWfColorGain": return .integer(Int64(settings.waterfallColorGain))
+        case "DisplayTxGridRefLevel": return .integer(Int64(settings.txGridTopDbm.rounded()))
+        case "DisplayTxGridMin": return .integer(Int64((settings.txGridTopDbm - settings.txGridRangeDb).rounded()))
         case "DisplayPeakValuePosition":
             return OverlayCorner.allCases.firstIndex(of: settings.peakValueCorner).map { .integer(Int64($0)) }
         case "DisplayWfColorScheme":
             // This phone's own gradient is none of the Core's options: no option shows chosen.
-            return .integer(Int64(settings.waterfallPaletteId))
+            return .integer(Int64(settings.waterfallPaletteId == BandPalette.customPaletteId ? Self.desktopCustomScheme : settings.waterfallPaletteId))
         case "DisplayTxWfPalette":
-            return .integer(Int64(settings.txWaterfallPaletteId))
+            return .integer(Int64(settings.txWaterfallPaletteId == BandPalette.customPaletteId ? Self.desktopCustomScheme : settings.txWaterfallPaletteId))
         case "DisplaySpectrumRenderMode":
             return .integer(Int64(settings.spectrumView.rawValue))
         case "DisplayWaterfallHistoryMs":
@@ -119,6 +149,10 @@ final class PhoneSetupKeys: SetupPhoneKeys {
             return .integer(Int64((settings.traceFillOpacity * 100).rounded()))
         case "DisplayFillColor":
             return Self.rgba(settings.traceColour)
+        case "DisplayTraceColor":
+            // The line's own colour, and the fill's until one is chosen, as
+            // the desktop's Trace Color button shows it.
+            return Self.rgba(settings.traceLineColourDrawn)
         case "DisplayRxFilterColor":
             guard case .text(let rgb)? = Self.rgba(settings.passbandColour) else { return nil }
             let alpha = Int((min(max(settings.passbandOpacity, 0), 1) * 255).rounded())
@@ -145,89 +179,141 @@ final class PhoneSetupKeys: SetupPhoneKeys {
     }
 
     func set(_ value: SetupValue, forPhoneKey key: String) -> Bool {
+        if displayUnavailableReason(forPhoneKey: key) != nil { return false }
         if let path = Self.switches[key] {
             guard let on = value.flag else { return false }
-            main.changeDisplay { $0[keyPath: path] = on }
+            changeDisplay(forPhoneKey: key) { $0[keyPath: path] = on }
             return true
         }
         if let path = Self.wholes[key] {
             guard let whole = value.whole, let number = Int(exactly: whole) else { return false }
-            main.changeDisplay { $0[keyPath: path] = number }
+            changeDisplay(forPhoneKey: key) { $0[keyPath: path] = number }
             return true
         }
         if let path = Self.colours[key] {
             guard let text = Self.normalised(value.text) else { return false }
-            main.changeDisplay { $0[keyPath: path] = text }
+            changeDisplay(forPhoneKey: key) { $0[keyPath: path] = text }
             return true
         }
         if let path = Self.wholeRates[key] {
             guard let whole = value.whole, let number = Int(exactly: whole) else { return false }
-            main.changeDisplay { $0[keyPath: path] = Double(number) }
+            changeDisplay(forPhoneKey: key) { $0[keyPath: path] = Double(number) }
             return true
         }
         if let path = Self.fractions[key] {
             guard let number = value.number else { return false }
-            main.changeDisplay { $0[keyPath: path] = number }
+            changeDisplay(forPhoneKey: key) { $0[keyPath: path] = number }
             return true
         }
         let whole = value.whole.flatMap { Int(exactly: $0) }
         switch key {
+        case "DisplayFreqGridSpacing":
+            guard let spacing = whole, Self.frequencyGridSpacingChoices.contains(spacing) else { return false }
+            changeDisplay(forPhoneKey: key) { $0.frequencyGridSpacingHz = spacing }
+        case "DisplayFreqScaleFontPx":
+            guard let size = whole, (8...14).contains(size) else { return false }
+            changeDisplay(forPhoneKey: key) { $0.frequencyScaleFontPoints = size }
+        case "Display3DSpeed":
+            guard let speed = whole, (0...10).contains(speed) else { return false }
+            changeDisplay(forPhoneKey: key) { $0.threeDSpeed = speed }
+        case "DisplayShowNoiseFloorPosition": return false // Kept but not used, as the accepted live page.
+        case "WaterfallBlankingEnabled", "DisplayBackgroundEnabled":
+            guard let enabled = value.flag else { return false }
+            changeDisplay(forPhoneKey: key) {
+                if key == "WaterfallBlankingEnabled" { $0.waterfallBlanking = enabled }
+                else { $0.backgroundEnabled = enabled }
+            }
+        case "WaterfallBlankingThresholdDb":
+            guard let threshold = whole, (1...20).contains(threshold) else { return false }
+            changeDisplay(forPhoneKey: key) { $0.waterfallBlankingThresholdDb = threshold }
+        case "DisplayBackgroundOpacity":
+            guard let opacity = whole, (0...100).contains(opacity) else { return false }
+            changeDisplay(forPhoneKey: key) { $0.backgroundOpacityPercent = opacity }
+        case "DisplayBackgroundColor":
+            guard let colour = Self.normalised(value.text) else { return false }
+            changeDisplay(forPhoneKey: key) { $0.backgroundColour = colour }
+        case "DisplayCalOffset": return false // Core calibration is already in the frame.
+        case "DisplayWaterfallLevelsMode":
+            guard let token = value.text, let mode = Self.levelModes[token] else { return false }
+            changeDisplay(forPhoneKey: key) { $0.waterfallLevelMode = mode }
+        case "DisplaySpectrumScaleMode":
+            guard let token = value.text, token == "Manual" || token == "TrackFloor" else { return false }
+            changeDisplay(forPhoneKey: key) { $0.gridFollowsNoiseFloor = token == "TrackFloor" }
+        case "DisplayLineWidth":
+            guard let pixels = value.number, pixels.isFinite, (0.1...5).contains(pixels) else { return false }
+            changeDisplay(forPhoneKey: key) { $0.traceWidthPoints = pixels / Double(UIScreen.main.scale) }
+        case "DisplayWfBlackLevel", "DisplayWfColorGain":
+            guard let position = whole, (0...100).contains(position) else { return false }
+            changeDisplay(forPhoneKey: key) {
+                if key == "DisplayWfBlackLevel" { $0.waterfallBlackLevel = position }
+                else { $0.waterfallColorGain = position }
+            }
+        case "DisplayTxGridRefLevel":
+            guard let top = value.number, top.isFinite, (-200...200).contains(top) else { return false }
+            changeDisplay(forPhoneKey: key) { $0.txGridTopDbm = top }
+        case "DisplayTxGridMin":
+            guard let bottom = value.number, bottom.isFinite, (-200...200).contains(bottom),
+                  BandDisplaySettings.txGridRangeRange.contains(main.displayEditingSettings.txGridTopDbm - bottom) else { return false }
+            changeDisplay(forPhoneKey: key) { $0.txGridRangeDb = $0.txGridTopDbm - bottom }
         case "DisplayPeakValuePosition":
             guard let index = whole, OverlayCorner.allCases.indices.contains(index) else { return false }
-            main.changeDisplay { $0.peakValueCorner = OverlayCorner.allCases[index] }
+            changeDisplay(forPhoneKey: key) { $0.peakValueCorner = OverlayCorner.allCases[index] }
         case "DisplayWfColorScheme":
-            guard let scheme = whole, scheme != Self.desktopCustomScheme else { return false }
-            main.changeDisplay { $0.waterfallPaletteId = scheme }
+            guard let scheme = whole, (0...8).contains(scheme) else { return false }
+            changeDisplay(forPhoneKey: key) { $0.waterfallPaletteId = scheme == Self.desktopCustomScheme ? BandPalette.customPaletteId : scheme }
         case "DisplayTxWfPalette":
-            guard let scheme = whole, scheme != Self.desktopCustomScheme else { return false }
-            main.changeDisplay { $0.txWaterfallPaletteId = scheme }
+            guard let scheme = whole, (0...8).contains(scheme) else { return false }
+            changeDisplay(forPhoneKey: key) { $0.txWaterfallPaletteId = scheme == Self.desktopCustomScheme ? BandPalette.customPaletteId : scheme }
         case "DisplaySpectrumRenderMode":
             // The 3D choice, on a Core that offers the 3D view.
             guard let view = whole.flatMap(SpectrumView.init(rawValue:)) else { return false }
-            main.changeDisplay { $0.spectrumView = view }
+            changeDisplay(forPhoneKey: key) { $0.spectrumView = view }
         case "DisplayWaterfallHistoryMs":
             guard let ms = whole, ms > 0 else { return false }
-            main.changeDisplay { $0.rewindSeconds = ms / 1000 }
+            changeDisplay(forPhoneKey: key) { $0.rewindSeconds = ms / 1000 }
         case "DisplayWfTimestampPos":
             guard let index = whole, TimestampPosition.allCases.indices.contains(index) else { return false }
-            main.changeDisplay { $0.timestampPosition = TimestampPosition.allCases[index] }
+            changeDisplay(forPhoneKey: key) { $0.timestampPosition = TimestampPosition.allCases[index] }
         case "DisplayWfTimestampMode":
             guard let mode = whole, mode == 0 || mode == 1 else { return false }
-            main.changeDisplay { $0.timestampUtc = mode == 0 }
+            changeDisplay(forPhoneKey: key) { $0.timestampUtc = mode == 0 }
         case "DisplayFreqLabelAlign":
             guard let index = whole, FrequencyLabelAlignment.allCases.indices.contains(index) else { return false }
-            main.changeDisplay { $0.frequencyLabelAlignment = FrequencyLabelAlignment.allCases[index] }
+            changeDisplay(forPhoneKey: key) { $0.frequencyLabelAlignment = FrequencyLabelAlignment.allCases[index] }
         case "DisplayGridMax":
             // The band the pan is on keeps it, as the desktop's per-band dB Max.
             guard let top = whole else { return false }
-            main.changeDisplay { $0.scaleTopDbm = Double(top) }
+            changeDisplay(forPhoneKey: key) { $0.scaleTopDbm = Double(top) }
         case "DisplayGridMin":
             guard let bottom = whole else { return false }
-            main.changeDisplay { $0.scaleBottomDbm = Double(bottom) }
+            changeDisplay(forPhoneKey: key) { $0.scaleBottomDbm = Double(bottom) }
         case "DisplaySpectrumDetector":
             guard let detector = whole.flatMap(SpectrumDetector.init(rawValue:)) else { return false }
-            main.changeDisplay { $0.spectrumDetector = detector }
+            changeDisplay(forPhoneKey: key) { $0.spectrumDetector = detector }
         case "DisplayWaterfallDetector":
             guard let detector = whole.flatMap(SpectrumDetector.init(rawValue:)), detector != .rms else { return false }
-            main.changeDisplay { $0.waterfallDetector = detector }
+            changeDisplay(forPhoneKey: key) { $0.waterfallDetector = detector }
         case "DisplaySpectrumAveraging":
             guard let averaging = whole.flatMap(SpectrumAveraging.init(rawValue:)) else { return false }
-            main.changeDisplay { $0.spectrumAveraging = averaging }
+            changeDisplay(forPhoneKey: key) { $0.spectrumAveraging = averaging }
         case "DisplayWaterfallAveraging":
             guard let averaging = whole.flatMap(SpectrumAveraging.init(rawValue:)) else { return false }
-            main.changeDisplay { $0.waterfallAveraging = averaging }
+            changeDisplay(forPhoneKey: key) { $0.waterfallAveraging = averaging }
         case "DisplayFftFillAlpha":
             // The percent the Core describes, kept as the typed fraction.
             guard let percent = whole, (0...100).contains(percent) else { return false }
-            main.changeDisplay { $0.traceFillOpacity = Double(percent) / 100 }
+            changeDisplay(forPhoneKey: key) { $0.traceFillOpacity = Double(percent) / 100 }
         case "DisplayFillColor":
             guard let text = Self.normalised(value.text) else { return false }
-            main.changeDisplay { $0.traceColour = String(text.prefix(7)) }
+            changeDisplay(forPhoneKey: key) { $0.traceColour = String(text.prefix(7)) }
+        case "DisplayTraceColor":
+            guard let text = Self.normalised(value.text) else { return false }
+            changeDisplay(forPhoneKey: key) { $0.traceLineColour = String(text.prefix(7)) }
         case "DisplayRxFilterColor":
             guard let text = Self.normalised(value.text), let alpha = Int(text.suffix(2), radix: 16) else {
                 return false
             }
-            main.changeDisplay {
+            changeDisplay(forPhoneKey: key) {
                 $0.passbandColour = String(text.prefix(7))
                 $0.passbandOpacity = Double(alpha) / 255
             }
@@ -275,7 +361,17 @@ final class PhoneSetupKeys: SetupPhoneKeys {
     static let navigationActions: Set<String> = ["openTxEq", "openSetupPage"]
 
     func canPerform(_ action: String) -> Bool {
-        (action == PaValuesModel.resetAction && paValues?.canReset == true) || Self.actions.contains(action) || (Self.navigationActions.contains(action) && navigation != nil)
+        if displayUnavailableReason(forPhoneKey: action) != nil { return false }
+        switch action {
+        case "editReceiveGradient": return main.displayEditingSettings.waterfallPaletteId == BandPalette.customPaletteId
+        case "editTransmitGradient": return main.displayEditingSettings.txWaterfallPaletteId == BandPalette.customPaletteId
+        case "ClarityRetune": return main.displayEditingSettings.waterfallLevelMode == .clarity && main.display.retuneAvailable
+        case "chooseBackgroundImage": return true
+        case "clearBackgroundImage": return !main.displayEditingSettings.backgroundImagePath.isEmpty
+        case "openDisplaySpectrum", "openDisplayPeaks", "openDisplayMultimeter": return navigation != nil
+        default: break
+        }
+        return (action == PaValuesModel.resetAction && paValues?.canReset == true) || Self.actions.contains(action) || (Self.navigationActions.contains(action) && navigation != nil)
     }
 
     func perform(_ action: String, argument: String?) -> Bool {
@@ -296,12 +392,57 @@ final class PhoneSetupKeys: SetupPhoneKeys {
         }
     }
 
+    /// The frozen row keeps its original action semantics; native/current
+    /// Appearance resets only the nine colors still on that page.
+    func perform(_ action: String, descriptionVersion: Int) -> Bool {
+        if action == "resetColors", descriptionVersion <= 28 {
+            main.changeDisplay(Self.resetLegacyColours)
+            return true
+        }
+        if action == "smoothDefaults", descriptionVersion <= 28 {
+            // Exact ef74a7707:346–355: the old action enabled AGC even
+            // beneath Clarity/Scale, without changing their other flags.
+            main.changeDisplay { settings in
+                let clarity = settings.clarityEnabled, floor = settings.waterfallNfAgc
+                let scale = settings.useSpectrumMinMax
+                Self.smoothDefaults(&settings)
+                settings.clarityEnabled = clarity; settings.waterfallNfAgc = floor
+                settings.useSpectrumMinMax = scale; settings.waterfallAgc = true
+            }
+            return true
+        }
+        return perform(action)
+    }
+
+    func perform(_ action: String, argument: String?, descriptionVersion: Int) -> Bool {
+        if argument == nil && (action == "resetColors" || action == "smoothDefaults") {
+            return perform(action, descriptionVersion: descriptionVersion)
+        }
+        return perform(action, argument: argument)
+    }
+
     func perform(_ action: String) -> Bool {
+        if displayUnavailableReason(forPhoneKey: action) != nil { return false }
         switch action {
+        case "editReceiveGradient", "editTransmitGradient":
+            guard canPerform(action) else { return false }
+            main.display.gradientEditor = action == "editReceiveGradient" ? .receive : .transmit
+        case "ClarityRetune":
+            guard canPerform(action) else { return false }
+            main.display.retune()
+        case "chooseBackgroundImage": main.display.choosingBackgroundPicture = true
+        case "clearBackgroundImage":
+            guard canPerform(action) else { return false }
+            main.changeDisplay { $0.backgroundImagePath = "" }
+        case "openDisplaySpectrum", "openDisplayPeaks", "openDisplayMultimeter":
+            guard let navigation else { return false }
+            let page = action == "openDisplaySpectrum" ? "display.spectrumDefaults"
+                : action == "openDisplayPeaks" ? "display.spectrumPeaks" : "display.multimeter"
+            return navigation.openSetupPage(page)
         case PaValuesModel.resetAction:
             return paValues?.reset() ?? false
         case "smoothDefaults":
-            main.changeDisplay(Self.smoothDefaults)
+            main.applySmoothDisplayDefaults()
         case "copySpectrumMinMax":
             // The pan's scale as it is drawn now becomes the thresholds.
             main.changeDisplay { settings in
@@ -329,14 +470,19 @@ final class PhoneSetupKeys: SetupPhoneKeys {
     /// The desktop's Reset to Smooth Defaults, as the Core's V12 note lists
     /// it: Clarity Blue, Log Recursive averaging, the white trace, no fill
     /// under it, the waterfall AGC on and a 30 ms update period; with D97's
-    /// 650 ms spectrum average time. Nothing else moves.
+    /// 650 ms spectrum average time. Nothing else moves. The white goes to
+    /// the fill (`traceColour`, the desktop's `DisplayFillColor`) and to the
+    /// trace line (`traceLineColour`, the desktop's `DisplayTraceColor`), as
+    /// the desktop's button sets both: a trace color chosen earlier does
+    /// not outlive the reset.
     static func smoothDefaults(_ settings: inout BandDisplaySettings) {
         settings.waterfallPaletteId = clarityBlueScheme
         settings.spectrumAveraging = .logRecursive
         settings.spectrumAverageTimeMs = smoothAverageTimeMs
         settings.traceColour = smoothTraceColour
+        settings.traceLineColour = smoothTraceColour
         settings.traceFill = false
-        settings.waterfallAgc = true
+        if settings.waterfallLevelMode == .manual { settings.waterfallLevelMode = .agc }
         settings.waterfallPeriodMs = smoothUpdatePeriodMs
     }
 
@@ -345,10 +491,26 @@ final class PhoneSetupKeys: SetupPhoneKeys {
     static let smoothTraceColour = "#FFFFFF"
     static let smoothUpdatePeriodMs = 30
 
-    /// Reset all colors: the ten Colors & Theme swatches back to their
-    /// defaults, which the phone keeps as the desktop's (D83). This phone
-    /// keeps no band edge colour, so nine fields hold the ten.
+    /// Reset the nine device-shared Appearance colors. Trace, fill and
+    /// background remain owned by their Display pages.
     static func resetColours(_ settings: inout BandDisplaySettings) {
+        let defaults = BandDisplaySettings.desktopDefaults
+        // Appearance's reset keeps trace/fill/background in their new owner pages.
+        settings.gridColour = defaults.gridColour
+        settings.gridFineColour = defaults.gridFineColour
+        settings.hGridColour = defaults.hGridColour
+        settings.gridTextColour = defaults.gridTextColour
+        settings.bandEdgeColour = defaults.bandEdgeColour
+        settings.rxZeroLineColour = defaults.rxZeroLineColour
+        settings.txZeroLineColour = defaults.txZeroLineColour
+        settings.passbandColour = defaults.passbandColour
+        settings.passbandOpacity = defaults.passbandOpacity
+        settings.txPassbandColour = defaults.txPassbandColour
+    }
+
+    /// Exact original ef74a7707 PhoneSetupKeys.swift:365–379. The old
+    /// Appearance page included fill and did not include band-edge color.
+    static func resetLegacyColours(_ settings: inout BandDisplaySettings) {
         let defaults = BandDisplaySettings.desktopDefaults
         settings.traceColour = defaults.traceColour
         settings.gridColour = defaults.gridColour
@@ -362,9 +524,140 @@ final class PhoneSetupKeys: SetupPhoneKeys {
         settings.txPassbandColour = defaults.txPassbandColour
     }
 
+    private func changeDisplay(forPhoneKey key: String, _ change: (inout BandDisplaySettings) -> Void) {
+        main.changeDisplay(fields: Self.displayFields(forPhoneKey: key), change)
+    }
+
+    /// Exact established typed carriers; virtual mode is one coherent stored
+    /// tuple and RX filter color carries its existing color/alpha pair.
+    static func displayFields(forPhoneKey key: String) -> Set<String> {
+        if key == "DisplayWaterfallLevelsMode" { return BandDisplaySettingsStore.waterfallModeFields }
+        if key == "DisplayRxFilterColor" { return ["passbandColour", "passbandOpacity"] }
+        return displayFieldNames[key].map { [$0] } ?? []
+    }
+    static func pictureFields(on page: SetupDescription.Page) -> Set<String> {
+        let controls = page.sections.flatMap(\.controls)
+        var fields = controls.reduce(into: Set<String>()) { result, control in
+            guard control.owner == .pan, control.kind != .button, control.perBand == nil,
+                  case .phone(let key)? = control.binding else { return }
+            result.formUnion(displayFields(forPhoneKey: key).intersection(BandDisplaySettingsStore.pictureFields))
+        }
+        // The local picker action carries a stored picture path; the action
+        // itself contributes no own marker, but page reset/copy includes its value.
+        if controls.contains(where: { $0.owner == .pan && $0.binding == .phone("chooseBackgroundImage") }) {
+            fields.insert("backgroundImagePath")
+        }
+        return fields
+    }
+    private static let displayFieldNames: [String: String] = [
+        "ClarityEnabled": "clarityEnabled",
+        "Display3DAngle": "threeDAngle",
+        "Display3DFloorDepth": "threeDFloors",
+        "Display3DGain": "threeDGain",
+        "Display3DSliceShadow": "threeDSliceShadow",
+        "Display3DSpan": "threeDSpan",
+        "Display3DSpeed": "threeDSpeed",
+        "DisplayActivePeakHoldColor": "peakHoldColour",
+        "DisplayActivePeakHoldDropDbPerSec": "activePeakHoldFallDbPerSec",
+        "DisplayActivePeakHoldDurationMs": "activePeakHoldMs",
+        "DisplayActivePeakHoldEnabled": "activePeakHold",
+        "DisplayActivePeakHoldFill": "activePeakHoldFill",
+        "DisplayActivePeakHoldOnTx": "activePeakHoldOnTx",
+        "DisplayAdjustGridMinToNoiseFloor": "gridFollowsNoiseFloor",
+        "DisplayBackgroundColor": "backgroundColour",
+        "DisplayBackgroundEnabled": "backgroundEnabled",
+        "DisplayBackgroundOpacity": "backgroundOpacityPercent",
+        "DisplayBandEdgeColor": "bandEdgeColour",
+        "DisplayDbmScaleVisible": "showDbmScale",
+        "DisplayDispNormalize": "normalize",
+        "DisplayFftFillAlpha": "traceFillOpacity",
+        "DisplayFillColor": "traceColour",
+        "DisplayFreqGridSpacing": "frequencyGridSpacingHz",
+        "DisplayFreqLabelAlign": "frequencyLabelAlignment",
+        "DisplayFreqScaleFontPx": "frequencyScaleFontPoints",
+        "DisplayGradientEnabled": "traceGradient",
+        "DisplayGridColor": "gridColour",
+        "DisplayGridEnabled": "grid",
+        "DisplayGridFineColor": "gridFineColour",
+        "DisplayGridMax": "scaleTopDbm",
+        "DisplayGridMin": "scaleBottomDbm",
+        "DisplayGridStep": "gridStepDb",
+        "DisplayGridTextColor": "gridTextColour",
+        "DisplayHGridColor": "hGridColour",
+        "DisplayLineWidth": "traceWidthPoints",
+        "DisplayMaintainNFAdjustDelta": "gridKeepsRange",
+        "DisplayNFOffsetGridFollow": "gridNoiseFloorOffsetDb",
+        "DisplayNoiseFloorColor": "noiseFloorColour",
+        "DisplayNoiseFloorFastColor": "noiseFloorFastColour",
+        "DisplayNoiseFloorLineWidth": "noiseFloorLineWidth",
+        "DisplayNoiseFloorShiftDb": "noiseFloorShiftDb",
+        "DisplayNoiseFloorTextColor": "noiseFloorTextColour",
+        "DisplayPanFill": "traceFill",
+        "DisplayPeakBlobColor": "peakBlobColour",
+        "DisplayPeakBlobTextColor": "peakBlobTextColour",
+        "DisplayPeakBlobsCount": "peakBlobCount",
+        "DisplayPeakBlobsEnabled": "peakBlobs",
+        "DisplayPeakBlobsFallDbPerSec": "peakBlobFallDbPerSec",
+        "DisplayPeakBlobsHoldDrop": "peakBlobFall",
+        "DisplayPeakBlobsHoldEnabled": "peakBlobHold",
+        "DisplayPeakBlobsHoldMs": "peakBlobHoldMs",
+        "DisplayPeakBlobsInsideFilterOnly": "peakBlobsInsideFilterOnly",
+        "DisplayPeakHoldEnabled": "peakHold",
+        "DisplayPeakHoldResetMs": "peakHoldDelayMs",
+        "DisplayPeakTextDelayMs": "peakValueDelayMs",
+        "DisplayPeakValuePosition": "peakValueCorner",
+        "DisplayRxZeroLineColor": "rxZeroLineColour",
+        "DisplayShowBinWidth": "showBinWidth",
+        "DisplayShowCursorFreq": "showCursorFrequency",
+        "DisplayShowFps": "showFps",
+        "DisplayShowNoiseFloor": "noiseFloorLine",
+        "DisplayShowNoiseFloorPosition": "noiseFloorPosition",
+        "DisplayShowPeakValueOverlay": "showPeakValue",
+        "DisplayShowRxFilterOnWaterfall": "showRxFilterOnWaterfall",
+        "DisplayShowRxZeroLine": "showRxZeroLineOnWaterfall",
+        "DisplayShowTxFilterOnRxWaterfall": "showTxFilterOnWaterfall",
+        "DisplayShowTxZeroLine": "showTxZeroLineOnWaterfall",
+        "DisplayShowZeroLine": "showZeroLine",
+        "DisplaySpectrumAverageTimeMs": "spectrumAverageTimeMs",
+        "DisplaySpectrumAveraging": "spectrumAveraging",
+        "DisplaySpectrumDetector": "spectrumDetector",
+        "DisplaySpectrumRenderMode": "spectrumView",
+        "DisplaySpectrumScaleMode": "gridFollowsNoiseFloor",
+        "DisplayTraceColor": "traceLineColour",
+        "DisplayTxFilterColor": "txPassbandColour",
+        "DisplayTxGridMin": "txGridRangeDb",
+        "DisplayTxGridRefLevel": "txGridTopDbm",
+        "DisplayTxWfHighLevel": "txWaterfallHighDbm",
+        "DisplayTxWfLowColor": "txWaterfallLowColour",
+        "DisplayTxWfLowLevel": "txWaterfallLowDbm",
+        "DisplayTxWfPalette": "txWaterfallPaletteId",
+        "DisplayTxZeroLineColor": "txZeroLineColour",
+        "DisplayWaterfallAverageTimeMs": "waterfallAverageTimeMs",
+        "DisplayWaterfallAveraging": "waterfallAveraging",
+        "DisplayWaterfallDetector": "waterfallDetector",
+        "DisplayWaterfallHistoryMs": "rewindSeconds",
+        "DisplayWfAgc": "waterfallAgc",
+        "DisplayWfBlackLevel": "waterfallBlackLevel",
+        "DisplayWfColorGain": "waterfallColorGain",
+        "DisplayWfColorScheme": "waterfallPaletteId",
+        "DisplayWfHighLevel": "waterfallHighDbm",
+        "DisplayWfLowLevel": "waterfallLowDbm",
+        "DisplayWfOpacity": "waterfallOpacityPercent",
+        "DisplayWfTimestampMode": "timestampUtc",
+        "DisplayWfTimestampPos": "timestampPosition",
+        "DisplayWfUpdatePeriodMs": "waterfallPeriodMs",
+        "DisplayWfUseSpectrumMinMax": "useSpectrumMinMax",
+        "WaterfallAGCOffsetDb": "waterfallOffsetDb",
+        "WaterfallBlankingEnabled": "waterfallBlanking",
+        "WaterfallBlankingThresholdDb": "waterfallBlankingThresholdDb",
+        "WaterfallNFAGCEnabled": "waterfallNfAgc",
+        "WaterfallStopOnTx": "waterfallStopOnTx",
+        "decimation": "decimation",
+    ]
+
     var perBandName: String? {
         // 160m to XVTR, and 2 m as the Core names it (band 27).
-        main.band.settings.scaleBand.flatMap(Int.init).flatMap(SetupDescription.bandName)
+        main.displayEditingBand.flatMap(Int.init).flatMap(SetupDescription.bandName)
     }
 
     var screenRefreshRate: Int? {
@@ -389,8 +682,37 @@ final class PhoneSetupKeys: SetupPhoneKeys {
     /// greyed: this phone does not track the running peak and minimum.
     static let paValuesPeakReason = "Peak and minimum PA readings are kept on the desktop."
 
+    /// Accepted HTML581/700–711: every receive Levels row of a keyed
+    /// selected pan is unavailable; All keeps editing the remembered master.
+    /// Copy actions inherit the gate of the receive rows they would change.
+    private static let receiveLevelsKeys: Set<String> = [
+        "DisplaySpectrumScaleMode", "DisplayGridMax", "DisplayGridMin",
+        "DisplayNFOffsetGridFollow", "DisplayMaintainNFAdjustDelta", "copyWaterfallThresholds",
+        "DisplayWaterfallLevelsMode", "DisplayWfBlackLevel", "DisplayWfColorGain",
+        "WaterfallAGCOffsetDb", "DisplayWfLowLevel", "DisplayWfHighLevel",
+        "ClarityRetune", "copySpectrumMinMax",
+    ]
+    private func displayUnavailableReason(forPhoneKey key: String) -> String? {
+        if main.displayEditScope == .pan, main.band.transmitOverlay, Self.receiveLevelsKeys.contains(key) {
+            return "Pan 1 is transmitting. Receive scale and level settings are kept until it stops. Change transmit settings on Transmit Display."
+        }
+        let display = main.displayEditingSettings
+        if display.gridFollowsNoiseFloor {
+            if key == "DisplayGridMin" { return "Track floor sets dB Min." }
+            if key == "DisplayGridMax" && display.gridKeepsRange { return "Track floor with Keep Range sets dB Max." }
+        }
+        return nil
+    }
+
     func unavailableReason(forPhoneKey key: String) -> String? {
+        if let reason = displayUnavailableReason(forPhoneKey: key) { return reason }
         switch key {
+        case "DisplayShowNoiseFloorPosition":
+            return "Not used: the noise floor text sits beside its box. The setting is kept but has no visual effect."
+        case "DisplayThreadPriority":
+            return "Thread Priority is controlled by the Core computer. This phone does not run the Core FFT thread."
+        case "DisplayCalOffset":
+            return BandDisplaySettings.calibrationReason
         case "MultimeterSignalHistoryDurationMs":
             return Self.noHistoryGraphReason
         case "display/showPaValuesPage", "resetPaValues":
@@ -403,9 +725,22 @@ final class PhoneSetupKeys: SetupPhoneKeys {
     func unavailableOptions(forPhoneKey key: String) -> [Int64: String] {
         switch key {
         case "DisplayWfColorScheme", "DisplayTxWfPalette":
-            return [Int64(Self.desktopCustomScheme): Self.customSchemeReason]
+            return [:]
         default:
             return [:]
+        }
+    }
+
+    static let levelModes: [String: BandDisplaySettings.WaterfallLevelMode] = [
+        "Clarity": .clarity, "Auto": .agc, "Floor": .noiseFloorAgc, "Manual": .manual, "Scale": .scale,
+    ]
+    static func levelToken(_ mode: BandDisplaySettings.WaterfallLevelMode) -> String {
+        switch mode {
+        case .clarity: return "Clarity"
+        case .agc: return "Auto"
+        case .noiseFloorAgc: return "Floor"
+        case .manual: return "Manual"
+        case .scale: return "Scale"
         }
     }
 
@@ -496,6 +831,7 @@ final class PhoneSetupKeys: SetupPhoneKeys {
         "DisplayGridFineColor": \.gridFineColour,
         "DisplayHGridColor": \.hGridColour,
         "DisplayGridTextColor": \.gridTextColour,
+        "DisplayBandEdgeColor": \.bandEdgeColour,
         "DisplayRxZeroLineColor": \.rxZeroLineColour,
         "DisplayTxZeroLineColor": \.txZeroLineColour,
         "DisplayTxFilterColor": \.txPassbandColour,

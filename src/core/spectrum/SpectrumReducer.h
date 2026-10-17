@@ -82,6 +82,9 @@ struct ReducerConfig {
     /// for one release and is now named for what it carries, matching the
     /// widget's own setAverageAlpha.
     double averageAlpha  {0.12};
+
+    /// Per-plane Time Window depth; legacy requests retain two frames.
+    int averageFrames {SpectrumAvenger::kMinWindowFrames};
 };
 
 /// Crop a linear-power FFT bin array to a frequency window and reduce it to

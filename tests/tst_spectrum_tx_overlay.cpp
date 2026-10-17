@@ -34,6 +34,12 @@
 // paint tests use show() + QTest::qWait to coax a paint event; coordinate
 // tests call the helper directly via a thin public test-seam accessor.
 //
+// Display pill plan Task 1 (2026-10-10): a pan's own colour lives in
+// "<base>_<N>", pan 0 included; the bare key is the Setup default and no
+// pan writes it. The six "...Persists" cases (7, 8, 9, 10, 12, 13) read pan
+// 0's colour back from the bare key and now read "<base>_0", and assert the
+// bare key was left alone.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-05-02 — Original implementation for NereusSDR by J.J. Boyd
@@ -182,9 +188,11 @@ private slots:
         // Getter returns the new color.
         QCOMPARE(w.txFilterColor(), testColor);
 
-        // AppSettings key was written.  Pan 0 key has no numeric suffix.
+        // Appearance colours are shared, so the bare key is written and
+        // no numbered pan override remains.
         auto& s = AppSettings::instance();
         const QString stored = s.value(QStringLiteral("DisplayTxFilterColor")).toString();
+        QVERIFY(!s.contains(QStringLiteral("DisplayTxFilterColor_0")));
         QVERIFY2(!stored.isEmpty(), "DisplayTxFilterColor not persisted");
         const QColor roundTrip = QColor::fromString(stored);
         QVERIFY2(roundTrip.isValid(), "Stored color is not a valid color string");
@@ -207,9 +215,11 @@ private slots:
         // Getter returns the new color.
         QCOMPARE(w.rxFilterColor(), testColor);
 
-        // AppSettings key was written.  Pan 0 key has no numeric suffix.
+        // Appearance colours are shared, so the bare key is written and
+        // no numbered pan override remains.
         auto& s = AppSettings::instance();
         const QString stored = s.value(QStringLiteral("DisplayRxFilterColor")).toString();
+        QVERIFY(!s.contains(QStringLiteral("DisplayRxFilterColor_0")));
         QVERIFY2(!stored.isEmpty(), "DisplayRxFilterColor not persisted");
         const QColor roundTrip = QColor::fromString(stored);
         QVERIFY2(roundTrip.isValid(), "Stored color is not a valid color string");
@@ -233,6 +243,7 @@ private slots:
 
         auto& s = AppSettings::instance();
         const QString stored = s.value(QStringLiteral("DisplayRxZeroLineColor")).toString();
+        QVERIFY(!s.contains(QStringLiteral("DisplayRxZeroLineColor_0")));
         QVERIFY2(!stored.isEmpty(), "DisplayRxZeroLineColor not persisted");
         const QColor roundTrip = QColor::fromString(stored);
         QVERIFY2(roundTrip.isValid(), "Stored RX zero-line color is not valid");
@@ -256,6 +267,7 @@ private slots:
 
         auto& s = AppSettings::instance();
         const QString stored = s.value(QStringLiteral("DisplayTxZeroLineColor")).toString();
+        QVERIFY(!s.contains(QStringLiteral("DisplayTxZeroLineColor_0")));
         QVERIFY2(!stored.isEmpty(), "DisplayTxZeroLineColor not persisted");
         const QColor roundTrip = QColor::fromString(stored);
         QVERIFY2(roundTrip.isValid(), "Stored TX zero-line color is not valid");
@@ -301,7 +313,8 @@ private slots:
         QCOMPARE(w.tnfFilterColor(), testColor);
 
         auto& s = AppSettings::instance();
-        const QString stored = s.value(QStringLiteral("DisplayTnfFilterColor")).toString();
+        const QString stored = s.value(QStringLiteral("DisplayTnfFilterColor_0")).toString();
+        QVERIFY(!s.contains(QStringLiteral("DisplayTnfFilterColor")));
         QVERIFY2(!stored.isEmpty(), "DisplayTnfFilterColor not persisted");
         const QColor roundTrip = QColor::fromString(stored);
         QVERIFY2(roundTrip.isValid(), "Stored TNF filter color is not valid");
@@ -324,7 +337,8 @@ private slots:
         QCOMPARE(w.subRxFilterColor(), testColor);
 
         auto& s = AppSettings::instance();
-        const QString stored = s.value(QStringLiteral("DisplaySubRxFilterColor")).toString();
+        const QString stored = s.value(QStringLiteral("DisplaySubRxFilterColor_0")).toString();
+        QVERIFY(!s.contains(QStringLiteral("DisplaySubRxFilterColor")));
         QVERIFY2(!stored.isEmpty(), "DisplaySubRxFilterColor not persisted");
         const QColor roundTrip = QColor::fromString(stored);
         QVERIFY2(roundTrip.isValid(), "Stored SubRX filter color is not valid");

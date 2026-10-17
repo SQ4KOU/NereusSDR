@@ -27,6 +27,7 @@
 // =================================================================
 #include "gui/widgets/LayoutThumbnail.h"
 
+#include "gui/styles/WorkspacePreview.h"
 #include <QFont>
 #include <QPainter>
 
@@ -95,19 +96,24 @@ void LayoutThumbnail::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
 
-    QColor bg = m_current ? QColor(0x00, 0x60, 0x7a) : QColor(0x1a, 0x2a, 0x3a);
-    if (!m_enabled) { bg = QColor(0x10, 0x10, 0x18); }
+    // Workspace preview: the tile, its edge, cells and letters take
+    // roles; roleColour() returns each legacy colour with the switch off.
+    using WorkspacePreview::roleColour;
+    QColor bg = m_current ? roleColour(QColor(0x00, 0x60, 0x7a), "selected-top")
+                          : roleColour(QColor(0x1a, 0x2a, 0x3a), "button");
+    if (!m_enabled) { bg = roleColour(QColor(0x10, 0x10, 0x18), "panel"); }
     p.fillRect(rect(), bg);
 
-    QColor border = m_current ? QColor(0x00, 0xb4, 0xd8) : QColor(0x30, 0x40, 0x50);
-    if (!m_enabled) { border = QColor(0x20, 0x20, 0x30); }
+    QColor border = m_current ? roleColour(QColor(0x00, 0xb4, 0xd8), "selected-border")
+                              : roleColour(QColor(0x30, 0x40, 0x50), "border");
+    if (!m_enabled) { border = roleColour(QColor(0x20, 0x20, 0x30), "disabled-border"); }
     p.setPen(QPen(border, m_current ? 2 : 1));
     p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 4, 4);
 
-    const QColor cellColor = m_enabled ? QColor(0x2a, 0x5a, 0x8a)
-                                       : QColor(0x1a, 0x1a, 0x2a);
-    const QColor textColor = m_enabled ? QColor(0xc8, 0xd8, 0xe8)
-                                       : QColor(0x40, 0x40, 0x50);
+    const QColor cellColor = m_enabled ? roleColour(QColor(0x2a, 0x5a, 0x8a), "border-muted")
+                                       : roleColour(QColor(0x1a, 0x1a, 0x2a), "disabled-bg");
+    const QColor textColor = m_enabled ? roleColour(QColor(0xc8, 0xd8, 0xe8), "text")
+                                       : roleColour(QColor(0x40, 0x40, 0x50), "disabled-text");
 
     const QVector<QRect> cells = cellRects();
     for (int i = 0; i < cells.size(); ++i) {

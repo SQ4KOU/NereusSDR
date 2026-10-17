@@ -44,6 +44,105 @@ struct ModesTabBindingTests {
     private let answered = Answered()
     private let commandsAnswered = Answered()
 
+    @Test("Core V2 opt-in changes choices while preserving current state and closing stale writes")
+    func radeV2CatalogTransition() async throws {
+        let (model, station) = try await connected(catalogue: Self.anan, frontEnd: false)
+        let base = try #require(Self.catalogueObject(Self.anan))
+        let enabledRaw = try #require(Self.radeV2Enabled(base))
+        let modes = model.main.modes
+        var stalePreset: RxPanelModel.Preset?
+        #expect(await settle { model.main.catalogFeed.revision == 2 })
+        for enabled in [true, false] {
+            let publishedRevision: Int64 = enabled ? 3 : 4
+            // The Core's ON table adds the V2 modes and their presets; its
+            // OFF table is the suite fixture's, which leaves both out.
+            let raw = enabled ? enabledRaw : base
+            let json = String(decoding: try JSONSerialization.data(withJSONObject: raw), as: UTF8.self)
+            await station.deliver(.delta(LinkMessage.Delta(key: "catalog", properties: [
+                .init(ordinal: 0, name: "json", value: .utf8(json)),
+                .init(ordinal: 1, name: "revision", value: .i64(publishedRevision)),
+            ])))
+            #expect(await settle {
+                model.main.catalogFeed.revision == UInt32(publishedRevision)
+                    && model.main.catalogFeed.catalog?.radeV2Enabled == enabled
+            })
+            #expect(await settle { modes.modes.contains { $0.id == 15 } == enabled })
+            await deliver(station, key: "slice:0", property: "dspMode", ordinal: 2, value: .enumeration(15))
+            #expect(await settle { modes.modeLabel == "RADE2-L" })
+            if enabled {
+                #expect(await settle { !modes.rx.presets.isEmpty })
+                stalePreset = modes.rx.presets.first
+            } else {
+                #expect(await settle { modes.rx.presets.isEmpty })
+                let start = station.messages.count
+                modes.selectMode(14)
+                model.main.slices.setMode(14, sliceId: 0)
+                if let stalePreset { modes.rx.selectPreset(stalePreset) }
+                await TransmitScreenTests.barrier(model, station)
+                #expect(!station.messages.dropFirst(start).contains { message in
+                    if case .propertyWrite(let write) = message {
+                        return write.properties.contains { ["dspMode", "filterLow", "filterHigh"].contains($0.name) }
+                    }
+                    return false
+                })
+            }
+        }
+        await model.disconnect()
+    }
+
+    @Test("preserved disabled V2 reads in every current-mode surface while choices stay absent")
+    func disabledCurrentRadeV2LabelsAcrossConsumers() async throws {
+        let (model, station) = try await connected(catalogue: Self.anan, frontEnd: false)
+        var raw = try #require(Self.catalogueObject(Self.anan))
+        raw["radeV2Enabled"] = false
+        raw["modes"] = (raw["modes"] as? [[String: Any]])?.filter { ($0["id"] as? Int ?? 0) < 14 }
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: raw), as: UTF8.self)
+        #expect(await settle { model.main.catalogFeed.revision == 2 })
+        await station.deliver(.delta(LinkMessage.Delta(key: "catalog", properties: [
+            .init(ordinal: 0, name: "json", value: .utf8(json)),
+            .init(ordinal: 1, name: "revision", value: .i64(3)),
+        ])))
+        #expect(await settle {
+            model.main.catalogFeed.revision == 3
+                && model.main.catalogFeed.catalog?.radeV2Enabled == false
+                && model.main.catalogFeed.catalog?.modes.contains { $0.id == 14 || $0.id == 15 } == false
+        })
+        #expect(await settle { !model.main.modes.modes.contains { $0.id == 14 || $0.id == 15 } })
+        for (id, label) in [(14, "RADE2-U"), (15, "RADE2-L")] {
+            await deliver(station, key: "slice:0", property: "dspMode", ordinal: 2, value: .enumeration(Int64(id)))
+            #expect(await settle { model.main.modes.modeLabel == label })
+            #expect(await settle { model.main.slices.entries.first { $0.id == 0 }?.modeLabel == label })
+            #expect(await settle { model.main.sliceList.rows.contains { $0.id == 0 && $0.slice.mode == id } })
+            let row = try #require(model.main.sliceList.rows.first { $0.id == 0 })
+            #expect(model.main.sliceList.modeText(row) == label)
+            #expect(model.main.foreign.modeLabel(id) == label)
+            #expect(model.main.modes.rx.presets.isEmpty)
+        }
+        await model.disconnect()
+    }
+
+    @Test("mode direct selection cannot write an ID absent from the Core catalogue")
+    func hiddenModeCannotSendDirectWrite() async throws {
+        let (model, station) = try await connected(catalogue: Self.anan, frontEnd: false)
+        let modes = model.main.modes
+        try #require(!modes.modes.contains { $0.id == 14 || $0.id == 15 })
+        let start = station.messages.count
+        modes.selectMode(14)
+        modes.selectMode(15)
+        modes.selectMode(999)
+        model.main.slices.setMode(14, sliceId: 0)
+        model.main.slices.setMode(15, sliceId: 0)
+        await TransmitScreenTests.barrier(model, station)
+        #expect(!station.messages.dropFirst(start).contains { message in
+            if case .propertyWrite(let write) = message {
+                return write.properties.contains { $0.name == "dspMode" }
+            }
+            return false
+        })
+        await model.disconnect()
+    }
+
+
     nonisolated static let anan = "catalog-anan-g2"
     nonisolated static let hermesLite = "catalog-hermes-lite-2"
 
@@ -235,7 +334,7 @@ struct ModesTabBindingTests {
         let board = try #require(wire["board"] as? [String: Any])
 
         // The modes, in the Core's order, the slice's USB lit.
-        #expect(modes.modes.map(\.label) == catalog.modes.map(\.label))
+        #expect(modes.modes.map(\.label) == catalog.offeredModes.map(\.label))
         #expect(modes.modes.count == 14)
         #expect(modes.modes.filter(\.lit).map(\.label) == ["USB"])
         #expect(modes.modeLabel == "USB")
@@ -1397,11 +1496,23 @@ struct ModesTabBindingTests {
                                           "[5, 10, 18]", "[50.0, 100, 200, 250, 500, 1000, 2000, 2500, 5000]",
                                           // The flag's step cycle: the desktop's step ladder in hertz,
                                           // the same on every radio.
-                                          "[1, 10, 100, 500, 1000, 10000]"]
+                                          "[1, 10, 100, 500, 1000, 10000]",
+                                          // CAT Control's serial baud rates, the desktop's list, the
+                                          // same on every Core: a serial port's, not a radio's.
+                                          "[300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200]",
+                                          // The rotor setup's serial baud rates, the desktop's
+                                          // commonRotorBauds: a rotor controller's port, not a radio's.
+                                          "[1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200]",
+                                          // Display's frequency-grid spacing choices, in hertz:
+                                          // phone drawing values, independent of radio hardware.
+                                          "[0, 1000, 2000, 5000, 10000, 25000, 50000, 100000]"]
         #expect(TransmitTimeOutModel.choices == [30, 60, 120, 180, 300, 600, 900, 1200, 1800])
         #expect(ModMonitorModel.posScale.ticks == [0, 50, 100, 125, 160])
         #expect(TxEqualizerModel.curveCounts == [5, 10, 18])
         #expect(FlagControls.stepLadder == [1, 10, 100, 500, 1000, 10000])
+        #expect(CatControlModel.baudRates == [300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200])
+        #expect(RotorSetupCard.bauds == [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200])
+        #expect(PhoneSetupKeys.frequencyGridSpacingChoices == [0, 1000, 2000, 5000, 10000, 25000, 50000, 100000])
         #expect(TxEqCurveParts.tickStep(250) == 50 && TxEqCurveParts.tickStep(40_000) == 10000)
         func tables(in text: String) -> [Substring] {
             text.matches(of: numericList).map { text[$0.range] }.filter { list in
@@ -1973,6 +2084,30 @@ struct ModesTabBindingTests {
             return nil
         }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    /// A default-off suite catalogue as a Core with V2 opted in publishes it:
+    /// `radeV2Enabled` true, modes 14 RADE2-U and 15 RADE2-L, and their
+    /// presets, which are RADE-U's and RADE-L's (SliceModel's preset table
+    /// shares one case per sideband). Nil when the catalogue is not the
+    /// default-off table or lacks the V1 presets.
+    static func radeV2Enabled(_ object: [String: Any]) -> [String: Any]? {
+        guard object["radeV2Enabled"] as? Bool == false,
+              var modes = object["modes"] as? [[String: Any]],
+              !modes.contains(where: { ($0["id"] as? Int) == 14 || ($0["id"] as? Int) == 15 }),
+              var presets = object["filterPresets"] as? [String: Any],
+              let upper = presets["RADE-U"], let lower = presets["RADE-L"] else {
+            return nil
+        }
+        modes.append(["id": 14, "label": "RADE2-U", "sideband": "upper"])
+        modes.append(["id": 15, "label": "RADE2-L", "sideband": "lower"])
+        presets["RADE2-U"] = upper
+        presets["RADE2-L"] = lower
+        var enabled = object
+        enabled["radeV2Enabled"] = true
+        enabled["modes"] = modes
+        enabled["filterPresets"] = presets
+        return enabled
     }
 
     /// A suite catalogue, read as plain JSON for comparing with what the tab shows.

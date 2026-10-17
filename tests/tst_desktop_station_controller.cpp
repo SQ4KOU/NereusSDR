@@ -4,6 +4,7 @@
 #include "core/AppSettings.h"
 #include "core/MoxController.h"
 #include "core/SliceOwnership.h"
+#include "core/StepAttenuatorController.h"
 #include "core/safety/TransmitHolder.h"
 #include "core/session/DeviceSessionRegistry.h"
 #include "core/session/StationServer.h"
@@ -35,6 +36,23 @@ StationHostOptions optionsFor(AppSettings& settings, const QString& directory)
         probe.close();
     }
     return options;
+}
+
+const QString kAttenuationKey = QStringLiteral("options/stepAtt/rx1Value");
+
+// The step attenuator saves into the process's own settings (the test
+// sandbox, kept between runs). Start each radio from nothing, so a value an
+// earlier run saved is never mistaken for this run's.
+void forgetRadio(const QString& mac)
+{
+    AppSettings::instance().load();
+    AppSettings::instance().clearHardwareValues(mac);
+    AppSettings::instance().save();
+}
+
+int savedAttenuation(const QString& mac)
+{
+    return AppSettings::instance().hardwareValue(mac, kAttenuationKey, -1).toInt();
 }
 }
 
@@ -395,6 +413,136 @@ private slots:
         QVERIFY(!model.isTune());
         QVERIFY(!model.mox());
         controller.stop();
+    }
+
+    // The tests below play the window's part: the window owns the step
+    // attenuator controller and hands it to its model before the Core starts.
+
+    void runningCoreSavesAttenuatorChangesShortlyAfter()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        StepAttenuatorController stepAtt;
+        stepAtt.setTickTimerEnabled(false);
+        RadioModel model;
+        model.setStepAttController(&stepAtt);
+        DesktopStationController controller(&model, optionsFor(settings, directory.path()));
+        QVERIFY(!stepAtt.debouncedSaveEnabled());
+        QVERIFY(controller.start(true));
+        QVERIFY(stepAtt.debouncedSaveEnabled());
+        controller.stop();
+        QVERIFY(!stepAtt.debouncedSaveEnabled());
+    }
+
+    void changeWhileRunningReachesTheSettingsWithoutStopping()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        const QString mac = QStringLiteral("02:00:00:00:47:01");
+        forgetRadio(mac);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        StepAttenuatorController stepAtt;
+        stepAtt.setTickTimerEnabled(false);
+        stepAtt.loadSettings(mac);
+        RadioModel model;
+        model.setStepAttController(&stepAtt);
+        DesktopStationController controller(&model, optionsFor(settings, directory.path()));
+        QVERIFY(controller.start(true));
+        QCOMPARE(savedAttenuation(mac), -1);
+
+        stepAtt.setAttenuation(12);
+        QCOMPARE(stepAtt.attenuatorDb(), 12);
+        QTRY_COMPARE_WITH_TIMEOUT(savedAttenuation(mac), 12, 20000);
+        QVERIFY(controller.enabled());
+        QVERIFY(!stepAtt.savePending());
+        controller.stop();
+    }
+
+    void stoppingWritesAPendingChangeAtOnce()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        const QString mac = QStringLiteral("02:00:00:00:47:02");
+        forgetRadio(mac);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        StepAttenuatorController stepAtt;
+        stepAtt.setTickTimerEnabled(false);
+        stepAtt.loadSettings(mac);
+        RadioModel model;
+        model.setStepAttController(&stepAtt);
+        DesktopStationController controller(&model, optionsFor(settings, directory.path()));
+        QVERIFY(controller.start(true));
+
+        stepAtt.setAttenuation(18);
+        QVERIFY(stepAtt.savePending());
+        QCOMPARE(savedAttenuation(mac), -1);
+        controller.stop();
+        QCOMPARE(savedAttenuation(mac), 18);
+        QVERIFY(!stepAtt.savePending());
+        QVERIFY(!stepAtt.debouncedSaveEnabled());
+    }
+
+    void leavesAloneASaveItDidNotTurnOn()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        StepAttenuatorController stepAtt;
+        stepAtt.setTickTimerEnabled(false);
+        stepAtt.setDebouncedSaveEnabled(true);
+        RadioModel model;
+        model.setStepAttController(&stepAtt);
+        DesktopStationController controller(&model, optionsFor(settings, directory.path()));
+        QVERIFY(controller.start(true));
+        QVERIFY(stepAtt.debouncedSaveEnabled());
+        controller.stop();
+        QVERIFY(stepAtt.debouncedSaveEnabled());
+    }
+
+    void attenuatorControllerGoneBeforeStopIsSafe()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend.");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        {
+            auto stepAtt = std::make_unique<StepAttenuatorController>();
+            stepAtt->setTickTimerEnabled(false);
+            RadioModel model;
+            model.setStepAttController(stepAtt.get());
+            DesktopStationController controller(&model, optionsFor(settings, directory.path()));
+            QVERIFY(controller.start(true));
+            model.setStepAttController(nullptr);
+            stepAtt.reset();
+            controller.stop();
+            QVERIFY(!controller.enabled());
+            QVERIFY(controller.host() == nullptr);
+        }
+        {
+            // A model with no step attenuator controller starts and stops as before.
+            RadioModel model;
+            QVERIFY(model.stepAttController() == nullptr);
+            DesktopStationController controller(&model, optionsFor(settings, directory.path()));
+            QVERIFY(controller.start(true));
+            QVERIFY(controller.enabled());
+            controller.stop();
+            QVERIFY(!controller.enabled());
+        }
     }
 };
 

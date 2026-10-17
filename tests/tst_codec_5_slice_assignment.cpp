@@ -7,6 +7,9 @@
 // multi-slice DDC assignments per design §4. Byte-faithful for the
 // RX1/RX2 case (1-2 slices) preserves Thetis console.cs:8186-8538 [v2.10.3.15]
 // behaviour; slices C/D/E fill Thetis's idle DDC4-6 slots additively.
+// 2026-10-12: the Anvelina Pro 3's stream order on Protocol 2 (third stream
+// on DDC5, DDC4 last). J.J. Boyd (KG4VCF), with AI-assisted implementation
+// via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -358,6 +361,230 @@ private slots:
         QCOMPARE(a.rate[2], 192000);
         QCOMPARE(a.nDdc, 1);
     }
+
+    // ── Anvelina Pro 3 on Protocol 2: the third stream avoids DDC4 ─────────
+    //
+    // Bench, 2026-10-11 and 2026-10-12 (KG4VCF's Anvelina Pro 3): the radio's
+    // DDC4 stream arrived with bits 20 and 21 set on about one non-negative
+    // sample in eight, which a display shows as a comb over a raised floor
+    // on every band. DDC2, DDC3 and DDC5 in the same capture were clean. The
+    // gateware builds receivers 1 to NR-1 as identical instances
+    // (Orion.v:1939-1954 [@8e86a61]), so which idle one hosts a stream is
+    // ours to choose: third stream on DDC5, fourth on DDC6, DDC4 last.
+
+    void anvelina_third_stream_uses_ddc5_not_ddc4()
+    {
+        P2CodecOrionMkII codec;
+        CodecContext ctx{};
+        ctx.model = HPSDRModel::ANVELINAPRO3;
+        std::array<SliceConfig, 5> slices{};
+        static constexpr int kRates[3] = {192000, 96000, 384000};
+        for (int i = 0; i < 3; ++i) {
+            slices[i].live = true;
+            slices[i].frequencyHz = (3600000 + i * 7000000);
+            slices[i].sampleRateHz = kRates[i];
+            slices[i].antennaIndex = 1;
+        }
+        slices[0].txBound = true;
+
+        const auto a = codec.applyDdcAssignment(ctx, slices);
+
+        QCOMPARE(a.streamDdc[0], 2);
+        QCOMPARE(a.streamDdc[1], 3);
+        QCOMPARE(a.streamDdc[2], 5);
+        QCOMPARE(a.streamDdc[3], -1);
+        QCOMPARE(a.streamDdc[4], -1);
+        // DDC2 + DDC3 + DDC5 = bits 2, 3 and 5; DDC4 (bit 4) stays off.
+        QCOMPARE(a.ddcEnable, 0x2c);
+        // The third stream's rate travels with it to DDC5.
+        QCOMPARE(a.rate[2], 192000);
+        QCOMPARE(a.rate[3], 96000);
+        QCOMPARE(a.rate[5], 384000);
+        QCOMPARE(a.rate[4], 0);
+        QCOMPARE(a.nDdc, 3);
+    }
+
+    void anvelina_five_streams_use_ddc4_last()
+    {
+        P2CodecOrionMkII codec;
+        CodecContext ctx{};
+        ctx.model = HPSDRModel::ANVELINAPRO3;
+        std::array<SliceConfig, 5> slices{};
+        static constexpr int kRates[5] = {192000, 96000, 384000, 48000, 768000};
+        for (int i = 0; i < 5; ++i) {
+            slices[i].live = true;
+            slices[i].frequencyHz = (3600000 + i * 3500000);
+            slices[i].sampleRateHz = kRates[i];
+            slices[i].antennaIndex = 1;
+        }
+        slices[0].txBound = true;
+
+        const auto a = codec.applyDdcAssignment(ctx, slices);
+
+        QCOMPARE(a.streamDdc[0], 2);
+        QCOMPARE(a.streamDdc[1], 3);
+        QCOMPARE(a.streamDdc[2], 5);
+        QCOMPARE(a.streamDdc[3], 6);
+        QCOMPARE(a.streamDdc[4], 4);
+        // All five user DDCs, same mask as every other board of the family.
+        QCOMPARE(a.ddcEnable, 0x7c);
+        QCOMPARE(a.rate[2], 192000);
+        QCOMPARE(a.rate[3], 96000);
+        QCOMPARE(a.rate[5], 384000);
+        QCOMPARE(a.rate[6], 48000);
+        QCOMPARE(a.rate[4], 768000);
+        QCOMPARE(a.nDdc, 5);
+    }
+
+    void anvelina_four_streams_leave_ddc4_off()
+    {
+        P2CodecOrionMkII codec;
+        CodecContext ctx{};
+        ctx.model = HPSDRModel::ANVELINAPRO3;
+        std::array<SliceConfig, 5> slices{};
+        for (int i = 0; i < 4; ++i) {
+            slices[i].live = true;
+            slices[i].sampleRateHz = 192000;
+            slices[i].antennaIndex = 1;
+        }
+
+        const auto a = codec.applyDdcAssignment(ctx, slices);
+
+        QCOMPARE(a.streamDdc[2], 5);
+        QCOMPARE(a.streamDdc[3], 6);
+        // DDC2 + DDC3 + DDC5 + DDC6; bit 4 clear.
+        QCOMPARE(a.ddcEnable, 0x6c);
+        QCOMPARE(a.rate[4], 0);
+        QCOMPARE(a.nDdc, 4);
+    }
+
+    // The antenna-driven ADC selector follows the stream to its DDC: DDC5 is
+    // adcCtrl2 bits 3&2 (console.cs:15117-15131 [v2.10.3.15] decodes DDC4-7
+    // as DDC(n-4) of the second word).
+    void anvelina_ext1_on_third_stream_routes_ddc5_to_adc1()
+    {
+        P2CodecOrionMkII codec;
+        CodecContext ctx{};
+        ctx.model = HPSDRModel::ANVELINAPRO3;
+        std::array<SliceConfig, 5> slices{};
+        for (int i = 0; i < 3; ++i) {
+            slices[i].live = true;
+            slices[i].sampleRateHz = 192000;
+            slices[i].antennaIndex = 1;   // ANT1 -> ADC0
+        }
+        slices[2].antennaIndex = 4;       // third stream -> DDC5, EXT1 -> ADC1
+
+        const auto a = codec.applyDdcAssignment(ctx, slices);
+
+        QCOMPARE(a.adcCtrl2 & 0x0c, 0x04);
+        // DDC4 (bits 1&0) and DDC6 (bits 5&4) are not ours here: left alone.
+        QCOMPARE(a.adcCtrl2 & 0x03, 0x00);
+        QCOMPARE(a.adcCtrl2 & 0x30, 0x00);
+    }
+
+    // PureSignal on transmit adds the DDC0/DDC1 pair and moves nothing else
+    // (console.cs:8265-8274 [v2.10.3.15]).
+    void anvelina_puresignal_on_mox_keeps_third_stream_on_ddc5()
+    {
+        P2CodecOrionMkII codec;
+        CodecContext ctx{};
+        ctx.model = HPSDRModel::ANVELINAPRO3;
+        ctx.mox = true;
+        ctx.puresignalRun = true;
+        std::array<SliceConfig, 5> slices{};
+        for (int i = 0; i < 3; ++i) {
+            slices[i].live = true;
+            slices[i].sampleRateHz = 192000;
+            slices[i].antennaIndex = 1;
+        }
+        slices[0].txBound = true;
+
+        const auto a = codec.applyDdcAssignment(ctx, slices);
+
+        QCOMPARE(a.streamDdc[2], 5);
+        // DDC0 + DDC2 + DDC3 + DDC5, with DDC1 synchronized to DDC0.
+        QCOMPARE(a.ddcEnable, 0x2d);
+        QCOMPARE(a.syncEnable, 0x02);
+        QCOMPARE(a.rate[5], 192000);
+        QCOMPARE(a.rate[4], 0);
+        QCOMPARE(a.nDdc, 5);
+    }
+
+    // Diversity on the third stream gives its DDC back, whichever one that is.
+    void anvelina_diversity_on_third_stream_releases_ddc5()
+    {
+        P2CodecOrionMkII codec;
+        CodecContext ctx{};
+        ctx.model = HPSDRModel::ANVELINAPRO3;
+        ctx.diversity = true;
+        ctx.diversityStream = 2;
+        ctx.adcCtrl = NereusSDR::defaultRxAdcCtrl(2);   // 2-ADC board
+        std::array<SliceConfig, 5> slices{};
+        for (int i = 0; i < 3; ++i) {
+            slices[i].live = true;
+            slices[i].sampleRateHz = 192000;
+            slices[i].antennaIndex = 1;
+        }
+        slices[2].sampleRateHz = 96000;
+        slices[2].diversityRequested = true;
+
+        const auto a = codec.applyDdcAssignment(ctx, slices);
+
+        // The third stream is on the DDC0/DDC1 pair; DDC5 and DDC4 are off.
+        QCOMPARE(a.streamDdc[2], 0);
+        QCOMPARE(a.ddcEnable, 0x0d);
+        QCOMPARE(a.syncEnable, 0x02);
+        QCOMPARE(a.rate[0], 96000);
+        QCOMPARE(a.rate[1], 96000);
+        QCOMPARE(a.rate[5], 0);
+        QCOMPARE(a.rate[4], 0);
+        QCOMPARE(a.nDdc, 4);
+    }
+
+    // Every other board this codec serves keeps the third stream on DDC4:
+    // the order above is one radio family's, on bench evidence from that
+    // family only.
+    void other_orion_class_models_keep_third_stream_on_ddc4_data()
+    {
+        QTest::addColumn<int>("model");
+        QTest::addColumn<bool>("saturnCodec");
+        QTest::newRow("no model named") << int(HPSDRModel::FIRST) << false;
+        QTest::newRow("ANAN-100D") << int(HPSDRModel::ANAN100D) << false;
+        QTest::newRow("ANAN-200D") << int(HPSDRModel::ANAN200D) << false;
+        QTest::newRow("Orion MkII") << int(HPSDRModel::ORIONMKII) << false;
+        QTest::newRow("ANAN-7000D") << int(HPSDRModel::ANAN7000D) << false;
+        QTest::newRow("ANAN-8000D") << int(HPSDRModel::ANAN8000D) << false;
+        QTest::newRow("Red Pitaya") << int(HPSDRModel::REDPITAYA) << false;
+        QTest::newRow("ANAN-G2") << int(HPSDRModel::ANAN_G2) << true;
+        QTest::newRow("ANAN-G2 1K") << int(HPSDRModel::ANAN_G2_1K) << true;
+    }
+
+    void other_orion_class_models_keep_third_stream_on_ddc4()
+    {
+        QFETCH(int, model);
+        QFETCH(bool, saturnCodec);
+        const P2CodecOrionMkII orion;
+        const P2CodecSaturn saturn;
+        const P2CodecOrionMkII& codec = saturnCodec
+            ? static_cast<const P2CodecOrionMkII&>(saturn) : orion;
+        CodecContext ctx{};
+        ctx.model = static_cast<HPSDRModel>(model);
+        std::array<SliceConfig, 5> slices{};
+        for (int i = 0; i < 5; ++i) {
+            slices[i].live = true;
+            slices[i].sampleRateHz = 192000;
+            slices[i].antennaIndex = 1;
+        }
+
+        const auto a = codec.applyDdcAssignment(ctx, slices);
+
+        QCOMPARE(a.streamDdc[0], 2);
+        QCOMPARE(a.streamDdc[1], 3);
+        QCOMPARE(a.streamDdc[2], 4);
+        QCOMPARE(a.streamDdc[3], 5);
+        QCOMPARE(a.streamDdc[4], 6);
+    }
+
     // ── Task 8: P1CodecStandard (Hermes / ANAN10 / ANAN100 / ANAN_G2E) ─────────
     //
     // Porting from Thetis console.cs:8387-8455 [v2.10.3.15] UpdateDDCs() Hermes-class

@@ -2,6 +2,7 @@
 // NereusSDR-original bounded station DSP asset manager.
 
 #include "DspAssetDialog.h"
+#include "gui/QtCocoaAccessibleTableCache.h"
 
 #include "core/AppSettings.h"
 #include "core/dsp/DspAssetService.h"
@@ -495,6 +496,7 @@ void DspAssetDialog::handleListReply(const QVariantMap& values)
     }
     m_assets = std::move(parsed);
 
+    resetItemsBeforeRowChange(m_table);
     m_table->setRowCount(m_assets.size());
     for (int rowIndex = 0; rowIndex < m_assets.size(); ++rowIndex) {
         const AssetRow& asset = m_assets.at(rowIndex);
@@ -530,6 +532,7 @@ void DspAssetDialog::populateNnrSelectors()
     const std::array<QString, 2> desired = m_service->desiredNnrModelAssets();
     for (int slot = 0; slot < 2; ++slot) {
         QSignalBlocker blocker(m_slotSelectors[slot]);
+        resetItemsBeforeRowChange(m_slotSelectors[slot]);
         m_slotSelectors[slot]->clear();
         const QString bundled = QStringLiteral("bundled:%1").arg(slot);
         m_slotSelectors[slot]->addItem(slot == 0 ? tr("Bundled standard model")
@@ -1203,6 +1206,7 @@ void Nr3ModelPicker::populate()
     m_populating = true;
     {
         const QSignalBlocker blocker(m_combo);
+        resetItemsBeforeRowChange(m_combo);
         m_combo->clear();
         m_combo->addItem(tr("Bundled large model"),
                          QString::fromLatin1(DspAssetService::kNr3BundledLargeId));

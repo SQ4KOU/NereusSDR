@@ -171,6 +171,16 @@ Resolved open questions from the PR2 draft:
 
 See `docs/architecture/2026-04-15-display-refactor-design.md` §6 for the full PR3 design.
 
+### Update 2026-10-10: Clarity precedence and the Black/Gain model
+
+The display pill work (`docs/architecture/2026-10-09-display-pill-and-levels-design.md`, sections 4 and 5) changes the precedence above. Where the two disagree, this update wins.
+
+- **Clarity on:** AGC, NF-AGC, Low and High are greyed. Clarity sets the levels from the noise floor, and Black Level and Color Gain shape them.
+- **Clarity paused or keyed:** Clarity holds its level. A manual pause no longer hands the waterfall to AGC. On a key, every pan keeps its level and the FFT input is purged on both key edges. After un-key nothing re-estimates for max(1000 ms, 2 x FFT fill time), about 11 s at 262144 points and 48 kHz, then Clarity resumes.
+- **Clarity off:** Low and High set the levels, and Black Level and Color Gain are greyed. With AGC on only the low edge follows the signal; High stays the operator's. NF-AGC is an option under AGC.
+- **Black Level** runs 0 to 100 in 0.5 dB steps, with 50 at the noise floor and a default of 57. **Color Gain** sets the span as 80 - 0.7 x Gain dB, default 60 (38 dB). These replace the old 0 to 125 Black and `low + (125 - black) x 0.4`, `high - gain x 0.3` formulas.
+- Stored levels were converted once, in the window only (marker `DisplayWfClarityLevelsConverted`).
+
 ## Related follow-ups flagged during PR2 tuning
 
 - **Phase 3G-11: zoom level persistence.** Spectrum zoom resets across app restarts, which made iterative visual comparison inconsistent. Captured as a Phase 3G-11 polish item — not fixed in PR2.

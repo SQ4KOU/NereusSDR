@@ -25,6 +25,15 @@
 //               marker, and a slice kept for an away device. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-10-12: new theReceiverHoldersWordsAreTheCores: the words a held
+//               C-Tune switch shows for a receiver another device holds
+//               (SliceAccessMirror::receiverHeldReason). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-10-12: new aValueALaterCoreAddsToTheEntryIsNotKept: the rule a
+//               window from before receiverHolderDeviceId reads the entry
+//               by. J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -599,6 +608,124 @@ private slots:
         QCOMPARE(flagAccess.heldReason, QStringLiteral("The Core itself controls this slice"));
         QCOMPARE(access.listenerReason(0),
                  QStringLiteral("Slice A is controlled by the Core. Take control to change it."));
+    }
+
+    // Ruling 6.3: a receiver's C-Tune setting is its holder's. The words a
+    // remote window shows on the held switch are the Core's two refusals of
+    // the pin (StationReceivers.cpp), with the holder named as the Core
+    // names one, and nothing when the receiver is this window's, nobody's,
+    // or the Core does not say whose it is.
+    void theReceiverHoldersWordsAreTheCores_data()
+    {
+        QTest::addColumn<bool>("sent");
+        QTest::addColumn<QString>("holder");
+        QTest::addColumn<QString>("expected");
+        QTest::newRow("the desktop that hosts the Core")
+            << true << QStringLiteral("station")
+            << QStringLiteral("This panadapter shows Shack desktop's receiver. Its C-Tune "
+                              "setting is Shack desktop's.");
+        QTest::newRow("a device, by its name")
+            << true << QStringLiteral("pad")
+            << QStringLiteral("This panadapter shows Jo's iPad's receiver. Its C-Tune setting "
+                              "is Jo's iPad's.");
+        QTest::newRow("a device with no name, by its kind")
+            << true << QStringLiteral("pocket")
+            << QStringLiteral("This panadapter shows a phone's receiver. Its C-Tune setting is "
+                              "a phone's.");
+        QTest::newRow("a device that is not connected now")
+            << true << QStringLiteral("den")
+            << QStringLiteral("This panadapter shows the receiver of Den laptop, which is not "
+                              "connected now. Its C-Tune setting stays with Den laptop until it "
+                              "is back or its three minutes are up.");
+        QTest::newRow("a device the list does not name")
+            << true << QStringLiteral("unlisted")
+            << QStringLiteral("This panadapter shows another device's receiver. Its C-Tune "
+                              "setting is another device's.");
+        QTest::newRow("this window") << true << QStringLiteral("me") << QString();
+        QTest::newRow("nobody") << true << QString() << QString();
+        QTest::newRow("a Core that does not say") << false << QString() << QString();
+    }
+
+    void theReceiverHoldersWordsAreTheCores()
+    {
+        QFETCH(bool, sent);
+        QFETCH(QString, holder);
+        QFETCH(QString, expected);
+        RemoteDevicesState devices;
+        devices.setSelfDeviceId(QStringLiteral("me"));
+        devices.applyObject("connectedDevices",
+                            {text("listJson",
+                                  QStringLiteral(
+                                      "[{\"deviceId\":\"c3RhdGlvbg\",\"name\":\"Shack desktop\","
+                                      "\"shortName\":\"Shack\",\"kind\":\"station\","
+                                      "\"hostsCore\":true,\"state\":\"listening\"},"
+                                      "{\"deviceId\":\"me\",\"name\":\"Bench window\","
+                                      "\"kind\":\"computer\",\"state\":\"listening\"},"
+                                      "{\"deviceId\":\"pad\",\"name\":\"Jo's iPad\","
+                                      "\"kind\":\"tablet\",\"state\":\"listening\"},"
+                                      "{\"deviceId\":\"pocket\",\"name\":\"\","
+                                      "\"kind\":\"phone\",\"state\":\"listening\"},"
+                                      "{\"deviceId\":\"den\",\"name\":\"Den laptop\","
+                                      "\"kind\":\"computer\",\"state\":\"away\"}]")),
+                             count("deviceLimit", 8)});
+        SliceAccessMirror access(nullptr, &devices);
+        access.setSelfDeviceId(QStringLiteral("me"));
+        QList<MirrorUpdate> entry{count("incarnation", 3), text("controllerDeviceId", "me"),
+                                  count("controlRevision", 1),
+                                  text("listenerDeviceIds", "[\"me\"]"),
+                                  text("activeRxDeviceIds", "[]"), flag("onAir", false)};
+        if (sent) {
+            entry.append(text("receiverHolderDeviceId", holder));
+        }
+        access.applyObject("access:0", entry);
+        QCOMPARE(access.receiverHeldReason(0), expected);
+        // A slice the Core sent no entry for is not held.
+        QVERIFY(access.receiverHeldReason(1).isEmpty());
+    }
+
+    // The Core appends values to the access entry over time
+    // (receiverHolderDeviceId on 2026-10-12, with no new sliceAccessVersion).
+    // A window reads the entry by name and keeps what it knows, which is
+    // what makes a window from before such a value safe on a Core that
+    // sends it. Here: values this build has no name for change nothing it
+    // reads, at the entry's creation and as a later change of their own.
+    void aValueALaterCoreAddsToTheEntryIsNotKept()
+    {
+        RemoteDevicesState devices;
+        devices.setSelfDeviceId(QStringLiteral("me"));
+        const QList<MirrorUpdate> known{count("incarnation", 3), text("controllerDeviceId", "pad"),
+                                        count("controlRevision", 4),
+                                        text("listenerDeviceIds", "[\"pad\",\"me\"]"),
+                                        text("activeRxDeviceIds", "[\"pad\"]"),
+                                        flag("txSelected", true), flag("onAir", false),
+                                        text("receiverHolderDeviceId", "pad")};
+        const auto same = [](const SliceAccessMirror::Entry& a, const SliceAccessMirror::Entry& b) {
+            return a.sliceId == b.sliceId && a.incarnation == b.incarnation
+                && a.controllerDeviceId == b.controllerDeviceId
+                && a.controlRevision == b.controlRevision && a.listeners == b.listeners
+                && a.activeRx == b.activeRx && a.txSelected == b.txSelected && a.onAir == b.onAir
+                && a.receiverHolderDeviceId == b.receiverHolderDeviceId;
+        };
+        SliceAccessMirror plain(nullptr, &devices);
+        plain.setSelfDeviceId(QStringLiteral("me"));
+        plain.applyObject("access:0", known);
+        QVERIFY(plain.entry(0).has_value());
+
+        SliceAccessMirror later(nullptr, &devices);
+        later.setSelfDeviceId(QStringLiteral("me"));
+        QList<MirrorUpdate> entry = known;
+        entry.append(text("aValueOfALaterCore", "den"));
+        entry.append(count("anotherOfItsValues", 7));
+        later.applyObject("access:0", entry);
+        QVERIFY(later.entry(0).has_value());
+        QVERIFY(same(*later.entry(0), *plain.entry(0)));
+        QCOMPARE(later.listeningHere(0), plain.listeningHere(0));
+        QCOMPARE(later.controlledHere(0), plain.controlledHere(0));
+        QCOMPARE(later.receiverHeldReason(0), plain.receiverHeldReason(0));
+
+        later.applyObject("access:0", {text("aValueOfALaterCore", "me")});
+        QVERIFY(same(*later.entry(0), *plain.entry(0)));
+        QCOMPARE(later.receiverHeldReason(0), plain.receiverHeldReason(0));
     }
 
     // Job B review N-1 (JJ, 2026-09-30): the station marker names no

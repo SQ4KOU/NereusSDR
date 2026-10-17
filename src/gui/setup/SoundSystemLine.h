@@ -1,0 +1,115 @@
+#pragma once
+
+// =================================================================
+// src/gui/setup/SoundSystemLine.h  (NereusSDR)
+// =================================================================
+//
+// NereusSDR-original "Sound system" status line at the top of
+// Setup > Audio > Outputs. It replaces the AudioBackendStrip that sat on
+// every Audio page (R-SPK-21, R-SPK-24, D15). No Thetis port.
+//
+// Design spec: docs/architecture/2026-10-05-radio-speaker-and-audio-setup-design.md
+// (R-SPK-21 Outputs, R-SPK-24 Platforms); mockup audio-setup.html.
+// =================================================================
+//
+//  Copyright (C) 2026 J.J. Boyd (KG4VCF)
+//
+//  This program is free software; you can redistribute it and/or
+//  modify it under the terms of the GNU General Public License
+//  as published by the Free Software Foundation; either version 2
+//  of the License, or (at your option) any later version.
+//
+//  This program is distributed in the hope that it will be useful,
+//  but WITHOUT ANY WARRANTY; without even the implied warranty of
+//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//  GNU General Public License for more details.
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-10-06 - Written for the radio speaker and Audio Setup plan, Task 9.
+//                J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                Anthropic Claude Code.
+//   2026-10-09 - Native audio plan Task 16 (R-AUD-01): the line names the
+//                engine the device catalogue describes and the older
+//                drivers in use. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-14 - describeEngine(): the line's words for an engine, so the
+//                Network Diagnostics Audio Backend row names the same
+//                sound system. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+// =================================================================
+
+#include "core/audio/LinuxAudioBackend.h"
+
+#include <QPointer>
+#include <QStringList>
+#include <QWidget>
+
+class QLabel;
+
+namespace NereusSDR {
+
+class AudioEngine;
+class IAudioDeviceCatalog;
+
+// SoundSystemLine (objectName "soundSystemLine")
+//
+//   [dot] Sound system: <text>
+//
+// R-AUD-01: once the engine has its device catalogue, the line names the
+// engine it describes (soundSystemDescription()) and then the older drivers
+// the device cards use ("Older drivers in use: MME, JACK."). Before that,
+// or for a catalogue that does not say which system it is, the line names
+// this build's system: Mac "Core Audio", Windows "Windows audio (WASAPI)",
+// Linux PipeWire, PulseAudio or "None found" in red with what to start,
+// following AudioEngine::linuxBackendChanged.
+// The text label is "soundSystemText", the dot "soundSystemDot".
+class SoundSystemLine : public QWidget {
+    Q_OBJECT
+public:
+    enum class System { Mac, Windows, Linux };
+
+    explicit SoundSystemLine(AudioEngine* engine, QWidget* parent = nullptr);
+
+    // The system this build runs on (Q_OS_MAC / Q_OS_WIN / Q_OS_LINUX).
+    static System thisSystem();
+    // The words after "Sound system:" for a system (and, on Linux, the
+    // backend found). Pure, so every platform's text is testable anywhere.
+    static QString describe(System system, LinuxAudioBackend backend);
+    // True when nothing was found (Linux, no backend): shown in red.
+    static bool isProblem(System system, LinuxAudioBackend backend);
+    // The older drivers the saved Speakers, Headphones (while Enabled) and
+    // Microphone choices use, by their short names ("MME", "JACK").
+    static QStringList olderDriversInUse();
+    // The ASIO driver a saved choice uses, empty when none does.
+    static QString asioDriverInUse();
+    // The words this line shows after "Sound system:" for `engine` (its
+    // device catalogue, else this build's system), so another surface
+    // (Network Diagnostics' Audio Backend row) names the same engine.
+    static QString describeEngine(AudioEngine* engine);
+
+    // The words now shown after "Sound system:".
+    QString text() const;
+    bool showsProblem() const { return m_problem; }
+
+public slots:
+    // Re-reads the engine (its device catalogue, or on Linux before that,
+    // its detected backend) and the saved choices.
+    void refresh();
+
+private:
+    struct Description {
+        QString text;
+        bool problem = false;
+    };
+    static Description describeFor(IAudioDeviceCatalog* catalogue, AudioEngine* engine);
+    void show(const QString& described, bool problem);
+
+    AudioEngine* m_engine{nullptr};
+    QPointer<IAudioDeviceCatalog> m_catalogue;
+    QLabel*      m_dot{nullptr};
+    QLabel*      m_text{nullptr};
+    QString      m_described;
+    bool         m_problem{false};
+};
+
+} // namespace NereusSDR

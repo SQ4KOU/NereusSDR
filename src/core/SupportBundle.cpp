@@ -68,7 +68,7 @@ SupportBundle::RadioDiagInfo SupportBundle::collectRadioInfo(const RadioModel* m
     const RadioInfo& ri = conn != nullptr ? conn->radioInfo() : model->currentRadioInfo();
     info.connected = true;
     info.model = ri.displayName();
-    info.firmware = QString::number(ri.firmwareVersion);
+    info.firmware = ri.firmwareText();
     info.protocol = static_cast<int>(ri.protocol);
 
     // Redact MAC — keep only last segment

@@ -9,6 +9,9 @@
 // AI-assisted via Anthropic Claude Code.
 // 2026-09-25: R-R3-49 (parity Task 9): showSavedEndpoint. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-11: StationAccessoryAdmission: a desktop window that shares its
+// accessories uses the device at the typed address, as it did before.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/StationPgxlController.h"
 #include "core/AppSettings.h"
 #include "core/LanDiscovery.h"
@@ -31,10 +34,15 @@ int stationPingSeconds()
 } // namespace
 
 StationPgxlController::StationPgxlController(PgxlConnection* connection,
-                                             AmplifierModel* model, QObject* parent)
-    : QObject(parent), m_connection(connection), m_model(model)
+                                             AmplifierModel* model, QObject* parent,
+                                             StationAccessoryAdmission admission)
+    : QObject(parent), m_connection(connection), m_model(model), m_admission(admission)
 {
-    connection->setIdentityAdmissionRequired(true);
+    // TypedAddress: the link keeps its plain handshake (PgxlConnection.h,
+    // "off by default so a local window's V-banner handshake is unchanged").
+    if (m_admission == StationAccessoryAdmission::Identified) {
+        connection->setIdentityAdmissionRequired(true);
+    }
     connection->setAutoPingIntervalSec(stationPingSeconds());
     if (model) {
         // This controller, not the raw connection signals, reports the phase.
@@ -77,6 +85,18 @@ StationPgxlController::StationPgxlController(PgxlConnection* connection,
         tryAdmit();
     });
     connect(connection, &PgxlConnection::connected, this, [this] {
+        if (m_admission == StationAccessoryAdmission::TypedAddress) {
+            // Nothing was identified: what the link itself knows, as
+            // AmplifierModel::refreshFromConnection reports it in a window
+            // with no controller.
+            if (!m_running || !m_connection) { return; }
+            m_state.phase = Phase::Connected;
+            m_state.error.clear();
+            m_state.peerAddress = m_connection->peerAddress();
+            m_state.deviceVersion = m_connection->version();
+            publish();
+            return;
+        }
         if (!current(m_attempt)) { return; }
         stopDiscovery();
         m_state.phase = Phase::Connected;

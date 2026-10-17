@@ -64,6 +64,7 @@
 // =================================================================
 
 #include "core/session/SessionTransport.h"
+#include "core/NereusCoreExport.h"
 
 #include <QByteArray>
 #include <QList>
@@ -76,7 +77,7 @@ QT_END_NAMESPACE
 
 namespace NereusSDR {
 
-class SwitchableTransport : public SessionTransport {
+class NEREUS_CORE_EXPORT SwitchableTransport : public SessionTransport {
     Q_OBJECT
 
 public:

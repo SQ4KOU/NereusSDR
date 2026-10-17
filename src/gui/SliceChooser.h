@@ -30,6 +30,8 @@
 //   2026-09-30: desktop listening lane: Row::controllerName names the
 //               hosting desktop for CoreDesktop. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-10-11: showRequested. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QColor>
@@ -38,6 +40,7 @@
 #include <QWidget>
 
 #include "gui/widgets/VfoWidget.h"
+#include "gui/NereusGuiExport.h"
 
 class QLabel;
 class QPushButton;
@@ -51,7 +54,7 @@ class RemoteDevicesState;
 class SliceAccessMirror;
 class StationServer;
 
-class SliceChooser : public QWidget {
+class NEREUS_GUI_EXPORT SliceChooser : public QWidget {
     Q_OBJECT
 
 public:
@@ -146,6 +149,9 @@ signals:
     void stopListeningRequested(int sliceId);
     void newSliceRequested();
     void selectRequested(int sliceId);
+    /// The row of a slice this window plays (controls or listens to) was
+    /// chosen: the window shows that slice. Nothing is asked of the Core.
+    void showRequested(int sliceId);
     void closeRequested();
     /// Every answer shown (the Core's, a refusal before sending, or "The
     /// Core did not answer"), so a flag that sent the request can show it.

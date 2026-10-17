@@ -7,6 +7,15 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Fit live inset threshold/hold readouts to the actual
+//                 slider range and resolved workspace font/style metrics.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-12 - Preserve the AM carrier row with the workspace text minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-09 - VAX TX (virtual device) only where a VAX transmit device
+//                exists: greyed on Windows with the PC Mic route, a saved
+//                choice falls back to PC Mic (R-SPK-21, R-AUD-01).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -63,6 +72,15 @@
 //   2026-10-01: Issue #289: persist the local DEXP threshold marker.
 //                 J.J. Boyd (KG4VCF), AI-assisted implementation via
 //                 OpenAI Codex.
+//   2026-10-06: R-SPK-21: the VAX right-click opens Setup > Audio >
+//               Microphone, the new name of TX Input. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-08  J.J. Boyd (KG4VCF): Qt 6.11.0 Cocoa accessibility cache
+//               repair on a live item view (QtCocoaAccessibleTableCache).
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-15  J.J. Boyd (KG4VCF): rows change after a real model reset
+//               (resetItemsBeforeRowChange), so accessibility cannot read a
+//               deleted cell. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -111,10 +129,12 @@
 //============================================================================================//
 
 #include "PhoneCwApplet.h"
+#include "gui/QtCocoaAccessibleTableCache.h"
 #include "gui/HGauge.h"
 #include "gui/meters/MeterPoller.h"
 #include "gui/ComboStyle.h"
 #include "gui/widgets/DexpPeakMeter.h"
+#include "gui/widgets/InsetValueLabelFit.h"
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
 #include "core/ControlRanges.h"
@@ -128,6 +148,7 @@
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 #include "gui/StyleConstants.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "gui/UnbuiltFeatures.h"
 
 #include <QButtonGroup>
@@ -562,6 +583,7 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
         m_dexpLabel->setFixedWidth(38);
         m_dexpLabel->setAlignment(Qt::AlignCenter);
         row->addWidget(m_dexpLabel);
+        new InsetValueLabelFit(m_dexpLabel, m_dexpSlider, QStringLiteral(" dB"), 38);
 
         vbox->addLayout(row);
     }
@@ -580,6 +602,12 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
         auto* lbl = new QLabel(QStringLiteral("AM Car:"), page);
         lbl->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(NereusSDR::Style::kTextSecondary));
         lbl->setFixedWidth(40);
+        if (WorkspacePreview::enabled()) {
+            // Larger gauge text makes Phone the tallest stacked page, so
+            // it no longer gets the hidden FM page's spare row height.
+            // Keep the AM row as tall as the existing adjacent control.
+            lbl->setMinimumHeight(m_dexpBtn->minimumHeight());
+        }
         row->addWidget(lbl);
 
         m_amCarSlider = new QSlider(Qt::Horizontal, page);
@@ -1022,12 +1050,12 @@ void PhoneCwApplet::wireControls()
     // ── #8 VAX button bidirectional with TransmitModel::toggleVaxSource ────
     // Left-click toggles MicSource between Vax and the user's previous
     // non-VAX source (tracked by TransmitModel::previousNonVaxMicSource,
-    // persisted per-MAC). Right-click opens Setup -> Audio -> TX Input.
+    // persisted per-MAC). Right-click opens Setup -> Audio -> Microphone.
     if (m_vaxBtn) {
         m_vaxBtn->setToolTip(QStringLiteral(
             "VAX digital audio input.\n"
             "Left-click: toggle VAX as the TX audio source.\n"
-            "Right-click: open Setup > Audio > TX Input."));
+            "Right-click: open Setup > Audio > Microphone."));
         {
             QSignalBlocker b(m_vaxBtn);
             m_vaxBtn->setChecked(tx.micSource() == MicSource::Vax);
@@ -1049,14 +1077,17 @@ void PhoneCwApplet::wireControls()
             }
             m_updatingFromModel = false;
         });
-        // Right-click goes to Setup > Audio > TX Input.
+        // Right-click goes to Setup > Audio > Microphone (R-SPK-21).
         m_vaxBtn->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(m_vaxBtn, &QPushButton::customContextMenuRequested, this,
                 [this](const QPoint&) {
             if (!m_transmitPermitted) { return; }
             emit openSetupRequested(QStringLiteral("Audio"),
-                                    QStringLiteral("TX Input"));
+                                    QStringLiteral("Microphone"));
         });
+        // R-SPK-21, R-AUD-01: greyed from the start where there is no VAX
+        // transmit device.
+        updateTransmitControlAvailability();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1417,8 +1448,14 @@ void PhoneCwApplet::updateTransmitControlAvailability()
     for (QWidget* control : {static_cast<QWidget*>(m_micSourceCombo),
                              static_cast<QWidget*>(m_vaxBtn)}) {
         const QString sourceReason = m_model ? m_model->micSourceChangeReason(MicSource::Pc) : QString();
-        gate(control, m_transmitPermitted && sourceReason.isEmpty(),
-             !m_transmitPermitted ? m_transmitPermissionReason : sourceReason);
+        // R-SPK-21, R-AUD-01: no VAX transmit device on this system
+        // (Windows): the VAX button is greyed with the PC Mic route.
+        const bool vaxMissing = control == m_vaxBtn && m_model
+            && !m_model->transmitModel().vaxSourceAvailable();
+        gate(control, m_transmitPermitted && sourceReason.isEmpty() && !vaxMissing,
+             !m_transmitPermitted ? m_transmitPermissionReason
+             : !sourceReason.isEmpty() ? sourceReason
+             : TransmitModel::vaxSourceUnavailableReason());
     }
     // R-R3-49 (parity Task 3): the mic profile.
     gate(m_micProfileCombo, m_txProfilePermitted, m_txProfileReason);
@@ -1470,6 +1507,7 @@ void PhoneCwApplet::rebuildMicProfileCombo()
     MicProfileManager* mgr = m_model ? m_model->micProfileManager() : nullptr;
     if (!m_micProfileCombo || !mgr) { return; }
     QSignalBlocker b(m_micProfileCombo);
+    resetItemsBeforeRowChange(m_micProfileCombo);
     m_micProfileCombo->clear();
     m_micProfileCombo->addItems(mgr->profileNames());
     const int idx = m_micProfileCombo->findText(mgr->activeProfileName());

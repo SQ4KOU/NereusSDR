@@ -72,6 +72,10 @@
 //                 as Thetis shows it (thetisAgcGainReading); polled() for
 //                 each tick. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-10-11 -- setMaxBinSource: in Max Bin each slice reads its own
+//                 reading from the window, not one value for every slice.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -119,12 +123,14 @@ mw0lge@grange-lane.co.uk
 #include <QTimer>
 
 #include <functional>
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
 class RadioModel;
+class SliceModel;
 
-class SliceMeterPump : public QObject {
+class NEREUS_CORE_EXPORT SliceMeterPump : public QObject {
     Q_OBJECT
 
 public:
@@ -151,6 +157,17 @@ public:
     // analog SMeterWidget exists; a headless daemon build never calls
     // this at all.
     void setSourceSelector(std::function<MeterSource()> selector);
+
+    // Max Bin, per slice: the strongest point of that slice's own passband
+    // on the trace of the pan that shows it, before the receive offset, or
+    // kNoReadingDbm when no pan of this window shows that slice's receiver.
+    // Thetis keeps one detector per receiver the same way (console.cs
+    // :46956-46960 and :47133-47137 [v2.10.3.15]). The trace is a GUI
+    // object, so the window supplies this as it supplies the selector;
+    // called once per slice on each poll() tick in Max Bin. Left unset
+    // (nereusd, and a test that does not call it), Max Bin stays the
+    // engine's one display-0 reading for every slice.
+    void setMaxBinSource(std::function<double(const SliceModel*)> source);
 
     // Clamped to [10, 2000] ms, matching MeterPoller::setIntervalMs's
     // clamp (MeterPoller.cpp) against the same MultimeterPage spinbox
@@ -193,6 +210,7 @@ private:
     QTimer m_timer;
 
     std::function<MeterSource()> m_sourceSelector;
+    std::function<double(const SliceModel*)> m_maxBinSource;
 };
 
 } // namespace NereusSDR

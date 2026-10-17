@@ -33,6 +33,14 @@
 //                 specHPSDR.cs updateNormalizePan does (R-IOS-18). J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-10-10 - Waterfall AGC and NF-AGC the Thetis way (display.cs
+//                 6190-6209, 6463-6478, 7640-7667): only the low edge
+//                 follows, NF-AGC is an option under AGC on the display's
+//                 noise floor, and the follower freezes while keyed, holds
+//                 after an un-key and saves and restores its run level. The
+//                 noise-floor fast attack takes a minimum length. J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 // --- From display.cs ---
@@ -117,13 +125,31 @@ namespace NereusSDR {
 // Also records the time — Thetis _fLastFastAttackEnabledTimeRX1
 // (display.cs:4641) — so process()'s convergence-gated auto-clear
 // (display.cs:5904-5908) can measure elapsed time since the last trigger.
-bool NoiseFloorFollower::setFastAttack(bool on, qint64 nowMs)
+bool NoiseFloorFollower::setFastAttack(bool on, qint64 nowMs, qint64 minMs)
 {
+    // From Thetis display.cs:928-933 [v2.10.3.15], the setter clears the
+    // good flag on any set:
+    //   m_bNoiseFloorGoodRX1 = false;
+    //   if(value) _fLastFastAttackEnabledTimeRX1 = _high_perf_timer.ElapsedMsec;
+    //   m_bFastAttackNoiseFloorRX1 = value;
+    m_good = false;
     if (on) {
         // Stamp every trigger; consecutive band/freq/MOX events all reset
         // the elapsed clock so the gray window covers the full settling
         // period regardless of how many triggers fired.
-        m_lastFastAttackMs = nowMs;
+        //
+        // NereusSDR, based on Thetis display.cs:5912 [v2.10.3.15]: Thetis
+        // has one settle time for every trigger. Here the trigger passes its
+        // minimum (a MOX edge passes the un-key hold length), and a trigger
+        // that would end before an earlier one still running does not
+        // shorten it.
+        const qint64 wanted = std::max<qint64>(0, minMs);
+        const bool earlierRunsLonger =
+            m_fastAttack && m_lastFastAttackMs + m_fastAttackMinMs > nowMs + wanted;
+        if (!earlierRunsLonger) {
+            m_lastFastAttackMs = nowMs;
+            m_fastAttackMinMs = wanted;
+        }
     }
     if (m_fastAttack == on) { return false; }
     m_fastAttack = on;
@@ -194,17 +220,29 @@ bool NoiseFloorFollower::process(const QVector<float>& src, int fps, qint64 nowM
     //       if (elapsed > tmpDelay) fastAttack = false;
     //   }
     // Clears the gray flag once the smoothed estimate has caught up to the
-    // per-frame estimate AND at least 1 second has passed since the trigger.
+    // per-frame estimate AND at least the trigger's minimum (1 second
+    // unless it passed its own) has passed since the trigger.
+    bool cleared = false;
     if (m_fastAttack &&
         std::abs(m_fftBinAverage - m_lerpAverage) < 1.0f)
     {
         const qint64 elapsed = nowMs - m_lastFastAttackMs;
-        if (elapsed > kFastAttackMinMs) {
+        if (elapsed > m_fastAttackMinMs) {
             m_fastAttack = false;
-            return true;
+            cleared = true;
         }
     }
-    return false;
+    // From Thetis display.cs:5400-5404 [v2.10.3.15], after the estimate on
+    // each frame that is not in fast attack:
+    //   if (!m_bFastAttackNoiseFloorRX1 && !bPreviousRX1)
+    //   {
+    //       m_fNoiseFloorRX1 = m_fLerpAverageRX1 + _fNFshiftDBM;
+    //       m_bNoiseFloorGoodRX1 = true;
+    //   }
+    if (!m_fastAttack) {
+        m_good = true;
+    }
+    return cleared;
 }
 
 bool NoiseFloorFastAttackTrigger::observe(double frequencyHz, int band, bool mox)
@@ -230,9 +268,36 @@ bool NoiseFloorFastAttackTrigger::observe(double frequencyHz, int band, bool mox
 
 // ── Waterfall levels ────────────────────────────────────────────────────
 
+void WaterfallLevelFollower::beginHold(qint64 lengthMs, qint64 nowMs)
+{
+    // NereusSDR, based on Thetis display.cs:2856-2858 [v2.10.3.15]:
+    //   //delay waterfall agc
+    //   _rx1_no_agc_duration = _high_perf_timer.ElapsedMsec + _fft_fill_timeRX1 + ((m_nFps / 1000f) * 2); // 2 extra frames
+    //   _ignore_waterfall_rx1_agc = true;
+    // Thetis delays the AGC for one fill time. NereusSDR's caller passes
+    // the one un-key hold length that Clarity and the noise-floor fast
+    // attack also use (moxHoldLengthMs, which says why the "2 extra frames"
+    // term is not ported).
+    m_holdActive = true;
+    m_holdEndMs = nowMs + std::max<qint64>(0, lengthMs);
+}
+
+void WaterfallLevelFollower::restoreAgcRunLevel(std::optional<float> saved)
+{
+    // From Thetis display.cs:2810-2820 [v2.10.3.15]
+    // getWaterfallCachedPreviousMinOrFloor: the level cached for the band,
+    // or
+    //   return WATERFALL_AGC_RESTART_FLOOR_DBM;
+    m_agcRunMin = saved.value_or(kAgcRestartFloorDbm);
+    m_agcPrimed = true;
+    // The low level kept for a key belonged to the run level this replaces.
+    m_hasAgcLow = false;
+}
+
 void WaterfallLevelFollower::compose(const QVector<float>& wfPixelsDbm,
                                      const WaterfallLevelSettings& settings,
-                                     float& activeLowDbm, float& activeHighDbm)
+                                     float& activeLowDbm, float& activeHighDbm,
+                                     qint64 nowMs)
 {
     if (wfPixelsDbm.isEmpty()) { return; }
 
@@ -243,46 +308,119 @@ void WaterfallLevelFollower::compose(const QVector<float>& wfPixelsDbm,
     // survive between rows.  Matches the Thetis
     // "high_threshold = waterfall_high_threshold" seed at display.cs:6575
     // [v2.10.3.13].
+    //
+    // The high level is never moved after this: with AGC on, only the low
+    // edge follows.
+    // From Thetis display.cs:6463 [v2.10.3.15]:
+    //   high_threshold = waterfall_high_threshold;
     if (!settings.clarityActive) {
         activeLowDbm  = settings.lowDbm;
         activeHighDbm = settings.highDbm;
     }
 
-    // AGC: one-pole follower on display-pixel min/max biases the
-    // effective thresholds.  Skipped while Clarity is the driver.
-    // Phase 3G-9c.
-    if (settings.agc && !settings.clarityActive) {
+    // AGC, with NF-AGC as an option under it. AGC off leaves the
+    // operator's Low and High, whatever NF-AGC holds.
+    // From Thetis display.cs:6464-6479 [v2.10.3.15]:
+    //   if (rx1_waterfall_agc && !m_bRX1_spectrum_thresholds)
+    //   {
+    //       if (useNoiseFloorCompensation)
+    //       {
+    //           low_threshold = useSettledNoiseFloorCompensation ? noiseFloorCompensationTarget : _RX1waterfallPreviousMinValue;
+    //       }
+    //       else
+    //       {
+    //           low_threshold = _RX1waterfallPreviousMinValue;
+    //           low_threshold -= m_fWaterfallAGCOffsetRX1;
+    //       }
+    //   }
+    //   else
+    //   {
+    //       low_threshold = waterfall_low_threshold;
+    //   }
+    // Skipped while Clarity is the driver.
+    if (!settings.agc || settings.clarityActive) { return; }
+
+    // While keyed nothing is estimated: the rows of a key draw with the low
+    // level last produced (setKeyed says how this differs from Thetis).
+    if (m_keyed && m_hasAgcLow) {
+        activeLowDbm = m_agcLow;
+        return;
+    }
+
+    // NereusSDR, based on Thetis display.cs:6207 [v2.10.3.15]:
+    //   return rx == 1 ? m_fLerpAverageRX1 - m_fWaterfallAGCOffsetRX1
+    // Thetis subtracts its offset. NereusSDR adds its stored offset, so the
+    // values already stored, the phone, and older windows and Cores keep
+    // their meaning: a negative offset puts the low level under the floor.
+    const float noiseFloorTarget = settings.noiseFloorDbm + settings.noiseFloorAgcOffsetDb;
+
+    // From Thetis display.cs:7640-7651 [v2.10.3.15]:
+    //   bool bIgnoreAgc = (rx == 1 && _ignore_waterfall_rx1_agc && (_high_perf_timer.ElapsedMsec < _rx1_no_agc_duration)) ||
+    //   ...
+    //   if (!local_mox && !bIgnoreAgc)
+    const bool ignoreAgc = m_keyed || inHold(nowMs);
+    if (m_holdActive && nowMs >= m_holdEndMs) {
+        m_holdActive = false;
+    }
+
+    if (ignoreAgc) {
+        // No row of a key or a hold may prime the run level: with nothing
+        // saved it starts from the restart floor, as restoreAgcRunLevel.
+        if (!m_agcPrimed) {
+            m_agcRunMin = kAgcRestartFloorDbm;
+            m_agcPrimed = true;
+        }
+    } else if (settings.noiseFloorAgc) {
+        if (!m_agcPrimed) {
+            // From Thetis display.cs:3071 [v2.10.3.15]:
+            //   private static float _RX1waterfallPreviousMinValue = WATERFALL_AGC_RESTART_FLOOR_DBM;
+            m_agcRunMin = kAgcRestartFloorDbm;
+            m_agcPrimed = true;
+        }
+        // From Thetis display.cs:7653-7667 [v2.10.3.15]:
+        //   //if (rx == 1)
+        //   //    _RX1waterfallPreviousMinValue = (((_RX1waterfallPreviousMinValue * 8) + (waterfall_minimum * 2)) / 10) + 1; //wfagc
+        //   //else
+        //   //    _RX2waterfallPreviousMinValue = (((_RX2waterfallPreviousMinValue * 8) + (waterfall_minimum * 2)) / 10) + 1; //wfagc
+        //   ...
+        //   if (rx1_waterfall_agc && !m_bRX1_spectrum_thresholds && useNoiseFloorCompensation)
+        //   {
+        //       _RX1waterfallPreviousMinValue = (_RX1waterfallPreviousMinValue * 0.6f) + (noiseFloorCompensationTarget * 0.4f);
+        //   }
+        m_agcRunMin = m_agcRunMin * kNoiseFloorAgcKeepWeight
+            + noiseFloorTarget * kNoiseFloorAgcTargetWeight;
+    } else {
+        // AGC without NF-AGC keeps NereusSDR's own follower on the row's
+        // minimum (Phase 3G-9c). NereusSDR, based on Thetis display.cs:7666
+        // [v2.10.3.15]:
+        //   _RX1waterfallPreviousMinValue = (_RX1waterfallPreviousMinValue * 0.6f) + (waterfall_minimum * 0.4f);
+        // The slower pole, the first row's prime and the margin are kept:
+        // AGC without NF-AGC changes only in leaving the high level alone.
         float mn = wfPixelsDbm[0];
-        float mx = mn;
         for (int i = 1; i < n; ++i) {
             const float v = wfPixelsDbm[i];
             if (v < mn) { mn = v; }
-            if (v > mx) { mx = v; }
         }
         if (!m_agcPrimed) {
             m_agcRunMin = mn;
-            m_agcRunMax = mx;
             m_agcPrimed = true;
         } else {
             m_agcRunMin = kAgcAlpha * mn + (1.0f - kAgcAlpha) * m_agcRunMin;
-            m_agcRunMax = kAgcAlpha * mx + (1.0f - kAgcAlpha) * m_agcRunMax;
         }
-        // Phase 3G-9b: 12 dB margin for palette breathing room.
-        activeLowDbm  = m_agcRunMin - kAgcMarginDb;
-        activeHighDbm = m_agcRunMax + kAgcMarginDb;
     }
 
-    // Task 2.8: NF-AGC -- override thresholds from 10th-percentile
-    // noise floor + configured offset.  Runs after AGC so it wins on
-    // tie; defers to Clarity.
-    if (settings.noiseFloorAgc && !settings.clarityActive) {
-        QVector<float> sorted = wfPixelsDbm;
-        std::sort(sorted.begin(), sorted.end());
-        const float nf = sorted[qBound(0, sorted.size() / 10, sorted.size() - 1)];
-        const float offsetF = static_cast<float>(settings.noiseFloorAgcOffsetDb);
-        activeLowDbm  = nf + offsetF;
-        activeHighDbm = activeLowDbm + kNoiseFloorAgcSpanDb;
+    if (settings.noiseFloorAgc) {
+        // From Thetis display.cs:6468 [v2.10.3.15] (quoted above): the
+        // settled noise floor, or the run level until there is one. A floor
+        // read while keyed is not a receive floor (Thetis: !local_mox,
+        // display.cs:6407 [v2.10.3.15]).
+        activeLowDbm = (settings.noiseFloorSettled && !m_keyed) ? noiseFloorTarget : m_agcRunMin;
+    } else {
+        // Phase 3G-9b: 12 dB margin for palette breathing room.
+        activeLowDbm = m_agcRunMin - kAgcMarginDb;
     }
+    m_agcLow = activeLowDbm;
+    m_hasAgcLow = true;
 }
 
 // ── Normalise, averaging, passband ──────────────────────────────────────

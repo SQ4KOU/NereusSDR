@@ -92,6 +92,7 @@
 
 #include "core/WdspTypes.h"   // NrSlot
 #include "gui/SetupPage.h"
+#include "gui/NereusGuiExport.h"
 
 #include <QCheckBox>
 #include <QList>
@@ -274,7 +275,7 @@ public:
 //                        TXA.c:846-855 [v2.10.3.13] (CESSB gated on CPDR
 //                        via the bp2 ladder).
 
-class CfcSetupPage : public SetupPage {
+class NEREUS_GUI_EXPORT CfcSetupPage : public SetupPage {
     Q_OBJECT
 public:
     explicit CfcSetupPage(RadioModel* model, QWidget* parent = nullptr);

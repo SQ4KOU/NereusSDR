@@ -2,6 +2,8 @@
 // src/core/MemoryLock.cpp  (NereusSDR-native)
 // =================================================================
 // 2026-05-26  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude.
+// 2026-10-15  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude:
+//             Windows raises the minimum working set before VirtualLock.
 // See MemoryLock.h for design rationale.
 // =================================================================
 #include "MemoryLock.h"
@@ -12,6 +14,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <vector>
 
@@ -81,8 +84,46 @@ AlignedRange alignRange(const void* addr, std::size_t bytes)
 // thread.  Nothing calls this from the audio callback, and the vector
 // holds a handful of entries (FFT scratch x3, waterfall, two overlay
 // textures, audio ring).
+//
+// workingSetAdded is what lockMemory() added to the Windows working-set
+// bounds for this range (zero elsewhere, or when the raise failed), so
+// unlockMemory() takes back exactly that much.
+struct LockedRange {
+    AlignedRange range;
+    std::size_t  workingSetAdded;
+};
+
 std::mutex               s_registryMutex;
-std::vector<AlignedRange> s_lockedRanges;
+std::vector<LockedRange> s_lockedRanges;
+
+#ifdef Q_OS_WIN
+// Read-modify-write of the process working-set bounds.  Callers hold
+// s_registryMutex, so two threads locking at once cannot both start
+// from the same bounds and lose one raise.
+bool adjustWorkingSet(std::size_t bytes, bool grow, DWORD* errOut)
+{
+    SIZE_T curMin = 0;
+    SIZE_T curMax = 0;
+    if (GetProcessWorkingSetSize(GetCurrentProcess(), &curMin, &curMax) == 0) {
+        if (errOut != nullptr) {
+            *errOut = GetLastError();
+        }
+        return false;
+    }
+    const detail::WorkingSetLimits current{curMin, curMax};
+    const detail::WorkingSetLimits want = grow
+        ? detail::workingSetForLock(current, bytes)
+        : detail::workingSetForUnlock(current, bytes);
+    if (SetProcessWorkingSetSize(GetCurrentProcess(), want.minimum,
+                                 want.maximum) == 0) {
+        if (errOut != nullptr) {
+            *errOut = GetLastError();
+        }
+        return false;
+    }
+    return true;
+}
+#endif
 
 } // namespace
 
@@ -94,15 +135,39 @@ bool lockMemory(const void* addr, std::size_t bytes, const char* tag)
     const AlignedRange r = alignRange(addr, bytes);
 
 #ifdef Q_OS_WIN
-    if (VirtualLock(reinterpret_cast<LPVOID>(r.startPage), r.bytesAligned)
-            == 0) {
-        const DWORD err = GetLastError();
-        qCWarning(lcMemLock) << "VirtualLock failed for tag" << (tag ? tag : "")
-                             << "bytes" << r.bytesAligned
-                             << "GetLastError" << err
-                             << "-- region remains pageable.";
-        s_lockFailuresTotal.fetch_add(1, std::memory_order_relaxed);
-        return false;
+    {
+        // Held across the working-set raise, the lock and the registry
+        // insert (see adjustWorkingSet).
+        const std::lock_guard<std::mutex> guard(s_registryMutex);
+
+        // Windows locks no more pages than the minimum working set
+        // allows, so raise it by this region first.  If the raise is
+        // refused, try the lock anyway: a small region may still fit.
+        DWORD raiseErr = 0;
+        const bool raised = adjustWorkingSet(r.bytesAligned, true, &raiseErr);
+
+        if (VirtualLock(reinterpret_cast<LPVOID>(r.startPage), r.bytesAligned)
+                == 0) {
+            const DWORD err = GetLastError();
+            if (raised) {
+                // Leave the working set as we found it.
+                adjustWorkingSet(r.bytesAligned, false, nullptr);
+                qCWarning(lcMemLock) << "VirtualLock failed for tag" << (tag ? tag : "")
+                                     << "bytes" << r.bytesAligned
+                                     << "GetLastError" << err
+                                     << "with the working set raised"
+                                     << "-- region remains pageable.";
+            } else {
+                qCWarning(lcMemLock) << "VirtualLock failed for tag" << (tag ? tag : "")
+                                     << "bytes" << r.bytesAligned
+                                     << "GetLastError" << err
+                                     << "after the working-set raise failed with GetLastError"
+                                     << raiseErr << "-- region remains pageable.";
+            }
+            s_lockFailuresTotal.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        s_lockedRanges.push_back({r, raised ? r.bytesAligned : 0});
     }
 #else
     if (mlock(reinterpret_cast<void*>(r.startPage), r.bytesAligned) != 0) {
@@ -114,12 +179,12 @@ bool lockMemory(const void* addr, std::size_t bytes, const char* tag)
         s_lockFailuresTotal.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
-#endif
 
     {
         const std::lock_guard<std::mutex> guard(s_registryMutex);
-        s_lockedRanges.push_back(r);
+        s_lockedRanges.push_back({r, 0});
     }
+#endif
     s_bytesLocked.fetch_add(r.bytesAligned, std::memory_order_relaxed);
     s_regionsLocked.fetch_add(1, std::memory_order_relaxed);
     qCInfo(lcMemLock) << "locked" << r.bytesAligned << "bytes for tag"
@@ -138,30 +203,31 @@ void unlockMemory(const void* addr, std::size_t bytes)
     // lock on this range there is nothing to release and nothing to
     // subtract -- returning here is what keeps the counters from
     // underflowing on the unconditional-unlock call sites.
-    AlignedRange held{};
+    LockedRange entry{};
     {
         const std::lock_guard<std::mutex> guard(s_registryMutex);
         auto it = std::find_if(
             s_lockedRanges.begin(), s_lockedRanges.end(),
-            [&asked](const AlignedRange& e) {
-                return e.startPage == asked.startPage
-                       && e.bytesAligned == asked.bytesAligned;
+            [&asked](const LockedRange& e) {
+                return e.range.startPage == asked.startPage
+                       && e.range.bytesAligned == asked.bytesAligned;
             });
         if (it == s_lockedRanges.end()) {
             // Same start page, different length: the caller resized the
             // buffer and is unlocking with the NEW byte count.  Release
             // what we actually locked so the kernel lock does not leak.
             it = std::find_if(s_lockedRanges.begin(), s_lockedRanges.end(),
-                              [&asked](const AlignedRange& e) {
-                                  return e.startPage == asked.startPage;
+                              [&asked](const LockedRange& e) {
+                                  return e.range.startPage == asked.startPage;
                               });
         }
         if (it == s_lockedRanges.end()) {
             return;
         }
-        held = *it;
+        entry = *it;
         s_lockedRanges.erase(it);
     }
+    const AlignedRange held = entry.range;
 
 #ifdef Q_OS_WIN
     // VirtualUnlock's return value is not actionable here -- we already
@@ -169,6 +235,13 @@ void unlockMemory(const void* addr, std::size_t bytes)
     // process teardown is benign.  Don't log; it would be noise.
     VirtualUnlock(reinterpret_cast<LPVOID>(held.startPage),
                   held.bytesAligned);
+    if (entry.workingSetAdded > 0) {
+        // Hand back what lockMemory() added, so a buffer that is resized
+        // and relocked does not ratchet the working set upward.  Same
+        // reasoning as VirtualUnlock: a failure here is not actionable.
+        const std::lock_guard<std::mutex> guard(s_registryMutex);
+        adjustWorkingSet(entry.workingSetAdded, false, nullptr);
+    }
 #else
     // munlock errors are benign (region already unlocked by the kernel
     // during teardown); not actionable for the caller.
@@ -178,6 +251,29 @@ void unlockMemory(const void* addr, std::size_t bytes)
     s_bytesLocked.fetch_sub(held.bytesAligned, std::memory_order_relaxed);
     s_regionsLocked.fetch_sub(1, std::memory_order_relaxed);
 }
+
+namespace detail {
+
+WorkingSetLimits workingSetForLock(WorkingSetLimits current, std::size_t bytes)
+{
+    constexpr std::size_t kMax = std::numeric_limits<std::size_t>::max();
+    WorkingSetLimits want;
+    want.minimum = (current.minimum > kMax - bytes) ? kMax : current.minimum + bytes;
+    want.maximum = (current.maximum > kMax - bytes) ? kMax : current.maximum + bytes;
+    want.maximum = std::max(want.maximum, want.minimum);
+    return want;
+}
+
+WorkingSetLimits workingSetForUnlock(WorkingSetLimits current, std::size_t bytes)
+{
+    WorkingSetLimits want;
+    want.minimum = (current.minimum > bytes) ? current.minimum - bytes : 0;
+    want.maximum = (current.maximum > bytes) ? current.maximum - bytes : 0;
+    want.maximum = std::max(want.maximum, want.minimum);
+    return want;
+}
+
+} // namespace detail
 
 MemoryLockStats memoryLockStats()
 {

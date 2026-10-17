@@ -181,48 +181,50 @@ extension BandDisplaySettings {
     /// The levels a line is coloured against when the phone sets them: the
     /// scale's top and bottom with Use spectrum min/max, else the manual ones.
     public var phoneLevels: WaterfallHistory.Levels {
-        useSpectrumMinMax
+        waterfallLevelMode == .scale
             ? WaterfallHistory.Levels(lowDbm: Float(scaleRange.lowerBound), highDbm: Float(scaleRange.upperBound))
             : manualLevels
     }
 
     /// The quantisation window the Core's frames are coded in (256 steps
-    /// between its bottom and top), as the desktop's remote window asks it
-    /// (`RemoteMediaController.cpp` `liveDbmWindow`): the scale's range
-    /// widened to hold the levels the waterfall is coloured against. With
-    /// the Core setting the levels, its latest levels (`coreLevels`) with
-    /// ``quantisationHeadroomDb`` either side, kept as `held` while they still
-    /// fit and are not far narrower; with the Core's AGC, the low level no
-    /// further than ``quantisationLowReachDb`` under the scale. The scale's
-    /// part is rounded outward to whole ten dB, so a drag of the scale asks
-    /// again only every ten dB.
+    /// between its bottom and top), by the rule the desktop's remote window
+    /// follows (`RemoteMediaController.cpp` `heldDbmWindow`, R-DISP-HOLD).
+    /// What the band needs coded is the scale's range joined with the levels
+    /// the waterfall is coloured against: the stored ones, or with the Core
+    /// setting them its latest (`coreLevels`), the Core's AGC low level no
+    /// further than ``quantisationLowReachDb`` under the scale. `held`, the
+    /// window last asked for, is kept while what is needed lies inside it
+    /// and neither of its edges is more than twice
+    /// ``quantisationHeadroomDb`` outside what is needed. Otherwise the
+    /// window is what is needed with the headroom either side, its edges on
+    /// whole dB. So the grid following the noise floor, a drag of the scale
+    /// or the Core's levels moving ask the Core again only after about a
+    /// headroom of travel, and each ask keeps the Core's averaged trace.
     public func quantisationWindow(coreLevels: WaterfallHistory.Levels?,
                                    held: ClosedRange<Double>?) -> ClosedRange<Double> {
-        let panLow = (scaleRange.lowerBound / 10).rounded(.down) * 10
-        let panHigh = (scaleRange.upperBound / 10).rounded(.up) * 10
+        let headroom = Self.quantisationHeadroomDb
         var levels = useSpectrumMinMax ? scaleRange : Double(waterfallLowDbm)...Double(max(waterfallHighDbm,
                                                                                             waterfallLowDbm))
         let runtime = !useSpectrumMinMax && waterfallLevelMode != .manual
         if runtime, let core = coreLevels, core.lowDbm.isFinite, core.highDbm.isFinite {
             var low = Double(core.lowDbm)
             if waterfallLevelMode != .clarity {
-                let reach = (min(panLow, waterfallLowDbm) - Self.quantisationLowReachDb).rounded(.down)
-                low = max(low, reach + Self.quantisationHeadroomDb)
+                let reach = (min(scaleRange.lowerBound, waterfallLowDbm) - Self.quantisationLowReachDb)
+                    .rounded(.down)
+                low = max(low, reach + headroom)
             }
-            let high = max(Double(core.highDbm), low)
-            let slack = 2 * Self.quantisationHeadroomDb
-            if let held, low >= held.lowerBound, high <= held.upperBound, held.lowerBound >= low - slack,
-               held.upperBound <= high + slack {
-                levels = held
-            } else {
-                levels = (low - Self.quantisationHeadroomDb).rounded(.down)...(high + Self.quantisationHeadroomDb)
-                    .rounded(.up)
-            }
+            levels = low...max(Double(core.highDbm), low)
         }
         let limits = Self.quantisationLimits
-        let low = min(max(min(panLow, levels.lowerBound), limits.lowerBound), limits.upperBound - 1)
-        let high = min(max(max(panHigh, levels.upperBound), low + 1), limits.upperBound)
-        return (low * 10).rounded(.down) / 10...(high * 10).rounded(.up) / 10
+        let neededLow = min(max(min(scaleRange.lowerBound, levels.lowerBound), limits.lowerBound),
+                            limits.upperBound - 1)
+        let neededHigh = min(max(max(scaleRange.upperBound, levels.upperBound), neededLow + 1), limits.upperBound)
+        if let held, held.lowerBound <= neededLow, held.upperBound >= neededHigh,
+           held.lowerBound >= neededLow - 2 * headroom, held.upperBound <= neededHigh + 2 * headroom {
+            return held
+        }
+        return max((neededLow - headroom).rounded(.down), limits.lowerBound)
+            ... min((neededHigh + headroom).rounded(.up), limits.upperBound)
     }
 
     /// The desktop remote window's own headroom about run-time levels, and

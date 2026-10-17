@@ -32,6 +32,7 @@
 
 #include "gui/VaxLinuxFirstRunDialog.h"
 #include "StyleConstants.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 
@@ -371,10 +372,10 @@ void VaxLinuxFirstRunDialog::refreshDetectionState()
     const QString socketLine = socketFound
         ? QStringLiteral("  PipeWire socket: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; "
                           "<span style='color:%1'>found at %2</span>")
-              .arg(Style::kGreenText, socketPath.toHtmlEscaped())
+              .arg(WorkspacePreview::roleColourName(Style::kGreenText, "ok"), socketPath.toHtmlEscaped())
         : QStringLiteral("  PipeWire socket: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; "
                           "<span style='color:%1'>not found at %2</span>")
-              .arg(Style::kAmberText, socketPath.toHtmlEscaped());
+              .arg(WorkspacePreview::roleColourName(Style::kAmberText, "measured"), socketPath.toHtmlEscaped());
 
     // ── pactl binary ───────────────────────────────────────────────────
     const bool pactlFound =
@@ -383,10 +384,10 @@ void VaxLinuxFirstRunDialog::refreshDetectionState()
     const QString pactlLine = pactlFound
         ? QStringLiteral("  pactl binary: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
                           "<span style='color:%1'>found in $PATH</span>")
-              .arg(Style::kGreenText)
+              .arg(WorkspacePreview::roleColourName(Style::kGreenText, "ok"))
         : QStringLiteral("  pactl binary: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
                           "<span style='color:%1'>not in $PATH</span>")
-              .arg(Style::kAmberText);
+              .arg(WorkspacePreview::roleColourName(Style::kAmberText, "measured"));
 
     m_stateLabel->setText(socketLine + QStringLiteral("<br/>") + pactlLine);
 
@@ -396,7 +397,7 @@ void VaxLinuxFirstRunDialog::refreshDetectionState()
     m_stateLabel->setText(
         QStringLiteral("  <span style='color:%1'>(Linux-only detection — "
                         "not applicable on this platform)</span>")
-            .arg(Style::kTextSecondary));
+            .arg(WorkspacePreview::roleColourName(Style::kTextSecondary, "text-secondary")));
 #endif
 }
 

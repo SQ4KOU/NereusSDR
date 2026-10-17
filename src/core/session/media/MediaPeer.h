@@ -31,6 +31,17 @@
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-10-01: Control logging lane: rttMs(). Logging only. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10: R-AUD-SEND: audioRtpSink(), the receive audio lines'
+//               sink for the Core's sender thread, with this peer's
+//               checks. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-15: setTxReceiptHook, given to each start's
+//               transport, for the remote transmit cut guard. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: Display send thread: displaySink(), the display and raw
+//               I/Q sends for the Core's display thread, with this peer's
+//               checks. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/NereusCoreExport.h"
@@ -103,7 +114,7 @@ public:
                bool receiverAudioStreams = false,
                bool headphonesMixStream = false,
                bool micLine = false,
-               bool iqChannel = false);
+               bool iqChannel = false, bool waveformChannel = false);
     void stop();
 
     /// iPhone app plan Task 28 (R-IOS-16): for a session whose control
@@ -124,8 +135,30 @@ public:
     IMediaTransport::DisplaySendResult submitDisplay(const QByteArray& message);
     IMediaTransport::DisplaySendResult submitIq(const QByteArray& message);
     bool iqBusy() const;
+    IMediaTransport::DisplaySendResult submitWaveform(const QByteArray& message);
+    bool waveformBusy() const;
     bool displayBusy() const;
     bool sendRtp(const QByteArray& packet);
+    /// R-AUD-SEND: sendRtp() for another thread (the Core's audio send
+    /// thread): the same checks, from any thread. The same object for this
+    /// peer's whole life; it refuses while the peer is not started, and
+    /// when the transport has no send that is safe off its owner's thread
+    /// (IMediaTransport::audioRtpSink). Owner's thread only.
+    std::shared_ptr<MediaRtpSink> audioRtpSink() const;
+    /// R-AUD-SEND: whether this peer's started transport has such a send
+    /// (false while not started). Without one audioRtpSink() answers "not
+    /// ready" for ever and receive audio goes nowhere on this connection.
+    bool transportHasAudioRtpSink() const;
+    /// Display send thread: submitDisplay(), displayBusy(), submitIq() and
+    /// iqBusy() for another thread (the Core's display send thread), with
+    /// the same checks, from any thread; ready() is isReady() there. The
+    /// same object for this peer's whole life; it refuses while the peer is
+    /// not started, and when the transport has no such send
+    /// (IMediaTransport::displaySink). Owner's thread only.
+    std::shared_ptr<MediaDisplaySink> displaySink() const;
+    /// Display send thread: whether this peer's started transport has such
+    /// a send (false while not started).
+    bool transportHasDisplaySink() const;
     /// Task 36: one packet on the microphone line (the answerer's), whose
     /// SSRC must be micAudioSsrc().
     bool sendMicRtp(const QByteArray& packet);
@@ -204,12 +237,23 @@ public:
     /// current transport takes it; otherwise (or before a start) the line
     /// stays on micRtpReceived(). The sink must be safe on any thread.
     bool setMicPacketSink(IMediaTransport::MicPacketSink sink);
+    /// Remote transmit cut off the main thread (2026-10-15): every message
+    /// the "tx" data channel takes is reported to `hook` on the transport's
+    /// own thread at its receipt (IMediaTransport::setTxReceiptHook), for
+    /// the current transport and every later start's, until an empty hook
+    /// is set. True when the current transport takes it. The hook must be
+    /// safe on any thread and must not block.
+    bool setTxReceiptHook(IMediaTransport::TxReceiptHook hook);
     std::optional<MediaPeerTelemetry> telemetry() const;
 
 signals:
     void controlReady(const QJsonObject& control);
     void displayReceived(const QByteArray& message);
     void iqReceived(const QByteArray& message);
+    void waveformReceived(const QByteArray& message);
+    void waveformErrorOccurred(const QString& reason);
+    void waveformDropped(quint64 packets);
+    void waveformWritable();
     void iqErrorOccurred(const QString& reason);
     void rtpReceived(const QByteArray& packet);
     /// Task 36: a packet on the microphone line carrying micAudioSsrc().

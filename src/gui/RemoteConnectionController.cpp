@@ -1,6 +1,8 @@
 // no-port-check: NereusSDR-original. R3 Core session presentation and actions.
 // 2026-10-01: Authenticated Core address inventory and reconnect learning.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex. NereusSDR-original.
+// 2026-10-15: an ICE pair not known yet is not called the relay. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "RemoteConnectionController.h"
 #include "core/AppSettings.h"
@@ -127,7 +129,8 @@ QString RemoteConnectionController::endpointText() const
     const QUrl url(m_client && m_client->isHandshakeComplete()
                        ? m_client->connectedUrl() : QUrl(m_options.url));
     if (m_client && m_client->isHandshakeComplete() && url.isEmpty()) {
-        if (m_client->pathRank() == PathRacer::ServiceRelayed || m_client->pathRank() == PathRacer::Floor) {
+        if ((m_client->pathRank() == PathRacer::ServiceRelayed && !m_client->pathPairUnknown())
+            || m_client->pathRank() == PathRacer::Floor) {
             return tr("Remote access relay (no direct Core address)");
         }
         return tr("Remote access service (no direct Core address)");

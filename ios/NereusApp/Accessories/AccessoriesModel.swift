@@ -120,16 +120,18 @@ final class AccessoriesModel: ObservableObject {
         var address = ""
     }
 
-    /// Optional raw readings for the TX panel; existing accessory pages retain their contracts.
+    /// Current display readings shared by the TX cards and accessory pages.
     struct PowerGeniusReadings: Equatable {
         var forwardW: Double?
         var swr: Double?
         var temperatureC: Double?
+        var reflectedW: Double?
     }
 
     struct TunerGeniusReadings: Equatable {
         var forwardW: Double?
         var swr: Double?
+        var reflectedW: Double?
         var relays: [Int64?] = [nil, nil, nil]
     }
 
@@ -635,22 +637,28 @@ final class AccessoriesModel: ObservableObject {
 
     private static func powerGeniusReadings(_ object: MirrorObject?) -> PowerGeniusReadings {
         guard let object, object["present"].flag == true, link(object).connected else { return .init() }
-        return PowerGeniusReadings(forwardW: reading(object["forwardPowerW"]),
-                                   swr: reading(object["swr"], minimum: 1),
-                                   temperatureC: reading(object["temperatureC"], minimum: nil))
+        let values = MeterReadout.accessory(.powerGenius, present: true,
+            transmitting: object["transmitting"].flag == true, forwardW: reading(object["forwardPowerW"]),
+            swr: reading(object["swr"], minimum: 1), temperatureC: reading(object["temperatureC"], minimum: nil))
+        return PowerGeniusReadings(forwardW: values.forwardW, swr: values.swr,
+            temperatureC: values.temperatureC, reflectedW: values.reflectedW)
     }
 
     private static func rfKitReadings(_ object: MirrorObject?) -> PowerGeniusReadings {
         guard let object, object["present"].flag == true, link(object).connected else { return .init() }
-        return PowerGeniusReadings(forwardW: reading(object["forwardPowerW"]),
-                                  swr: reading(object["swr"], minimum: 1),
-                                  temperatureC: reading(object["temperatureC"], minimum: nil))
+        let values = MeterReadout.accessory(.rfKit, present: true, forwardW: reading(object["forwardPowerW"]),
+            reflectedW: reading(object["reflectedPowerW"]), swr: reading(object["swr"], minimum: 1),
+            temperatureC: reading(object["temperatureC"], minimum: nil))
+        return PowerGeniusReadings(forwardW: values.forwardW, swr: values.swr,
+            temperatureC: values.temperatureC, reflectedW: values.reflectedW)
     }
 
     private static func tunerGeniusReadings(_ object: MirrorObject?) -> TunerGeniusReadings {
         guard let object, object["isPresent"].flag == true, link(object).connected else { return .init() }
-        return TunerGeniusReadings(forwardW: reading(object["fwdPower"]), swr: reading(object["swr"], minimum: 1),
-                                   relays: ["relayC1", "relayL", "relayC2"].map { relayReading(object[$0]) })
+        let values = MeterReadout.accessory(.tuner, present: true, forwardW: reading(object["fwdPower"]),
+            swr: reading(object["swr"], minimum: 1))
+        return TunerGeniusReadings(forwardW: values.forwardW, swr: values.swr, reflectedW: values.reflectedW,
+            relays: ["relayC1", "relayL", "relayC2"].map { relayReading(object[$0]) })
     }
 
     private static func relayReading(_ value: MirrorValue?) -> Int64? {

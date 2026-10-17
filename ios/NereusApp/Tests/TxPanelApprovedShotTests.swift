@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-NereusSDR-AppStore-permission
 
 import NereusBand
+import NereusModels
 import NereusKitTesting
 import NereusLink
 import NereusMirror
@@ -31,7 +32,7 @@ struct TxPanelApprovedShotTests {
         })
         model.mirror.apply(.delta(.init(key: "amplifier", properties: [
             .init(ordinal: 0, name: "connectionPhase", value: .enumeration(6)),
-            .init(name: "forwardPowerW", value: .f64(1234)),
+            .init(name: "transmitting", value: .bool(true)), .init(name: "forwardPowerW", value: .f64(1234)),
             .init(name: "swr", value: .f64(1.23)),
             .init(name: "temperatureC", value: .f64(48.5)),
         ])))
@@ -60,9 +61,9 @@ struct TxPanelApprovedShotTests {
         try await shoot("native-txpanel-large-type", model: model, size: CGSize(width: 402, height: 874), large: true)
         try await shoot("native-txpanel-landscape", model: model, size: CGSize(width: 874, height: 402))
         try await shoot("native-txpanel-landscape-large", model: model, size: CGSize(width: 874, height: 402), large: true)
-        // Same canonical meters: true idle values still have numeric zero/one, never --.
+        // Idle power and SWR have dashes; temperature retains its live number.
         model.mirror.apply(.delta(.init(key: "amplifier", properties: [
-            .init(name: "forwardPowerW", value: .f64(0)), .init(name: "swr", value: .f64(1)),
+            .init(name: "transmitting", value: .bool(false)), .init(name: "forwardPowerW", value: .f64(0)), .init(name: "swr", value: .f64(1)),
             .init(name: "temperatureC", value: .f64(0)),
         ])))
         model.mirror.apply(.delta(.init(key: "tuner", properties: [
@@ -78,7 +79,7 @@ struct TxPanelApprovedShotTests {
         }
         try await shoot("native-txpanel-equipment-readings-unavailable", model: model, size: CGSize(width: 402, height: 874), unavailable: true)
         model.mirror.apply(.delta(.init(key: "amplifier", properties: [
-            .init(name: "forwardPowerW", value: .f64(1234)), .init(name: "swr", value: .f64(1.23)),
+            .init(name: "transmitting", value: .bool(true)), .init(name: "forwardPowerW", value: .f64(1234)), .init(name: "swr", value: .f64(1.23)),
             .init(name: "temperatureC", value: .f64(48.5)),
         ])))
         model.mirror.apply(.delta(.init(key: "tuner", properties: [
@@ -167,9 +168,9 @@ struct TxPanelApprovedShotTests {
             let unavailableAmp = main.accessories.powerGeniusReadings.forwardW == nil
             for (id, text) in [
                 ("txPgxlPower", unavailableAmp ? "--" : idle ? "0 W" : "1234 W"),
-                ("txPgxlSwr", unavailableAmp ? "--" : idle ? "1.00:1" : "1.23:1"),
-                ("txPgxlTemperature", unavailableAmp ? "--" : idle ? "0.0 °C" : "48.5 °C"),
-                ("txTgxlPower", unavailable ? "--" : idle ? "0 W" : "87 W"), ("txTgxlSwr", unavailable ? "--" : idle ? "1.00:1" : "1.45:1"),
+                ("txPgxlSwr", unavailableAmp ? "--" : "1.23"),
+                ("txPgxlTemperature", main.accessories.powerGeniusReadings.temperatureC == nil ? "--" : idle ? "0 °C" : "48 °C"),
+                ("txTgxlPower", unavailable || idle ? "--" : "87 W"), ("txTgxlSwr", unavailable || idle ? "--" : "1.45"),
                 ("txTgxlRelay0", unavailable ? "--" : idle ? "0" : "12"), ("txTgxlRelay1", unavailable ? "--" : idle ? "0" : "34"), ("txTgxlRelay2", unavailable ? "--" : idle ? "0" : "56"),
             ] {
                 let readout = try #require(observed[id], "\(id)")
@@ -272,5 +273,39 @@ struct TxPanelApprovedShotTests {
         let url = URL(fileURLWithPath: directory).appendingPathComponent("\(name).png")
         try data.write(to: url)
         print("Wrote \(url.path)")
+    }
+}
+
+@MainActor
+extension TxPanelApprovedShotTests {
+    @Test("Shared amplifier source and display readings")
+    func sharedAmplifierMeterRule() {
+        let main = TransmitMeterFixture.main(amplifierWatts: 2300)
+        #expect(main.transmit.forwardWatts == 42)
+        #expect(main.transmit.meterRule.forwardW == 2300)
+        #expect(main.transmit.meterRule.driveW == 42)
+        let scale = LinearGauge.Scale.selectedPower(main.transmit.meterRule, meter: nil)
+        #expect(scale.max == 2000 && scale.redFrom == 1500)
+        #expect(LinearGauge(scale: scale, value: 2300).filledFraction == 1)
+        #expect(MeterReadout.power(main.transmit.meterRule.forwardW) == "2300 W")
+        let absent = TransmitMeterFixture.main(present: false, radioWatts: 98)
+        #expect(!absent.transmit.meterRule.amplifying && absent.transmit.meterRule.driveW == nil)
+    }
+}
+
+@MainActor
+extension TxPanelApprovedShotTests {
+    @Test("Approved meter source pictures")
+    func approvedMeterSourcePictures() async throws {
+        for state in TransmitMeterPictures.states {
+            let main = TransmitMeterFixture.main(operate: state.operate, keyed: state.keyed, radioWatts: state.watts)
+            let panel = TxPanel(transmit: main.transmit, accessories: main.accessories, micLevel: main.micLevel,
+                modes: main.modes, meters: main.band.catalog?.meters, width: nil, modMonitor: main.modMonitor, take: main.take)
+            try await TransmitMeterPictures.capture(panel, name: "meter-txpanel-" + state.name, check: { window in
+                let expected = state.keyed ? (state.operate ? "1236 W" : "98 W") : "--"
+                #expect(AccessoryPagesTests.elements(labelled: "RF Pwr", in: window).first?.accessibilityValue == expected)
+                #expect((!AccessoryPagesTests.elements(labelled: "DRIVE 42 W", in: window).isEmpty) == (state.operate && state.keyed))
+            })
+        }
     }
 }

@@ -65,6 +65,9 @@
 //               the selected pair's candidate transports. Measurement
 //               only: the queue and its order are unchanged. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: setAnswererOpenDelayForTest(), a Core slow to see its own
+//               end open. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
@@ -955,6 +958,12 @@ DataChannelTransport::SelectedPathOverride& selectedPathOverride()
     static DataChannelTransport::SelectedPathOverride override;
     return override;
 }
+
+int& answererOpenDelayMs()
+{
+    static int delayMs = 0;
+    return delayMs;
+}
 } // namespace
 
 void DataChannelTransport::setWatchRelayClockForTest(WatchRelayClock clock)
@@ -965,6 +974,11 @@ void DataChannelTransport::setWatchRelayClockForTest(WatchRelayClock clock)
 void DataChannelTransport::setSelectedPathOverrideForTest(SelectedPathOverride override)
 {
     selectedPathOverride() = std::move(override);
+}
+
+void DataChannelTransport::setAnswererOpenDelayForTest(int ms)
+{
+    answererOpenDelayMs() = std::max(0, ms);
 }
 
 std::optional<MediaIcePath> DataChannelTransport::selectedPath() const
@@ -1511,6 +1525,18 @@ void DataChannelTransport::deliverHeld()
 void DataChannelTransport::handleOpen()
 {
     if (m_open || m_closing) {
+        return;
+    }
+    if (m_options.role == Role::Answerer && answererOpenDelayMs() > 0 && !m_openDelayElapsed) {
+        // The library reports an incoming channel's open twice (its arrival
+        // and its own open); both wait for the one delayed report.
+        if (!m_openDelayed) {
+            m_openDelayed = true;
+            QTimer::singleShot(answererOpenDelayMs(), this, [this] {
+                m_openDelayElapsed = true;
+                handleOpen();
+            });
+        }
         return;
     }
     m_open = true;

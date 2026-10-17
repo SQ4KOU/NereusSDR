@@ -15,6 +15,7 @@ The radio is an ADC/DAC with network transport.
 | Hardware facts (DDCs, ADCs, clocks) | docs/protocols/, TAPR and Anvelina gateware (facts only) |
 | Qt6 structure, UI patterns | AetherSDR |
 | Digital voice, PSK Reporter | freedv-gui |
+| Rotor control, a NereusSDR fork's take | Longpath (OE5SOS, GPL-3) |
 
 **Study, then choose.** Read how the references do it and summarize it in the
 plan or PR. Then **port** when it fits as written (faithfully, under the rules
@@ -114,12 +115,12 @@ substitute the product calendar version into that protocol field.
 `~/.config/NereusSDR/NereusSDR.settings`). PascalCase keys; booleans are the
 strings `"True"` / `"False"`.
 
-* Radio-authoritative, never persisted: antenna selection.
 * Saved and sent to the radio on connect, as Thetis does: ADC attenuation and
   preamp (console.cs:2174-2179), per-band TX power (console.cs:3089-3093,
   4903-4910, 17528-17542). Connecting never keys.
 * Per-MAC under `hardware/<mac>/...`: sample rate, active RX count.
-* Client-authoritative, persisted: VFO, mode, filter, DSP settings, layout, UI
+* Client-authoritative, persisted: VFO, mode, filter, DSP settings, RX and TX
+  antenna per receiver (`Slice<N>/RxAntenna`, `Slice<N>/TxAntenna`), layout, UI
   and display preferences.
 
 GUI↔model sync: model setters emit, the connection sends; guard echo loops with
@@ -161,9 +162,10 @@ First launch generates FFTW wisdom (~15 min), cached in `~/.config/NereusSDR/`.
   `../pihpsdr/` (github.com/dl1ycf/pihpsdr), `../deskhpsdr/`
   (github.com/dl1bz/deskhpsdr), `../n1gp-Anvelina_PROIII/`
   (github.com/n1gp/Anvelina_PROIII, pinned), `../TAPR-OpenHPSDR-Firmware/`
-  (github.com/TAPR/OpenHPSDR-Firmware, pinned).
-* Vendored: `third_party/wdsp/` (WDSP 2.10, TAPR b02d5bac), `third_party/rade/` (radae_nopy
-  b289102, BSD-2), `third_party/r8brain/` (MIT resampler), `third_party/fftw3/`
+  (github.com/TAPR/OpenHPSDR-Firmware, pinned), `../Longpath/`
+  (github.com/oe5sos/Longpath, a GPL-3 NereusSDR fork, pinned `551576e`).
+* Vendored: `third_party/wdsp/` (WDSP 2.10, TAPR b02d5bac), `third_party/rade/` (rade_c
+  c8a3dc1, BSD-2), `third_party/r8brain/` (MIT resampler), `third_party/fftw3/`
   (Windows DLL).
 * Version: `CMakeLists.txt`. Phase status, release history, plan index:
   [docs/development/project-status.md](docs/development/project-status.md),

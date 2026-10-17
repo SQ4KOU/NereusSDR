@@ -52,6 +52,7 @@
 #pragma once
 
 #include "AppletWidget.h"
+#include "gui/NereusGuiExport.h"
 
 #include <QPointer>
 #include <QString>
@@ -88,7 +89,7 @@ class StationVax;
 //   meter portion of MeterSlider. Pattern A per the Task 9.2b handoff
 //   (isolated per-applet timer; no shared poller). Stopped on hide for
 //   scope discipline.
-class VaxApplet : public AppletWidget {
+class NEREUS_GUI_EXPORT VaxApplet : public AppletWidget {
     Q_OBJECT
 public:
     static constexpr int kChannels = 4;

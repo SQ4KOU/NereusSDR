@@ -18,12 +18,17 @@
 #include "core/spectrum/FftEnginePool.h"
 #include "core/FFTEngine.h"
 
+#include <QEvent>
 #include <QLoggingCategory>
+#include <QRegularExpression>
 #include <QScopeGuard>
 #include <QSignalSpy>
 #include <QThread>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <memory>
 
 using namespace NereusSDR;
 
@@ -373,6 +378,342 @@ private slots:
         pool.setDecimation(17);
         QCOMPARE(pool.decimation(), 5);
         QCOMPARE(first->decimation(), 5);
+    }
+
+    // Display pill plan Task 7 (R-DSP-30): the Size slider's choice reaches
+    // every engine's baseline and the stored config, and leaves each
+    // engine's current size for the caller's replan.
+    void fftSizeBaselineReachesEveryEngineAndLeavesTheirSize()
+    {
+        FftEnginePool pool;
+        FFTEngine* first = pool.engineForStream(0);
+        FFTEngine* second = pool.engineForStream(1);
+        first->setFftSize(32768); // a zoom's size
+        QCOMPARE(second->fftSize(), 4096);
+
+        pool.setFftSizeBaseline(16384);
+        QCOMPARE(first->fftSizeBaseline(), 16384);
+        QCOMPARE(second->fftSizeBaseline(), 16384);
+        QCOMPARE(first->fftSize(), 32768);
+        QCOMPARE(second->fftSize(), 4096);
+        QCOMPARE(pool.config().fftSize, 16384);
+
+        FFTEngine* later = pool.engineForStream(2);
+        QCOMPARE(later->fftSizeBaseline(), 16384);
+        QCOMPARE(later->fftSize(), 16384);
+
+        // The slider's largest size is taken as it is.
+        pool.setFftSizeBaseline(262144);
+        QCOMPARE(first->fftSizeBaseline(), 262144);
+        QCOMPARE(pool.config().fftSize, 262144);
+    }
+
+    // The FFT sizing mode (design D38, D43): setSizing gives every engine
+    // the size the mode's control chose and the target in force, leaves each
+    // running size for the caller's replan, and on a mode change has every
+    // engine say fftSizeBaselineChanged exactly once, whether its baseline
+    // moved with the mode or stayed.
+    void sizingReachesEveryEngineAndAModeChangeIsSaidOnce()
+    {
+        using ControlRanges::DisplayFftSizingMode;
+        FftEnginePool pool;
+        FFTEngine* first = pool.engineForStream(0);
+        FFTEngine* second = pool.engineForStream(1);
+        first->setFftSize(32768); // a zoom's size
+        QCOMPARE(pool.config().sizingMode, DisplayFftSizingMode::Auto);
+        QSignalSpy firstSaid(first, &FFTEngine::fftSizeBaselineChanged);
+        QSignalSpy secondSaid(second, &FFTEngine::fftSizeBaselineChanged);
+        const auto said = [&](int count) {
+            const bool ok = firstSaid.size() == count && secondSaid.size() == count;
+            firstSaid.clear();
+            secondSaid.clear();
+            return ok;
+        };
+
+        // Auto as it already is: nothing.
+        pool.setSizing(DisplayFftSizingMode::Auto, 4096, 0.0);
+        QVERIFY(said(0));
+
+        // Auto to Fixed at 16384: the baseline moves and says so.
+        pool.setSizing(DisplayFftSizingMode::Fixed, 16384, 0.0);
+        QCOMPARE(pool.config().sizingMode, DisplayFftSizingMode::Fixed);
+        QCOMPARE(pool.config().fftSize, 16384);
+        QCOMPARE(first->fftSizeBaseline(), 16384);
+        QCOMPARE(second->fftSizeBaseline(), 16384);
+        QCOMPARE(first->fftSizeOffsetDb(), 4.0);
+        QCOMPARE(first->fftSize(), 32768);
+        QCOMPARE(second->fftSize(), 4096);
+        QVERIFY(said(1));
+        // A new size in Fixed is a size change.
+        pool.setSizing(DisplayFftSizingMode::Fixed, 65536, 0.0);
+        QCOMPARE(first->fftSizeOffsetDb(), 8.0);
+        QVERIFY(said(1));
+        pool.setSizing(DisplayFftSizingMode::Fixed, 65536, 0.0);
+        QVERIFY(said(0));
+        // A stream made in Fixed starts on the size.
+        FFTEngine* later = pool.engineForStream(2);
+        QCOMPARE(later->fftSizeBaseline(), 65536);
+        QCOMPARE(later->fftSize(), 65536);
+        pool.removeStream(2);
+
+        // Fixed to Hz/bin: 4096 and the target.
+        pool.setSizing(DisplayFftSizingMode::HzPerBin, 4096, 2.5);
+        QCOMPARE(pool.config().hzPerBinTarget, 2.5);
+        QCOMPARE(first->hzPerBinTarget(), 2.5);
+        QCOMPARE(second->hzPerBinTarget(), 2.5);
+        QCOMPARE(first->fftSizeBaseline(), 4096);
+        QCOMPARE(first->fftSizeOffsetDb(), 0.0);
+        QVERIFY(said(1));
+        // A new target in Hz/bin is not a mode change.
+        pool.setSizing(DisplayFftSizingMode::HzPerBin, 4096, 5.0);
+        QCOMPARE(second->hzPerBinTarget(), 5.0);
+        QVERIFY(said(0));
+
+        // Hz/bin to Auto: the baseline stays 4096, and it is said all the
+        // same. A target passed outside Hz/bin is not kept.
+        pool.setSizing(DisplayFftSizingMode::Auto, 4096, 5.0);
+        QCOMPARE(pool.config().hzPerBinTarget, 0.0);
+        QCOMPARE(first->hzPerBinTarget(), 0.0);
+        QCOMPARE(first->fftSizeBaseline(), 4096);
+        QCOMPARE(first->fftSizeOffsetDb(), 0.0);
+        QVERIFY(said(1));
+
+        // A baseline that is not an FFT size changes nothing.
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("FFT sizing baseline 5000 is not")));
+        pool.setSizing(DisplayFftSizingMode::Fixed, 5000, 0.0);
+        QCOMPARE(pool.config().sizingMode, DisplayFftSizingMode::Auto);
+        QCOMPARE(first->fftSizeBaseline(), 4096);
+        QVERIFY(said(0));
+    }
+
+    void invalidFftSizeBaselineIsIgnoredWithAWarning_data()
+    {
+        QTest::addColumn<int>("size");
+        QTest::newRow("below 1024") << 512;
+        QTest::newRow("above 262144") << 524288;
+        QTest::newRow("not a power of two") << 12288;
+        QTest::newRow("zero") << 0;
+        QTest::newRow("negative") << -4096;
+    }
+
+    void invalidFftSizeBaselineIsIgnoredWithAWarning()
+    {
+        QFETCH(int, size);
+        FftEnginePool pool;
+        FFTEngine* engine = pool.engineForStream(0);
+        pool.setFftSizeBaseline(8192);
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("FFT size baseline -?\\d+ is not")));
+        pool.setFftSizeBaseline(size);
+        QCOMPARE(engine->fftSizeBaseline(), 8192);
+        QCOMPARE(pool.config().fftSize, 8192);
+        QCOMPARE(pool.engineForStream(1)->fftSizeBaseline(), 8192);
+    }
+
+    // R-DSP-33: window, Hz/bin target and frame rate reach both engines the
+    // pool has and one it makes afterwards.
+    void windowTargetAndFpsReachEveryEngine()
+    {
+        FftEnginePool pool;
+        FFTEngine* first = pool.engineForStream(0);
+        FFTEngine* second = pool.engineForStream(1);
+
+        pool.setWindowType(static_cast<int>(WindowFunction::Hann));
+        pool.setHzPerBinTarget(2.5);
+        pool.setOutputFps(45);
+        for (FFTEngine* engine : {first, second, pool.engineForStream(2)}) {
+            QCOMPARE(engine->windowFunction(), WindowFunction::Hann);
+            QCOMPARE(engine->hzPerBinTarget(), 2.5);
+            QCOMPARE(engine->outputFps(), 45);
+        }
+        QCOMPARE(pool.config().windowType, static_cast<int>(WindowFunction::Hann));
+        QCOMPARE(pool.config().hzPerBinTarget, 2.5);
+        QCOMPARE(pool.config().fps, 45);
+        // None of them is a size change.
+        QCOMPARE(first->fftSize(), 4096);
+
+        // The config holds what the engines run: the frame rate clamped to
+        // 1 to 60, a target that is not above 0 stored as off.
+        pool.setOutputFps(500);
+        QCOMPARE(first->outputFps(), 60);
+        QCOMPARE(pool.config().fps, 60);
+        pool.setHzPerBinTarget(-1.0);
+        QCOMPARE(second->hzPerBinTarget(), 0.0);
+        QCOMPARE(pool.config().hzPerBinTarget, 0.0);
+
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("FFT window 7 is not a window")));
+        pool.setWindowType(static_cast<int>(WindowFunction::Count));
+        QCOMPARE(first->windowFunction(), WindowFunction::Hann);
+        QCOMPARE(pool.config().windowType, static_cast<int>(WindowFunction::Hann));
+    }
+
+    // The priority reaches the worker threads the pool has and one it
+    // starts afterwards (two buckets, so stream 1 starts a second thread).
+    void threadPriorityReachesRunningAndLaterThreads()
+    {
+        FftEnginePool pool;
+        FftPoolConfig config;
+        config.threadCount = 2;
+        pool.setConfig(config);
+        FFTEngine* first = pool.engineForStream(0);
+        QVERIFY(!pool.threadPriority().has_value());
+        QTRY_VERIFY(first->thread()->isRunning());
+
+        pool.setThreadPriority(QThread::HighPriority);
+        QCOMPARE(pool.threadPriority().value(), QThread::HighPriority);
+        QCOMPARE(first->thread()->priority(), QThread::HighPriority);
+
+        FFTEngine* second = pool.engineForStream(1);
+        QVERIFY(second->thread() != first->thread());
+        QTRY_VERIFY(second->thread()->isRunning());
+        QCOMPARE(second->thread()->priority(), QThread::HighPriority);
+    }
+
+    // resetInputHistoryAll() queues one resetInputHistory() to each engine
+    // (both tiers), delivered on that engine's own thread.
+    void resetInputHistoryAllQueuesOneCallPerEngineOnItsThread()
+    {
+        // Counts the queued calls delivered to one engine and notes the
+        // thread that delivered them. Declared before the pool, so it
+        // outlives the engines it filters.
+        struct QueuedCallCounter : QObject {
+            std::atomic<int> calls{0};
+            std::atomic<QThread*> deliveredOn{nullptr};
+            bool eventFilter(QObject*, QEvent* event) override
+            {
+                if (event->type() == QEvent::MetaCall) {
+                    ++calls;
+                    deliveredOn = QThread::currentThread();
+                }
+                return false;
+            }
+        };
+        std::array<QueuedCallCounter, 3> counters;
+        FftEnginePool pool;
+        const std::array<FFTEngine*, 3> engines{
+            pool.engineForStream(0),
+            pool.engineForStream(1),
+            pool.engineForSource({1, FftTier::Fine}, pool.config()),
+        };
+        for (std::size_t i = 0; i < engines.size(); ++i) {
+            QVERIFY(engines[i]->thread() != QThread::currentThread());
+            counters[i].moveToThread(engines[i]->thread());
+            engines[i]->installEventFilter(&counters[i]);
+        }
+
+        pool.resetInputHistoryAll();
+        for (std::size_t i = 0; i < engines.size(); ++i) {
+            QTRY_COMPARE(counters[i].calls.load(), 1);
+            QCOMPARE(counters[i].deliveredOn.load(), engines[i]->thread());
+        }
+    }
+
+    // The reset is behind the input the engine's thread already holds: a
+    // nearly full window queued before it is dropped by it, so the few
+    // samples after it do not complete a transform. A reset made directly
+    // on this thread would run before that input and drop nothing.
+    void resetInputHistoryAllDropsTheInputQueuedBeforeIt()
+    {
+#ifndef HAVE_FFTW3
+        QSKIP("FFTEngine has no FFTW3 backend in this build");
+#else
+        QLoggingCategory::setFilterRules(
+            QStringLiteral("nereus.dsp.info=false\nnereus.memlock.info=false"));
+        const auto restoreRules = qScopeGuard([] { QLoggingCategory::setFilterRules({}); });
+        constexpr int kFftSize = 1024;
+        FftEnginePool pool;
+        FftPoolConfig config;
+        config.fftSize = kFftSize;
+        pool.setConfig(config);
+        FFTEngine* engine = pool.engineForStream(0);
+        QSignalSpy frames(engine, &FFTEngine::fftReadyLinear);
+        const QVector<float> nearlyFull((kFftSize - 8) * 2, 0.0f);
+        const QVector<float> few(16 * 2, 0.0f);
+        const auto feed = [engine](const QVector<float>& iq) {
+            QMetaObject::invokeMethod(engine, [engine, iq]() { engine->feedIQ(iq); },
+                                      Qt::QueuedConnection);
+        };
+        // True once the engine's thread has run everything queued so far.
+        const auto drained = [engine]() {
+            auto done = std::make_shared<std::atomic<bool>>(false);
+            QMetaObject::invokeMethod(engine, [done]() { done->store(true); },
+                                      Qt::QueuedConnection);
+            return done;
+        };
+
+        feed(nearlyFull);
+        pool.resetInputHistoryAll();
+        feed(few);
+        const auto afterReset = drained();
+        QTRY_VERIFY(afterReset->load());
+        QCOMPARE(frames.count(), 0);
+
+        // Without the reset the same input completes a window.
+        feed(nearlyFull);
+        const auto afterRefill = drained();
+        QTRY_VERIFY(afterRefill->load());
+        QCOMPARE(frames.count(), 1);
+#endif
+    }
+
+    // Follow-up wave F6: a frame carries the generation of the last purge
+    // before its samples. One whose samples the engine's thread held before
+    // the purge keeps the older generation, though it is delivered here
+    // after resetInputHistoryAll() returned.
+    void aFrameCarriesTheGenerationOfThePurgeBeforeIt()
+    {
+#ifndef HAVE_FFTW3
+        QSKIP("FFTEngine has no FFTW3 backend in this build");
+#else
+        QLoggingCategory::setFilterRules(
+            QStringLiteral("nereus.dsp.info=false\nnereus.memlock.info=false"));
+        const auto restoreRules = qScopeGuard([] { QLoggingCategory::setFilterRules({}); });
+        constexpr int kFftSize = 1024;
+        FftEnginePool pool;
+        FftPoolConfig config;
+        config.fftSize = kFftSize;
+        pool.setConfig(config);
+        FFTEngine* engine = pool.engineForStream(0);
+        QCOMPARE(pool.inputGeneration(), quint64(0));
+        QCOMPARE(engine->inputGeneration(), quint64(0));
+        QSignalSpy frames(&pool, &FftEnginePool::fftFrameReady);
+        // A transform runs on the first sample after a full window.
+        const QVector<float> window((kFftSize + 8) * 2, 0.0f);
+        const auto feed = [engine, &window]() {
+            QMetaObject::invokeMethod(engine, [engine, iq = window]() { engine->feedIQ(iq); },
+                                      Qt::QueuedConnection);
+        };
+
+        // The window is on the engine's thread before the purge is queued,
+        // and nothing is delivered here until the event loop next runs.
+        feed();
+        pool.resetInputHistoryAll();
+        QCOMPARE(pool.inputGeneration(), quint64(1));
+        QCOMPARE(frames.count(), 0);
+        QTRY_COMPARE(frames.count(), 1);
+        QCOMPARE(frames.at(0).size(), 5);
+        QCOMPARE(frames.at(0).at(4).toULongLong(), quint64(0));
+        QVERIFY(frames.at(0).at(4).toULongLong() < pool.inputGeneration());
+
+        // The engine has the purge's generation, and the next frame carries it.
+        QTRY_COMPARE(engine->inputGeneration(), quint64(1));
+        feed();
+        QTRY_COMPARE(frames.count(), 2);
+        QCOMPARE(frames.at(1).at(4).toULongLong(), quint64(1));
+
+        // A second purge is a second generation.
+        pool.resetInputHistoryAll();
+        QCOMPARE(pool.inputGeneration(), quint64(2));
+        feed();
+        QTRY_COMPARE(frames.count(), 3);
+        QCOMPARE(frames.at(2).at(4).toULongLong(), quint64(2));
+
+        // An engine made after a purge starts with its generation.
+        FFTEngine* later = pool.engineForStream(1);
+        QCOMPARE(later->inputGeneration(), quint64(2));
+#endif
     }
 
     void destroysSafelyWithPendingWorkQueued()

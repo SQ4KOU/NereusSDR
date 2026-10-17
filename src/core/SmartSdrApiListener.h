@@ -32,6 +32,7 @@
 
 #pragma once
 #include "core/StationNetwork.h"
+#include "core/NereusCoreExport.h"
 
 #include <QObject>
 #include <QTcpServer>
@@ -69,7 +70,7 @@ namespace NereusSDR {
 //
 // We push slice / transmit S-frames at 1 Hz (and on every change) so that
 // PGXL's bandA / bandB tracking and TGXL's CAT-following both work.
-class SmartSdrApiListener : public QObject {
+class NEREUS_CORE_EXPORT SmartSdrApiListener : public QObject {
     Q_OBJECT
 public:
     explicit SmartSdrApiListener(QObject* parent = nullptr);
@@ -323,6 +324,10 @@ private:
         // PTT_REQUESTED ACK chain (the amp has stepped out of the TX
         // path). Default is true on `interlock create` per the wiki.
         bool    interlockEnabled{true};
+        // Last S-frame body logged at info, keyed by its object word
+        // (`slice`, `transmit`). The 1 Hz push repeats an unchanged body;
+        // only a changed body is logged at info (Core journal volume).
+        QHash<QString, QString> lastLoggedStatus;
     };
 
     void sendBanner(QTcpSocket* sock, const QString& handle);

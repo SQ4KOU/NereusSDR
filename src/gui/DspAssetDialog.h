@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/dsp/DspAssetValidation.h"
+#include "gui/NereusGuiExport.h"
 
 #include <QDialog>
 #include <QPair>
@@ -31,7 +32,7 @@ class RadioModel;
 // Modeless manager for station-owned NNR models, NR3 models or PureSignal v2
 // correction files. All station operations cross DspAssetService's typed request boundary;
 // paths and file handles stay in this GUI process.
-class DspAssetDialog final : public QDialog
+class NEREUS_GUI_EXPORT DspAssetDialog final : public QDialog
 {
     Q_OBJECT
 
@@ -160,7 +161,7 @@ private:
 // and opens the NR3 model manager. The same request path serves the local
 // window and a remote one; against a Core without NR3 models it says so and
 // stays disabled.
-class Nr3ModelPicker final : public QWidget
+class NEREUS_GUI_EXPORT Nr3ModelPicker final : public QWidget
 {
     Q_OBJECT
 

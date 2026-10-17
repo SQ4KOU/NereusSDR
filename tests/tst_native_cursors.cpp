@@ -3,7 +3,7 @@
 // =================================================================
 //
 // no-port-check: NereusSDR-original test. It checks the cursor shapes of
-// two widgets; no upstream logic is ported here.
+// three widgets; no upstream logic is ported here.
 //
 // R-R3-49: the desktop window crashed on macOS (2026-09-25, 2026-09-26)
 // with EXC_BREAKPOINT in CGImageCreate under QCocoaCursor::createCursorData,
@@ -23,6 +23,12 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 native cursors. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-10-08  J.J. Boyd / KG4VCF  The Longpath BandwidthFilterPane
+//                                    crashed the same way from its body
+//                                    zone hover; hover, drag and edge
+//                                    cases added. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -31,6 +37,7 @@
 #include <QStandardPaths>
 
 #include "gui/containers/ContainerWidget.h"
+#include "gui/widgets/BandwidthFilterPane.h"
 #include "gui/widgets/FilterPassbandWidget.h"
 
 using namespace NereusSDR;
@@ -144,6 +151,46 @@ private slots:
         sendMouse(&w, QEvent::MouseButtonPress, QPoint(5, 50));
         QCOMPARE(w.cursor().shape(), Qt::SizeHorCursor);
         sendMouse(&w, QEvent::MouseButtonRelease, QPoint(5, 50));
+        QVERIFY(!isImageDrawn(w.cursor().shape()));
+    }
+
+    // The Longpath filter pane (2026-10-08 crash, mouseMoveEvent on hover
+    // over the passband body). Constructed alone, with no model or radio.
+    void bandwidthFilterPaneUsesHands()
+    {
+        BandwidthFilterPane w;
+        w.resize(360, 140);
+        w.setSpan(10000);
+        w.setFilter(-1000, 1000);
+        // Plot is x 6..354 for 10 kHz: the low edge sits at x 145, the
+        // high edge at x 215, the body between them.
+        const QPoint body(180, 70);
+        const QPoint lowEdge(145, 70);
+        const QPoint outside(20, 70);
+
+        // Hover the body: open hand.
+        sendMouse(&w, QEvent::MouseMove, body);
+        QCOMPARE(w.cursor().shape(), Qt::OpenHandCursor);
+
+        // Drag the body: closed hand while dragging, open hand after.
+        sendMouse(&w, QEvent::MouseButtonPress, body);
+        QCOMPARE(w.cursor().shape(), Qt::ClosedHandCursor);
+        sendMouse(&w, QEvent::MouseMove, body + QPoint(10, 0));
+        QCOMPARE(w.cursor().shape(), Qt::ClosedHandCursor);
+        sendMouse(&w, QEvent::MouseButtonRelease, body + QPoint(10, 0));
+        QCOMPARE(w.cursor().shape(), Qt::OpenHandCursor);
+
+        // Hover an edge: horizontal resize; pressing it keeps that shape.
+        sendMouse(&w, QEvent::MouseMove, lowEdge);
+        QCOMPARE(w.cursor().shape(), Qt::SizeHorCursor);
+        sendMouse(&w, QEvent::MouseButtonPress, lowEdge);
+        QCOMPARE(w.cursor().shape(), Qt::SizeHorCursor);
+        sendMouse(&w, QEvent::MouseButtonRelease, lowEdge);
+        QCOMPARE(w.cursor().shape(), Qt::SizeHorCursor);
+
+        // Elsewhere: arrow.
+        sendMouse(&w, QEvent::MouseMove, outside);
+        QCOMPARE(w.cursor().shape(), Qt::ArrowCursor);
         QVERIFY(!isImageDrawn(w.cursor().shape()));
     }
 };

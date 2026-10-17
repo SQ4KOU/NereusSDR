@@ -51,9 +51,16 @@
 //               web relay's leg (RelayLeg) and its per-connection candidate
 //               sources; the computer's own proxy settings (SystemProxy).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: setLeavesServiceAtOpenForTest(), a window that leaves
+//               the service at its own open, as older ones do. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: ready() says when its receiver must listen for the Core's
+//               hello. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
+#include "core/NereusCoreExport.h"
 
 #include <QList>
 #include <QObject>
@@ -75,7 +82,7 @@ class DataChannelTransport;
 class RendezvousClient;
 class RelayLeg;
 
-class RendezvousDialer : public QObject {
+class NEREUS_CORE_EXPORT RendezvousDialer : public QObject {
     Q_OBJECT
 
 public:
@@ -119,6 +126,9 @@ public:
     void setDialDeadlineMs(int ms) { m_deadlineMs = ms; }
     /// Test seam: kAnswerDeadlineMs.
     void setAnswerDeadlineMs(int ms) { m_answerDeadlineMs = ms; }
+    /// Test seam: every dial leaves the service the moment its own end
+    /// opens, as windows before 2026-10-15 did (default false).
+    static void setLeavesServiceAtOpenForTest(bool leaves);
     /// iPhone app plan Task 29: false gathers no relay candidate and
     /// accepts none of the Core's (an upgrade, which looks for a path
     /// without the relay; a Core with the relay turned off). Default true.
@@ -153,6 +163,13 @@ public:
 signals:
     /// The control channel opened. The receiver takes `transport` (it has
     /// no parent) and runs the session over it.
+    ///
+    /// The receiver connects its textReceived listener before this signal
+    /// returns. Right after it returns the dialer connects its own
+    /// single-shot listener (it leaves the service when the Core speaks),
+    /// and that one counts as someone listening: a message the transport
+    /// holds until it has a listener (the Core's hello) would go to the
+    /// dialer alone, and a listener connected later would never see it.
     void ready(NereusSDR::DataChannelTransport* transport);
     /// The attempt ended without a connection. `reason` is plain words.
     void failed(const QString& reason);

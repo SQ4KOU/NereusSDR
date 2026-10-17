@@ -89,6 +89,10 @@
 //   2026-09-30 - Level Cal 2 review: the RX2 box stops at 31 dB, the
 //                 second ADC's field (rx2StepAttMaxDb), except while linked.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - Rotor control plan Task 8: "Turn the beam when I tune to a
+//                 spot" (Rotor/TurnOnTune, this window's, off by default),
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -139,6 +143,7 @@
 #include "GeneralOptionsPage.h"
 #include "gui/StyleConstants.h"
 #include "models/RadioModel.h"
+#include "models/SpotBeamTurner.h"
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
 #include "core/PureSignal.h"
@@ -828,7 +833,7 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
         });
     }
 
-    contentLayout()->addWidget(group);
+    addContent(group);
 }
 
 // ---------------------------------------------------------------------------
@@ -928,6 +933,20 @@ void GeneralOptionsPage::buildOptionsGroup()
     });
     vbox->addWidget(m_chkSwapRedBlue);
 
+    // Rotor control plan Task 8 (NereusSDR-original): auto-turn, a
+    // preference of this window (Rotor/TurnOnTune), off by default. With it
+    // off, tuning to a spot never moves the rotor; Turn beam on the spot
+    // menu and in the Spot Hub always does.
+    m_chkTurnBeamOnTune = new QCheckBox(tr("Turn the beam when I tune to a spot"), group);
+    m_chkTurnBeamOnTune->setObjectName(QStringLiteral("chkTurnBeamOnTune"));
+    m_chkTurnBeamOnTune->setToolTip(
+        tr("Off: only Turn beam on a spot moves the rotor. This computer's setting."));
+    m_chkTurnBeamOnTune->setChecked(SpotBeamTurner::turnOnTune());
+    connect(m_chkTurnBeamOnTune, &QCheckBox::toggled, this, [](bool on) {
+        SpotBeamTurner::setTurnOnTune(on);
+    });
+    vbox->addWidget(m_chkTurnBeamOnTune);
+
     // Bidirectional sync: when PureSignal flips state from another source
     // (e.g. PsaIndicatorWidget left/right click on the bottom-banner FB
     // label per ucInfoBar.cs:1042-1054 [v2.10.3.13]), reflect the change
@@ -987,7 +1006,7 @@ void GeneralOptionsPage::buildOptionsGroup()
         vbox->addLayout(rateRow);
     }
 
-    contentLayout()->addWidget(group);
+    addContent(group);
 }
 
 // ---------------------------------------------------------------------------
@@ -1215,7 +1234,7 @@ void GeneralOptionsPage::buildTimeOutGroup()
     connect(m_udRemoteMoxTimeOutSeconds, QOverload<int>::of(&QSpinBox::valueChanged), this,
             applyRemote);
 
-    contentLayout()->addWidget(group);
+    addContent(group);
 }
 
 // ---------------------------------------------------------------------------
@@ -1325,7 +1344,7 @@ void GeneralOptionsPage::buildStepAttGroup()
         }
     });
 
-    contentLayout()->addWidget(group);
+    addContent(group);
 }
 
 // ---------------------------------------------------------------------------
@@ -1486,7 +1505,7 @@ void GeneralOptionsPage::buildAutoAttGroup()
             });
         }
 
-        contentLayout()->addWidget(group);
+        addContent(group);
 
         // R-R3-46 / R-R3-11: the RX2 group is usable on a radio with a
         // second receive ADC (refreshRx2StepAtt sets it).

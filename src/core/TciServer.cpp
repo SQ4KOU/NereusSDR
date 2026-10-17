@@ -1,4 +1,66 @@
-// no-port-check: AetherSDR-derived NereusSDR file.  Transport lifecycle
+// =================================================================
+// src/core/TciServer.cpp  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis source:
+//   Project Files/Source/Console/TCIServer.cs, original licence included below
+//
+// Modification history (NereusSDR):
+//   2026-10-14 - Live TX dial visibility by J.J. Boyd (KG4VCF),
+//                AI-assisted via Claude Code: a TX handoff to, or a tune
+//                of, a bound slice this desktop client has no receiver for
+//                sends receiver 0's dial, as the init burst reports.
+//   2026-10-12 - Dynamic receiver availability correction by J.J. Boyd
+//                (KG4VCF), AI-assisted via OpenAI Codex: exact mapped slice
+//                existence gates initial/query and live RX/TX availability.
+//   2026-10-12 — Transmit receiver state adaptation by J.J. Boyd
+//                (KG4VCF), with AI-assisted transformation via Anthropic
+//                Claude Code; attribution remediation via OpenAI Codex.
+// =================================================================
+
+// --- From TCIServer.cs ---
+/*  TCIServer.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2020-2026 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+//
+
+// Historical attribution context: AetherSDR-derived NereusSDR file.  Transport lifecycle
 // (start/stop/onNewConnection/onClientDisconnected) is adapted from
 // AetherSDR src/core/TciServer.{h,cpp} [@0cd4559]; NereusSDR diverges in
 // bind address, double-start contract, signal set, and client table type.
@@ -129,6 +191,17 @@
 //                that app leaving releases the key on the Core, or the
 //                Core's answer when it comes. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - TCI program keys that send silence: the forwarded key
+//                says whether the app's trx carried ",tci"
+//                (RemoteTransmit::key's programAudio), so the window's
+//                microphone line carries the app's audio or silence, never
+//                the microphone. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-12 - A key or TUNE going on names the receiver that transmits
+//                and says nothing of the other (enqueueTrxState), as
+//                Thetis's MoxChange and TuneChange do: an app on receiver 1
+//                was told trx:1,false; with its own accepted key. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -921,13 +994,19 @@ void TciServer::hookSliceBroadcasts()
     // the wire, so re-publishing the full VFO triplet here would announce a
     // receiver the client was never told about. tx_frequency carries no
     // receiver index and is correct for any slice.
+    //
+    // Desktop hosting: a slice this client has no receiver for never has
+    // its dial announced. The client hears receiver 0's dial instead, which
+    // is what its init burst reports for the same binding
+    // (TciProtocol::txFrequencyFor), so connecting and staying connected
+    // agree.
     if (TxSliceArbiter* arb = m_model->txSliceArbiter()) {
         connect(arb, &TxSliceArbiter::txBoundSliceChanged, this,
                 [this](int /*oldId*/, int newId) {
             SliceModel* slice = m_model ? m_model->sliceById(newId) : nullptr;
             if (!slice || !m_protocol) { return; }
-            m_protocol->enqueueLocalBroadcastTxFrequency(
-                static_cast<qint64>(slice->frequency()));
+            m_protocol->enqueueLocalBroadcastTxFrequency(m_protocol->txFrequencyFor(
+                newId, static_cast<qint64>(slice->frequency())));
         });
     }
 
@@ -971,7 +1050,15 @@ bool TciServer::sliceDrivesTx(int sliceId) const
         // dropping tx_frequency for every client on a one-slice radio.
         return sliceId == 0;
     }
-    return arb->txBoundSliceId() == sliceId;
+    const int boundId = arb->txBoundSliceId();
+    // Desktop hosting: while TX is on a slice this client has no receiver
+    // for, its tx_frequency follows receiver 0's slice, as the init burst
+    // reports (TciProtocol::txFrequencyFor). The bound slice's own tunes
+    // then send nothing.
+    if (boundId >= 0 && m_protocol && !m_protocol->announcesTxSlice(boundId)) {
+        return m_protocol->receiverSlice(0) == sliceId;
+    }
+    return boundId == sliceId;
 }
 
 void TciServer::wireSliceForBroadcast(SliceModel* slice, int sliceId)
@@ -1455,16 +1542,7 @@ void TciServer::hookGlobalBroadcasts()
                 });
         connect(mox, &MoxController::moxStateChanged, this,
                 [this](bool on) {
-                    const QString boolStr =
-                        on ? QStringLiteral("true") : QStringLiteral("false");
-                    // Thetis sendMOX(0, ...) + sendMOX(1, MOX && VFOBTX &&
-                    // bRX2Enabled).  Until VFOBTX state plumbing lands the
-                    // rx==1 channel is always false (the !VFOBTX path of
-                    // sendInitialRadioState matches this).
-                    m_protocol->enqueueLocalBroadcast(
-                        QStringLiteral("trx:0,%1;").arg(boolStr));
-                    m_protocol->enqueueLocalBroadcast(
-                        QStringLiteral("trx:1,false;"));
+                    enqueueTrxState(on);
                     // MOX gates rx_enable / tx_enable per Thetis sendRXEnable
                     // / sendTXEnable at TCIServer.cs:2515-2516 + 2618-2619
                     // [v2.10.3.15].  Re-emit both to mirror the init burst
@@ -1474,25 +1552,18 @@ void TciServer::hookGlobalBroadcasts()
                     // RX count (0 until a connect sets it from the
                     // persisted count, and not tied to slices).  tx_enable
                     // also follows the init burst's transmitRefused() gate.
-                    const bool rx2en = m_protocol->rx2EnabledNow();
-                    const QString notMox =
-                        on ? QStringLiteral("false") : QStringLiteral("true");
-                    m_protocol->enqueueLocalBroadcast(
-                        QStringLiteral("rx_enable:0,%1;").arg(notMox));
-                    m_protocol->enqueueLocalBroadcast(
-                        QStringLiteral("rx_enable:1,%1;")
-                            .arg((rx2en && !on) ? QStringLiteral("true")
-                                                 : QStringLiteral("false")));
-                    m_protocol->enqueueLocalBroadcast(
-                        QStringLiteral("tx_enable:0,%1;")
-                            .arg((!m_protocol->transmitRefused() && !on)
-                                     ? QStringLiteral("true")
-                                     : QStringLiteral("false")));
-                    m_protocol->enqueueLocalBroadcast(
-                        QStringLiteral("tx_enable:1,%1;")
-                            .arg((!m_protocol->transmitRefused() && rx2en && !on)
-                                     ? QStringLiteral("true")
-                                     : QStringLiteral("false")));
+                    for (int receiver = 0; receiver < TciProtocol::kExposedReceiverCount;
+                         ++receiver) {
+                        const bool available = m_protocol->receiverAvailableNow(receiver);
+                        m_protocol->enqueueLocalBroadcast(
+                            QStringLiteral("rx_enable:%1,%2;").arg(receiver)
+                                .arg(available && !on ? QStringLiteral("true")
+                                                     : QStringLiteral("false")));
+                        m_protocol->enqueueLocalBroadcast(
+                            QStringLiteral("tx_enable:%1,%2;").arg(receiver)
+                                .arg(available && !on && !m_protocol->transmitRefused()
+                                         ? QStringLiteral("true") : QStringLiteral("false")));
+                    }
                 });
     }
 
@@ -1503,12 +1574,20 @@ void TciServer::hookGlobalBroadcasts()
     // chkTUN.Checked at console.cs:18677-18684 [v2.10.3.15]).
     connect(&m_model->transmitModel(), &TransmitModel::tuneChanged, this,
             [this](bool on) {
-                const QString boolStr =
-                    on ? QStringLiteral("true") : QStringLiteral("false");
-                m_protocol->enqueueLocalBroadcast(
-                    QStringLiteral("tune:0,%1;").arg(boolStr));
-                m_protocol->enqueueLocalBroadcast(
-                    QStringLiteral("tune:1,false;"));  // !VFOBTX path
+                // From Thetis TCIServer.cs:1096-1100 [v2.10.3.15] --
+                // TuneChange(int rx, bool oldTune, bool newTune):
+                //   sendTune(rx-1, newTune);
+                // one line, for the receiver that transmits (console.cs:30208
+                // [v2.10.3.15], TciProtocol::transmitReceiverNow). TUNE going
+                // on says nothing of the other receiver, and TUNE going off
+                // tells both, for the reasons at enqueueTrxState.
+                if (on) {
+                    m_protocol->enqueueLocalBroadcast(
+                        QStringLiteral("tune:%1,true;").arg(m_protocol->transmitReceiverNow()));
+                    return;
+                }
+                m_protocol->enqueueLocalBroadcast(QStringLiteral("tune:0,false;"));
+                m_protocol->enqueueLocalBroadcast(QStringLiteral("tune:1,false;"));
             });
 
     // ── TX profile (tx_profile_ex: / tx_profiles_ex: lines), remote window ─
@@ -1630,7 +1709,7 @@ void TciServer::hookGlobalBroadcasts()
                 }
             });
 
-    // ── RX2 enabled (rx_enable:1 + tx_enable:1) ───────────────────────────
+    // ── Receiver availability (rx_enable + tx_enable) ───────────────────────────
     // Source: Thetis RX2EnabledChangedHandlers at TCIServer.cs:6741
     // [v2.10.3.15] routed to OnRX2EnabledChanged -> RX2EnabledChange.
     // RX2 is on when receiver 1 has a slice (TciProtocol::rx2EnabledNow), so
@@ -1638,7 +1717,9 @@ void TciServer::hookGlobalBroadcasts()
     // removed, the receiver map moving with slice ownership while hosting,
     // and the active RX count. They go out only when the answer flips, as
     // Thetis's handler fires only on a change.
-    m_rx2EnabledSent = m_protocol->rx2EnabledNow();
+    for (int receiver = 0; receiver < TciProtocol::kExposedReceiverCount; ++receiver) {
+        m_receiverAvailableSent[receiver] = m_protocol->receiverAvailableNow(receiver);
+    }
     connect(m_model, &RadioModel::activeRxCountChanged, this,
             [this](int) { refreshRx2Enabled(); });
     connect(m_model, &RadioModel::sliceAdded, this,
@@ -1662,25 +1743,30 @@ void TciServer::refreshRx2Enabled()
     // A stopped server queues nothing (stop() also drops the ownership
     // hook; the singleShot after a slice removal can still land here).
     if (!m_model || !m_protocol || !m_globalBroadcastsWired) { return; }
-    const bool en = m_protocol->rx2EnabledNow();
-    if (en == m_rx2EnabledSent) { return; }
-    m_rx2EnabledSent = en;
     // From Thetis TCIServer.cs:842-847 [v2.10.3.15] (RX2EnabledChange):
     //   sendRXEnable(1, enabled);
     //   sendTXEnable(1, enabled && !consoleThreadSafe.MOX);
     // Only those two lines: rx_channel_enable and lock are not re-sent on
     // this path (console.cs:37522 fires RX2EnabledChangedHandlers alone).
+    // NereusSDR: either receiver's exact mapped slice may disappear. Apply
+    // the initial/query !MOX gate to both RX lines as well as TX lines.
     // tx_enable also follows transmitRefused(), as the first lines do.
     bool mox = false;
     QMetaObject::invokeMethod(m_model, "mox",
                               Qt::DirectConnection,
                               Q_RETURN_ARG(bool, mox));
-    const auto flag = [](bool on) {
-        return on ? QStringLiteral("true") : QStringLiteral("false");
-    };
-    m_protocol->enqueueLocalBroadcast(QStringLiteral("rx_enable:1,%1;").arg(flag(en)));
-    m_protocol->enqueueLocalBroadcast(QStringLiteral("tx_enable:1,%1;")
-        .arg(flag(en && !mox && !m_protocol->transmitRefused())));
+    for (int receiver = 0; receiver < TciProtocol::kExposedReceiverCount; ++receiver) {
+        const bool available = m_protocol->receiverAvailableNow(receiver);
+        if (available == m_receiverAvailableSent[receiver]) { continue; }
+        m_receiverAvailableSent[receiver] = available;
+        m_protocol->enqueueLocalBroadcast(
+            QStringLiteral("rx_enable:%1,%2;").arg(receiver)
+                .arg(available && !mox ? QStringLiteral("true") : QStringLiteral("false")));
+        m_protocol->enqueueLocalBroadcast(
+            QStringLiteral("tx_enable:%1,%2;").arg(receiver)
+                .arg(available && !mox && !m_protocol->transmitRefused()
+                         ? QStringLiteral("true") : QStringLiteral("false")));
+    }
 }
 
 TciServer::~TciServer()
@@ -2202,6 +2288,10 @@ void TciServer::stop()
     }
     m_clients.clear();
     m_remoteAudioSockets.clear();
+    // Every app is gone: the sensor timers go back to the idle default, so
+    // a restarted server does not tick at a departed app's rate. They are
+    // stopped above; setInterval does not start them.
+    updateSensorTimerIntervals();
 
     for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
         if (m_remoteIqRequested[rx]) {
@@ -2544,6 +2634,10 @@ void TciServer::onClientDisconnected()
 
     m_clients.erase(it);
     ws->deleteLater();
+
+    // A fast app that leaves without turning its sensors off no longer sets
+    // the rate the others get.
+    updateSensorTimerIntervals();
 
     // R-R3-42: the last app listening to a Core receiver releases it.
     for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
@@ -3174,6 +3268,38 @@ void TciServer::handleAudioUnsubscribe(std::shared_ptr<TciClientSession>& sessio
         session->audioResamplers.erase(rIt);
         qCInfo(lcTci) << "TciServer: audio resampler destroyed for rx" << rx
                       << "peer" << session->peer;
+    }
+}
+
+// ── updateSensorTimerIntervals() ──────────────────────────────────────────────
+//
+// The shared sensor timers follow the apps that are left. In Thetis each
+// listener runs its own sensor timers, stopped when it leaves
+// (StopSocketListener, TCIServer.cs:3045-3056 [v2.10.3.15]), and the
+// server-wide MinimumRequiredRxSensorInterval / MinimumRequiredTxSensorInterval
+// (TCIServer.cs:8092-8130) skip it once PurgingThreadStart removes it from
+// the listener list (TCIServer.cs:7199-7221). NereusSDR runs one RX and one
+// TX timer for all apps, so a leaving app's interval is dropped here, as
+// rx_sensors_enable / tx_sensors_enable already drop a disabled one.
+void TciServer::updateSensorTimerIntervals()
+{
+    QList<int> rxIntervals;
+    QList<int> txIntervals;
+    for (auto it = m_clients.cbegin(); it != m_clients.cend(); ++it) {
+        if (it.value()->rxSensorsEnabled) {
+            rxIntervals.append(it.value()->rxSensorIntervalMs);
+        }
+        if (it.value()->txSensorsEnabled) {
+            txIntervals.append(it.value()->txSensorIntervalMs);
+        }
+    }
+    const int rxInterval = TciSensorManager::minimumRequiredInterval(rxIntervals);
+    if (m_rxSensorTimer->interval() != rxInterval) {
+        m_rxSensorTimer->setInterval(rxInterval);
+    }
+    const int txInterval = TciSensorManager::minimumRequiredInterval(txIntervals);
+    if (m_txSensorTimer->interval() != txInterval) {
+        m_txSensorTimer->setInterval(txInterval);
     }
 }
 
@@ -3873,7 +3999,7 @@ void TciServer::handleRemoteTrx(QWebSocket* ws, const QString& peer, int rx, boo
     m_remoteKeyClient = asker;
     const quint64 generation = ++m_remoteKeyGeneration;
     qCInfo(lcTci) << "TciServer: trx from" << peer << "forwarded to the Core as a program's key";
-    m_remoteTransmit.key([this, asker, peer, rx, hasTciArg, generation, answerAsker](
+    m_remoteTransmit.key(hasTciArg, [this, asker, peer, rx, hasTciArg, generation, answerAsker](
                              const RemoteKeyAnswer& answer) {
         if (generation != m_remoteKeyGeneration || !m_remoteKeyPending) {
             // A stale answer (the server stopped or the forwarder changed):
@@ -3942,10 +4068,40 @@ void TciServer::broadcastRemoteKeyState(bool on)
     // As the MOX change broadcast (hookGlobalBroadcasts, Thetis sendMOX at
     // TCIServer.cs:2207-2211 [v2.10.3.13]) tells every app, for this
     // window's key.
-    const QString boolStr = on ? QStringLiteral("true") : QStringLiteral("false");
-    m_protocol->enqueueLocalBroadcast(QStringLiteral("trx:0,%1;").arg(boolStr));
-    m_protocol->enqueueLocalBroadcast(QStringLiteral("trx:1,false;"));
+    enqueueTrxState(on);
     broadcastPendingNotifications();
+}
+
+// The trx lines every app hears when the transmitter keys or unkeys.
+//
+// From Thetis TCIServer.cs:1443-1472 [v2.10.3.15] -- MoxChange(int rx, bool
+// oldMox, bool newMox) ends with
+//   sendMOX(rx - 1, newMox);
+// one line, for the receiver that transmits (console.cs:29728 [v2.10.3.15],
+// TciProtocol::transmitReceiverNow).
+//
+// Keying says nothing of the other receiver. Until 2026-10-12 every key
+// also sent trx:1,false;, contradicting an app's accepted key on receiver
+// 1. WSJT-X Cmd_Trx treats that false announcement as the key ending: it
+// clears both PTT states, can skip the release, and can time out on the
+// next trx:1,true. Cmd_Trx does not directly set the modulator Idle; the
+// reported silent transmit's full audio cause remains an inference.
+//
+// Unkeying tells both receivers, as before. Thetis names one there too, but
+// its handleTrxMessage (TCIServer.cs:3666-3681 [v2.10.3.15]) moves transmit
+// to the VFO of the receiver an app keys, so the receiver an app keyed is
+// always the one named. That move is not ported: an app that keyed
+// receiver 1 while receiver 0's slice transmits was answered trx:1,true;,
+// and hears trx:1,false; here whatever ended the key.
+void TciServer::enqueueTrxState(bool on)
+{
+    if (on) {
+        m_protocol->enqueueLocalBroadcast(
+            QStringLiteral("trx:%1,true;").arg(m_protocol->transmitReceiverNow()));
+        return;
+    }
+    m_protocol->enqueueLocalBroadcast(QStringLiteral("trx:0,false;"));
+    m_protocol->enqueueLocalBroadcast(QStringLiteral("trx:1,false;"));
 }
 
 bool TciServer::raiseOperatorNotice(const QString& peer, const QString& reason,

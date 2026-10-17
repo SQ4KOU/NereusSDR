@@ -42,6 +42,9 @@
 //                                    connection counts, read from its
 //                                    Rf2ksConnection once a second.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-11  J.J. Boyd / KG4VCF  The timed save writes the file on the
+//                                    settings writer thread. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QObject>
@@ -119,10 +122,16 @@ private:
     void publishLabels();
     void publishRfKitCounters();
     void scheduleSave();
+    // Writes the file before returning (the destructor's flush).
     void saveNow();
+    // The timed save: the file is written on the settings writer thread.
+    void saveInBackground();
+    void onBackgroundSaveFinished(quint64 ticket, bool saved, const QString& error);
 
     QPointer<AccessoryDataModel> m_model;
     QTimer m_saveTimer;
+    // The timed save still with the writer thread; 0 when none is.
+    quint64 m_backgroundSaveTicket{0};
     QTimer m_rfkitCountersTimer;
     Sources m_sources;
     bool m_alertArmed{true};

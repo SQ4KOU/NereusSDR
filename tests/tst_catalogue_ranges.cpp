@@ -52,6 +52,7 @@
 #include <QLayout>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QScrollArea>
 #include <QSet>
 #include <QSlider>
 
@@ -184,7 +185,8 @@ struct PopupRows {
 PopupRows rowsOf(const DspParamPopup& popup)
 {
     PopupRows rows;
-    QLayout* layout = popup.layout();
+    auto* scroll = popup.findChild<QScrollArea*>();
+    QLayout* layout = scroll && scroll->widget() ? scroll->widget()->layout() : nullptr;
     for (int i = 0; layout && i < layout->count(); ++i) {
         QLayout* row = layout->itemAt(i)->layout();
         if (!row || row->count() != 3) {

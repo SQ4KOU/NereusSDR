@@ -24,6 +24,7 @@
 // =================================================================
 
 #include "core/session/RemoteDevicesState.h"
+#include "gui/NereusGuiExport.h"
 
 #include <QFrame>
 
@@ -32,7 +33,7 @@ class QPushButton;
 
 namespace NereusSDR {
 
-class NoticeCard : public QFrame {
+class NEREUS_GUI_EXPORT NoticeCard : public QFrame {
     Q_OBJECT
 
 public:

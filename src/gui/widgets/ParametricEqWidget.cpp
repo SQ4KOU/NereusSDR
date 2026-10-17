@@ -35,6 +35,15 @@
 //                 Thetis, and a point that is not an object fails the
 //                 load. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-10-08 - The editor presentation's client and plot backgrounds read
+//                 WorkspacePreview::dataBackground() (the data colour
+//                 choice; navy until a choice is made). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - JJ's D22: with the workspace preview on, the plot takes
+//                 its container's background (the dialog's app-bg, or a
+//                 user container colour) as the margin does; grid, curves,
+//                 labels and readout unchanged. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  ucParametricEq.cs
@@ -78,6 +87,7 @@ mw0lge@grange-lane.co.uk
 //============================================================================================//
 
 #include "ParametricEqWidget.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "gui/StyleConstants.h"
 #include <QDataStream>
 #include <QSet>
@@ -997,7 +1007,9 @@ void ParametricEqWidget::paintEvent(QPaintEvent* /*event*/) {
     QRect client = rect();
     if (client.width() < 2 || client.height() < 2) return;
 
-    g.fillRect(client, m_editorPresentationEnabled ? QColor(Style::kAppBg) : QColor(25, 25, 25));   // BackColor (ucParametricEq.cs:443)
+    g.fillRect(client, m_editorPresentationEnabled
+                           ? WorkspacePreview::dataBackground(QColor(Style::kAppBg), "app-bg", this)
+                           : QColor(25, 25, 25));   // BackColor (ucParametricEq.cs:443)
 
     QRect plot = computePlotRect();
     if (plot.width() < 2 || plot.height() < 2) return;
@@ -1023,7 +1035,9 @@ void ParametricEqWidget::paintEvent(QPaintEvent* /*event*/) {
 
 // From Thetis ucParametricEq.cs:2061-2117 [v2.10.3.13].
 void ParametricEqWidget::drawGrid(QPainter& g, const QRect& plot) {
-    g.fillRect(plot, m_editorPresentationEnabled ? QColor(Style::kPanelBg) : QColor(18, 18, 18));
+    g.fillRect(plot, m_editorPresentationEnabled
+                         ? WorkspacePreview::dataBackground(QColor(Style::kPanelBg), "app-bg", this)
+                         : QColor(18, 18, 18));
 
     drawBarChart(g, plot);
 

@@ -1,3 +1,12 @@
+# NereusSDR vendored RADE V1/V2
+
+Current codec source: [freedv/rade_c](https://github.com/freedv/rade_c), pinned
+at `c8a3dc156045cae2cd251e1a4be0c304c9ddf2f9`. The V2 modes are an opt-in
+experiment; upstream identifies its waveform, weights and API as developing.
+The native adapter supports V2 speech and EOO only; V1 callsign EOO remains
+available in the V1 modes. See [PROVENANCE.md](PROVENANCE.md) for preserved
+notices and build patches. The original V1 vendor README is retained below.
+
 # C Port of RADE V1
 
 This repo contains a pure C implementaion of RADE V1, with all Python code and dependencies removed. It was derived from the [reference Python implementation](https://github.com/drowe67/radae) with the asistance of Claude Code. It has been reviewed, and carefully tested by the FreeDV team.  It passes the same [suite of automated tests](https://github.com/drowe67/radae/pull/66) as the Python version.

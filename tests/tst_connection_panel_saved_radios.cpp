@@ -141,6 +141,47 @@ private slots:
         QCOMPARE(list.first().autoConnect,          true);
     }
 
+    // The second firmware number is saved with the first, so a saved row
+    // reads the same after a restart as the row discovery filled in.
+    void firmwareBetaVersionRoundTrips() {
+        AppSettings settings = makeSettings();
+        settings.clearSavedRadios();
+        RadioInfo info = makeSaturnInfo();
+        info.boardType           = HPSDRHW::OrionMKII;
+        info.firmwareVersion     = 22;
+        info.firmwareBetaVersion = 14;
+        settings.saveRadio(info, true, false);
+
+        std::optional<SavedRadio> saved = settings.savedRadio(info.macAddress);
+        QVERIFY(saved.has_value());
+        QCOMPARE(saved->info.firmwareVersion,     22);
+        QCOMPARE(saved->info.firmwareBetaVersion, 14);
+        QCOMPARE(saved->info.firmwareText(),      QStringLiteral("22.14"));
+
+        // A later connect with a release that reports none replaces it.
+        info.firmwareBetaVersion = 0;
+        settings.saveRadio(info, true, false);
+        saved = settings.savedRadio(info.macAddress);
+        QVERIFY(saved.has_value());
+        QCOMPARE(saved->info.firmwareBetaVersion, 0);
+        QCOMPARE(saved->info.firmwareText(),      QStringLiteral("22"));
+    }
+
+    // A radio saved before the number was kept has no such key and reads
+    // as reporting none.
+    void savedRadioWithoutABetaVersionKeyReadsNone() {
+        AppSettings settings = makeSettings();
+        settings.clearSavedRadios();
+        const RadioInfo info = makeHl2Info();
+        settings.saveRadio(info, true, false);
+        settings.remove(QStringLiteral("radios/%1/firmwareBetaVersion").arg(info.macAddress));
+
+        const std::optional<SavedRadio> saved = settings.savedRadio(info.macAddress);
+        QVERIFY(saved.has_value());
+        QCOMPARE(saved->info.firmwareVersion,     72);
+        QCOMPARE(saved->info.firmwareBetaVersion, 0);
+    }
+
     // -------------------------------------------------------------------------
     // Phase 3Q Task 11 — design §7.4
     // Saved radios must survive the stale sweep even when their lastSeen

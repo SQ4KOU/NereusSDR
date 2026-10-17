@@ -192,8 +192,31 @@ enum class DSPMode : int {
     // codec; split from a single "RADE" value after bench testing
     // revealed the codec needs upper/lower variants like USB/LSB.
     RADE_U = 12,
-    RADE_L = 13
+    RADE_L = 13,
+    // Experimental RADE v2; append to preserve persisted/wire mode IDs.
+    RADE2_U = 14,
+    RADE2_L = 15
 };
+
+constexpr bool isRadeUpperDspMode(DSPMode mode)
+{
+    return mode == DSPMode::RADE_U || mode == DSPMode::RADE2_U;
+}
+
+constexpr bool isRadeLowerDspMode(DSPMode mode)
+{
+    return mode == DSPMode::RADE_L || mode == DSPMode::RADE2_L;
+}
+
+constexpr bool isRadeDspMode(DSPMode mode)
+{
+    return isRadeUpperDspMode(mode) || isRadeLowerDspMode(mode);
+}
+
+constexpr bool isRade2DspMode(DSPMode mode)
+{
+    return mode == DSPMode::RADE2_U || mode == DSPMode::RADE2_L;
+}
 
 // AGC operating mode. Values match WDSP wcpAGC enum.
 // From Thetis dsp.cs AGCMode

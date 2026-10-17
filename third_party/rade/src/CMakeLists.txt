@@ -24,7 +24,16 @@ set(RADE_DSP_SOURCES
 
 # RADE library (Python-free)
 add_library(rade SHARED
-    rade_api_nopy.c
+    rade_api.c
+    rade_enc_v2.c
+    rade_dec_v2.c
+    rade_sync.c
+    rade_enc_v2_data.c
+    rade_dec_v2_data.c
+    rade_sync_data.c
+    rade_v2_ofdm.c
+    rade_tx_v2.c
+    rade_rx_v2.c
     rade_enc.c
     rade_dec.c
     rade_enc_data.c
@@ -71,7 +80,22 @@ add_executable(rade_ber_test rade_ber_test.c)
 target_link_libraries(rade_ber_test rade m)
 
 # Callsign round-trip test: set callsign → EOO TX → OFDM demod → decode
-add_executable(rade_callsign_test rade_callsign_test.c)
-target_link_libraries(rade_callsign_test rade m)
+# NereusSDR vendored patch: rade_callsign_test is not built. It calls
+# rade_tx_set_eoo_callsign / rade_rx_get_eoo_callsign, which radae_nopy had
+# and rade_c c8a3dc1 does not, so it no longer compiles against rade_api.h.
+# The source file stays in place; rade_v1_text_test below is upstream's
+# current V1 text check.
+# add_executable(rade_callsign_test rade_callsign_test.c)
+# target_link_libraries(rade_callsign_test rade m)
+
+# Current upstream V1/V2 tools; keep the previous V1 tool names available.
+add_executable(rade_tx_wav rade_tx_wav.c)
+target_link_libraries(rade_tx_wav rade opus ${RADE_LIBM})
+add_executable(rade_rx_wav rade_rx_wav.c)
+target_link_libraries(rade_rx_wav rade opus ${RADE_LIBM})
+add_executable(rade_v2_text_test rade_v2_text_test.c)
+target_link_libraries(rade_v2_text_test rade opus ${RADE_LIBM})
+add_executable(rade_v1_text_test rade_v1_text_test.c)
+target_link_libraries(rade_v1_text_test rade ${RADE_LIBM})
 
 endif(NOT WIN32)

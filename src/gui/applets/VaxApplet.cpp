@@ -756,7 +756,7 @@ QString VaxApplet::deviceLabelFor(int channel) const
     // audio/Vax<ch>/DeviceName to a real device picker. Until then,
     // display whatever's persisted (typically blank on fresh installs).
     const QString name = AppSettings::instance()
-        .value(QStringLiteral("audio/Vax%1/DeviceName").arg(channel))
+        .value(kDeviceKey(channel))
         .toString();
     if (name.isEmpty()) {
         return QStringLiteral("(no device)");

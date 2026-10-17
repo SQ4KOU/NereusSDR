@@ -1,6 +1,7 @@
 // NereusSDR for iOS: the waterfall's painted lines, newest first, each coloured against its own levels
 // SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-NereusSDR-AppStore-permission
 
+import Foundation
 import NereusMedia
 
 /// The waterfall's history (R-IOS-11): one line for each frame the Core
@@ -34,6 +35,34 @@ public struct WaterfallHistory: Equatable, Sendable {
         /// under 125, the high level falls 0.3 dB for each step of Color
         /// Gain, and the high level stays at least 1 dB over the low one.
         public func adjusted(by adjustment: Adjustment) -> Levels {
+            if let mode = adjustment.mode {
+                let black = min(max(adjustment.blackLevel, ClarityLevels.kBlackLevelMin), ClarityLevels.kBlackLevelMax)
+                let gain = min(max(adjustment.colorGain, ClarityLevels.kColorGainMin), ClarityLevels.kColorGainMax)
+                let low: Float
+                var high: Float
+                if mode == .clarity {
+                    // Seeded NSDX levels are not a measured Clarity floor.
+                    // Until a finite full-source floor arrives, retain the pair.
+                    guard let floor = adjustment.clarityFloorDbm, floor.isFinite else {
+                        return Levels(lowDbm: lowDbm, highDbm: max(highDbm, lowDbm + Adjustment.effectiveGapDb))
+                    }
+                    low = ClarityLevels.blackPointDbm(floor, black)
+                    high = low + ClarityLevels.colorSpanDb(gain)
+                } else {
+                    // Approved levels() display arithmetic, shared with
+                    // SpectrumWidget.cpp:9402-9424; not legacy conversion math.
+                    low = lowDbm + Float(black - ClarityLevels.kBlackLevelDefault) * ClarityLevels.kBlackLevelDbPerStep
+                    high = highDbm
+                    if mode == .agc || mode == .noiseFloorAgc {
+                        high = max(adjustment.storedHighDbm ?? highDbm,
+                                   floorf(low + 0.5) + Adjustment.effectiveGapDb)
+                    }
+                    high -= Float(gain - ClarityLevels.kColorGainDefault) * Adjustment.highTrimDbPerStep
+                }
+                return Levels(lowDbm: low, highDbm: max(high, low + Adjustment.effectiveGapDb))
+            }
+            // Unversioned explicit Adjustment callers retain legacy arithmetic;
+            // current typed settings always carry their chosen mode above.
             let black = Float(min(max(adjustment.blackLevel, 0), Adjustment.blackLevelTop))
             let gain = Float(min(max(adjustment.colorGain, 0), Adjustment.colorGainTop))
             let low = lowDbm + (Float(Adjustment.blackLevelTop) - black) * 0.4
@@ -50,10 +79,26 @@ public struct WaterfallHistory: Equatable, Sendable {
         public var colorGain: Int
         public var blackLevel: Int
 
-        public init(colorGain: Int, blackLevel: Int) {
+        /// Current local mode, nil only for an explicit legacy adjustment.
+        public var mode: BandDisplaySettings.WaterfallLevelMode?
+        public var storedHighDbm: Float?
+        /// Runtime-only measured full-source floor, never persistent settings.
+        public var clarityFloorDbm: Float?
+
+        public init(colorGain: Int, blackLevel: Int,
+                    mode: BandDisplaySettings.WaterfallLevelMode? = nil,
+                    storedHighDbm: Float? = nil, clarityFloorDbm: Float? = nil) {
             self.colorGain = colorGain
             self.blackLevel = blackLevel
+            self.mode = mode
+            self.storedHighDbm = storedHighDbm
+            self.clarityFloorDbm = clarityFloorDbm
         }
+
+        // From accepted display-pill-live.html levels(), as implemented in
+        // SpectrumWidget.cpp:9402-9424. RX effective-only; stored High stays.
+        static let effectiveGapDb: Float = 5
+        static let highTrimDbPerStep: Float = 0.3
 
         static let colorGainTop = 100
         static let blackLevelTop = 125

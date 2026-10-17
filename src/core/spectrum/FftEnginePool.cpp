@@ -35,10 +35,20 @@
 // Modification history (NereusSDR):
 // 2026-09-27: Use the approved shared decimation bounds.
 // J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
+// 2026-10-10: Each spectrum thread registers with nereusd's thread
+// placement, which lets it use the fast cores. J.J. Boyd (KG4VCF),
+// AI-assisted implementation via Anthropic Claude Code.
+// 2026-10-10: One setter per FFT setting and resetInputHistoryAll
+// (R-DSP-30, R-DSP-33). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+// Claude Code.
+// 2026-10-11: Follow-up wave F6: each purge has a generation, which the
+// frames computed after it carry. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 
 #include "core/ControlRanges.h"
 #include "core/spectrum/FftEnginePool.h"
 
+#include "core/LogCategories.h"
 #include "core/audio/RealtimeAudioPriority.h"
 #include "core/platform/ThreadPlacement.h"
 
@@ -46,6 +56,8 @@
 #include <QtGlobal>
 
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <utility>
 
 namespace NereusSDR {
@@ -53,6 +65,7 @@ namespace NereusSDR {
 FftEnginePool::FftEnginePool(QObject* parent, bool forwardFrameReady)
     : QObject(parent)
     , m_forwardFrameReady(forwardFrameReady)
+    , m_elevation(std::make_shared<ElevationState>())
 {
 }
 
@@ -128,6 +141,130 @@ void FftEnginePool::setDecimation(int factor)
     }
 }
 
+void FftEnginePool::setFftSizeBaseline(int size)
+{
+    // The sizes FFTEngine::setFftSizeBaseline takes.
+    if (size < ControlRanges::kDisplayFftPlanMinSize || size > FFTEngine::maximumFftSize()
+        || (size & (size - 1)) != 0) {
+        qCWarning(lcSpectrum) << "FftEnginePool: FFT size baseline" << size
+                              << "is not a power of two in"
+                              << ControlRanges::kDisplayFftPlanMinSize << "to"
+                              << FFTEngine::maximumFftSize() << "; ignored";
+        return;
+    }
+    m_config.fftSize = size;
+    for (FFTEngine* engine : std::as_const(m_engines)) {
+        if (engine) {
+            engine->setFftSizeBaseline(size);
+        }
+    }
+}
+
+void FftEnginePool::setSizing(ControlRanges::DisplayFftSizingMode mode, int baseline,
+                              double hzPerBinTarget)
+{
+    // The sizes FFTEngine::setFftSizeBaseline takes.
+    if (baseline < ControlRanges::kDisplayFftPlanMinSize
+        || baseline > FFTEngine::maximumFftSize() || (baseline & (baseline - 1)) != 0) {
+        qCWarning(lcSpectrum) << "FftEnginePool: FFT sizing baseline" << baseline
+                              << "is not a power of two in"
+                              << ControlRanges::kDisplayFftPlanMinSize << "to"
+                              << FFTEngine::maximumFftSize() << "; ignored";
+        return;
+    }
+    // !(hz > 0) is also true for NaN.
+    if (mode != ControlRanges::DisplayFftSizingMode::HzPerBin || !(hzPerBinTarget > 0.0)
+        || !std::isfinite(hzPerBinTarget)) {
+        hzPerBinTarget = 0.0;
+    }
+    const bool modeChanged = m_config.sizingMode != mode;
+    m_config.sizingMode = mode;
+    m_config.fftSize = baseline;
+    m_config.hzPerBinTarget = hzPerBinTarget;
+    for (FFTEngine* engine : std::as_const(m_engines)) {
+        if (!engine) {
+            continue;
+        }
+        const bool baselineStays = engine->fftSizeBaseline() == baseline;
+        // Says fftSizeBaselineChanged itself when the baseline moves.
+        engine->setFftSizeBaseline(baseline);
+        engine->setHzPerBinTarget(hzPerBinTarget);
+        if (modeChanged && baselineStays) {
+            engine->announceFftSizingChanged();
+        }
+    }
+}
+
+void FftEnginePool::setWindowType(int windowType)
+{
+    if (windowType < 0 || windowType >= static_cast<int>(WindowFunction::Count)) {
+        qCWarning(lcSpectrum) << "FftEnginePool: FFT window" << windowType
+                              << "is not a window; ignored";
+        return;
+    }
+    m_config.windowType = windowType;
+    for (FFTEngine* engine : std::as_const(m_engines)) {
+        if (engine) {
+            engine->setWindowFunction(static_cast<WindowFunction>(windowType));
+        }
+    }
+}
+
+void FftEnginePool::setHzPerBinTarget(double hz)
+{
+    // !(hz > 0) is also true for NaN.
+    if (!(hz > 0.0) || !std::isfinite(hz)) { hz = 0.0; }
+    m_config.hzPerBinTarget = hz;
+    for (FFTEngine* engine : std::as_const(m_engines)) {
+        if (engine) {
+            engine->setHzPerBinTarget(hz);
+        }
+    }
+}
+
+void FftEnginePool::setOutputFps(int fps)
+{
+    // FFTEngine::setOutputFps's own clamp, so config() reads what runs.
+    fps = qBound(1, fps, 60);
+    m_config.fps = fps;
+    for (FFTEngine* engine : std::as_const(m_engines)) {
+        if (engine) {
+            engine->setOutputFps(fps);
+        }
+    }
+}
+
+void FftEnginePool::setThreadPriority(QThread::Priority priority)
+{
+    // R-R3-41: nereusd's placement owns these threads' priority there.
+    if (ThreadPlacement::managesThreadPriority()) { return; }
+    // Held across the calls below so a worker thread that is just starting
+    // either elevated itself already or will see the choice and not try.
+    const std::lock_guard<std::mutex> lock(m_elevation->mutex);
+    m_elevation->priorityChosen = true;
+    m_threadPriority = priority;
+    for (QThread* thread : std::as_const(m_threadsByBucket)) {
+        if (thread && thread->isRunning()) {
+            thread->setPriority(priority);
+        }
+    }
+}
+
+void FftEnginePool::resetInputHistoryAll()
+{
+    // The engine takes the new generation in the same queued call that
+    // drops its input, on its own thread, so the stamp on a frame says
+    // which side of the purge its samples are from.
+    const quint64 generation = ++m_inputGeneration;
+    for (FFTEngine* engine : std::as_const(m_engines)) {
+        if (engine) {
+            QMetaObject::invokeMethod(engine, [engine, generation]() {
+                engine->purgeInputForGeneration(generation);
+            }, Qt::QueuedConnection);
+        }
+    }
+}
+
 FFTEngine* FftEnginePool::engineForStream(int streamIndex)
 {
     if (streamIndex < 0) { return nullptr; }
@@ -162,6 +299,8 @@ FFTEngine* FftEnginePool::createEngine(const FftSourceKey& key,
     if (m_decimation) {
         engine->setDecimation(*m_decimation);
     }
+    // An engine made after a purge holds nothing from before it.
+    engine->setInputGeneration(m_inputGeneration);
 
     const int threadCount = qMax(1, m_config.threadCount);
     const int bucket = key.streamIndex % threadCount;
@@ -191,14 +330,38 @@ FFTEngine* FftEnginePool::createEngine(const FftSourceKey& key,
         // afterwards, same as the pre-extraction code's single
         // connection using stream 0's engine as context for the whole
         // (then-implicitly-one) shared thread.
-        connect(thread, &QThread::started, engine, []() {
-            // R-R3-41: nereusd's placement keeps spectrum work on the
-            // housekeeping cores and skips the nice call there.
-            if (!ThreadPlacement::managesThreadPriority()) {
+        // nereusd runs several pools (one per spectrum source), each with
+        // a bucket 0, so placement tells their threads apart by a number
+        // of its own, taken once per thread.
+        static std::atomic<int> nextPlacementId{0};
+        const int placementId = nextPlacementId.fetch_add(1, std::memory_order_relaxed);
+        // A priority setThreadPriority() chose replaces that elevation,
+        // also when it is chosen between start() and this lambda: the two
+        // take turns under m_elevation's mutex, because macOS refuses the
+        // elevation on a thread whose priority was set first.
+        connect(thread, &QThread::started, engine, [placementId, elevation = m_elevation]() {
+            // R-R3-41: nereusd's placement owns this thread's cores and
+            // skips the nice call there. 2026-10-10: where slower cores
+            // run everything else it may use every fast core, at normal
+            // priority, and is never held to one (ThreadPlacement.h).
+            if (ThreadPlacement::managesThreadPriority()) {
+                ThreadPlacement::instance().registerCurrentThread(
+                    ThreadRole::SpectrumThread, placementId);
+                return;
+            }
+            const std::lock_guard<std::mutex> lock(elevation->mutex);
+            if (!elevation->priorityChosen) {
                 elevateLatencyCriticalThreadPriority();
             }
         });
-        thread->start();
+        // finished() is emitted on the thread itself, so a direct
+        // connection forgets it before its ID can be reused.
+        connect(thread, &QThread::finished, thread, []() {
+            if (ThreadPlacement::managesThreadPriority()) {
+                ThreadPlacement::instance().deregisterCurrentThread();
+            }
+        }, Qt::DirectConnection);
+        thread->start(m_threadPriority.value_or(QThread::InheritPriority));
     }
 
     if (m_forwardFrameReady) {

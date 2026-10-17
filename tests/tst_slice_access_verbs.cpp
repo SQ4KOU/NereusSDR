@@ -57,6 +57,10 @@
 //               and its own close releasing it to a listener (ruling Q6)
 //               are back in their own tests. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-12: new theEntryNamesTheHolderOfTheSlicesReceiver and
+//               theEntryFollowsTheReceiverWhenItsHoldersSliceCloses: the
+//               entry's receiverHolderDeviceId. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -2332,6 +2336,95 @@ private slots:
                                      levelArgs(seenBy(appA, 0), 0.3, false))));
         QCOMPARE(access->listenLevel(a.key.fingerprint(), 0).level, 0.3);
         QCOMPARE(slice->afGain(), 60);
+    }
+
+    // ── The receiver's holder ───────────────────────────────────────────
+
+    // Ruling 6.3: a receiver's C-Tune setting is its holder's (the device
+    // whose slice claimed the receiver, or has been on it longest). Each
+    // slice's entry names the holder of the receiver the slice is on, so a
+    // window knows whose the setting is before it asks for it.
+    void theEntryNamesTheHolderOfTheSlicesReceiver()
+    {
+        Core core;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        SliceOwnership* const ownership = core.model->sliceOwnership();
+        ownership->setOwner(0, SliceOwnership::stationDevice());
+        core.pair(b);
+        // sliceAccess 3: the Core's own slice may be taken.
+        LoopbackTransport* appB = core.signIn(
+            b, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 3}});
+        QVERIFY(admitted(appB));
+        const QList<int> own = ownership->ownedBy(b.key.fingerprint());
+        QCOMPARE(own.size(), 1);
+        const int mine = own.first();
+        const auto holderOf = [appB](int sliceId) {
+            return accessOf(appB, sliceId, "receiverHolderDeviceId").toString(
+                QStringLiteral("not sent"));
+        };
+        const auto streamOf = [&core](int sliceId) {
+            return core.model->sliceById(sliceId)->streamIndex();
+        };
+        const QString station = QStringLiteral("station");
+
+        // B's slice shares the receiver the Core's slice claimed.
+        core.model->sliceById(mine)->setFrequency(7150000.0);
+        QCOMPARE(streamOf(mine), streamOf(0));
+        QTRY_COMPARE(holderOf(mine), station);
+        QCOMPARE(holderOf(0), station);
+
+        // The Core's slice goes to another receiver: the one it left is B's
+        // (ruling 6.2), and the one it claimed is the Core's.
+        core.model->sliceById(0)->setFrequency(14074000.0);
+        QVERIFY(streamOf(0) >= 0);
+        QVERIFY(streamOf(0) != streamOf(mine));
+        QTRY_COMPARE(holderOf(mine), b.id());
+        QCOMPARE(holderOf(0), station);
+
+        // Control of a slice alone on its receiver takes the receiver with
+        // it (the Core's slice, taken by B).
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refArgs(seenBy(appB, 0)))));
+        const QJsonObject take =
+            core.invoke(appB, "slice.takeControl", revisionArgs(seenBy(appB, 0)));
+        QVERIFY2(accepted(take), qPrintable(reasonOf(take)));
+        QTRY_COMPARE(holderOf(0), b.id());
+        QCOMPARE(ownership->anchorOf(streamOf(0)), b.key.fingerprint());
+        QCOMPARE(holderOf(mine), b.id());
+    }
+
+    // The holder's slice closes: the receiver passes to the device whose
+    // slice has been on it longest (ruling 6.2), and that slice's entry
+    // says so.
+    void theEntryFollowsTheReceiverWhenItsHoldersSliceCloses()
+    {
+        Core core;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        SliceOwnership* const ownership = core.model->sliceOwnership();
+        ownership->setOwner(0, SliceOwnership::stationDevice());
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(
+            b, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 3}});
+        QVERIFY(admitted(appB));
+        const QList<int> own = ownership->ownedBy(b.key.fingerprint());
+        QCOMPARE(own.size(), 1);
+        const int mine = own.first();
+        const auto holderOf = [appB](int sliceId) {
+            return accessOf(appB, sliceId, "receiverHolderDeviceId").toString(
+                QStringLiteral("not sent"));
+        };
+        QCOMPARE(core.model->sliceById(mine)->streamIndex(),
+                 core.model->sliceById(0)->streamIndex());
+        QTRY_COMPARE(holderOf(mine), QStringLiteral("station"));
+
+        core.model->removeSlice(0);
+        QVERIFY(core.model->sliceById(0) == nullptr);
+        QTRY_COMPARE(holderOf(mine), b.id());
+        QCOMPARE(ownership->anchorOf(core.model->sliceById(mine)->streamIndex()),
+                 b.key.fingerprint());
     }
 };
 

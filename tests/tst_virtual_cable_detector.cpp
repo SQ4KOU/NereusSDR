@@ -4,6 +4,7 @@
 // helpers used by the MainWindow first-run hook (Sub-Phase 11 Task 11b).
 // NereusSDR-original; no Thetis/AetherSDR port.
 #include <QtTest/QtTest>
+#include "core/audio/IAudioDeviceCatalog.h"
 #include "core/audio/VirtualCableDetector.h"
 
 using namespace NereusSDR;
@@ -17,6 +18,45 @@ DetectedCable makeCable(VirtualCableProduct p, const QString& name)
 {
     return DetectedCable{p, name, true, 0};
 }
+
+AudioDeviceInfo makeDevice(AudioBackendId backend, AudioDeviceDirection dir,
+                           const QString& id, const QString& name,
+                           AudioDeviceState state = AudioDeviceState::Present)
+{
+    AudioDeviceInfo d;
+    d.backend = backend;
+    d.direction = dir;
+    d.id = id;
+    d.name = name;
+    d.state = state;
+    d.channelCount = 2;
+    return d;
+}
+
+// A catalogue with fixed lists, for cableSourceDevices().
+class FixedCatalogue : public IAudioDeviceCatalog {
+public:
+    QList<AudioBackendId> order;
+    QList<AudioBackendId> running;
+    QList<AudioDeviceInfo> all;
+    QList<AudioBackendId> backends() const override { return order; }
+    bool backendRunning(AudioBackendId id) const override { return running.contains(id); }
+    QList<AudioDeviceInfo> devices(AudioBackendId id, AudioDeviceDirection dir) const override
+    {
+        QList<AudioDeviceInfo> out;
+        for (const AudioDeviceInfo& d : all) {
+            if (d.backend == id && d.direction == dir) {
+                out.push_back(d);
+            }
+        }
+        return out;
+    }
+    std::optional<AudioDeviceInfo> defaultDevice(AudioBackendId, AudioDeviceDirection) const override
+    {
+        return std::nullopt;
+    }
+    void rescanOlderDrivers() override {}
+};
 
 } // namespace
 
@@ -32,9 +72,45 @@ private slots:
         QVERIFY(VirtualCableDetector::matchProduct("CABLE-A Input") == VirtualCableProduct::VbCableA);
         QVERIFY(VirtualCableDetector::matchProduct("CABLE-B Input") == VirtualCableProduct::VbCableB);
     }
+    void detectsOtherVbCableVariants()
+    {
+        QCOMPARE(VirtualCableDetector::matchProduct("CABLE-C Input"), VirtualCableProduct::VbCableC);
+        QCOMPARE(VirtualCableDetector::matchProduct("CABLE-D Input"), VirtualCableProduct::VbCableD);
+        QCOMPARE(VirtualCableDetector::matchProduct("Hi-Fi Cable Input"), VirtualCableProduct::VbHiFiCable);
+        QCOMPARE(VirtualCableDetector::matchProduct("HiFi Cable Output"), VirtualCableProduct::VbHiFiCable);
+    }
     void detectsVac() {
         QVERIFY(VirtualCableDetector::matchProduct("Line 1 (Virtual Audio Cable)")
                 == VirtualCableProduct::MuzychenkoVac);
+    }
+    void genericLineIsNotVac_data()
+    {
+        QTest::addColumn<QString>("name");
+        QTest::newRow("bare-line-1") << QStringLiteral("Line 1");
+        QTest::newRow("bare-line-2") << QStringLiteral("Line 2");
+        QTest::newRow("hardware-stereo-pair") << QStringLiteral("Line 1/2 (USB Audio CODEC)");
+        QTest::newRow("hardware-numbered-input") << QStringLiteral("Line 2 (USB Audio CODEC)");
+        QTest::newRow("hardware-case-insensitive") << QStringLiteral("line 12 (High Definition Audio Device)");
+    }
+    void genericLineIsNotVac()
+    {
+        QFETCH(QString, name);
+        QCOMPARE(VirtualCableDetector::matchProduct(name), VirtualCableProduct::None);
+    }
+    void vacProductNames_data()
+    {
+        QTest::addColumn<QString>("name");
+        QTest::newRow("line-1") << QStringLiteral("Line 1 (Virtual Audio Cable)");
+        QTest::newRow("line-12") << QStringLiteral("Line 12 (Virtual Audio Cable)");
+        QTest::newRow("line-case-insensitive") << QStringLiteral("line 2 (virtual audio cable)");
+        QTest::newRow("microphone-source") << QStringLiteral("Mic 1 (Virtual Audio Cable)");
+        QTest::newRow("digital-source") << QStringLiteral("S/PDIF 1 (Virtual Audio Cable)");
+        QTest::newRow("product-name") << QStringLiteral("Virtual Audio Cable");
+    }
+    void vacProductNames()
+    {
+        QFETCH(QString, name);
+        QCOMPARE(VirtualCableDetector::matchProduct(name), VirtualCableProduct::MuzychenkoVac);
     }
     void detectsVoicemeeter() {
         QVERIFY(VirtualCableDetector::matchProduct("VoiceMeeter Input (VB-Audio VoiceMeeter VAIO)")
@@ -195,6 +271,180 @@ private slots:
         QCOMPARE(fresh.size(), 1);
         QCOMPARE(fresh[0].deviceName, QStringLiteral("CABLE-C Input"));
     }
+    // ── newCablesSince(): like with like (R-AUD-03) ───────────────────
+    // An older build saved the fingerprint from the PortAudio scan, with
+    // no source key; on Windows MME cut the name to 31 characters. The
+    // first catalogue launch flags nothing and the next compares like
+    // with like.
+    void upgradeFromPortAudioNamesFlagsNothing() {
+        QVector<DetectedCable> old;
+        old.push_back(makeCable(VirtualCableProduct::VbCableA,
+                                QStringLiteral("CABLE-A Input (VB-Audio Virtual")));
+        const QString oldCsv = VirtualCableDetector::fingerprintCsv(old);
+
+        QVector<DetectedCable> now;
+        now.push_back(makeCable(VirtualCableProduct::VbCableA,
+                                QStringLiteral("CABLE-A Input (VB-Audio Virtual Cable)")));
+        const QString catalogue = VirtualCableDetector::fingerprintSource(true);
+        QCOMPARE(catalogue, QStringLiteral("Catalogue"));
+        QCOMPARE(VirtualCableDetector::fingerprintSource(false), QStringLiteral("PortAudio"));
+        // The names differ, so a plain diff would call the cable new.
+        QCOMPARE(VirtualCableDetector::diffNewCables(now, oldCsv).size(), 1);
+        QVERIFY(VirtualCableDetector::newCablesSince(now, oldCsv, QString(), catalogue).isEmpty());
+
+        // The launch after: a cable added since is new, the known one not.
+        QVector<DetectedCable> later = now;
+        later.push_back(makeCable(VirtualCableProduct::VbCableB,
+                                  QStringLiteral("CABLE-B Input (VB-Audio Virtual Cable)")));
+        const auto fresh = VirtualCableDetector::newCablesSince(
+            later, VirtualCableDetector::fingerprintCsv(now), catalogue, catalogue);
+        QCOMPARE(fresh.size(), 1);
+        QCOMPARE(fresh[0].deviceName, QStringLiteral("CABLE-B Input (VB-Audio Virtual Cable)"));
+    }
+    void portAudioScanAgainstOldFingerprintStillDiffs() {
+        QVector<DetectedCable> old;
+        old.push_back(makeCable(VirtualCableProduct::VbCableA, QStringLiteral("CABLE-A Input")));
+        QVector<DetectedCable> now = old;
+        now.push_back(makeCable(VirtualCableProduct::VbCableB, QStringLiteral("CABLE-B Input")));
+        const QString portAudio = VirtualCableDetector::fingerprintSource(false);
+        const QString oldCsv = VirtualCableDetector::fingerprintCsv(old);
+        QCOMPARE(VirtualCableDetector::newCablesSince(now, oldCsv, QString(), portAudio).size(), 1);
+        QCOMPARE(VirtualCableDetector::newCablesSince(now, oldCsv, portAudio, portAudio).size(), 1);
+        // A catalogue fingerprint read by a launch without one: nothing.
+        QVERIFY(VirtualCableDetector::newCablesSince(
+                    now, oldCsv, VirtualCableDetector::fingerprintSource(true), portAudio)
+                    .isEmpty());
+    }
+
+    // ── detect(): the catalogue's devices (R-AUD-03) ──────────────────
+    void detectKeepsMatchesWithIdAndBackend() {
+        const QList<AudioDeviceInfo> devices{
+            makeDevice(AudioBackendId::Wasapi, AudioDeviceDirection::Output,
+                       QStringLiteral("{w-out-a}"), QStringLiteral("CABLE-A Input (VB-Audio Cable A)")),
+            makeDevice(AudioBackendId::Wasapi, AudioDeviceDirection::Output,
+                       QStringLiteral("{w-spk}"), QStringLiteral("Speakers (Realtek(R) Audio)")),
+            makeDevice(AudioBackendId::Wasapi, AudioDeviceDirection::Input,
+                       QStringLiteral("{w-in-a}"), QStringLiteral("CABLE-A Output (VB-Audio Cable A)")),
+        };
+        const QList<DetectedCable> found = VirtualCableDetector::detect(devices);
+        QCOMPARE(found.size(), 2);
+        QCOMPARE(found[0].product, VirtualCableProduct::VbCableA);
+        QCOMPARE(found[0].deviceName, QStringLiteral("CABLE-A Input (VB-Audio Cable A)"));
+        QCOMPARE(found[0].isInput, false);
+        QCOMPARE(found[0].deviceId, QStringLiteral("{w-out-a}"));
+        QCOMPARE(found[0].backend, AudioBackendId::Wasapi);
+        QCOMPARE(found[1].isInput, true);
+        QCOMPARE(found[1].deviceId, QStringLiteral("{w-in-a}"));
+    }
+    void detectOfNothingIsEmpty() {
+        QVERIFY(VirtualCableDetector::detect(QList<AudioDeviceInfo>{}).isEmpty());
+        QVERIFY(VirtualCableDetector::detect(QList<AudioDeviceInfo>{
+            makeDevice(AudioBackendId::CoreAudio, AudioDeviceDirection::Output,
+                       QStringLiteral("BuiltIn"), QStringLiteral("MacBook Pro Speakers"))}).isEmpty());
+    }
+    void scanStillDefaultsTheNewFields() {
+        const DetectedCable c{VirtualCableProduct::VbCable, QStringLiteral("CABLE Input"), false, 0};
+        QVERIFY(c.deviceId.isEmpty());
+        QVERIFY(c.hostApi.isEmpty());
+        QCOMPARE(c.backend, AudioBackendId::PortAudio);
+    }
+    void detectKeepsTheOlderDriversHostApi() {
+        AudioDeviceInfo mme = makeDevice(AudioBackendId::PortAudio, AudioDeviceDirection::Output,
+                                         QStringLiteral("pa:MME:CABLE Input"),
+                                         QStringLiteral("CABLE Input (VB-Audio Virtual C"));
+        mme.hostApi = QStringLiteral("MME");
+        const QList<DetectedCable> found = VirtualCableDetector::detect(QList<AudioDeviceInfo>{mme});
+        QCOMPARE(found.size(), 1);
+        QCOMPARE(found[0].hostApi, QStringLiteral("MME"));
+        QCOMPARE(VirtualCableDetector::engineFor(found[0]), AudioEngineKind::PortAudio);
+    }
+    void engineForEachBackend() {
+        DetectedCable c{VirtualCableProduct::VbCable, QStringLiteral("CABLE Input"), false, 0};
+        c.backend = AudioBackendId::Wasapi;
+        QCOMPARE(VirtualCableDetector::engineFor(c), AudioEngineKind::WindowsShared);
+        c.backend = AudioBackendId::CoreAudio;
+        QCOMPARE(VirtualCableDetector::engineFor(c), AudioEngineKind::CoreAudio);
+        c.backend = AudioBackendId::PipeWire;
+        QCOMPARE(VirtualCableDetector::engineFor(c), AudioEngineKind::PipeWire);
+        c.backend = AudioBackendId::PulseAudio;
+        QCOMPARE(VirtualCableDetector::engineFor(c), AudioEngineKind::PulseAudio);
+        c.backend = AudioBackendId::AlsaDirect;
+        QCOMPARE(VirtualCableDetector::engineFor(c), AudioEngineKind::AlsaDirect);
+    }
+    void cableSourcesPreferNativeAndSkipAsioAndGone() {
+        FixedCatalogue cat;
+        cat.order = {AudioBackendId::Wasapi, AudioBackendId::Asio, AudioBackendId::PortAudio};
+        cat.running = {AudioBackendId::Wasapi, AudioBackendId::Asio, AudioBackendId::PortAudio};
+        cat.all = {
+            makeDevice(AudioBackendId::PortAudio, AudioDeviceDirection::Output,
+                       QStringLiteral("pa:3"), QStringLiteral("CABLE Input (VB-Audio Virtual Cable)")),
+            makeDevice(AudioBackendId::Wasapi, AudioDeviceDirection::Output,
+                       QStringLiteral("{w-cable}"), QStringLiteral("CABLE Input (VB-Audio Virtual Cable)")),
+            makeDevice(AudioBackendId::Asio, AudioDeviceDirection::Output,
+                       QStringLiteral("VoiceMeeter Virtual ASIO"), QStringLiteral("VoiceMeeter Virtual ASIO")),
+            makeDevice(AudioBackendId::Wasapi, AudioDeviceDirection::Output,
+                       QStringLiteral("{w-gone}"), QStringLiteral("CABLE-B Input (VB-Audio Cable B)"),
+                       AudioDeviceState::NotConnected),
+            makeDevice(AudioBackendId::PortAudio, AudioDeviceDirection::Output,
+                       QStringLiteral("pa:7"), QStringLiteral("Line 1 (Virtual Audio Cable)")),
+        };
+        const QList<DetectedCable> found = VirtualCableDetector::detect(cat);
+        QCOMPARE(found.size(), 2);
+        QCOMPARE(found[0].deviceId, QStringLiteral("{w-cable}"));
+        QCOMPARE(found[0].backend, AudioBackendId::Wasapi);
+        QCOMPARE(found[1].deviceId, QStringLiteral("pa:7"));
+        QCOMPARE(found[1].backend, AudioBackendId::PortAudio);
+    }
+    void cableSourcesSkipStoppedBackends() {
+        FixedCatalogue cat;
+        cat.order = {AudioBackendId::Wasapi, AudioBackendId::PortAudio};
+        cat.running = {AudioBackendId::PortAudio};
+        cat.all = {
+            makeDevice(AudioBackendId::Wasapi, AudioDeviceDirection::Output,
+                       QStringLiteral("{w-cable}"), QStringLiteral("CABLE Input (VB-Audio Virtual Cable)")),
+            makeDevice(AudioBackendId::PortAudio, AudioDeviceDirection::Output,
+                       QStringLiteral("pa:3"), QStringLiteral("CABLE Input (VB-Audio Virtual Cable)")),
+        };
+        const QList<DetectedCable> found = VirtualCableDetector::detect(cat);
+        QCOMPARE(found.size(), 1);
+        QCOMPARE(found[0].backend, AudioBackendId::PortAudio);
+    }
+    void catalogueRejectsPhysicalLinesAndKeepsKnownCables()
+    {
+        FixedCatalogue cat;
+        cat.order = {AudioBackendId::Wasapi, AudioBackendId::PortAudio};
+        cat.running = cat.order;
+        AudioDeviceInfo vac = makeDevice(AudioBackendId::PortAudio, AudioDeviceDirection::Output,
+                                         QStringLiteral("pa:vac"), QStringLiteral("Line 2 (Virtual Audio Cable)"));
+        vac.hostApi = QStringLiteral("MME");
+        cat.all = {
+            makeDevice(AudioBackendId::Wasapi, AudioDeviceDirection::Output,
+                       QStringLiteral("physical-out"), QStringLiteral("Line 1/2 (USB Audio CODEC)")),
+            makeDevice(AudioBackendId::Wasapi, AudioDeviceDirection::Input,
+                       QStringLiteral("physical-in"), QStringLiteral("Line 2 (USB Audio CODEC)")),
+            makeDevice(AudioBackendId::Wasapi, AudioDeviceDirection::Input,
+                       QStringLiteral("vb-in"), QStringLiteral("CABLE Output (VB-Audio Virtual Cable)")),
+            makeDevice(AudioBackendId::Wasapi, AudioDeviceDirection::Input,
+                       QStringLiteral("nereus-in"), QStringLiteral("NereusSDR VAX 1")),
+            vac,
+        };
+        const QList<DetectedCable> found = VirtualCableDetector::detect(cat);
+        QCOMPARE(found.size(), 3);
+        QCOMPARE(found[0].product, VirtualCableProduct::VbCable);
+        QCOMPARE(found[0].deviceId, QStringLiteral("vb-in"));
+        QCOMPARE(found[0].backend, AudioBackendId::Wasapi);
+        QVERIFY(found[0].isInput);
+        QCOMPARE(found[1].product, VirtualCableProduct::NereusSdrVax);
+        QCOMPARE(found[1].deviceId, QStringLiteral("nereus-in"));
+        QCOMPARE(found[2].product, VirtualCableProduct::MuzychenkoVac);
+        QCOMPARE(found[2].deviceId, QStringLiteral("pa:vac"));
+        QCOMPARE(found[2].backend, AudioBackendId::PortAudio);
+        QCOMPARE(found[2].hostApi, QStringLiteral("MME"));
+        QVERIFY(!found[2].isInput);
+        const QVector<DetectedCable> bindable = VirtualCableDetector::bindableEnds(found);
+        QCOMPARE(bindable.size(), 1);
+        QCOMPARE(bindable[0].deviceId, QStringLiteral("pa:vac"));
+    }
     void diffIgnoresRemovedCables() {
         QVector<DetectedCable> prev;
         prev.push_back(makeCable(VirtualCableProduct::VbCableA, "CABLE-A Input"));
@@ -207,6 +457,39 @@ private slots:
 
         const auto fresh = VirtualCableDetector::diffNewCables(current, prevCsv);
         QVERIFY(fresh.isEmpty());
+    }
+
+    // ── bindableEnds(): what a "new cables" notice has to offer ────────
+    // R-AUD-03: a VAX slot is bound to the playback end of a third-party
+    // cable, and to nothing else.
+    void bindableEndsKeepsThirdPartyPlaybackEnds() {
+        QVector<DetectedCable> all;
+        all.push_back(DetectedCable{VirtualCableProduct::VbCableA, "CABLE-A Input", false, 1});
+        all.push_back(DetectedCable{VirtualCableProduct::VbCableA, "CABLE-A Output", true, 1});
+        all.push_back(DetectedCable{VirtualCableProduct::NereusSdrVax, "NereusSDR VAX 1", false, 1});
+        all.push_back(DetectedCable{VirtualCableProduct::Voicemeeter, "VoiceMeeter Input", false, 0});
+
+        const auto ends = VirtualCableDetector::bindableEnds(all);
+        QCOMPARE(ends.size(), 2);
+        QCOMPARE(ends[0].deviceName, QStringLiteral("CABLE-A Input"));
+        QCOMPARE(ends[1].deviceName, QStringLiteral("VoiceMeeter Input"));
+    }
+    // What a Mac lists for NereusSDR's own VAX: four recording devices.
+    // There is nothing in them to bind, so a notice has nothing to offer.
+    void bindableEndsOfOwnVaxRecordingDevicesIsEmpty() {
+        QVector<DetectedCable> all;
+        for (int i = 1; i <= 4; ++i) {
+            all.push_back(DetectedCable{VirtualCableProduct::NereusSdrVax,
+                                        QStringLiteral("NereusSDR VAX %1").arg(i), true, i});
+        }
+        QVERIFY(VirtualCableDetector::bindableEnds(all).isEmpty());
+    }
+    void bindableEndsOfARecordingEndAloneIsEmpty() {
+        QVector<DetectedCable> all;
+        all.push_back(DetectedCable{VirtualCableProduct::VbCable,
+                                    "CABLE Output (VB-Audio Virtual Cable)", true, 0});
+        QVERIFY(VirtualCableDetector::bindableEnds(all).isEmpty());
+        QVERIFY(VirtualCableDetector::bindableEnds({}).isEmpty());
     }
 };
 

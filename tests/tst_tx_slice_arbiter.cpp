@@ -6,6 +6,8 @@
 // Phase 3F Sub-Epic C: TxSliceArbiter single-TX invariant.
 // See docs/architecture/2026-05-26-phase3f-multi-pan-multi-slice-design.md §6.
 // Modification history (NereusSDR):
+//   2026-10-14 Preserve saved TX intent until roster restoration completes.
+//              J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 2: the
 //                                    arbiter's owner lookup is a transmit
 //                                    access check (setTransmitAccess).
@@ -421,6 +423,191 @@ private slots:
         QCOMPARE(slices[0]->isTxSlice(), true);
         QCOMPARE(slices[1]->isTxSlice(), false);
         QCOMPARE(arb.txBoundSliceId(), 0);
+    }
+
+    void load_restores_saved_slice_when_it_arrives_after_initial_a()
+    {
+        const QString mac = QStringLiteral("de:ad:be:ef:00:02");
+        AppSettings::instance().setValue(
+            QStringLiteral("hardware/%1/TxBoundSliceId").arg(mac), 1);
+        QVector<SliceModel*> slices;
+        buildSlices(slices, 1);
+        TxSliceArbiter arb;
+        arb.setSliceList(&slices);
+        arb.setMacAddress(mac);
+        arb.load();
+        QCOMPARE(arb.txBoundSliceId(), 0);
+        QVERIFY(slices[0]->isTxSlice());
+
+        SliceModel restoredB(1);
+        slices.append(&restoredB);
+        arb.syncToSliceList();
+        // Add sync precedes stream admission; restore only the final roster.
+        QCOMPARE(arb.txBoundSliceId(), 0);
+        arb.finishRestore();
+        QCOMPARE(arb.txBoundSliceId(), 1);
+        QVERIFY(restoredB.isTxSlice());
+        QVERIFY(!slices[0]->isTxSlice());
+    }
+
+    void pending_restore_is_superseded_data()
+    {
+        QTest::addColumn<int>("action");
+        QTest::addColumn<int>("expectedId");
+        QTest::newRow("operator-already-bound-A") << 0 << 0;
+        QTest::newRow("operator-moves-C") << 1 << 2;
+        QTest::newRow("different-MAC") << 2 << 0;
+        QTest::newRow("binding-released") << 3 << 0;
+        QTest::newRow("final-missing-B") << 4 << 0;
+        QTest::newRow("reloaded-choice-A") << 5 << 0;
+        QTest::newRow("rejected-command-keeps-restore") << 6 << 1;
+    }
+
+    void pending_restore_is_superseded()
+    {
+        QFETCH(int, action);
+        QFETCH(int, expectedId);
+        const QString mac = QStringLiteral("de:ad:be:ef:00:03");
+        const QString key = QStringLiteral("hardware/%1/TxBoundSliceId").arg(mac);
+        AppSettings::instance().setValue(key, 1);
+        QVector<SliceModel*> slices;
+        buildSlicesWithIds(slices, {0, 2});
+        SliceModel replacementA(0);
+        SliceModel restoredB(1);
+        TxSliceArbiter arb;
+        arb.setSliceList(&slices);
+        arb.setMacAddress(mac);
+        arb.load();
+        if (action == 0) {
+            QVERIFY(arb.requestHandoff(0));
+        } else if (action == 1) {
+            QVERIFY(arb.requestHandoff(2));
+        } else if (action == 2) {
+            arb.setMacAddress(QStringLiteral("de:ad:be:ef:00:04"));
+        } else if (action == 3) {
+            slices.clear();
+            arb.releaseBinding();
+            slices.append(&replacementA);
+        } else if (action == 4) {
+            arb.finishRestore();
+        } else if (action == 5) {
+            AppSettings::instance().setValue(key, 0);
+            arb.load();
+        } else {
+            QVERIFY(!arb.requestHandoff(99));
+        }
+        slices.append(&restoredB);
+        arb.syncToSliceList();
+        arb.finishRestore();
+        QCOMPARE(arb.txBoundSliceId(), expectedId);
+        QVERIFY(arb.txBoundSlice());
+        QVERIFY(arb.txBoundSlice()->isTxSlice());
+        int flagged = 0;
+        for (const SliceModel* slice : slices) {
+            if (slice->isTxSlice()) { ++flagged; }
+        }
+        QCOMPARE(flagged, 1);
+    }
+
+    void save_preserves_pending_choice_until_roster_finishes()
+    {
+        const QString mac = QStringLiteral("de:ad:be:ef:00:05");
+        const QString key = QStringLiteral("hardware/%1/TxBoundSliceId").arg(mac);
+        AppSettings::instance().setValue(key, 1);
+        QVector<SliceModel*> slices;
+        buildSlices(slices, 1);
+        TxSliceArbiter arb;
+        arb.setSliceList(&slices);
+        arb.setMacAddress(mac);
+        arb.load();
+        arb.save();
+        QCOMPARE(AppSettings::instance().value(key, -1).toInt(), 1);
+        arb.finishRestore();
+        arb.save();
+        QCOMPARE(AppSettings::instance().value(key, -1).toInt(), 0);
+    }
+
+    void final_restore_respects_live_authority_data()
+    {
+        QTest::addColumn<bool>("frozen");
+        QTest::newRow("holder-cannot-transmit-on-B") << false;
+        QTest::newRow("station-frozen") << true;
+    }
+
+    void final_restore_respects_live_authority()
+    {
+        QFETCH(bool, frozen);
+        const QString mac = QStringLiteral("de:ad:be:ef:00:06");
+        AppSettings::instance().setValue(
+            QStringLiteral("hardware/%1/TxBoundSliceId").arg(mac), 1);
+        QVector<SliceModel*> slices;
+        buildSlices(slices, 1);
+        SliceModel restoredB(1);
+        TxSliceArbiter arb;
+        arb.setSliceList(&slices);
+        arb.setMacAddress(mac);
+        bool allowB = frozen;
+        arb.setTransmitAccess([&allowB](const QByteArray&, int id) {
+            return id == 0 || allowB;
+        }, [](const QByteArray&) { return 0; });
+        arb.setHolderLookup([]() { return QByteArrayLiteral("holder"); });
+        arb.setFrozen([&frozen]() { return frozen; });
+        arb.load();
+        slices.append(&restoredB);
+        arb.syncToSliceList();
+        arb.finishRestore();
+        QCOMPARE(arb.txBoundSliceId(), 0);
+        QVERIFY(!restoredB.isTxSlice());
+        // Eligibility returning later must not replay an expired saved choice.
+        allowB = true;
+        frozen = false;
+        arb.syncToSliceList();
+        arb.finishRestore();
+        QCOMPARE(arb.txBoundSliceId(), 0);
+    }
+
+    void an_accepted_noop_during_restore_lookup_wins()
+    {
+        const QString mac = QStringLiteral("de:ad:be:ef:00:07");
+        AppSettings::instance().setValue(
+            QStringLiteral("hardware/%1/TxBoundSliceId").arg(mac), 1);
+        QVector<SliceModel*> slices;
+        buildSlices(slices, 1);
+        SliceModel restoredB(1);
+        TxSliceArbiter arb;
+        arb.setSliceList(&slices);
+        arb.setMacAddress(mac);
+        arb.load();
+        slices.append(&restoredB);
+        arb.syncToSliceList();
+        bool chosenA = false;
+        arb.setTransmitAccess([&](const QByteArray&, int) {
+            chosenA = arb.requestHandoff(0);
+            return true;
+        }, [](const QByteArray&) { return 0; });
+        arb.setHolderLookup([]() { return QByteArrayLiteral("holder"); });
+        arb.finishRestore();
+        QVERIFY(chosenA);
+        QCOMPARE(arb.txBoundSliceId(), 0);
+        QVERIFY(!restoredB.isTxSlice());
+    }
+
+    void remote_load_and_completion_do_not_choose_local_tx()
+    {
+        const QString mac = QStringLiteral("de:ad:be:ef:00:08");
+        AppSettings::instance().setValue(
+            QStringLiteral("hardware/%1/TxBoundSliceId").arg(mac), 1);
+        QVector<SliceModel*> slices;
+        buildSlices(slices, 2);
+        TxSliceArbiter arb;
+        arb.setSliceList(&slices);
+        arb.setMacAddress(mac);
+        arb.setRemote(true);
+        arb.load();
+        arb.finishRestore();
+        QCOMPARE(arb.txBoundSliceId(), -1);
+        QVERIFY(slices[0]->isTxSlice());
+        QVERIFY(!slices[1]->isTxSlice());
     }
 
     // txBoundSlice resolves the same POSITION requestHandoff writes, so

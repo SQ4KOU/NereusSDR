@@ -288,6 +288,21 @@
 //   2026-10-02: Diversity v1 producer corpus export and offline Orion MkII
 //               codec planning, with bounded app incarnation placeholders.
 //               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-08: Rotor control plan Task 4b: with coreAccessories the
+//               Core's rotor sees no serial ports and no rotctld, so the
+//               rotor object reads the same on every machine.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-11: The connectable station sets the receive block size,
+//               filter size and filter type its readings were recorded
+//               with, now that a receiver takes its DSP > Options values
+//               when it is bound to its slice.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-16: The connectable station waits until every meter reading
+//               the snapshot carries is a measurement, the signal
+//               readings held to WDSP's seed plus the slice's receive
+//               offset: a meter refresh inside the first block sent the
+//               S-meter's seed (-399.02 dBm) in the station object.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -309,8 +324,11 @@
 
 #include "core/ModelPaths.h"
 #include "core/AppSettings.h"
+#include "core/LogCategories.h"
 #include "core/ConnectionState.h"
 #include "core/MoxController.h"
+#include "core/RotctldProcess.h"
+#include "core/StationRotorController.h"
 #include "core/StepAttenuatorController.h"
 #include "core/accessories/AlexController.h"
 #include "core/dsp/DspAssetService.h"
@@ -329,6 +347,7 @@
 #include "core/settings/SettingsScope.h"
 #include "models/Band.h"
 #include "models/RadioModel.h"
+#include "models/RotorModel.h"
 #include "models/SliceModel.h"
 
 #include "LinkFixtures.h"
@@ -478,6 +497,10 @@ struct Station {
     }
 };
 
+// The log categories LogManager starts with, read in initTestCase before
+// any fixture runs.
+QStringList defaultLogCategories;
+
 QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
 {
     for (auto it = setup.constBegin(); it != setup.constEnd(); ++it) {
@@ -491,6 +514,11 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
     // RadioModel keeps state in AppSettings::instance() (notches, accessory
     // choices, DSP asset selections). Each fixture starts from an empty
     // profile, so one fixture's writes never reach the next.
+    // LogManager is a process-wide singleton whose selection (radio's
+    // logCategories) support.setLogCategories changes; put back the one it
+    // started with first, so the LogCategory_* keys it writes are cleared
+    // below.
+    LogManager::instance().setEnabledList(defaultLogCategories);
     AppSettings::instance().clear();
     station->settings = std::make_unique<AppSettings>(
         station->dir.filePath(QStringLiteral("NereusSDR.settings")));
@@ -499,6 +527,29 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
     if (radio == QStringLiteral("connectable")) {
         // Load findings 4: the fake radio does not stream on its own; the
         // runner feeds the receiver's first block below (buildStation).
+        // That holds the readings still only while a block is far longer
+        // than the frames that keep the link alive, and the fixture's
+        // readings are one block's, so they are the filter's as well. A
+        // receiver takes its DSP > Options values when it is bound to its
+        // slice (RadioModel, as Thetis SyncDSP does): a 64-sample block
+        // and a Low Latency filter unless set. With those the first block
+        // is about four of the fake's frames, read before the tone is
+        // through the filter (-237.6 dBm where the fixture holds -82.7),
+        // and a block would complete every few keep-alive frames and move
+        // the readings under the script. So this station states the
+        // conditions its readings were recorded with, the ones WDSP opens
+        // a channel in: a 4096-sample block, a 4096 filter, linear phase.
+        // The page offers blocks of 64 to 1024; the channel takes any size
+        // up to its filter size (RxChannel::setDspBufferSizeSamples).
+        // Every mode group, so a mode change in a script keeps them.
+        for (const char* const group : {"Phone", "Fm", "Cw", "Dig"}) {
+            const QString mode = QLatin1String(group) + QStringLiteral("Rx");
+            AppSettings& settings = AppSettings::instance();
+            settings.setValue(QStringLiteral("DspOptionsBufferSize") + mode, QStringLiteral("4096"));
+            settings.setValue(QStringLiteral("DspOptionsFilterSize") + mode, QStringLiteral("4096"));
+            settings.setValue(QStringLiteral("DspOptionsFilterType") + mode,
+                              QStringLiteral("Linear Phase"));
+        }
         station->harness = ConnectableRadioModel::create(
             10000, RadioModel::Role::Local, {}, HPSDRHW::HermesLite, /*stream=*/false);
         if (!station->harness) {
@@ -559,7 +610,15 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
 
     RadioModel& model = *station->model;
     if (setup.value(QStringLiteral("coreAccessories")).toBool(false)) {
+        // The Core's rotor finds no rotctld and no serial ports, on every
+        // machine the runner runs on, and never opens one.
+        RotctldProcess::setBinaryOverrideForTesting(QString());
         model.enableStationAccessoryIdentity();
+        if (StationRotorController* rotor = model.stationRotorController()) {
+            rotor->setSerialPortListerForTesting([] { return QStringList(); });
+            // The rotor object looks again with the lister in place.
+            model.rotorModel()->bindController(rotor);
+        }
     }
     if (setup.value(QStringLiteral("stationTci")).toBool(false)) {
         model.enableStationTci(QStringLiteral("127.0.0.1"));
@@ -784,11 +843,36 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
         // the runner feeds the first block itself: 16 frames at a time,
         // each time waiting three of the pump's polls for the reading (the
         // pump reads the receive lane's cached meters, a poll behind),
-        // until the ADC peak leaves the no-reading value.
+        // until every reading the snapshot carries is a measurement.
+        //
+        // The ADC peak alone does not say that. WDSP measures a block's
+        // meters one after another (RXA.c:665 the ADC meter, :668 the
+        // S-meter after the nbp0 filter, :695 the AGC meter), each under
+        // its own lock, and the receive lane reads them one by one
+        // (RxChannel::refreshMeterCacheOnLane), the S-meter first. A
+        // refresh that lands while the first block is between those lines
+        // caches a real ADC peak beside the S-meter's -400 seed
+        // (meter.c:69-70). The pump adds the slice's receive offset to the
+        // signal readings, so that seed reaches the slice as -400 plus the
+        // offset (-399.02 on this radio), above the no-reading value, and
+        // the snapshot went out with it. So each signal reading is held to
+        // the seed plus the offset, computed as the pump computes it, and
+        // the AGC readings to their own seed. The next refresh reads the
+        // finished block, so the wait ends one poll later.
         NereusSDR::Test::P1FakeRadio& fake = station->harness->fake();
-        const auto firstBlockMeasured = [station]() {
-            for (SliceModel* slice : station->model->slices()) {
-                if (slice->adcPeakDbfs() <= SliceMeterPump::kNoReadingDbm) {
+        RadioModel* const stationModel = station->model;
+        const auto firstBlockMeasured = [stationModel]() {
+            for (SliceModel* slice : stationModel->slices()) {
+                const double signalSeedDbm = SliceMeterPump::kNoReadingDbm
+                    + stationModel->rxMeterOffsetDbForSlice(slice->sliceIndex());
+                if (slice->signalStrengthDbm() <= signalSeedDbm
+                    || slice->signalPeakDbm() <= signalSeedDbm
+                    || slice->signalAverageDbm() <= signalSeedDbm
+                    || slice->adcPeakDbfs() <= SliceMeterPump::kNoReadingDbm
+                    || slice->adcAverageDbfs() <= SliceMeterPump::kNoReadingDbm
+                    || slice->agcGainDb() <= SliceMeterPump::kNoReadingDbm
+                    || slice->agcPeakDb() <= SliceMeterPump::kNoReadingDbm
+                    || slice->agcAverageDb() <= SliceMeterPump::kNoReadingDbm) {
                     return false;
                 }
             }
@@ -808,18 +892,8 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
         if (!measured) {
             return QStringLiteral("the connectable station's receiver did not measure a block");
         }
-        const bool readings = QTest::qWaitFor([station, &polls]() {
-            if (polls.isEmpty()) {
-                return false;
-            }
-            for (SliceModel* slice : station->model->slices()) {
-                if (slice->signalStrengthDbm() <= SliceMeterPump::kNoReadingDbm
-                    || slice->signalPeakDbm() <= SliceMeterPump::kNoReadingDbm
-                    || slice->signalAverageDbm() <= SliceMeterPump::kNoReadingDbm) {
-                    return false;
-                }
-            }
-            return true;
+        const bool readings = QTest::qWaitFor([&firstBlockMeasured, &polls]() {
+            return !polls.isEmpty() && firstBlockMeasured();
         }, 5000);
         if (!readings) {
             return QStringLiteral("the slices' signal readings did not settle");
@@ -1244,6 +1318,8 @@ void TstLinkConformanceSession::initTestCase()
     AppSettings::setProfileOverride(profile);
     QCOMPARE(AppSettings::instance().filePath(), AppSettings::resolveSettingsPath(profile));
     AppSettings::instance().clear();
+    defaultLogCategories =
+        LogManager::instance().enabledList().split(QLatin1Char(','), Qt::SkipEmptyParts);
     // Whether this machine's build carries the bundled NR3 model files
     // decides what the dspAssets object says about them. Fixtures are the
     // same on every machine, so none is found here.
@@ -2591,6 +2667,12 @@ void TstLinkConformanceSession::jsonStringsMatchTheirShape()
 // still end at 180 s of virtual time.
 void TstLinkConformanceSession::theVirtualClockKeepsALongTimersDueAsRealTimePasses()
 {
+#ifdef Q_OS_WIN
+    // The case needs a coarse timer that reports more than its interval,
+    // which is how Qt's Unix timer list rounds one. Windows' event
+    // dispatcher never does, so no start there can set the case up.
+    QSKIP("Windows never reports a coarse timer above its interval");
+#endif
     constexpr int kIntervalMs = 180000;
     // How far above its interval the timer must report, so the real time
     // below passes while the report is still above it.

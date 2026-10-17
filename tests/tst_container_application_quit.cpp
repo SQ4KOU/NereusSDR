@@ -1,6 +1,12 @@
 // no-port-check: NereusSDR-original radio-free application quit regressions.
 // Modification history (NereusSDR):
 //   2026-10-04 — J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-11 - A simulated operator move is reported as one
+//                 (rememberOperatorGeometry). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - An operator move of a window saves the monitor it was
+//                 moved on. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 #include <QtTest>
 #include <QApplication>
 #include <QCloseEvent>
@@ -26,6 +32,7 @@
 #include "gui/containers/ContainerWidget.h"
 #include "gui/containers/ContainerWorkspaceStore.h"
 #include "gui/containers/FloatingContainer.h"
+#include "gui/containers/ScreenSource.h"
 
 using namespace NereusSDR;
 
@@ -283,7 +290,12 @@ int runQuitChild(QApplication& application, const QString& scenario)
                     return;
                 }
                 form->move(form->pos() + QPoint(13, 0));
+                // The simulated move is the operator's.
+                manager.rememberOperatorGeometry(ordinary.id);
                 shutdownExpected.containers[1].geometry = form->geometry();
+                // The monitor it was moved on is saved with its place.
+                shutdownExpected.containers[1].screen =
+                    savedScreenOf(ScreenSource::system()->screenFor(form->geometry()));
                 ++shutdownExpected.revision;
                 manager.saveState();
                 check(shell && !shell->isVisible() && !form->isVisible(),
@@ -303,7 +315,12 @@ int runQuitChild(QApplication& application, const QString& scenario)
                     return;
                 }
                 form->move(form->pos() + QPoint(13, 0));
+                // The simulated move is the operator's.
+                manager.rememberOperatorGeometry(ordinary.id);
                 shutdownExpected.containers[1].geometry = form->geometry();
+                // The monitor it was moved on is saved with its place.
+                shutdownExpected.containers[1].screen =
+                    savedScreenOf(ScreenSource::system()->screenFor(form->geometry()));
                 ++shutdownExpected.revision;
                 manager.saveState();
                 check(shell && !shell->isVisible() && !form->isVisible(),

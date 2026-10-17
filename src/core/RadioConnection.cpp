@@ -3,6 +3,11 @@
 // behavioral source-first cites for formula constants; no Thetis logic is
 // reproduced here. The voltage conversion formulae are independently
 // implemented from the Thetis console.cs interface specification.
+//
+// Modification history (NereusSDR):
+//   2026-10-15: The transmit cut latch: cutTransmit, clearTransmitCut and
+//               the default applyTransmitCut. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 
 #include "RadioConnection.h"
 #include "P1RadioConnection.h"
@@ -32,6 +37,35 @@ std::unique_ptr<RadioConnection> RadioConnection::create(const RadioInfo& info)
     }
     qCWarning(lcConnection) << "Unknown protocol version:" << static_cast<int>(info.protocol);
     return nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// The transmit cut (2026-10-15). NereusSDR-original.
+// ---------------------------------------------------------------------------
+void RadioConnection::cutTransmit()
+{
+    // Any thread. Only the first call queues the unkey; posting an event
+    // takes no lock the main thread or this object's thread holds for long,
+    // so the caller never waits on either.
+    if (m_transmitCut.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    QMetaObject::invokeMethod(this, [this]() { applyTransmitCut(); },
+                              Qt::QueuedConnection);
+}
+
+void RadioConnection::clearTransmitCut()
+{
+    if (m_transmitCut.exchange(false, std::memory_order_acq_rel)) {
+        qCInfo(lcConnection) << "Transmit cut cleared; the next key is allowed";
+    }
+}
+
+void RadioConnection::applyTransmitCut()
+{
+    qCWarning(lcConnection) << "Transmit cut: MOX and the T/R relay off";
+    setMox(false);
+    setTrxRelay(false);
 }
 
 void RadioConnection::setState(ConnectionState newState)
@@ -80,6 +114,7 @@ void RadioConnection::pruneSamples(QList<ByteSample>& samples, qint64 nowMs, int
 void RadioConnection::recordBytesSent(qint64 n)
 {
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const std::lock_guard<std::mutex> lock(m_byteSamplesMutex);
     pruneSamples(m_txSamples, nowMs, 5000);
     m_txSamples.append({nowMs, n});
 }
@@ -87,17 +122,20 @@ void RadioConnection::recordBytesSent(qint64 n)
 void RadioConnection::recordBytesReceived(qint64 n)
 {
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const std::lock_guard<std::mutex> lock(m_byteSamplesMutex);
     pruneSamples(m_rxSamples, nowMs, 5000);
     m_rxSamples.append({nowMs, n});
 }
 
 double RadioConnection::txByteRate(int windowMs) const
 {
+    const std::lock_guard<std::mutex> lock(m_byteSamplesMutex);
     return rateFromSamples(m_txSamples, windowMs);
 }
 
 double RadioConnection::rxByteRate(int windowMs) const
 {
+    const std::lock_guard<std::mutex> lock(m_byteSamplesMutex);
     return rateFromSamples(m_rxSamples, windowMs);
 }
 
@@ -175,15 +213,15 @@ double RadioConnection::rateFromSamples(const QList<ByteSample>& samples, int wi
 
 void RadioConnection::notePingSent()
 {
-    m_pingSentMs = QDateTime::currentMSecsSinceEpoch();
+    m_pingSentMs.store(QDateTime::currentMSecsSinceEpoch(), std::memory_order_relaxed);
 }
 
 void RadioConnection::notePingReceived()
 {
-    if (m_pingSentMs == 0) { return; }
+    const qint64 sentMs = m_pingSentMs.exchange(0, std::memory_order_relaxed);
+    if (sentMs == 0) { return; }
     const qint64 nowMs   = QDateTime::currentMSecsSinceEpoch();
-    const qint64 elapsed = nowMs - m_pingSentMs;
-    m_pingSentMs = 0;
+    const qint64 elapsed = nowMs - sentMs;
     if (elapsed >= 0 && elapsed <= 5000) {
         m_lastPingRttMs = static_cast<int>(elapsed);
         m_lastPingRttAge.start();

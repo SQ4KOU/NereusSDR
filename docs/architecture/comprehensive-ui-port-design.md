@@ -69,6 +69,8 @@ sub-panel over the spectrum.
 
 ### Display Flyout — Expanded Design
 
+> Note 2026-10-10: this flyout design is superseded by section 3 of `2026-10-09-display-pill-and-levels-design.md` (the four-tab Display pill).
+
 The Display flyout is significantly expanded vs AetherSDR. It uses **per-slice
 tabs** (RX1 / RX2 / TX) and exposes the most-used Thetis Display settings:
 
@@ -779,6 +781,7 @@ handles the real hardware interface, DAX handles virtual routing.
 
 - Use ASIO SDK (Steinberg, free for non-commercial — check license for
   NereusSDR's open-source status)
+  Superseded 2026-10-09: Steinberg dual-licensed the ASIO SDK 2.3.4 under GPL version 3; NereusSDR bundles it (third_party/asiosdk/).
 - Alternatively, PortAudio with ASIO host API (LGPL, well-tested)
 - ASIO callbacks run on a dedicated high-priority thread — same atomic
   parameter pattern as current AudioEngine

@@ -125,7 +125,10 @@ final class CoreDisplayModel: ObservableObject {
     /// to write once it has: a slider sends one write at a time, then its
     /// latest value.
     private var writing: Set<String> = []
-    private var queued: [String: (text: String, edit: UInt64, snapshot: UInt64)] = [:]
+    private var queued: [String: (text: String, edit: UInt64, snapshot: UInt64, then: String?)] = [:]
+    /// The Hz/bin target a Sizing choice writes once the Core has taken the
+    /// choice, shown from the tap until that write is answered.
+    private var pendingTarget: (text: String, edit: UInt64)?
     private let outcomeOwner = ControlOutcomeOwner()
     private var watches: Set<AnyCancellable> = []
     private static let logger = Logger(subsystem: "NereusSDR", category: "display.core")
@@ -213,6 +216,23 @@ final class CoreDisplayModel: ObservableObject {
             guard let key = control.settingsKey else {
                 return nil
             }
+            if let mode = sizingMode {
+                switch key {
+                case Sizing.settingsKey:
+                    return control.options.first { $0.token == mode.rawValue }?.value
+                case Self.fftSizeKey where mode != .fixed:
+                    // Not in charge: the size this pan runs, not the stored one.
+                    return runningFftSize.map(Double.init)
+                case Self.fftSizeKey:
+                    return Double(Sizing.fixedSize(number(key) ?? control.defaultValue ?? 0))
+                case Self.hzPerBinKey where mode != .hzPerBin:
+                    // Not in charge: the remembered target, else the running
+                    // bin width. Never 0, and never "Off".
+                    return Sizing.targetShown(remembered: rememberedTarget, runningBinWidthHz: runningBinWidthHz)
+                default:
+                    break
+                }
+            }
             let set = setting(key).flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }
             guard let value = set ?? control.defaultValue, value.isFinite else {
                 return nil
@@ -228,7 +248,7 @@ final class CoreDisplayModel: ObservableObject {
             return Self.choiceNotSentText
         }
         if control.isStation {
-            return control.settingsKey == nil ? Self.choiceNotSentText : nil
+            return control.settingsKey == nil ? Self.choiceNotSentText : sizingReason(control)
         }
         let gates = subscriber.gates
         switch control.subscribe {
@@ -255,7 +275,15 @@ final class CoreDisplayModel: ObservableObject {
         guard reason(control) == nil else {
             return
         }
-        let kept = control.clamped(value)
+        if sizingMode != nil, control.settingsKey == Sizing.settingsKey {
+            choose(control, value)
+            return
+        }
+        var kept = control.clamped(value)
+        if let range = range(control) {
+            // With Sizing drawn, the target's 0 ("Off") is not a choice.
+            kept = max(kept, range.min)
+        }
         if let key = control.settingsKey, let field = DisplayBinDiagnostic.field(for: key) {
             let record = DisplayBinDiagnostic(stage: .offer, field: field, value: kept)
             if record != lastBinOffer {
@@ -300,7 +328,113 @@ final class CoreDisplayModel: ObservableObject {
     /// A Core setting as shown: a value waiting its turn behind a write the
     /// Core has not answered shows at once (`StationClient.cpp:1040-1068`).
     private func setting(_ key: String) -> String? {
-        queued[key]?.text ?? settingsProxy.value(key)
+        queued[key]?.text ?? (key == Self.hzPerBinKey ? pendingTarget?.text : nil) ?? settingsProxy.value(key)
+    }
+
+    private func number(_ key: String) -> Double? {
+        setting(key).flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+    }
+
+    // MARK: Sizing: who sets the FFT size
+
+    typealias Sizing = StationCatalog.Display.FftSizing
+
+    /// Why FFT size is gray while the zoom sets it, or the bin width does.
+    static let sizeAutoText = "Sizing is Auto, so the zoom sets the FFT size. Choose Fixed to set it yourself."
+    static let sizeHzPerBinText = "Sizing is Hz/bin, so the bin width sets the FFT size. Choose Fixed to set it yourself."
+    /// Why the Hz/bin target is gray outside Hz/bin.
+    static let targetText = "Choose Hz/bin under Sizing to set the bin width yourself."
+
+    /// The Sizing control, on a Core that describes one.
+    var sizingControl: StationCatalog.Display.Control? { description?.sizingControl }
+
+    /// The Sizing choice in charge, by the rule every reader shares; nil on
+    /// a Core that describes no Sizing, where Size and the target are as
+    /// they were.
+    var sizingMode: Sizing? {
+        guard sizingControl != nil else {
+            return nil
+        }
+        return Sizing.onRead(stored: setting(Sizing.settingsKey), hzPerBinTarget: number(Self.hzPerBinKey))
+    }
+
+    /// The bin width this pan runs: the granted size's, the planned size's
+    /// before a grant.
+    var runningBinWidthHz: Double? {
+        if let granted = band.binWidthHz, granted.isFinite, granted > 0 {
+            return granted
+        }
+        guard let rate = subscriber.plannedSampleRateHz, let size = subscriber.plannedFftSize, rate > 0, size > 0 else {
+            return nil
+        }
+        return rate / Double(size)
+    }
+
+    /// The FFT size this pan runs: the granted size, the planned one before
+    /// a grant.
+    var runningFftSize: Int? {
+        if let granted = band.binWidthHz, granted.isFinite, granted > 0,
+           let rate = subscriber.plannedSampleRateHz, rate > 0 {
+            let size = (rate / granted).rounded()
+            if size >= 1, size <= Double(Int32.max) {
+                return Int(size)
+            }
+        }
+        return subscriber.plannedFftSize
+    }
+
+    /// The target the Core remembers from the last time Hz/bin was in charge.
+    private var rememberedTarget: Double? {
+        hzPerBinControl?.rememberedKey.flatMap { number($0) }
+    }
+
+    /// Why Sizing grays this control; nil for one in charge, and on a Core
+    /// that describes no Sizing.
+    func sizingReason(_ control: StationCatalog.Display.Control) -> String? {
+        guard let mode = sizingMode else {
+            return nil
+        }
+        switch control.settingsKey {
+        case Self.fftSizeKey:
+            switch mode {
+            case .auto: return Self.sizeAutoText
+            case .hzPerBin: return Self.sizeHzPerBinText
+            case .fixed: return nil
+            }
+        case Self.hzPerBinKey:
+            return mode == .hzPerBin ? nil : Self.targetText
+        default:
+            return nil
+        }
+    }
+
+    /// The range a control is changed within: the Core's, and for the Hz/bin
+    /// target beside a Sizing control, from one step above its "Off" value.
+    func range(_ control: StationCatalog.Display.Control) -> StationCatalog.Range? {
+        guard let range = control.range else {
+            return nil
+        }
+        guard sizingMode != nil, control.settingsKey == Self.hzPerBinKey, let off = control.offValue,
+              range.min == off, range.min + range.step <= range.max else {
+            return range
+        }
+        return StationCatalog.Range(min: range.min + range.step, max: range.max, step: range.step)
+    }
+
+    /// Chooses a Sizing mode: the choice is written, then the Hz/bin target
+    /// (the desktop's order): 0 for Auto and Fixed, and for Hz/bin the
+    /// remembered target or, with none, the running bin width rounded up to
+    /// the target's step.
+    private func choose(_ control: StationCatalog.Display.Control, _ value: Double) {
+        let kept = control.clamped(value)
+        guard let token = control.options.first(where: { $0.value == kept })?.token,
+              let mode = Sizing(rawValue: token),
+              mode != sizingMode || settingsProxy.value(Sizing.settingsKey) != token else {
+            return
+        }
+        let target = Self.settingText(mode.targetWritten(remembered: rememberedTarget,
+                                                         runningBinWidthHz: runningBinWidthHz))
+        write(Sizing.settingsKey, token, then: target)
     }
 
     // MARK: The FFT size and the bin width
@@ -363,22 +497,38 @@ final class CoreDisplayModel: ObservableObject {
 
     // MARK: Writing to the Core
 
-    private func write(_ key: String, _ text: String) {
+    /// Writes `text` to the Core's `key`; `then`, the Hz/bin target that
+    /// follows a Sizing choice once the Core has taken it. Returns the
+    /// edit, or nil when nothing could be sent.
+    @discardableResult
+    private func write(_ key: String, _ text: String, then: String? = nil) -> UInt64? {
         let edit = outcomeOwner.begin()
         guard let snapshot = settingsProxy.currentSnapshotIdentity else {
             recordBinWrite(key, text, edit: edit, stage: .writeOutcome, outcome: .notSent)
-            return
+            return nil
+        }
+        if let then {
+            pendingTarget = (then, edit)
         }
         guard !writing.contains(key) else {
             recordBinWrite(key, text, edit: edit, stage: .writeQueued)
-            queued[key] = (text, edit, snapshot)
+            dropPending(queued[key]?.edit, unless: edit)
+            queued[key] = (text, edit, snapshot, then)
             changed()
-            return
+            return edit
         }
-        startWrite(key, text, edit: edit, snapshot: snapshot)
+        startWrite(key, text, edit: edit, snapshot: snapshot, then: then)
+        return edit
     }
 
-    private func startWrite(_ key: String, _ text: String, edit: UInt64, snapshot: UInt64) {
+    /// Stops showing the target that waited on the write `edit`.
+    private func dropPending(_ edit: UInt64?, unless kept: UInt64? = nil) {
+        if let edit, edit != kept, pendingTarget?.edit == edit {
+            pendingTarget = nil
+        }
+    }
+
+    private func startWrite(_ key: String, _ text: String, edit: UInt64, snapshot: UInt64, then: String? = nil) {
         writing.insert(key)
         recordBinWrite(key, text, edit: edit, stage: .writeAttempt)
         let proxy = settingsProxy
@@ -392,15 +542,31 @@ final class CoreDisplayModel: ObservableObject {
             self.writing.remove(key)
             self.recordBinWrite(key, text, edit: edit, stage: .writeOutcome, outcome: DisplayBinDiagnostic.outcome(outcome))
             self.receive(outcome, edit: edit)
+            if let then, self.pendingTarget?.edit == edit {
+                // The Core took the choice: its target follows, and stays
+                // shown until that write is answered.
+                if outcome == .accepted, proxy.isCurrent(snapshot),
+                   let follow = self.write(Self.hzPerBinKey, then) {
+                    self.pendingTarget = (then, follow)
+                } else {
+                    self.pendingTarget = nil
+                }
+            } else {
+                self.dropPending(edit)
+            }
             if let next = self.queued.removeValue(forKey: key) {
                 if outcome == .linkLost && !proxy.isCurrent(next.snapshot) {
                     // The newest old-session touch retires with that session.
                     self.recordBinWrite(key, next.text, edit: next.edit, stage: .writeOutcome, outcome: .linkLost)
                     self.receive(.linkLost, edit: next.edit)
-                } else if proxy.isCurrent(next.snapshot), next.text != proxy.value(key) {
-                    self.startWrite(key, next.text, edit: next.edit, snapshot: next.snapshot)
-                } else if !proxy.isCurrent(next.snapshot) {
-                    self.recordBinWrite(key, next.text, edit: next.edit, stage: .writeOutcome, outcome: .notSent)
+                    self.dropPending(next.edit)
+                } else if proxy.isCurrent(next.snapshot), next.text != proxy.value(key) || next.then != nil {
+                    self.startWrite(key, next.text, edit: next.edit, snapshot: next.snapshot, then: next.then)
+                } else {
+                    if !proxy.isCurrent(next.snapshot) {
+                        self.recordBinWrite(key, next.text, edit: next.edit, stage: .writeOutcome, outcome: .notSent)
+                    }
+                    self.dropPending(next.edit)
                 }
             }
             self.changed()

@@ -33,6 +33,19 @@
 //               unanswered release included), and a program key after a
 //               release makes the press an unkey. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-08: programAudioKey(): a program key asked with programAudio
+//               is one from its asking until the key ends, however it
+//               ends. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
+//   2026-10-09: programAudioKey() also ends with reset() on a key that is
+//               on, with the Core ending the key on its own, with MOX off,
+//               and with the screen key's release. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-14: a replacement session started by the retirement key-up edge
+//               still completes the retired program request. J.J. Boyd
+//               (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-15: a program key asked while another is on is refused.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -228,7 +241,7 @@ private slots:
         QCOMPARE(core.sent.last().verb, QByteArray("tx.unkey"));
         answerCopies(client, core.sent.last(), true, {}, {});
         bool programAccepted = false;
-        client.keyForProgram([&](const RemoteTransmitClient::Answer& answer) {
+        client.keyForProgram(false, [&](const RemoteTransmitClient::Answer& answer) {
             programAccepted = answer.accepted;
         });
         QCOMPARE(core.sent.last().verb, QByteArray("tx.key"));
@@ -239,6 +252,132 @@ private slots:
         QCOMPARE(core.sent.last().verb, QByteArray("tx.unkey"));
         QCOMPARE(core.argument(core.sent.size()-1, "epoch").toLongLong(), 11LL);
         QVERIFY(client.micSourcePending());
+    }
+
+    // 2026-10-15: the TCI server and the remote window's rigctld share the
+    // one program key. A second program asking while one is on is refused,
+    // so neither one's release ends the other's transmission.
+    void aProgramKeyAskedWhileAnotherIsOnIsRefused()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setAvailable(true);
+        client.keyForProgram(true, {});
+        answerCopies(client, core.sent.last(), true, {}, epochValue(12));
+        QVERIFY(client.programAudioKey());
+        const int sent = core.sent.size();
+        std::optional<RemoteTransmitClient::Answer> second;
+        client.keyForProgram(true, [&](const RemoteTransmitClient::Answer& a) { second = a; });
+        QVERIFY(second.has_value());
+        QVERIFY(!second->accepted);
+        QCOMPARE(core.sent.size(), sent);
+        QVERIFY(client.programAudioKey());
+        client.unkeyForProgram(12);
+        QCOMPARE(core.sent.last().verb, QByteArray("tx.unkey"));
+        answerCopies(client, core.sent.last(), true, {}, {});
+        // Once it is released, the next program may key.
+        client.keyForProgram(true, {});
+        QCOMPARE(core.sent.last().verb, QByteArray("tx.key"));
+    }
+
+    // 2026-10-08: a program key asked with programAudio brings its own
+    // audio from its asking (already true when micKeyDownChanged starts the
+    // microphone line) until the key ends: released, refused, stopped by
+    // the Core or the link lost. A key asked without it never is.
+    void programAudioKeyFollowsTheProgramKey()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setAvailable(true);
+        QVERIFY(!client.programAudioKey());
+        QList<bool> atKeyDown;
+        connect(&client, &RemoteTransmitClient::micKeyDownChanged, &client,
+                [&](bool down) { atKeyDown << (down && client.programAudioKey()); });
+
+        // Released by the program.
+        client.keyForProgram(true, {});
+        QCOMPARE(atKeyDown, QList<bool>{true});
+        QVERIFY(client.programAudioKey());
+        answerCopies(client, core.sent.last(), true, {}, epochValue(3));
+        QVERIFY(client.holdsTransmit());
+        QVERIFY(client.programAudioKey());
+        client.unkeyForProgram(3);
+        QVERIFY(!client.programAudioKey());
+        answerCopies(client, core.sent.last(), true, {}, {});
+
+        // Refused by the Core.
+        client.keyForProgram(true, {});
+        QVERIFY(client.programAudioKey());
+        answerCopies(client, core.sent.last(), false, QStringLiteral("No."), {});
+        QVERIFY(!client.micKeyDown());
+        QVERIFY(!client.programAudioKey());
+
+        // Asked without programAudio: never one.
+        client.keyForProgram(false, {});
+        QVERIFY(client.micKeyDown());
+        QVERIFY(!client.programAudioKey());
+        answerCopies(client, core.sent.last(), true, {}, epochValue(4));
+        QVERIFY(!client.programAudioKey());
+        client.unkeyForProgram(4);
+        answerCopies(client, core.sent.last(), true, {}, {});
+
+        // Ended by the Core's stop.
+        client.keyForProgram(true, {});
+        answerCopies(client, core.sent.last(), true, {}, epochValue(5));
+        QVERIFY(client.programAudioKey());
+        client.coreStopped(1, /*coreKeyed=*/false, 5);
+        QVERIFY(!client.holdsTransmit());
+        QVERIFY(!client.programAudioKey());
+
+        // 2026-10-09: ended by the Core on its own (transmitting goes false).
+        client.keyForProgram(true, {});
+        answerCopies(client, core.sent.last(), true, {}, epochValue(6));
+        QVERIFY(client.programAudioKey());
+        client.setCoreTransmitting(true);
+        QVERIFY(client.programAudioKey());
+        client.setCoreTransmitting(false);
+        QVERIFY(!client.holdsTransmit());
+        QVERIFY(!client.programAudioKey());
+
+        // 2026-10-09: MOX off while the program keys through this window.
+        client.keyForProgram(true, {});
+        answerCopies(client, core.sent.last(), true, {}, epochValue(7));
+        QVERIFY(client.programAudioKey());
+        client.setScreenKey(false);
+        QCOMPARE(core.sent.last().verb, QByteArray("tx.unkey"));
+        QVERIFY(!client.micKeyDown());
+        QVERIFY(!client.programAudioKey());
+        answerCopies(client, core.sent.last(), true, {}, {});
+
+        // 2026-10-09: the operator's screen key released under the
+        // program's key ends it too.
+        client.setScreenKey(true);
+        answerCopies(client, core.sent.last(), true, {}, epochValue(8));
+        client.keyForProgram(true, {});
+        answerCopies(client, core.sent.last(), true, {}, epochValue(8));
+        QVERIFY(client.programAudioKey());
+        client.setScreenKey(false);
+        QCOMPARE(core.sent.last().verb, QByteArray("tx.unkey"));
+        QVERIFY(!client.micKeyDown());
+        QVERIFY(!client.programAudioKey());
+        answerCopies(client, core.sent.last(), true, {}, {});
+
+        // 2026-10-09: reset() (private; reached through the link going)
+        // ends a key that is on, as it does one still waiting below.
+        client.keyForProgram(true, {});
+        answerCopies(client, core.sent.last(), true, {}, epochValue(9));
+        QVERIFY(client.programAudioKey());
+        client.setAvailable(false);
+        QVERIFY(!client.micKeyDown());
+        QVERIFY(!client.programAudioKey());
+        client.setAvailable(true);
+        QVERIFY(!client.programAudioKey());
+
+        // The link lost while waiting for the answer.
+        client.keyForProgram(true, {});
+        QVERIFY(client.programAudioKey());
+        client.setAvailable(false);
+        QVERIFY(!client.programAudioKey());
     }
 
     void radioMicAcceptedAckKeepsKeyWatchAliveAndRejectsProgram()
@@ -261,7 +400,7 @@ private slots:
         client.keepaliveTick();
         QVERIFY(keepalives > 0);
         bool programRefused = false;
-        client.keyForProgram([&](const RemoteTransmitClient::Answer& answer) {
+        client.keyForProgram(false, [&](const RemoteTransmitClient::Answer& answer) {
             programRefused = !answer.accepted && !answer.reason.isEmpty();
         });
         QVERIFY(programRefused);
@@ -561,7 +700,7 @@ private slots:
         client.setScreenKey(true);
         answerCopies(client, core.sent.at(0), true, {}, epochValue(5));
         RemoteTransmitClient::Answer answer;
-        client.keyForProgram([&answer](const RemoteTransmitClient::Answer& a) { answer = a; });
+        client.keyForProgram(false, [&answer](const RemoteTransmitClient::Answer& a) { answer = a; });
         QCOMPARE(core.argument(1, "trigger").toString(), QStringLiteral("tci"));
         answerCopies(client, core.sent.at(1), true, {}, epochValue(5));
         QVERIFY(answer.accepted);
@@ -581,7 +720,7 @@ private slots:
         RemoteTransmitClient client(core.sender());
         client.setAvailable(true);
         bool accepted = false;
-        client.keyForProgram([&accepted](const RemoteTransmitClient::Answer& a) {
+        client.keyForProgram(false, [&accepted](const RemoteTransmitClient::Answer& a) {
             accepted = a.accepted;
         });
         QVERIFY(client.micKeyDown());
@@ -636,7 +775,7 @@ private slots:
         client.setScreenKey(true);
         QString programReason;
         bool programAnswered = false;
-        client.keyForProgram([&](const RemoteTransmitClient::Answer& a) {
+        client.keyForProgram(false, [&](const RemoteTransmitClient::Answer& a) {
             programAnswered = true;
             programReason = a.reason;
         });
@@ -654,6 +793,32 @@ private slots:
         client.setScreenKey(true);
         QCOMPARE(refused.count(), 1);
         QVERIFY(!client.micKeyDown());
+    }
+
+    void aReplacementDuringRetirementStillAnswersTheWaitingProgram()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setAvailable(true);
+        client.setScreenKey(true);
+        QString programReason;
+        bool programAnswered = false;
+        client.keyForProgram(false, [&](const RemoteTransmitClient::Answer& a) {
+            programAnswered = true;
+            programReason = a.reason;
+        });
+        QObject::connect(&client, &RemoteTransmitClient::micKeyDownChanged,
+                         &client, [&](bool down) {
+            if (!down) {
+                client.setAvailable(true);
+            }
+        });
+
+        client.retireSession();
+
+        QVERIFY(programAnswered);
+        QCOMPARE(programReason, QString::fromLatin1(RemoteTransmitClient::kNoLinkReason));
+        QVERIFY(client.available());
     }
 
     // ---- Task 37: the keepalive -------------------------------------------
@@ -803,7 +968,7 @@ private slots:
         paths.watchdog.setVoxArmed(paths.device, true);
         paths.client.setVoxArmed(true);
         RemoteTransmitClient::Answer keyAnswer;
-        paths.client.keyForProgram([&keyAnswer](const RemoteTransmitClient::Answer& answer) {
+        paths.client.keyForProgram(false, [&keyAnswer](const RemoteTransmitClient::Answer& answer) {
             keyAnswer = answer;
         });
         QCOMPARE(paths.primary.sent.size(), 1);
@@ -1025,7 +1190,7 @@ private slots:
             case 2: client->setTune(false); break;
             case 3: client->setTunerTune(true); break;
             case 4: client->setTwoTone(true); break;
-            case 5: client->keyForProgram({}); break;
+            case 5: client->keyForProgram(false, {}); break;
             case 6: client->unkeyForProgram(7); break;
             }
             QVERIFY2(alive.isNull(), qPrintable(QStringLiteral("scenario %1").arg(scenario)));
@@ -1158,7 +1323,7 @@ private slots:
         client.setTunerTune(true);
         client.setTwoTone(true);
         RemoteTransmitClient::Answer programAnswer;
-        client.keyForProgram([&](const RemoteTransmitClient::Answer& answer) {
+        client.keyForProgram(false, [&](const RemoteTransmitClient::Answer& answer) {
             programAnswer = answer;
         });
         QCOMPARE(core.sent.size(), sentBefore);
@@ -1497,7 +1662,7 @@ private slots:
         client.setCoreTransmitting(true);
         client.setScreenKey(false);
         QVERIFY(client.screenReleasePending());
-        client.keyForProgram([](const RemoteTransmitClient::Answer&) {});
+        client.keyForProgram(false, [](const RemoteTransmitClient::Answer&) {});
         answerCopies(client, core.sent.last(), true, {}, epochValue(4));
         QVERIFY(!client.screenReleasePending());
         const int keys = std::count_if(core.sent.cbegin(), core.sent.cend(),

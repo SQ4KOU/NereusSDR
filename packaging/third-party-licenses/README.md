@@ -14,12 +14,13 @@ directory alongside NereusSDR's own `LICENSE`.
 | Qt 6 | GUI / network / audio framework | LGPL-3.0 (dynamic linking) | `qt6.txt` | `LGPLv3.txt` (+ `GPLv3.txt` by LGPL §4 reference) |
 | FFTW3 | FFT library | GPL-2.0-or-later | `fftw3.txt`, `fftw3-notices.txt` | `GPLv2.txt` |
 | WDSP | DSP engine | GPL-2.0-or-later | `wdsp.txt`, `wdsp-notices.txt` | `GPLv2.txt` |
-| RADE (radae_nopy b2891023) | RADE digital voice modem, built as the rade shared library | BSD-2-Clause | `rade.txt`, `rade-notices.txt` | `rade.txt` |
+| RADE (rade_c c8a3dc15) | RADE digital voice modem, built as the rade shared library | BSD-2-Clause | `rade.txt`, `rade-notices.txt` | `rade.txt` |
 | r8brain-free-src 5c44bebe | sample rate conversion for RADE transmit audio | MIT | `r8brain.txt`, `r8brain-notices.txt` | `r8brain.txt` |
 | libspecbleach 0.2.0 (41d3f583) | NR4 noise reduction | LGPL-2.1-or-later | `libspecbleach.txt` | `LGPLv2.1.txt` |
 | rnnoise 70f1d256 | NR3 noise reduction and its two bundled models | BSD-3-Clause | `rnnoise.txt`, `rnnoise-notices.txt` | `rnnoise.txt` |
 | DeepFilterNet d375b2d8 | DFNR noise reduction library and its bundled model | Apache-2.0 OR MIT | `deepfilternet.txt`, `deepfilternet-crates.txt` | `deepfilternet-apache.txt`, `deepfilternet-mit.txt` |
 | PortAudio v19.7.0 | audio device input and output | MIT | `portaudio.txt`, `portaudio-notices.txt` | `portaudio.txt` |
+| Steinberg ASIO SDK 2.3.4 (Windows builds) | ASIO driver loading and the ASIO entry points for the ASIO engine, in the mic helper nereus-audio-capture | GPL-3.0-only (dual Steinberg ASIO License OR GPL-3.0, taken under GPL-3.0); the host helper files carry an embedded BSD-style notice | `asiosdk.txt`, `asiosdk-notices.txt` | `GPLv3.txt` |
 | nlohmann json 55f93686 | JSON parsing for libdatachannel | MIT | `nlohmann-json.txt` | `nlohmann-json.txt` |
 | zlib v1.3.1 (Windows builds) | compression for stored equaliser settings | Zlib | `zlib.txt` | `zlib.txt` |
 | libASPL v3.1.2 (macOS audio driver) | the NereusSDR VAX audio driver installed by the macOS package | MIT | `libaspl.txt` | `libaspl.txt` |
@@ -41,6 +42,7 @@ directory alongside NereusSDR's own `LICENSE`.
 | Thetis (ramdor/Thetis) | C# → C++/Qt6 port (logic, DSP integration, protocol, UI behaviour) | GPL-2.0-or-later | `thetis.txt` |
 | mi0bot/Thetis-HL2 fork | HL2-specific discovery + capability ports | GPL-2.0-or-later | `mi0bot-thetis.txt` |
 | AetherSDR (ten9876/AetherSDR) | Qt6 architectural template; ~45 derived files | GPL-3.0 | `aethersdr.txt` |
+| PulseAudio v17.0 | Selected public libpulse ABI declarations for bounded Linux VAX ownership control | LGPL-2.1-or-later | `pulseaudio.txt` (+ `LGPLv2.1.txt`) |
 
 ## Where each library comes from
 
@@ -54,13 +56,14 @@ directory, or when a text file here is named by no row.
 | Qt 6 | installed on the build machine; copied into packages by linuxdeploy, macdeployqt and windeployqt | the release workflow's Qt | desktop packages; the Core uses the system's Qt | `qt6.txt` |
 | FFTW3 (libfftw3, libfftw3f and libfftw3_threads, all FFTW's own libraries under its one licence) | `third_party/fftw3` (Windows headers and DLLs, fetched from fftw.org by the root CMakeLists.txt when missing; the threads functions are inside libfftw3-3.dll there); system package on Linux (libfftw3-double3 carries libfftw3_threads.so.3); Homebrew on macOS | 3.3.5 on Windows; the system or Homebrew package elsewhere | desktop packages and the Core | `fftw3.txt`, `fftw3-notices.txt` |
 | WDSP | `third_party/wdsp` | TAPR v1.29 with NereusSDR changes | desktop packages and the Core | `wdsp.txt`, `wdsp-notices.txt` |
-| RADE (radae_nopy) | `third_party/rade` | b2891023f3aecdf8b1793618000b1be6bcb2c4d1 | desktop packages and the Core | `rade.txt`, `rade-notices.txt` |
+| RADE (rade_c) | `third_party/rade` | c8a3dc156045cae2cd251e1a4be0c304c9ddf2f9 | desktop packages and the Core | `rade.txt`, `rade-notices.txt` |
 | Opus | ExternalProject `build_opus`, `build_opus_x86` and `build_opus_arm` in `third_party/rade/cmake/BuildOpus.cmake`, built into the rade library with its LPCNet and FARGAN parts | 940d4e5af64351ca8ba8390df3f555484c567fbb | desktop packages and the Core | `opus.txt`, `opus-notices.txt` |
 | r8brain-free-src | `third_party/r8brain` | 5c44bebe9c477d47b1dc7037fcaae2794ff2b4e1 | desktop packages and the Core | `r8brain.txt`, `r8brain-notices.txt` |
 | libspecbleach | `third_party/libspecbleach`, FetchContent `libspecbleach_upstream` | 41d3f58310391e05ecfb8b7c9efb62ea2ba8ef05 (v0.2.0) | desktop packages and the Core | `libspecbleach.txt` |
 | rnnoise | `third_party/rnnoise`, FetchContent `rnnoise_upstream` | 70f1d256acd4b34a572f999a05c87bf00b67730d | desktop packages and the Core (models too) | `rnnoise.txt`, `rnnoise-notices.txt` |
 | DeepFilterNet | `third_party/deepfilter`, built or downloaded by `setup-deepfilter.sh` and `setup-deepfilter.ps1` | d375b2d8309e0935d165700c91da9de862a99c31 | desktop packages, and the Core when its build has the library | `deepfilternet.txt`, `deepfilternet-crates.txt` |
 | PortAudio | FetchContent `portaudio` | v19.7.0 | desktop packages and the Core | `portaudio.txt`, `portaudio-notices.txt` |
+| Steinberg ASIO SDK | `third_party/asiosdk`, the release archive `ASIO-SDK_2.3.4_2025-10-15.zip` copied unchanged (SHA-256 in `third_party/asiosdk/VERSION.txt`), built as `asiosdk_host` on Windows only | 2.3.4 | Windows packages (the mic helper) | `asiosdk.txt`, `asiosdk-notices.txt` |
 | zlib | FetchContent `zlib` on Windows; the system library elsewhere | v1.3.1 on Windows | Windows packages | `zlib.txt` |
 | libdatachannel | FetchContent `nereus_libdatachannel`, with build-owned source copies changed by `cmake/patches/libdatachannel-keep-remote-description-first.cpp`, `libdatachannel-set-dtls-mtu-before-incoming.cpp`, `libdatachannel-0003-retain-juice-agent-through-turn-release.patch`, `libdatachannel-0004-retain-ice-lifetime-anchor.patch` and `libdatachannel-0005-defer-dtls-startup.patch` in the same directory | v0.24.5 | desktop packages and the Core | `libdatachannel.txt`, `libdatachannel-notices.txt` |
 | libjuice | FetchContent `nereus_libjuice`, with build-owned source copies changed by `cmake/patches/libjuice-0001-give-turn-allocations-back.patch`, `libjuice-0002-bounded-turn-release-lifecycle.patch` and `libjuice-0003-keep-poll-worker-with-retained-agents.patch` in the same directory | 3c40a3545b6b1b62c7adee7f8f2bd58aa290afd6 | desktop packages and the Core | `libjuice.txt`, `libjuice-notices.txt` |
@@ -110,7 +113,8 @@ files carry only the notice `libspecbleach.txt` and `LGPLv2.1.txt` already
 hold. The DeepFilterNet header NereusSDR compiles carries no notice.
 libsodium's file also lists the public-domain and CC0 dedications its
 sources carry in place of a copyright notice (the preset reads those
-too). SPAKE2+EE's compiled files carry no notice beyond `spake2-ee.txt`,
+too). The ASIO SDK has no preset in the script: `asiosdk-notices.txt` was
+collected by hand from the files `asiosdk_host` compiles and names them. SPAKE2+EE's compiled files carry no notice beyond `spake2-ee.txt`,
 so it has no such file. The
 plog headers libdatachannel compiles carry no copyright notice, and
 libdatachannel's compiled files include no nlohmann json header. The
@@ -254,7 +258,7 @@ the §6(b) fallback.
 - `aethersdr.txt`       — AetherSDR upstream-port notice
 - `SOURCE-OFFER.txt`    — written source offer + corresponding-source pointers
 - `LGPLv2.1.txt`        full GNU Lesser General Public License, version 2.1
-- `rade.txt`            RADE (radae_nopy) full BSD-2-Clause notice
+- `rade.txt`            RADE (rade_c) full BSD-2-Clause notice
 - `opus.txt`            Opus full BSD-3-Clause notice
 - `r8brain.txt`         r8brain-free-src full MIT notice
 - `libspecbleach.txt`   libspecbleach dependency notice
@@ -263,6 +267,7 @@ the §6(b) fallback.
 - `deepfilternet-apache.txt` DeepFilterNet's copy of the Apache License 2.0
 - `deepfilternet-mit.txt` DeepFilterNet full MIT notice
 - `portaudio.txt`       PortAudio full MIT notice
+- `asiosdk.txt`         Steinberg ASIO SDK licence (dual Steinberg ASIO License or GPL-3.0)
 - `nlohmann-json.txt`   nlohmann json full MIT notice
 - `zlib.txt`            zlib full notice
 - `libaspl.txt`         libASPL full MIT notice
@@ -273,6 +278,7 @@ the §6(b) fallback.
 - `r8brain-notices.txt` notices in the r8brain-free-src headers NereusSDR compiles
 - `rnnoise-notices.txt` notices in the rnnoise sources NereusSDR compiles
 - `portaudio-notices.txt` notices in the PortAudio sources NereusSDR compiles
+- `asiosdk-notices.txt` notices in the ASIO SDK sources NereusSDR compiles
 - `libdatachannel-notices.txt` notices in the libdatachannel sources NereusSDR compiles
 - `libjuice-notices.txt` notices in the libjuice sources NereusSDR compiles
 - `usrsctp-notices.txt` notices in the usrsctp sources NereusSDR compiles

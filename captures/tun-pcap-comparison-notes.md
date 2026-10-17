@@ -170,7 +170,8 @@ REPO STATE
 - Note: BENCH-DIAG instrumentation is NOT on main. Stderr log will be
   quiet. That's expected.
 
-PROCEDURE
+PROCEDURE (Git Bash terminals on Windows; paths and line continuation below use Bash)
+Replace <YYYYMMDD> in every command with the capture date before running it.
 1. Confirm no NereusSDR / Thetis is running:
      tasklist | grep -iE "thetis|nereus"
 2. Verify G2 reachable:
@@ -184,25 +185,31 @@ PROCEDURE
    main HEAD):
      cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
      cmake --build build -j
-5. Start dumpcap (background):
-     "C:\Program Files\Wireshark\dumpcap.exe" \
+5. Start dumpcap in a dedicated Git Bash terminal (leave it in the foreground):
+     "/c/Program Files/Wireshark/dumpcap.exe" \
         -i 8 -f "host 192.168.109.45" \
-        -w "C:\Users\boyds\NereusSDR\captures\nereussdr-tun-7240-<YYYYMMDD>.pcapng"
+        -w "C:/Users/boyds/NereusSDR/captures/nereussdr-tun-7240-<YYYYMMDD>.pcapng"
    Wait ~2 s, verify the .pcapng file exists and grew past the header.
-6. Launch NereusSDR with stderr → log:
-     build\NereusSDR.exe 2> captures\nereussdr-bench-diag-7240-<YYYYMMDD>.log
+6. From a second Git Bash terminal in the checkout, launch with stderr → log:
+     ./build/NereusSDR.exe 2> "captures/nereussdr-bench-diag-7240-<YYYYMMDD>.log"
 7. JJ at the bench: connect to G2 in NereusSDR's discovery UI → tune to
    7.240 LSB → wait ~3 s for steady-state RX (waterfall confirms real
    signals) → press TUNE, hold ~3 s → release → wait ~2 s.
-8. Stop dumpcap (taskkill //F //IM dumpcap.exe). Quit NereusSDR.
+8. In the capture terminal, press Ctrl+C and wait for dumpcap to finish and
+   close the file. Quit NereusSDR normally. This stops only the capture
+   started in step 5; do not use a process-name-wide forced stop.
+   If a separately authorized fallback requires taskkill, native cmd.exe
+   and PowerShell use single-slash options (/PID <capture-pid>); Git Bash
+   needs MSYS_NO_PATHCONV=1 before taskkill so it does not rewrite them.
+   Do not substitute another PID or force termination as part of this recipe.
 
 VERIFICATION
 1. File exists, non-empty.
 2. Port set: PC→radio 1024/1025/1026/1027/1029, radio→PC 1025/1026/1037
    (1024 and 1035 may or may not appear).
 3. Find the byte-4 transitions on PC→radio port 1027:
-     "C:\Program Files\Wireshark\tshark.exe" \
-        -r captures\nereussdr-tun-7240-<YYYYMMDD>.pcapng \
+     "/c/Program Files/Wireshark/tshark.exe" \
+        -r "captures/nereussdr-tun-7240-<YYYYMMDD>.pcapng" \
         -Y "udp.dstport == 1027" \
         -T fields -e frame.number -e frame.time_relative -e udp.payload \
         | awk '{ b=substr($3,9,2); print $1, $2, b }' \

@@ -12,10 +12,22 @@
 // Modification history (NereusSDR):
 //   2026-09-22: J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-10-11: a newly started scripted helper gets 30 s for its hello
+//               and for the first wait after its start
+//               (kFakeCaptureChildStartMs, fakes/FakeCaptureChild.h),
+//               so a busy computer cannot fail a case that is not about
+//               the helper's start.  J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-10-16: setSharedCaptureSupervisor(): the application's standing
+//               helper outlives one engine and serves the next one's open,
+//               and the next engine starts Closed after the last one's
+//               failure.  J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 
+#include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QSignalSpy>
@@ -71,11 +83,17 @@ namespace {
 // file, below) and ends the helper itself once the order is proven.
 constexpr int kHangingHelperDeadlineMs = 30000;
 
+// What a newly started scripted helper is allowed before its start counts
+// as failed: the hello deadline, and each first wait after a start
+// (fakes/FakeCaptureChild.h).
+constexpr int kHelperStartMs = NereusSDR::Test::kFakeCaptureChildStartMs;
+
 CaptureSupervisor::Options fakeOptions(const QString& scenario)
 {
     CaptureSupervisor::Options options;
     options.program = QCoreApplication::applicationFilePath();
     options.arguments = {QStringLiteral("--fake-capture-child"), scenario};
+    options.helloTimeoutMs = kHelperStartMs;   // 3000 in production
     return options;
 }
 
@@ -259,6 +277,68 @@ private slots:
         engine.stop();
     }
 
+    // 2026-10-16: the persistent helper.  An engine built while a shared
+    // supervisor is set uses it, so the supervisor's standing helper
+    // outlives the engine (a window retired at a Core switch) and the next
+    // engine's open runs on that same process.
+    void sharedSupervisorKeepsItsHelperAcrossEngines()
+    {
+        CaptureSupervisor shared(fakeOptions(QStringLiteral("ready")));
+        auto standby = shared.acquire(CaptureSupervisor::Demand::Standby);
+        AudioEngine::setSharedCaptureSupervisor(&shared);
+        auto first = std::make_unique<AudioEngine>();
+        QTRY_VERIFY_WITH_TIMEOUT(first->captureHelperProcessIdForTest() > 0, kHelperStartMs);
+        const qint64 pid = first->captureHelperProcessIdForTest();
+        QVERIFY(!first->hasCaptureDemand());
+        QCOMPARE(first->captureStatus().state, State::Closed);
+
+        auto lease = first->acquireCaptureDemand(CaptureSupervisor::Demand::LocalSession);
+        QTRY_COMPARE_WITH_TIMEOUT(first->captureStatus().state, State::Ready, kHelperStartMs);
+        QCOMPARE(first->captureHelperProcessIdForTest(), pid);
+        lease.release();
+        first.reset();
+        QTRY_COMPARE_WITH_TIMEOUT(shared.status().state, State::Closed, 5000);
+        QTest::qWait(300);
+        QCOMPARE(shared.helperProcessId(), pid);                // outlived the engine
+        QVERIFY(!processIsGone(pid));
+
+        auto second = std::make_unique<AudioEngine>();
+        QCOMPARE(second->captureHelperProcessIdForTest(), pid);
+        auto again = second->acquireCaptureDemand(CaptureSupervisor::Demand::LocalSession);
+        QTRY_COMPARE_WITH_TIMEOUT(second->captureStatus().state, State::Ready, kHelperStartMs);
+        QCOMPARE(second->captureHelperProcessIdForTest(), pid);
+        QCOMPARE(shared.lastHelperProcessId(), pid);            // no other helper started
+        again.release();
+        second.reset();
+        AudioEngine::setSharedCaptureSupervisor(nullptr);
+
+        standby.release();
+        QTRY_VERIFY_WITH_TIMEOUT(processIsGone(pid), 3000);
+    }
+
+    // A failure the last engine saw on the shared supervisor (here: no
+    // helper program) is not the next engine's: it starts Closed, as an
+    // engine with a supervisor of its own would.
+    void newEngineDoesNotInheritTheSharedFailure()
+    {
+        CaptureSupervisor::Options options;
+        options.program = QDir(QCoreApplication::applicationDirPath())
+                              .filePath(QStringLiteral("no-such-capture-helper"));
+        CaptureSupervisor shared(options);
+        AudioEngine::setSharedCaptureSupervisor(&shared);
+        auto first = std::make_unique<AudioEngine>();
+        auto lease = first->acquireCaptureDemand(CaptureSupervisor::Demand::LocalSession);
+        QTRY_COMPARE_WITH_TIMEOUT(first->captureStatus().state, State::Failed, 3000);
+        lease.release();
+        first.reset();
+        QCOMPARE(shared.status().state, State::Failed);         // a failure persists
+
+        auto second = std::make_unique<AudioEngine>();
+        QTRY_COMPARE_WITH_TIMEOUT(second->captureStatus().state, State::Closed, 3000);
+        second.reset();
+        AudioEngine::setSharedCaptureSupervisor(nullptr);
+    }
+
     // A helper that hangs in open never delays start() or a demand; the
     // TX input stays unavailable (zeros) and stop() and the release return
     // while the helper still runs.
@@ -285,7 +365,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(engine.captureStatus().state, State::Opening, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(engine.captureHelperProcessIdForTest() > 0, 10000);
         const qint64 pid = engine.captureHelperProcessIdForTest();
-        QTRY_VERIFY_WITH_TIMEOUT(markers.hanging(pid), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(markers.hanging(pid), kHelperStartMs);
         QVERIFY(hangingHelperStillRunning(engine, pid));
         QVERIFY(!sawCaptureState(statusSpy, State::Failed));
         QVERIFY(!engine.isPcMicOverrideActive());
@@ -334,7 +414,7 @@ private slots:
         QSignalSpy statusSpy(&engine, &AudioEngine::captureStatusChanged);
         CaptureSupervisor::Lease lease =
             engine.acquireCaptureDemand(CaptureSupervisor::Demand::LocalSession);
-        QTRY_COMPARE_WITH_TIMEOUT(engine.captureStatus().state, State::Ready, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(engine.captureStatus().state, State::Ready, kHelperStartMs);
         QVERIFY(statusSpy.count() > 0);
         QVERIFY(engine.isPcMicOverrideActive());
         QTRY_VERIFY_WITH_TIMEOUT(engine.pcMicInputLevel() > 0.1f, 2000);
@@ -410,7 +490,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(engine->captureStatus().state, State::Opening, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(engine->captureHelperProcessIdForTest() > 0, 10000);
         const qint64 firstPid = engine->captureHelperProcessIdForTest();
-        QTRY_VERIFY_WITH_TIMEOUT(markers.hanging(firstPid), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(markers.hanging(firstPid), kHelperStartMs);
         QVERIFY(hangingHelperStillRunning(*engine, firstPid));
 
         QElapsedTimer timer;
@@ -436,7 +516,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(engine->captureHelperProcessIdForTest() > 0, 10000);
         const qint64 secondPid = engine->captureHelperProcessIdForTest();
         QVERIFY(secondPid != firstPid);
-        QTRY_VERIFY_WITH_TIMEOUT(markers.hanging(secondPid), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(markers.hanging(secondPid), kHelperStartMs);
         QVERIFY(hangingHelperStillRunning(*engine, secondPid));
         QVERIFY(!sawCaptureState(statusSpy, State::Failed));
 
@@ -462,7 +542,7 @@ private slots:
         RadioModel& model = harness->model();
         AudioEngine* const engine = model.audioEngine();
         QCOMPARE(model.transmitModel().micSource(), MicSource::Pc);
-        QTRY_COMPARE_WITH_TIMEOUT(engine->captureStatus().state, State::Ready, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(engine->captureStatus().state, State::Ready, kHelperStartMs);
         const qint64 pid = engine->captureHelperProcessIdForTest();
         QVERIFY(pid > 0);
 
@@ -476,7 +556,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(processIsGone(pid), 5000);
 
         model.transmitModel().setMicSource(MicSource::Pc);
-        QTRY_COMPARE_WITH_TIMEOUT(engine->captureStatus().state, State::Ready, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(engine->captureStatus().state, State::Ready, kHelperStartMs);
 
         model.disconnectFromRadio();
         QTRY_COMPARE_WITH_TIMEOUT(engine->captureStatus().state, State::Closed, 5000);

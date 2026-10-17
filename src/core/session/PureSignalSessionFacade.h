@@ -124,7 +124,13 @@ private:
         QString label;
         std::optional<Ps3FileOperationToken> file;
     };
+    // refreshStatus() announces the status whether or not it changed, for
+    // the events others follow through statusChanged() (a connection, the
+    // receive-only policy, the two-tone test). The coordinator's own report
+    // arrives on every 100 ms poll and is announced only when it changed.
     void refreshStatus();
+    void refreshPolledStatus();
+    void updateStatus(bool announceUnchanged);
     void acquireDisplay();
     void reconcileDisplayTimer();
     void finishFile(int kind, int result, quint64 generation, quint64 completion);

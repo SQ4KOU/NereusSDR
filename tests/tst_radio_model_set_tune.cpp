@@ -260,6 +260,131 @@ class TestRadioModelSetTune : public QObject {
     void clearSettings() { AppSettings::instance().clear(); }
 
 private slots:
+    void delayedConnectSeedKeepsTuneCompensation_data()
+    {
+        tuningFrequencyUpdatesKeepCarrierOnDial_data();
+    }
+
+    void delayedConnectSeedKeepsTuneCompensation()
+    {
+        QFETCH(int, mode);
+        QFETCH(qint64, toneHz);
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        SliceModel* slice = model.activeSlice();
+        QVERIFY(slice);
+        slice->setDspMode(static_cast<DSPMode>(mode));
+        slice->setFrequency(14'074'000);
+        model.setTune(true);
+        QVERIFY(model.isTune());
+        QCOMPARE(conn->txFreqLog.last(), quint64(14'074'000 - toneHz));
+        conn->txFreqLog.clear();
+        // wireSliceSignals schedules this existing 100 ms connect seed.
+        // Await its observable write instead of sleeping for a deadline.
+        QTRY_VERIFY_WITH_TIMEOUT(!conn->txFreqLog.isEmpty(), 1000);
+        QCOMPARE(conn->txFreqLog.last(), quint64(14'074'000 - toneHz));
+        model.setTune(false);
+        pump();
+    }
+
+    void tuningFrequencyUpdatesKeepCarrierOnDial_data()
+    {
+        QTest::addColumn<int>("mode");
+        QTest::addColumn<qint64>("toneHz");
+        QTest::newRow("DIGU") << int(DSPMode::DIGU) << qint64(600);
+        QTest::newRow("DIGL") << int(DSPMode::DIGL) << qint64(-600);
+        QTest::newRow("USB") << int(DSPMode::USB) << qint64(600);
+        QTest::newRow("LSB") << int(DSPMode::LSB) << qint64(-600);
+        QTest::newRow("CWU") << int(DSPMode::CWU) << qint64(600);
+        QTest::newRow("CWL") << int(DSPMode::CWL) << qint64(-600);
+        QTest::newRow("AM") << int(DSPMode::AM) << qint64(600);
+        QTest::newRow("SAM") << int(DSPMode::SAM) << qint64(600);
+        QTest::newRow("FM") << int(DSPMode::FM) << qint64(600);
+        QTest::newRow("DSB") << int(DSPMode::DSB) << qint64(600);
+    }
+
+    void tuningFrequencyUpdatesKeepCarrierOnDial()
+    {
+        QFETCH(int, mode);
+        QFETCH(qint64, toneHz);
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        SliceModel* slice = model.activeSlice();
+        QVERIFY(slice);
+        slice->setDspMode(static_cast<DSPMode>(mode));
+        slice->setFrequency(14'074'000);
+        model.wireSliceSignalsForTest();
+        model.setTune(true);
+        pump();
+        QVERIFY(model.isTune());
+        QVERIFY(!conn->txFreqLog.isEmpty());
+        QCOMPARE(conn->txFreqLog.last(), quint64(14'074'000 - toneHz));
+
+        slice->setFrequency(14'074'100);
+        pump();
+        QCOMPARE(conn->txFreqLog.last(), quint64(14'074'100 - toneHz));
+        slice->setXitHz(75);
+        slice->setXitEnabled(true);
+        pump();
+        QCOMPARE(conn->txFreqLog.last(), quint64(14'074'175 - toneHz));
+        slice->setXitHz(-25);
+        pump();
+        QCOMPARE(conn->txFreqLog.last(), quint64(14'074'075 - toneHz));
+        slice->setXitEnabled(false);
+        pump();
+        QCOMPARE(conn->txFreqLog.last(), quint64(14'074'100 - toneHz));
+
+        model.setTune(false);
+        pump();
+        QCOMPARE(conn->txFreqLog.last(), quint64(14'074'100));
+    }
+
+    void supersededPendingOffCannotRestorePower()
+    {
+        RadioModel model; MockConnection* conn = nullptr; setupModel(model, conn);
+        model.transmitModel().setPower(80);
+        KeyerIdentity cat = KeyerIdentity::station(PttMode::Manual); cat.program = true; cat.requestTag = 74;
+        model.setTune(true, cat); QVERIFY(model.isTune());
+        QVERIFY(model.endTuneIfRequest(74, model.moxController()->acceptedRequestGeneration()));
+        model.moxController()->onMoxButton(true);
+        model.transmitModel().setPower(37); pump();
+        QCOMPARE(model.transmitModel().power(), 37); QVERIFY(model.moxController()->isMox());
+        QVERIFY(!model.tuneOffPendingForTest());
+    }
+
+    void rejectedRepeatRetainsTaggedTune()
+    {
+        RadioModel model; MockConnection* conn = nullptr; setupModel(model, conn);
+        KeyerIdentity cat = KeyerIdentity::station(PttMode::Manual); cat.program = true; cat.requestTag = 66;
+        model.setTune(true, cat); QVERIFY(model.isTune());
+        const quint64 stamp = model.moxController()->acceptedRequestGeneration();
+        model.moxController()->setMoxCheck([] { return safety::BandPlanGuard::MoxCheckResult{false, QStringLiteral("repeat refused")}; });
+        model.setTune(true);
+        QCOMPARE(model.moxController()->acceptedRequestGeneration(), stamp);
+        QVERIFY(model.endTuneIfRequest(66, stamp)); pump();
+        QVERIFY(!model.isTune());
+    }
+
+    void taggedRepeatAdoptsSnapshotsAndStaleEndDoesNothing()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        model.sliceById(0)->setDspMode(DSPMode::CWU);
+        KeyerIdentity cat = KeyerIdentity::station(PttMode::Manual);
+        cat.program = true; cat.requestTag = 52;
+        model.setTune(true, cat);
+        QVERIFY(model.isTune());
+        const quint64 stamp = model.moxController()->acceptedRequestGeneration();
+        model.setTune(true);
+        QVERIFY(!model.endTuneIfRequest(52, stamp));
+        QVERIFY(model.isTune());
+        model.setTune(false); pump();
+        QCOMPARE(model.sliceById(0)->dspMode(), DSPMode::CWU);
+    }
+
     // PA on-air gate review, Minor 2: a disconnect forgets the transmit band.
     // The next band the model sees is an initializing pass (it loads that
     // band's stored power and saves nothing), so a retune after a disconnect

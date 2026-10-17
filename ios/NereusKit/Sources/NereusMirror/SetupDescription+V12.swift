@@ -19,13 +19,17 @@ extension SetupDescription {
         var decimals: Int?
         var options: [(value: Int64, label: String)]?
         var dependency: (phone: String, oneOf: [Literal])?
+        /// V26: the terms of an `allOf` dependency, in the Core's order.
+        var allOf: [(phone: String, oneOf: [Literal])]?
         var perBand: String?
         var confirm = false
 
         init(phone: String, kind: Kind, applies: Applies, gate: (String, Int64)? = nil,
              defaultValue: Literal? = nil, range: Range? = nil, unit: String? = nil, decimals: Int? = nil,
              options: [(Int64, String)]? = nil, dependency: (String, [Literal])? = nil,
+             allOf: [(String, [Literal])]? = nil,
              perBand: String? = nil, confirm: Bool = false) {
+            self.allOf = allOf?.map { (phone: $0.0, oneOf: $0.1) }
             self.phone = phone
             self.kind = kind
             self.applies = applies
@@ -42,11 +46,14 @@ extension SetupDescription {
     }
 
     /// Checks a V12 row against its spec; nil when it differs in any way.
+    /// `introduced` is the version the row needs: 12, or 26 for a row of
+    /// `v26Specs`.
     static func checkV12(_ raw: [String: Any], spec: V12Spec, id: String, category: String, version: Int,
                          kind: Kind?, binding: Binding?, applies: Applies?, gate: Gate?,
-                         range: Range?, decimals: Int?, required: Int?) -> ExtensionMetadata? {
+                         range: Range?, decimals: Int?, required: Int?,
+                         introduced: Int = 12) -> ExtensionMetadata? {
         guard category == (id.hasPrefix("appearance.") ? "appearance" : "display"),
-              version >= 12, required == 12, kind == spec.kind, binding == .phone(spec.phone),
+              version >= introduced, required == introduced, kind == spec.kind, binding == .phone(spec.phone),
               applies == spec.applies, raw["label"] is String, raw["tooltip"] is String,
               range == spec.range, raw["unit"] as? String == spec.unit, decimals == spec.decimals else {
             return nil
@@ -63,7 +70,7 @@ extension SetupDescription {
         if spec.unit != nil { keys.insert("unit") }
         if spec.decimals != nil { keys.insert("decimals") }
         if spec.options != nil { keys.insert("options") }
-        if spec.dependency != nil { keys.insert("enabledWhen") }
+        if spec.dependency != nil || spec.allOf != nil { keys.insert("enabledWhen") }
         if spec.perBand != nil { keys.insert("perBand") }
         if spec.confirm { keys.insert("confirm") }
         guard Set(raw.keys) == keys else { return nil }
@@ -81,20 +88,13 @@ extension SetupDescription {
             result.options = expected.map { Option(value: $0.value, label: $0.label) }
         }
         if let expected = spec.dependency {
-            guard let object = raw["enabledWhen"] as? [String: Any], Set(object.keys) == ["phone", "oneOf"],
-                  object["phone"] as? String == expected.phone,
-                  let values = object["oneOf"] as? [Any], values.count == expected.oneOf.count else { return nil }
-            for (value, want) in zip(values, expected.oneOf) {
-                switch want {
-                case .bool(let on):
-                    guard bool(value) == on else { return nil }
-                case .integer(let whole):
-                    guard int(value) == whole else { return nil }
-                default:
-                    return nil
-                }
-            }
-            result.phoneDependency = PhoneDependency(phone: expected.phone, oneOf: expected.oneOf)
+            guard let dependency = phoneTerm(raw["enabledWhen"], phone: expected.phone,
+                                             oneOf: expected.oneOf) else { return nil }
+            result.phoneDependency = dependency
+        }
+        if let expected = spec.allOf {
+            guard let terms = phoneAllOf(raw["enabledWhen"], expected: expected) else { return nil }
+            result.phoneAllOf = terms
         }
         if let expected = spec.perBand {
             guard let object = raw["perBand"] as? [String: Any], Set(object.keys) == ["label"],

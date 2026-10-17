@@ -20,6 +20,11 @@
 //   2026-09-27: the decimation cite corrected: Thetis's range is 1 to 16;
 //               1 to 32 is NereusSDR's own (R-IOS-06). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-11: Follow-up wave F6, NereusSDR-original: each frame carries
+//               the generation of the input purge it was computed after
+//               (purgeInputForGeneration, fftReadyLinear's last argument).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -143,8 +148,24 @@ public:
     // (console.cs:33304).  Without the compensation, the AGC threshold
     // drifts up to 12 dB across the slider's 0..6 range.
     // From Thetis Display.cs:1389-1397 [v2.10.3.13] RX1FFTSizeOffset.
+    //
+    // NereusSDR, 2026-10-11: Auto AGC-T no longer reads this offset. It
+    // reads a noise floor referred to a 4096-point FFT instead
+    // (NoiseFloorTracker::agcNoiseFloor; RadioModel::updateAutoAgc says
+    // why). The offset is still stored on every size change and nothing
+    // reads it at present.
     void setFftSizeOffsetDb(double db);
     double fftSizeOffsetDb() const { return m_fftSizeOffsetDb.load(); }
+
+    // The offset an FFT size baseline carries: its slider position times
+    // 2 dB, where the position is log2(size / 4096). setFftSizeBaseline()
+    // stores it, so every FFT size change sets it, wherever it came from.
+    // From Thetis setup.cs:16148 [v2.10.3.13] (position 0 is 4096)
+    static constexpr int kFftSizeOffsetZeroSize = 4096;
+    // From Thetis setup.cs:16154 [v2.10.3.13]
+    //   Display.RX1FFTSizeOffset = tbDisplayFFTSize.Value * 2;
+    static constexpr double kFftSizeOffsetDbPerPosition = 2.0;
+    static double fftSizeOffsetDbForSize(int size);
 
     // FFT-size baseline -- the user's slider-set "FFT size at full DDC
     // bandwidth (bwHz == sampleRate)" choice.  NereusSDR-original auto-zoom
@@ -156,6 +177,14 @@ public:
     // baseline * sampleRate / bwHz formula.
     void setFftSizeBaseline(int size);
     int  fftSizeBaseline() const { return m_fftSizeBaseline.load(); }
+
+    // The FFT sizing mode changed (design D43; R-DSP-67) and left this
+    // engine's baseline as it was (Auto to Hz/bin and back: both 4096).
+    // Stores the offset the baseline carries and says fftSizeBaselineChanged
+    // once, as a changed baseline does, so the noise-floor trackers this
+    // engine feeds restart their fast attack. FftEnginePool::setSizing calls
+    // one or the other for a mode change, never both.
+    void announceFftSizingChanged();
 
     // Hz-per-bin auto-zoom override.  When > 0, the auto-zoom replan
     // formula (in MainWindow) targets this Hz/bin instead of the default
@@ -218,6 +247,21 @@ public slots:
     /// overlap ring when their values happen to be unchanged.
     void resetInputHistory();
 
+    /// resetInputHistory(), and every frame from now on carries
+    /// `generation` (fftReadyLinear's last argument). Runs on this engine's
+    /// worker thread, so a frame computed before the purge keeps the
+    /// generation it was computed under however late it is delivered.
+    /// NereusSDR-original.
+    void purgeInputForGeneration(quint64 generation);
+
+public:
+    /// The generation frames are stamped with now. 0 until the first
+    /// purgeInputForGeneration() or setInputGeneration().
+    quint64 inputGeneration() const { return m_inputGeneration.load(); }
+    /// The stamp alone, with no purge: for an engine made after a purge,
+    /// which holds no input from before it.
+    void setInputGeneration(quint64 generation) { m_inputGeneration.store(generation); }
+
 signals:
     // Emitted when a new FFT frame is ready.
     // binsDbm contains fftSize float values (full FFT-shifted bins, neg-freq
@@ -248,8 +292,13 @@ signals:
     //
     // Emitted in lock-step with fftReady — every frame, both signals fire.
     // Cost: one extra QVector<float> heap allocation + 16 bytes per frame.
+    //
+    // inputGeneration is the generation of the last input purge before the
+    // samples of this frame (purgeInputForGeneration); a slot that does not
+    // need it leaves it out.
     void fftReadyLinear(int receiverId, const QVector<float>& binsLinear,
-                        double windowEnb, double dbmOffset);
+                        double windowEnb, double dbmOffset,
+                        quint64 inputGeneration = 0);
 
     // Emitted whenever a setFftSize() call results in an actual size
     // change (oldSize != newSize).  Mirrors Thetis
@@ -258,6 +307,13 @@ signals:
     // refresh their derived state.  NereusSDR has no subscribers today;
     // emitted for forward compatibility.
     void spectrumSettingsChanged(int receiverId);
+
+    // Emitted when setFftSizeBaseline() changes the baseline (once per
+    // change; a size that is already the baseline emits nothing), and by
+    // announceFftSizingChanged() for a sizing mode change that left the
+    // baseline alone, from the thread that called it. MainWindow restarts
+    // the fast attack of the noise-floor trackers this engine feeds.
+    void fftSizeBaselineChanged(int size);
 
 private:
     void replanFft();
@@ -276,6 +332,8 @@ private:
     // FFT size display calibration offset (dB).  Updated by the slider
     // handler to slider.Value * 2 per Thetis setup.cs:16154 [v2.10.3.13].
     std::atomic<double> m_fftSizeOffsetDb{0.0};
+    // The generation frames are stamped with (purgeInputForGeneration).
+    std::atomic<quint64> m_inputGeneration{0};
     // User's slider-set FFT size baseline (NereusSDR-original auto-zoom
     // anchor).  Default matches m_fftSize so first-launch behavior is
     // identical to a system without auto-zoom (slider == FFT size).

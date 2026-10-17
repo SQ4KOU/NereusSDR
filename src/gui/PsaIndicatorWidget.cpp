@@ -16,6 +16,13 @@
 //                 by J.J. Boyd (KG4VCF), with OpenAI Codex assistance.
 //   2026-10-04 — Live Core status and passive numeric correction readouts,
 //                 by J.J. Boyd (KG4VCF), with OpenAI Codex assistance.
+//   2026-10-09 - Workspace preview only: the banner's status fills take the
+//                 decided status tones (on and a good feedback level ok,
+//                 a low level warn, a bad level danger). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-10-11 — A status update restyles the banner only when its
+//                 color changes; J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 
 //   2026-05-06 — Phase 3M-4 Task 10: created by J.J. Boyd (KG4VCF),
 //                 with AI-assisted transformation via Anthropic Claude
@@ -117,6 +124,7 @@ mw0lge@grange-lane.co.uk
 #include "core/session/PureSignalSessionFacade.h"
 #include "models/PureSignalSettings.h"
 #include "models/RadioModel.h"
+#include "gui/styles/WorkspacePreview.h"
 
 #include <QHBoxLayout>
 #include <QLabel>
@@ -153,6 +161,23 @@ inline QColor kDodgerBlue() { return QColor( 30, 144, 255); }
 // dark, so labels render with near-black text on the colored
 // backgrounds.  Use a clearly contrasting value here.
 inline QColor kFgText()     { return QColor( 16,  16,  16); }
+
+// Workspace preview: a banner fill as the status it means (D21). Off
+// (DimGray) and the over-range blue have no status of their own and keep
+// their colours.
+QColor statusFill(const QColor& bg)
+{
+    if (bg == kSeaGreen() || bg == kLime()) {
+        return WorkspacePreview::statusColour(bg, "ok");
+    }
+    if (bg == kYellow()) {
+        return WorkspacePreview::statusColour(bg, "warn");
+    }
+    if (bg == kRed()) {
+        return WorkspacePreview::statusColour(bg, "danger");
+    }
+    return bg;
+}
 } // namespace
 
 PsaIndicatorWidget::PsaIndicatorWidget(RadioModel* model, QWidget* parent)
@@ -505,11 +530,12 @@ void PsaIndicatorWidget::updateTooltip()
     m_lblPsFeedback->setToolTip(tooltip);
 }
 
-void PsaIndicatorWidget::applyBackground(QLabel* label, const QColor& bg)
+void PsaIndicatorWidget::applyBackground(QLabel* label, const QColor& source)
 {
     if (!label) {
         return;
     }
+    const QColor bg = statusFill(source);
 
     // Drive the background via QPalette so fbBackgroundColor() /
     // psBackgroundColor() can read it back without parsing a stylesheet
@@ -520,11 +546,16 @@ void PsaIndicatorWidget::applyBackground(QLabel* label, const QColor& bg)
     label->setPalette(p);
     label->setAutoFillBackground(true);
 
-    label->setStyleSheet(QStringLiteral(
+    const QString style = QStringLiteral(
         "QLabel { background-color: %1; color: #101010; "
         "padding: 1px 6px; border-radius: 3px; "
         "font-weight: bold; font-size: 11px; }")
-        .arg(bg.name()));
+        .arg(bg.name());
+    // Qt polishes and repaints a widget on every setStyleSheet(), the same
+    // text or not, and this runs on every status update.
+    if (label->styleSheet() != style) {
+        label->setStyleSheet(style);
+    }
 }
 
 } // namespace NereusSDR

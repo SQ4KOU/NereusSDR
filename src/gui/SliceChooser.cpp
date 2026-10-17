@@ -23,6 +23,9 @@
 //               no desktop hosts; a slice the Core keeps for an away
 //               device names that device. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-10-11: choosing the row of a slice this window plays asks the
+//               window to show it (showRequested). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/SliceChooser.h"
@@ -417,10 +420,13 @@ void SliceChooser::rebuild()
         layout->addWidget(tune);
         layout->addWidget(owner, 1);
         button->setMinimumHeight(tune->sizeHint().height() + 8);
-        // Choosing a row only shows it.
-        connect(button, &QPushButton::clicked, this, [this, id = row.sliceId]() {
+        // Choosing a row shows it here, and a slice this window already
+        // plays is shown in the window too. It asks the Core for nothing.
+        connect(button, &QPushButton::clicked, this,
+                [this, id = row.sliceId, shownHere = row.listeningHere]() {
             m_selected = id;
             rebuild();
+            if (shownHere) { emit showRequested(id); }
         });
         m_list->addWidget(button);
     }

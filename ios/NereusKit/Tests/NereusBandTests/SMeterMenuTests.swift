@@ -86,10 +86,10 @@ import Testing
         state.chooseTx(.swr)
         shown = state.display(at: 0, meters: meters)
         #expect(shown.caption == "SWR")
-        #expect(shown.right == "1.5 : 1")
+        #expect(shown.right == "1.50")
         #expect(Self.near(shown.needle, 0.25))
         state.chooseFace(.classic)
-        #expect(state.display(at: 0, meters: meters).right == "1.5")
+        #expect(state.display(at: 0, meters: meters).right == "1.50")
 
         state.chooseTx(.level)
         shown = state.display(at: 0, meters: meters)

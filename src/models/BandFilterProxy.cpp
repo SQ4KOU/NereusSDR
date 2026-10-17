@@ -41,6 +41,11 @@
 //                                    convention for unknown values).
 //                                    AI tooling: Anthropic Claude
 //                                    Code.
+//   2026-10-15  J.J. Boyd (KG4VCF)  setBandVisible and setSourceVisible
+//                                    flush the view's pending
+//                                    accessibility reset before the
+//                                    filter changes. AI-assisted via
+//                                    Anthropic Claude Code.
 
 #include "BandFilterProxy.h"
 #include "SpotTableModel.h"
@@ -50,6 +55,9 @@ namespace NereusSDR {
 // From AetherSDR src/gui/DxClusterDialog.cpp:208-215 [@0cd4559]
 void BandFilterProxy::setBandVisible(const QString& band, bool visible)
 {
+    // NereusSDR: before the filter changes, so the reset keeps the rows
+    // shown now (OrderKeepingProxyModel::prepareForRowChange).
+    prepareForRowChange();
     if (visible)
         m_hiddenBands.remove(band);
     else
@@ -62,6 +70,9 @@ void BandFilterProxy::setBandVisible(const QString& band, bool visible)
 // (Cluster / RBN / WSJT-X / SpotCollector / POTA / FreeDV / PSK).
 void BandFilterProxy::setSourceVisible(const QString& source, bool visible)
 {
+    // NereusSDR: before the filter changes, so the reset keeps the rows
+    // shown now (OrderKeepingProxyModel::prepareForRowChange).
+    prepareForRowChange();
     if (visible)
         m_hiddenSources.remove(source);
     else

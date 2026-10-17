@@ -3,6 +3,8 @@
 The suite has **598 registered tests** (four are Linux/PipeWire-only and
 register only on Linux).
 
+Audio tests use the fakes in `tests/fakes/` and never open a sound device.
+
 The application is built as a single shared library (`NereusSDRLib`) that
 every test links dynamically, so a test executable is about **90 KB**, not a
 private 40 MB copy of the whole app. Re-measured 2026-08-02 on an Apple
@@ -67,6 +69,16 @@ and returns a false green. There is one `tests_<label>` target per label,
 generated from the same derivation that produces the labels, so the two
 cannot drift apart.
 
+### The workspace look in tests
+
+The app's workspace look is on unless `NEREUS_WORKSPACE_PREVIEW` is `0`
+(`src/gui/styles/WorkspacePreview.h`). The suite was written against the
+classic look, so ctest starts every test with `NEREUS_WORKSPACE_PREVIEW=0`;
+a test of the new look turns it on itself with
+`WorkspacePreview::setEnabledForTest(true)`. A test binary started by hand
+does not get that variable: set it to `0` yourself, or the widgets it
+builds take the new look.
+
 Current distribution:
 
 | Label | Tests |
@@ -85,7 +97,8 @@ test, and two that deliberately avoid instantiating GUI classes).
 Every test carries `TIMEOUT 120` by default, so a hung test fails instead
 of blocking forever. A few still override it in `tests/CMakeLists.txt`, each
 with its reason beside it: `tst_remote_audio_clock` (700 s, two simulated
-hours through WDSP's resampler), `tst_rendezvous_client`,
+hours through WDSP's resampler), `tst_device_rate_matcher` (600 s, four
+10-minute simulations through varsamp), `tst_rendezvous_client`,
 `tst_remote_vax_feeder`, `tst_remote_media_controller`, `tst_media_tunnel`,
 the media-wait set (`tst_remote_audio_session`, `tst_media_replace`,
 `tst_remote_telemetry`, `tst_remote_connection_controls`) and the link
@@ -148,8 +161,13 @@ average). A `realtime` failure under load is a rerun-alone item: rerun that
 test by itself on a quiet machine before you call anything done. Never
 treat it as background noise: if it also fails alone, it is a real failure.
 
-CI keeps running the `realtime` tests in its normal suite, with no label
-filter, because each CI job has its runner to itself.
+CI does the same. On GitHub's hosted runners each Linux job runs everything
+else side by side, one test per core, then the `realtime` tests one at a time
+on the otherwise idle runner (the Test step in `.github/workflows/ci.yml`).
+When Linux runs on the self-hosted runners, two jobs there run everything
+else, 8 at a time (the linux-box jobs), and the `realtime` tests run one at a
+time on an idle GitHub-hosted runner (the linux-realtime job), since other
+work shares the self-hosted machine.
 
 To add a test to the group, register it with
 `nereus_add_test(<name> REALTIME ...)` and call
@@ -194,6 +212,17 @@ ctest --test-dir build -LE native-window   # everything else
 Reserve `NATIVE_WINDOW` for tests that need a capability the offscreen
 platform lacks. If a test fails off-screen because the product itself
 misbehaves without a native window, fix the product instead.
+
+Native-window tests share your desktop, so ctest runs them one at a time
+(the `native-window-desktop` resource lock) while offscreen tests keep
+running in parallel. macOS draws nothing for a window it reports covered:
+another app's full-screen window, the app that was frontmost taking focus
+back a second after the test launches, or another test's window. A test
+that waits for a GPU frame (`QRhiWidget::frameSubmitted`) waits through
+`tests/NativeWindowFrames.h`, which raises a covered window and asks again.
+If the window stays covered the test fails with a message that says so,
+which is not a product stall; rerun it with the window unobstructed. A
+frame that never arrives while the window is exposed is a real failure.
 
 ## Building tests is opt-in
 

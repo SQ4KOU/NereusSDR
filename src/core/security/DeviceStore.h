@@ -55,6 +55,7 @@
 
 #include <functional>
 #include <optional>
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
@@ -74,7 +75,7 @@ struct PairedDevice {
     QString shortName;
 };
 
-class DeviceStore : public QObject {
+class NEREUS_CORE_EXPORT DeviceStore : public QObject {
     Q_OBJECT
 
 public:

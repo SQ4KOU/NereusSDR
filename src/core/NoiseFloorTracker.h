@@ -10,6 +10,9 @@
 //   2026-04-16 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-10-11 — A second floor referred to a 4096-point FFT, for Auto
+//                 AGC-T (NereusSDR-original). J.J. Boyd (KG4VCF), with
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -70,15 +73,42 @@ class NoiseFloorTracker {
 public:
     NoiseFloorTracker();
 
+    // NereusSDR-original. The FFT size WDSP's AGC threshold is stated for:
+    // RxChannel passes 4096 to SetRXAAGCThresh and GetRXAAGCThresh, and WDSP
+    // (third_party/wdsp/src/wcpAGC.c:504-515) reads the threshold as the
+    // noise in one bin of width rate / 4096. RxChannel.cpp asserts its size
+    // against this constant.
+    static constexpr int kAgcReferenceFftSize = 4096;
+    // What a frame of `binCount` bins adds to its mean to give the floor
+    // per (rate / 4096) Hz: 10 * log10(binCount / 4096), 3.01 dB per
+    // doubling. FFTEngine normalizes by the window's coherent gain only, so
+    // the noise in each bin falls by that much when the size doubles. The
+    // display's decimation plays no part: it drops samples without a
+    // filter, so the whole band's noise folds into the bins that remain.
+    static float agcReferenceOffsetDb(int binCount) noexcept;
+
+    // One frame of full-band bins, as FFTEngine::fftReady sends them: the
+    // frame's size is binsDbm.size().
     void feed(const QVector<float>& binsDbm, float frameIntervalMs);
+    // The floor per bin at the size the frames arrive in: what is drawn on
+    // the pan, and what every reader but Auto AGC-T uses.
     float noiseFloor() const noexcept { return m_lerpAverage; }
+    // NereusSDR-original. The same floor referred to a 4096-point FFT, frame
+    // by frame, with the same lerp and the same fast attack. Auto AGC-T
+    // reads this one, so its threshold does not move when the running FFT
+    // size does. Equal to noiseFloor() while the frames are 4096 bins.
+    float agcNoiseFloor() const noexcept { return m_agcLerpAverage; }
     bool isGood() const noexcept { return m_isGood; }
     void triggerFastAttack();
+    // True from triggerFastAttack() (and from construction) until the next
+    // feed() takes the snap.
+    bool fastAttackPending() const noexcept { return m_fastAttackPending; }
     float attackTimeMs() const noexcept { return m_attackTimeMs; }
     void setAttackTimeMs(float ms) { m_attackTimeMs = ms; }
 
 private:
     float m_lerpAverage{-200.0f};      // From Thetis v2.10.3.13 display.cs:4628
+    float m_agcLerpAverage{-200.0f};   // NereusSDR-original: agcNoiseFloor()
     float m_attackTimeMs{2000.0f};     // From Thetis v2.10.3.13 display.cs:4638
     bool m_isGood{false};              // From Thetis v2.10.3.13 display.cs:4630
     bool m_fastAttackPending{true};

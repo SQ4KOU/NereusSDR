@@ -14,6 +14,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Shared accessory display readings and independent legal
+//                 marker / display scale by J.J. Boyd (KG4VCF),
+//                 AI-assisted via OpenAI Codex.
+//   2026-10-09 - PC mic status for the transmit badge (native audio plan
+//                Task 20; R-AUD-24, R-AUD-09, R-AUD-13). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 //   2026-10-02  J.J. Boyd / KG4VCF. TX letters share the guarded flag
 //                Take and select action, with current access and target
 //                lifetime checks. AI-assisted via OpenAI Codex.
@@ -146,6 +152,9 @@
 //   2026-09-30  J.J. Boyd / KG4VCF  Fix round 1 (minor 5): m_psBoardUnknown,
 //                PS-A shown disabled while the board is not known.
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-13 - Expose the window-owned DUP presentation and click signal.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation
+//                 via OpenAI Codex.
 // =================================================================
 
 //=================================================================
@@ -212,6 +221,7 @@
 // =================================================================
 
 #include "AppletWidget.h"
+#include "gui/NereusGuiExport.h"
 #include <QPointer>
 #include <QList>
 #include <functional>
@@ -232,6 +242,7 @@ class QTimer;
 namespace NereusSDR {
 
 class HGauge;
+class BarInstrument;
 class MicProfileManager;
 class PureSignal;
 class PureSignalSessionFacade;
@@ -281,7 +292,7 @@ class SliceModel;
 //   VOX engage surface next to MOX/TUNE on the right pane.  Full row moves
 //   as a unit including the live DexpPeakMeter strip + 100 ms poller.
 // Out-of-phase controls (2-Tone, PS-A) are hidden.
-class TxApplet : public AppletWidget {
+class NEREUS_GUI_EXPORT TxApplet : public AppletWidget {
     Q_OBJECT
 public:
     explicit TxApplet(RadioModel* model, QWidget* parent = nullptr);
@@ -300,6 +311,7 @@ public:
     // wireControls().  HPSDRModel::FIRST is a safe sentinel default
     // (yields 100 W ceiling).  Bench-reported #167 follow-up.
     void rescaleFwdGaugeForModel(HPSDRModel model);
+    void refreshPowerReadouts();
 
     // K.2: MOX button tooltip override based on current DSP mode.
     // Public static so tests can call it directly without constructing a full
@@ -319,6 +331,9 @@ public:
     // button's clicked-state drives controller.setActive(checked); the
     // controller's twoToneActiveChanged signal mirrors back into the button.
     void setTwoToneController(TwoToneController* controller);
+
+    // The window owns this display preference; the applet only presents it.
+    void setDisplayDuplexState(bool checked, bool available, const QString& tooltip);
 
     // ── Phase 3M-3a-ii Batch 6 (Task A): TxCfcDialog launch ─────────────────
     // Public slot so external surfaces (CfcSetupPage's [Configure CFC bands…]
@@ -407,8 +422,8 @@ public slots:
     void applyStationCfcCompression(const QList<double>& binsDb);
     void setStationCfcBarChartUnavailable(const QString& reason);
     // Parity Task 33: the RF Pwr and SWR bars, for a test.
-    HGauge* fwdPowerGauge() const { return m_fwdPowerGauge; }
-    HGauge* swrGauge() const { return m_swrGauge; }
+    BarInstrument* fwdPowerGauge() const { return m_fwdPowerGauge; }
+    BarInstrument* swrGauge() const { return m_swrGauge; }
     // R-R3-49 (parity Task 7): PS-A arms PureSignal and keys nothing. It
     // follows this gate (not setTransmitPermitted): a remote window whose
     // Core offers arming (transmitSettingsVersion 7) uses it while the
@@ -537,6 +552,7 @@ signals:
     // PureSignal…); the same singleton dialog instance is opened by the
     // [PS-A] button right-click and the matching control on PureSignalApplet.
     void openPureSignalDialogRequested();
+    void displayDuplexRequested(bool on);
 
 private slots:
     /// Phase 3M-3a-iii bench polish (2026-05-04): 100 ms timer slot — pulls
@@ -551,9 +567,11 @@ private slots:
 private:
     void buildUI();
     void refreshMicSourceBadge();
+    static QString micSourceBadgeStyle(bool amber);
     void wireControls();  // called after buildUI() — attaches signals/slots
     void syncXpaFromOc();  // external PA state follows saved RX/TX OC6
     void syncPsaFromFacade();
+    void syncRemoteIndicators();
     // Fix wave GUI-I7: put back PS-A's tooltip under the facade's reason.
     void removePsaFacadeReason();
     // R-R3-45: show the MON output choice (true = headphones) without
@@ -612,12 +630,13 @@ private:
 
     // 0. Mic-source badge (J.3 Phase 3M-1b) — read-only label above the gauges.
     QLabel*  m_micSourceBadge = nullptr;
+    bool     m_micSourceBadgeAmber = false;   // native audio plan Task 20
     QLabel*  m_holderLabel = nullptr;   // fix wave I4
     QPushButton* m_takeTransmitBtn = nullptr;  // Task 78
     // 1. Forward Power gauge
-    HGauge*  m_fwdPowerGauge  = nullptr;
+    BarInstrument*  m_fwdPowerGauge  = nullptr;
     // 2. SWR gauge
-    HGauge*  m_swrGauge       = nullptr;
+    BarInstrument*  m_swrGauge       = nullptr;
     // EMA smoothing state for fwd-power gauge (Thetis-style envelope detector
     // not yet ported; this is a simple alpha=0.25 exponential-moving-average
     // to keep the displayed value calm — RadioStatus::powerChanged fires

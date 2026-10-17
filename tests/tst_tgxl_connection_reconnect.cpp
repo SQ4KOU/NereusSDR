@@ -22,6 +22,9 @@ namespace {
 
 constexpr int kBackoffUnitMs = 200;
 constexpr int kRetryObservationMs = 500;
+// A refused loopback dial reports in milliseconds on Linux and macOS but
+// takes about 3.4 s on Windows, which retries the SYN after the reset.
+constexpr int kRefusedDialMs = 8000;
 
 quint16 closedLoopbackPort()
 {
@@ -71,7 +74,7 @@ private slots:
         conn.testSetReconnectBackoffUnitMs(kBackoffUnitMs);
         QSignalSpy attempts(&conn, &TgxlConnection::reconnectAttempt);
         conn.connectToTgxl(QStringLiteral("127.0.0.1"), oldPort);
-        QTRY_COMPARE_WITH_TIMEOUT(attempts.size(), 1, 2000);
+        QTRY_COMPARE_WITH_TIMEOUT(attempts.size(), 1, kRefusedDialMs);
         QTcpServer oldEndpoint;
         QVERIFY(oldEndpoint.listen(QHostAddress::LocalHost, oldPort));
         QSignalSpy staleConnections(&oldEndpoint, &QTcpServer::newConnection);
@@ -93,7 +96,7 @@ private slots:
         conn.testSetReconnectBackoffUnitMs(kBackoffUnitMs);
         QSignalSpy attempts(&conn, &TgxlConnection::reconnectAttempt);
         conn.connectToTgxl(QStringLiteral("127.0.0.1"), oldPort);
-        QTRY_COMPARE_WITH_TIMEOUT(attempts.size(), 1, 2000);
+        QTRY_COMPARE_WITH_TIMEOUT(attempts.size(), 1, kRefusedDialMs);
         conn.disconnect();
 
         QTcpServer oldEndpoint;
@@ -152,7 +155,7 @@ private slots:
         QPointer<QTcpSocket> failedSocket = conn.testSocketForTesting();
         QVERIFY(!failedSocket.isNull());
 
-        QTRY_COMPARE_WITH_TIMEOUT(attempts.size(), 1, 2000);
+        QTRY_COMPARE_WITH_TIMEOUT(attempts.size(), 1, kRefusedDialMs);
         QTRY_VERIFY_WITH_TIMEOUT(
             conn.testActiveSocketAttemptGeneration() != failedAttempt, 2000);
 
@@ -164,7 +167,7 @@ private slots:
         // lifecycle invariant required by the real timeout path.
         QTRY_VERIFY_WITH_TIMEOUT(failedSocket.isNull(), 2000);
         QVERIFY(conn.testSocketForTesting() != nullptr);
-        QTRY_VERIFY_WITH_TIMEOUT(failures.size() >= 2, 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(failures.size() >= 2, kRefusedDialMs);
         for (const QList<QVariant>& failure : failures) {
             QVERIFY2(!failure.at(0).toString().contains(
                          QStringLiteral("Invalid socket descriptor")),
@@ -200,7 +203,7 @@ private slots:
         conn.testSetReconnectBackoffUnitMs(kBackoffUnitMs);
         QSignalSpy attempts(&conn, &TgxlConnection::reconnectAttempt);
         conn.connectToTgxl(QStringLiteral("127.0.0.1"), deadPort);
-        QTRY_COMPARE_WITH_TIMEOUT(attempts.size(), 1, 2000);
+        QTRY_COMPARE_WITH_TIMEOUT(attempts.size(), 1, kRefusedDialMs);
         QTcpServer server;
         QVERIFY(server.listen(QHostAddress::LocalHost, 0));
         int accepted = 0;
@@ -237,7 +240,7 @@ private slots:
         }, Qt::DirectConnection);
 
         conn.connectToTgxl(QStringLiteral("127.0.0.1"), deadPort);
-        QTRY_VERIFY_WITH_TIMEOUT(conn.isConnected(), 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(conn.isConnected(), kRefusedDialMs);
         QTest::qWait(kRetryObservationMs);
         QCOMPARE(accepted, 1);
         QCOMPARE(conn.peerPort(), replacement.serverPort());
@@ -255,7 +258,7 @@ private slots:
                 &conn, [&conn](int, int) { conn.disconnect(); }, Qt::DirectConnection);
 
         conn.connectToTgxl(QStringLiteral("127.0.0.1"), deadPort);
-        QTRY_COMPARE_WITH_TIMEOUT(attempts.size(), 1, 2000);
+        QTRY_COMPARE_WITH_TIMEOUT(attempts.size(), 1, kRefusedDialMs);
         QTcpServer oldEndpoint;
         QVERIFY(oldEndpoint.listen(QHostAddress::LocalHost, deadPort));
         QSignalSpy staleConnections(&oldEndpoint, &QTcpServer::newConnection);
@@ -289,7 +292,7 @@ private slots:
         }, Qt::DirectConnection);
 
         conn.connectToTgxl(QStringLiteral("127.0.0.1"), deadPort);
-        QTRY_VERIFY_WITH_TIMEOUT(conn.isConnected(), 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(conn.isConnected(), kRefusedDialMs);
         QCOMPARE(accepted, 1);
         QCOMPARE(conn.peerPort(), replacement.serverPort());
         QVERIFY(!conn.testReconnectPending());
@@ -306,7 +309,7 @@ private slots:
                 Qt::DirectConnection);
 
         conn.connectToTgxl(QStringLiteral("127.0.0.1"), deadPort);
-        QTRY_COMPARE_WITH_TIMEOUT(failures.size(), 1, 2000);
+        QTRY_COMPARE_WITH_TIMEOUT(failures.size(), 1, kRefusedDialMs);
 
         QTcpServer oldEndpoint;
         QVERIFY(oldEndpoint.listen(QHostAddress::LocalHost, deadPort));

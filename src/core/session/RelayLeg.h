@@ -47,6 +47,7 @@
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
+#include "core/NereusCoreExport.h"
 
 #include <QByteArray>
 #include <QElapsedTimer>
@@ -69,7 +70,7 @@ QT_END_NAMESPACE
 
 namespace NereusSDR {
 
-class RelayLeg : public QObject {
+class NEREUS_CORE_EXPORT RelayLeg : public QObject {
     Q_OBJECT
 
 public:

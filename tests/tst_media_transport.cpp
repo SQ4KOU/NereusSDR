@@ -46,8 +46,71 @@
 // maxaveragebitrate=48000. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 // Claude Code.
 //
+// 2026-10-09: the stalled-owner case times each owner stall, each packet
+// the line hands over and each underrun, and measures the line once more
+// when every underrun sat in a gap without packets that no stall's end
+// closed (the machine starving the transport, not the owner). J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
+//
+// 2026-10-15: the stalled-owner case's coordinator waits on a
+// high-resolution timer (HighResolutionWait.h). On Windows its std sleep
+// lasted 15.6 ms, so one stall saw 29 pulls and 2 packets instead of about
+// 315 and 21, and owner.ownerExposed failed in every run. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
+//
+// 2026-10-15: a handshake wait that runs out says how far each end had
+// come (LibDataChannelMediaTransport::handshakeStateForTest), so a miss
+// under load shows whether the handshake was slow or stuck, and where.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//
+// 2026-10-15: two cases that failed on the STRIX at 100% CPU. The
+// ready-first case keeps the answer from the offerer until the answerer's
+// drain is held, since a starved drain took the channels' opening with
+// the end of gathering; the held-message case offers messages until one
+// is held, since a starved sender lost the race with the first one's
+// acknowledgment. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+// Code.
+//
+// 2026-10-15: review of pull request 542. The held-message case takes its
+// two sends, the busy check and the Busy send as one attempt, and tries a
+// fresh pair when any step loses the race; a handshake miss ends its case
+// and builds its stage text only on a miss. J.J. Boyd (KG4VCF), AI-assisted
+// via Anthropic Claude Code.
+//
+// 2026-10-16: second review of pull request 542. The held-message case
+// fails at once on a result no lost race explains (Refused anywhere, Busy
+// before the third send); between attempts it also waits for each held
+// message's writable signal, and every such wait shares one 20 s budget,
+// with none after the last attempt. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
+//
+// 2026-10-15: Display send thread: the display sink sends from a thread
+// other than the transport's, as the owner's own sends do, beside the
+// owner's drains, and refuses
+// before the transport is ready, after it stops and once it is gone; a
+// channel that closed before the owner heard of it is reported once.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//
+// 2026-10-15: the display sink's case takes its two large sends, the busy
+// check and the Busy send as one attempt and tries a fresh pair when any
+// step loses the race with the first one's acknowledgment, as a sender
+// starved between the first two did on the STRIX at 100% CPU. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
+//
+// 2026-10-16: the display sink's case, as its main twin after pull request
+// 542's second review: a result no lost race explains (Refused anywhere,
+// Busy before the third send) fails at once; between attempts it also waits
+// for each held message's writable signal, and every such wait shares one
+// 20 s budget, with none after the last attempt; a miss says when that
+// budget ran out. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//
+// 2026-10-16: both display sink cases that start a pair stop there when it
+// does not start, so the miss is the only failure they report. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
+//
 // =================================================================
 
+#include "HighResolutionWait.h"
 #include "RealtimeTestLoad.h"
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
@@ -55,9 +118,12 @@
 #include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/OpusAudioCodec.h"
 #include "core/session/media/RemoteIqCodec.h"
+#include "core/session/media/WaveformCodec.h"
 #include "core/session/media/RemoteMicReceiver.h"
 
+#include <QDeadlineTimer>
 #include <QElapsedTimer>
+#include <QMetaEnum>
 #include <QPointer>
 #include <QProcess>
 #include <QRegularExpression>
@@ -68,6 +134,7 @@
 #include <QtTest>
 #include <QtEndian>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -77,12 +144,16 @@
 #include <functional>
 #include <optional>
 #include <thread>
+#include <utility>
+#include <vector>
 
 using namespace NereusSDR;
 
 namespace {
 
 constexpr quint32 kTestAudioSsrc = 0x4e523301U;
+// Each end's fixed wait for ready() in a real encrypted loopback handshake.
+constexpr int kHandshakeWaitMs = 10000;
 
 class RetainedCandidateSource final : public IceConfiguration::CandidateSource {
 public:
@@ -311,6 +382,9 @@ private slots:
     void encryptedPeersCarryDisplayAndRtp();
     void stalledReceiverRefusesDisplayInsteadOfQueueing();
     void heldDisplayMessageIsTakenAndSignalsWritable();
+    void displaySinkSendsFromAnotherThread();
+    void displaySinkRefusesUnlessReady();
+    void displaySinkReportsAClosedChannelOnce();
     void queuedDisplayOverflowDropsOldestAndCountsIt();
     void heldBurstAfterAStallIsDeliveredWhole();
     void telemetryCountsValidatedTrafficAndResets();
@@ -346,6 +420,8 @@ private slots:
     void micLineCarriesLosslessWhenOffered();
     void micSsrcPreconditionsRefuseSilently();
     void dedicatedIqChannelPreservesOrder();
+    void waveformChannelIsOptionalAndBounded();
+    void waveformPendingOpenIsBusy();
     void dedicatedTxAndIqTelemetryCountsPayloadsAndResets();
     void iqTelemetryCountsValidArrivalBeforeReceiveQueueFails();
 
@@ -357,6 +433,14 @@ private:
                      LibDataChannelMediaTransport& answerer);
     static void startPair(LibDataChannelMediaTransport& offerer,
                           LibDataChannelMediaTransport& answerer);
+    // The fixed handshake waits, the offerer's ready() and then the
+    // answerer's, each as long as before; a wait that runs out says how
+    // far each end had come.
+    static void waitForReady(const LibDataChannelMediaTransport& offerer,
+                             const LibDataChannelMediaTransport& answerer,
+                             const QSignalSpy& offerReady, const QSignalSpy& answerReady);
+    static QString handshakeStages(const LibDataChannelMediaTransport& offerer,
+                                   const LibDataChannelMediaTransport& answerer);
     static QByteArray rtpPacket(quint16 sequence,
                                 qsizetype size = 15,
                                 quint32 ssrc = kTestAudioSsrc);
@@ -397,10 +481,104 @@ void TestMediaTransport::startPair(LibDataChannelMediaTransport& offerer,
                             kTestAudioSsrc}));
     QVERIFY(offerer.start({IMediaTransport::Role::Offerer,
                            kTestAudioSsrc}));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    waitForReady(offerer, answerer, offerReady, answerReady);
+    if (QTest::currentTestFailed()) { return; }
     QVERIFY(offerer.isReady());
     QVERIFY(answerer.isReady());
+}
+
+void TestMediaTransport::waveformPendingOpenIsBusy()
+{
+    LibDataChannelMediaTransport offerer,answerer; wire(offerer,answerer);
+    IMediaTransport::StartOptions offered{IMediaTransport::Role::Offerer,kTestAudioSsrc};
+    IMediaTransport::StartOptions answered{IMediaTransport::Role::Answerer,kTestAudioSsrc};
+    offered.waveformChannel=answered.waveformChannel=true;
+    QSignalSpy ready(&offerer,&IMediaTransport::ready),answerReady(&answerer,&IMediaTransport::ready);
+    QSignalSpy received(&answerer,&IMediaTransport::waveformReceived),writable(&offerer,&IMediaTransport::waveformWritable);
+    QVERIFY(answerer.start(answered)); QVERIFY(offerer.start(offered));
+    QTRY_COMPARE_WITH_TIMEOUT(ready.size(),1,10000); QTRY_COMPARE_WITH_TIMEOUT(answerReady.size(),1,10000);
+    offerer.setWaveformOpenHeldForTest(true);
+    QVERIFY(offerer.waveformBusy());
+    QCOMPARE(offerer.submitWaveform(QByteArrayLiteral("pending-open")),IMediaTransport::DisplaySendResult::Busy);
+    offerer.setWaveformOpenHeldForTest(false); QTRY_VERIFY(!writable.empty());
+    const auto result=offerer.submitWaveform(QByteArrayLiteral("opened"));
+    QVERIFY(result==IMediaTransport::DisplaySendResult::Sent || result==IMediaTransport::DisplaySendResult::Queued);
+    QTRY_COMPARE_WITH_TIMEOUT(received.size(),1,5000); QCOMPARE(received[0][0].toByteArray(),QByteArrayLiteral("opened"));
+    offerer.stop(); answerer.stop();
+}
+
+void TestMediaTransport::waveformChannelIsOptionalAndBounded()
+{
+    LibDataChannelMediaTransport offerer, answerer;
+    wire(offerer, answerer);
+    IMediaTransport::StartOptions offered{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    IMediaTransport::StartOptions answered{IMediaTransport::Role::Answerer, kTestAudioSsrc};
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready), answerReady(&answerer, &IMediaTransport::ready);
+    QSignalSpy received(&answerer, &IMediaTransport::waveformReceived);
+    QSignalSpy dropped(&answerer, &IMediaTransport::waveformDropped);
+    QVERIFY(answerer.start(answered)); QVERIFY(offerer.start(offered));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.size(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.size(), 1, 10000);
+    QCOMPARE(offerer.submitWaveform(QByteArrayLiteral("absent")), IMediaTransport::DisplaySendResult::Refused);
+    offerer.stop(); answerer.stop(); offerReady.clear(); answerReady.clear();
+    offered.waveformChannel = answered.waveformChannel = true;
+    QVERIFY(answerer.start(answered)); QVERIFY(offerer.start(offered));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.size(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.size(), 1, 10000);
+    WaveformPacket packet; packet.sliceId=1; packet.sourceGeneration=UINT64_MAX; packet.deliveryGeneration=9;
+    packet.batch.kind=WaveformKind::RawMicrophone; packet.batch.sampleRate=48000;
+    packet.batch.samples.resize(1024, -0.125f); packet.batch.segments={{0,1024,0,1}};
+    packet.batch.serial=1;
+    const auto bytes = WaveformCodec::encode(packet); QVERIFY(bytes);
+    const auto result = offerer.submitWaveform(*bytes);
+    QVERIFY(result == IMediaTransport::DisplaySendResult::Sent || result == IMediaTransport::DisplaySendResult::Queued);
+    QTRY_COMPARE_WITH_TIMEOUT(received.size(), 1, 5000);
+    QCOMPARE(received.at(0).at(0).toByteArray(), *bytes);
+    received.clear();
+    // Hold the owner drain while network callbacks enqueue 40 large packets.
+    // Byte cap (128 KiB) is tighter than 32 packets at the 4168-byte maximum.
+    for (int i=0; i<40; ++i) {
+        packet.batch.serial=quint64(i+2); const auto next=WaveformCodec::encode(packet); QVERIFY(next);
+        QElapsedTimer waited; waited.start();
+        while (offerer.waveformBusy() && waited.elapsed()<5000) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+        QVERIFY(!offerer.waveformBusy());
+        const auto sent=offerer.submitWaveform(*next);
+        QVERIFY(sent == IMediaTransport::DisplaySendResult::Sent || sent == IMediaTransport::DisplaySendResult::Queued);
+        std::this_thread::sleep_for(std::chrono::milliseconds(3));
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(!dropped.empty(), 5000);
+    QVERIFY(received.size() <= 31);
+    quint64 losses=0; for(const auto& drop:dropped) { losses+=drop.at(0).toULongLong(); }
+    QCOMPARE(quint64(received.size())+losses,quint64(40));
+    offerer.stop(); answerer.stop();
+    const int old=received.size(); QTest::qWait(10); QCOMPARE(received.size(),old);
+}
+
+QString TestMediaTransport::handshakeStages(const LibDataChannelMediaTransport& offerer,
+                                            const LibDataChannelMediaTransport& answerer)
+{
+    return QStringLiteral("offerer: %1. answerer: %2.")
+        .arg(offerer.handshakeStateForTest(), answerer.handshakeStateForTest());
+}
+
+void TestMediaTransport::waitForReady(const LibDataChannelMediaTransport& offerer,
+                                      const LibDataChannelMediaTransport& answerer,
+                                      const QSignalSpy& offerReady,
+                                      const QSignalSpy& answerReady)
+{
+    // QVERIFY2 builds its text on every pass; the stages are read on a miss.
+    if (!QTest::qWaitFor([&offerReady] { return offerReady.count() == 1; }, kHandshakeWaitMs)) {
+        QFAIL(qPrintable(QStringLiteral("the offerer's ready() came %1 times in %2 ms. %3")
+                             .arg(offerReady.count())
+                             .arg(kHandshakeWaitMs)
+                             .arg(handshakeStages(offerer, answerer))));
+    }
+    if (!QTest::qWaitFor([&answerReady] { return answerReady.count() == 1; }, kHandshakeWaitMs)) {
+        QFAIL(qPrintable(QStringLiteral("the answerer's ready() came %1 times in %2 ms. %3")
+                             .arg(answerReady.count())
+                             .arg(kHandshakeWaitMs)
+                             .arg(handshakeStages(offerer, answerer))));
+    }
 }
 
 void TestMediaTransport::dedicatedIqChannelPreservesOrder()
@@ -418,8 +596,8 @@ void TestMediaTransport::dedicatedIqChannelPreservesOrder()
     QSignalSpy iqErrors(&answerer, &IMediaTransport::iqErrorOccurred);
     QVERIFY(answerer.start(answered));
     QVERIFY(offerer.start(offered));
-    QTRY_COMPARE_WITH_TIMEOUT(offeredReady.size(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answeredReady.size(), 1, 10000);
+    waitForReady(offerer, answerer, offeredReady, answeredReady);
+    if (QTest::currentTestFailed()) { return; }
     for (quint32 sequence = 0; sequence < 128; ++sequence) {
         const auto frame = RemoteIqCodec::encode(1, 9, sequence,
                                                   {float(sequence), -float(sequence)});
@@ -462,8 +640,8 @@ void TestMediaTransport::dedicatedTxAndIqTelemetryCountsPayloadsAndResets()
     QSignalSpy iqReceived(&answerer, &IMediaTransport::iqReceived);
     QVERIFY(answerer.start(answered));
     QVERIFY(offerer.start(offered));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.size(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReady.size(), 1, 10000);
+    waitForReady(offerer, answerer, offerReady, answerReady);
+    if (QTest::currentTestFailed()) { return; }
 
     const QByteArray tx = QByteArrayLiteral("watch-keepalive");
     const auto iq = RemoteIqCodec::encode(1, 9, 1, {0.25f, -0.25f});
@@ -501,8 +679,8 @@ void TestMediaTransport::dedicatedTxAndIqTelemetryCountsPayloadsAndResets()
     QSignalSpy answerReadyAgain(&answerer, &IMediaTransport::ready);
     QVERIFY(answerer.start(answered));
     QVERIFY(offerer.start(offered));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReadyAgain.size(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReadyAgain.size(), 1, 10000);
+    waitForReady(offerer, answerer, offerReadyAgain, answerReadyAgain);
+    if (QTest::currentTestFailed()) { return; }
     QCOMPARE(offerer.telemetry()->submittedTxPayloadBytes, quint64(0));
     QCOMPARE(offerer.telemetry()->submittedIqPayloadBytes, quint64(0));
     QCOMPARE(answerer.telemetry()->receivedTxPayloadBytes, quint64(0));
@@ -525,8 +703,8 @@ void TestMediaTransport::iqTelemetryCountsValidArrivalBeforeReceiveQueueFails()
     QSignalSpy iqErrors(&answerer, &IMediaTransport::iqErrorOccurred);
     QVERIFY(answerer.start(answered));
     QVERIFY(offerer.start(offered));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.size(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReady.size(), 1, 10000);
+    waitForReady(offerer, answerer, offerReady, answerReady);
+    if (QTest::currentTestFailed()) { return; }
 
     // With no Qt drain, the ninth valid frame exceeds the existing eight-
     // message receive queue. The callback counter still measures its arrival.
@@ -607,6 +785,7 @@ void TestMediaTransport::sctpSettingsAppliedOnceBeforeFirstPeer()
         LibDataChannelMediaTransport offerer;
         LibDataChannelMediaTransport answerer;
         startPair(offerer, answerer);
+        if (QTest::currentTestFailed()) { return; }
         const MediaSctpSettingsRecord first = mediaSctpSettingsRecord();
         QCOMPARE(first.applications, 1);
         QCOMPARE(first.peersCreatedBeforeApplication, quint64(0));
@@ -620,6 +799,7 @@ void TestMediaTransport::sctpSettingsAppliedOnceBeforeFirstPeer()
     LibDataChannelMediaTransport offerer;
     LibDataChannelMediaTransport answerer;
     startPair(offerer, answerer);
+    if (QTest::currentTestFailed()) { return; }
     const MediaSctpSettingsRecord second = mediaSctpSettingsRecord();
     QCOMPARE(second.applications, 1);
     QCOMPARE(second.peersCreatedBeforeApplication, quint64(0));
@@ -637,6 +817,7 @@ void TestMediaTransport::encryptedPeersCarryDisplayAndRtp()
     QSignalSpy displayReceived(&answerer, &IMediaTransport::displayReceived);
     QSignalSpy rtpReceived(&answerer, &IMediaTransport::rtpReceived);
     startPair(offerer, answerer);
+    if (QTest::currentTestFailed()) { return; }
 
     QCOMPARE(offerDescriptions.count(), 1);
     QCOMPARE(answerDescriptions.count(), 1);
@@ -693,6 +874,7 @@ void TestMediaTransport::stalledReceiverRefusesDisplayInsteadOfQueueing()
     LibDataChannelMediaTransport answerer;
     QSignalSpy displayReceived(&answerer, &IMediaTransport::displayReceived);
     startPair(offerer, answerer);
+    if (QTest::currentTestFailed()) { return; }
 
     // The largest spectrum frame: 4096/4096 points plus a 768-point 3D row.
     constexpr qsizetype kFrameBytes = 9361;
@@ -765,35 +947,450 @@ void TestMediaTransport::stalledReceiverRefusesDisplayInsteadOfQueueing()
 // taken by libdatachannel and held (Queued), not lost; a third is Busy; the
 // display channel reports writable once the held message has gone, and the
 // receiver gets both messages.
+//
+// Every step after the first races the first message's acknowledgment. A
+// sender starved between two steps finds the second message sent, the held
+// one already gone or the third taken (this case's copy on the display send
+// thread's branch, pull request 539, found the second sent on the STRIX at
+// 100% CPU, 2026-10-15). Such an attempt shows nothing either way: once the
+// path is idle, a fresh pair is tried. A lost race can only turn an expected
+// Queued or Busy into Sent or Queued, or find the held message gone; any
+// other result fails at once. Every message taken in any attempt must reach
+// the receiver, in order.
 void TestMediaTransport::heldDisplayMessageIsTakenAndSignalsWritable()
 {
+    using Result = IMediaTransport::DisplaySendResult;
     LibDataChannelMediaTransport offerer;
     LibDataChannelMediaTransport answerer;
     QSignalSpy displayReceived(&answerer, &IMediaTransport::displayReceived);
     QSignalSpy writable(&offerer, &IMediaTransport::displayWritable);
     startPair(offerer, answerer);
+    if (QTest::currentTestFailed()) { return; }
 
     constexpr qsizetype kChunkBytes = 49'216; // one PureSignal display chunk
-    const QByteArray first(kChunkBytes, char(0x11));
-    const QByteArray second(kChunkBytes, char(0x22));
-    const QByteArray third(kChunkBytes, char(0x33));
-    QCOMPARE(offerer.submitDisplay(first), IMediaTransport::DisplaySendResult::Sent);
-    QCOMPARE(offerer.submitDisplay(second), IMediaTransport::DisplaySendResult::Queued);
-    QVERIFY(offerer.displayBusy());
-    QCOMPARE(offerer.submitDisplay(third), IMediaTransport::DisplaySendResult::Busy);
+    // Far more than a race lost now and then; a send buffer with room for
+    // two such messages loses every attempt.
+    constexpr int kMostAttempts = 5;
+    const QMetaEnum resultName = QMetaEnum::fromType<Result>();
+    QList<QByteArray> taken;
+    int submitted = 0;
+    QStringList steps;
+    const auto submit = [&]() {
+        // Each message different, so the receiver's order can be checked.
+        const QByteArray message(kChunkBytes, char(0x11 + submitted++));
+        const Result result = offerer.submitDisplay(message);
+        if (result == Result::Sent || result == Result::Queued) {
+            taken.append(message);
+        }
+        steps << QString::fromLatin1(resultName.valueToKey(int(result)));
+        return result;
+    };
+    QStringList attempts;
+    bool held = false;
+    // Every wait between attempts draws on one budget, so the case stays
+    // well inside the binary's ctest timeout however the attempts go.
+    const QDeadlineTimer idleBudget(20'000);
+    while (!held && attempts.size() < kMostAttempts) {
+        steps.clear();
+        // Refused, or Busy before the third send, is no lost race.
+        bool unexplained = false;
+        const auto offer = [&](bool busyExpected) {
+            const Result result = submit();
+            unexplained = unexplained || result == Result::Refused
+                          || (result == Result::Busy && !busyExpected);
+            return result;
+        };
+        const Result first = offer(false);
+        // The path is idle before the first attempt: usrsctp always has room.
+        if (attempts.isEmpty()) {
+            QCOMPARE(first, Result::Sent);
+        }
+        if (first == Result::Sent && offer(false) == Result::Queued) {
+            const bool busy = offerer.displayBusy();
+            steps << (busy ? QStringLiteral("busy") : QStringLiteral("not busy"));
+            held = busy && offer(true) == Result::Busy;
+        }
+        attempts << steps.join(QStringLiteral(", "));
+        if (unexplained) {
+            QFAIL(qPrintable(QStringLiteral("attempt %1 gave a result no lost race explains: %2")
+                                 .arg(attempts.size())
+                                 .arg(attempts.join(QStringLiteral("; ")))));
+        }
+        if (held || attempts.size() == kMostAttempts) {
+            break;
+        }
+        // Idle again: nothing held, everything taken delivered, each held
+        // message's writable signal in, and a delayed acknowledgment's time
+        // for the last of it.
+        const qsizetype heldInAttempt = steps.count(QStringLiteral("Queued"));
+        if (!QTest::qWaitFor([&] {
+                return !offerer.displayBusy() && displayReceived.count() == taken.size()
+                       && writable.count() >= heldInAttempt;
+            }, int(std::max<qint64>(0, idleBudget.remainingTime())))) {
+            QFAIL(qPrintable(QStringLiteral("the path did not go idle after attempt %1 (%2): "
+                                            "%3 of %4 taken messages delivered, %5 of %6 "
+                                            "writable signals")
+                                 .arg(attempts.size()).arg(attempts.constLast())
+                                 .arg(displayReceived.count()).arg(taken.size())
+                                 .arg(writable.count()).arg(heldInAttempt)));
+        }
+        QTest::qWait(250);
+        writable.clear();
+    }
+    QVERIFY2(held, qPrintable(QStringLiteral("no attempt held the second of two messages: %1")
+                                  .arg(attempts.join(QStringLiteral("; ")))));
+    if (attempts.size() > 1) {
+        qInfo().noquote() << QStringLiteral("held on attempt %1: %2")
+                                 .arg(attempts.size()).arg(attempts.join(QStringLiteral("; ")));
+    }
 
     QTRY_VERIFY_WITH_TIMEOUT(!writable.isEmpty(), 10'000);
     QVERIFY(!offerer.displayBusy());
-    QTRY_COMPARE_WITH_TIMEOUT(displayReceived.count(), 2, 10'000);
-    QCOMPARE(displayReceived.at(0).at(0).toByteArray(), first);
-    QCOMPARE(displayReceived.at(1).at(0).toByteArray(), second);
+    QTRY_COMPARE_WITH_TIMEOUT(displayReceived.count(), taken.size(), 10'000);
+    for (qsizetype index = 0; index < taken.size(); ++index) {
+        QCOMPARE(displayReceived.at(index).at(0).toByteArray(), taken.at(index));
+    }
     // Busy was not taken: nothing more arrives.
     QTest::qWait(200);
-    QCOMPARE(displayReceived.count(), 2);
-    QCOMPARE(offerer.telemetry()->submittedDisplayPayloadBytes, quint64(2 * kChunkBytes));
+    QCOMPARE(displayReceived.count(), taken.size());
+    QCOMPARE(offerer.telemetry()->submittedDisplayPayloadBytes,
+             quint64(taken.size()) * quint64(kChunkBytes));
 
     offerer.stop();
     answerer.stop();
+}
+
+// Display send thread: the sink answers from another thread as the owner's
+// own sends do (heldDisplayMessageIsTakenAndSignalsWritable): the first
+// large message Sent, the second held by the library (Queued), a third
+// Busy; the owner's thread reports writable once the held one has gone,
+// and the receiver gets both. Then sends beside the owner's drains, and a
+// stop while the other thread is sending.
+//
+// Every step after the first races the first message's acknowledgment. A
+// sender starved between two steps finds the second message sent (this case
+// did so on the STRIX at 100% CPU, 2026-10-15), the held one already gone or
+// the third taken. Such an attempt shows nothing either way: once the path
+// is idle, the other thread tries a fresh pair. A lost race can only turn
+// an expected Queued or Busy into Sent or Queued, or find the held message
+// gone; any other result fails at once.
+void TestMediaTransport::displaySinkSendsFromAnotherThread()
+{
+    using Result = IMediaTransport::DisplaySendResult;
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QSignalSpy displayReceived(&answerer, &IMediaTransport::displayReceived);
+    QSignalSpy writable(&offerer, &IMediaTransport::displayWritable);
+    const std::shared_ptr<MediaDisplaySink> sink = offerer.displaySink();
+    QVERIFY(sink != nullptr);
+    QVERIFY(offerer.displaySink() == sink);
+    startPair(offerer, answerer);
+    if (QTest::currentTestFailed()) {
+        return;
+    }
+    QVERIFY(sink->ready());
+
+    // The display channel never retransmits: on a slowed run (a sanitizer,
+    // a loaded machine) a message can be lost whole, or arrive seconds
+    // late, after the far end is read below. What arrives is whole and in
+    // the order sent; the far end is read once it has taken nothing new
+    // for 300 ms.
+    const auto farEndSettles = [&](int atLeast, int timeoutMs = 30'000) {
+        int seen = -1;
+        QElapsedTimer quiet;
+        quiet.start();
+        return QTest::qWaitFor([&] {
+            if (displayReceived.count() != seen) {
+                seen = int(displayReceived.count());
+                quiet.restart();
+            }
+            return seen >= atLeast && quiet.elapsed() >= 300;
+        }, timeoutMs);
+    };
+
+    constexpr qsizetype kChunkBytes = 49'216; // one PureSignal display chunk
+    // Far more than a race lost now and then; a send buffer with room for
+    // two such messages loses every attempt.
+    constexpr int kMostAttempts = 5;
+    const QMetaEnum resultName = QMetaEnum::fromType<Result>();
+    QList<QByteArray> taken;
+    int submitted = 0;
+    QStringList steps;
+    // The other thread only; the test thread reads these after the join.
+    const auto submit = [&]() {
+        // Each message different, so the far end's order can be checked.
+        const QByteArray message(kChunkBytes, char(0x44 + submitted++));
+        const Result result = sink->submitDisplay(message);
+        if (result == Result::Sent || result == Result::Queued) {
+            taken.append(message);
+        }
+        steps << QString::fromLatin1(resultName.valueToKey(int(result)));
+        return result;
+    };
+    QStringList attempts;
+    bool held = false;
+    // Every wait between attempts draws on one budget, so the case stays
+    // well inside the binary's ctest timeout however the attempts go.
+    const QDeadlineTimer idleBudget(20'000);
+    const auto budgetLeft = [&idleBudget] {
+        return int(std::max<qint64>(0, idleBudget.remainingTime()));
+    };
+    while (!held && attempts.size() < kMostAttempts) {
+        steps.clear();
+        Result first = Result::Refused;
+        // Refused, or Busy before the third send, is no lost race.
+        bool unexplained = false;
+        std::thread sender([&] {
+            const auto offer = [&](bool busyExpected) {
+                const Result result = submit();
+                unexplained = unexplained || result == Result::Refused
+                              || (result == Result::Busy && !busyExpected);
+                return result;
+            };
+            first = offer(false);
+            if (first == Result::Sent && offer(false) == Result::Queued) {
+                const bool busy = sink->displayBusy();
+                steps << (busy ? QStringLiteral("busy") : QStringLiteral("not busy"));
+                held = busy && offer(true) == Result::Busy;
+            }
+        });
+        sender.join();
+        // The path is idle before the first attempt: usrsctp always has room.
+        if (attempts.isEmpty()) {
+            QCOMPARE(first, Result::Sent);
+        }
+        attempts << steps.join(QStringLiteral(", "));
+        if (unexplained) {
+            QFAIL(qPrintable(QStringLiteral("attempt %1 gave a result no lost race explains: %2")
+                                 .arg(attempts.size())
+                                 .arg(attempts.join(QStringLiteral("; ")))));
+        }
+        if (held || attempts.size() == kMostAttempts) {
+            break;
+        }
+        // Idle again: nothing held, each held message's writable signal in,
+        // and the far end quiet for 300 ms, which also gives a delayed
+        // acknowledgment its time.
+        const qsizetype heldInAttempt = steps.count(QStringLiteral("Queued"));
+        if (!QTest::qWaitFor([&] {
+                return !sink->displayBusy() && writable.count() >= heldInAttempt;
+            }, budgetLeft())
+            || !farEndSettles(0, budgetLeft())) {
+            QFAIL(qPrintable(QStringLiteral("the path did not go idle after attempt %1 (%2)%3: "
+                                            "%4 of %5 writable signals")
+                                 .arg(attempts.size()).arg(attempts.constLast())
+                                 .arg(idleBudget.hasExpired()
+                                          ? QStringLiteral(" before the 20 s budget for the "
+                                                           "waits between attempts ran out")
+                                          : QString())
+                                 .arg(writable.count()).arg(heldInAttempt)));
+        }
+        writable.clear();
+    }
+    QVERIFY2(held, qPrintable(QStringLiteral("no attempt held the second of two messages: %1")
+                                  .arg(attempts.join(QStringLiteral("; ")))));
+    if (attempts.size() > 1) {
+        qInfo().noquote() << QStringLiteral("held on attempt %1: %2")
+                                 .arg(attempts.size()).arg(attempts.join(QStringLiteral("; ")));
+    }
+    QCOMPARE(offerer.telemetry()->submittedDisplayPayloadBytes,
+             quint64(taken.size()) * quint64(kChunkBytes));
+
+    QTRY_VERIFY_WITH_TIMEOUT(!writable.isEmpty(), 10'000);
+    QVERIFY(!sink->displayBusy());
+    QVERIFY(farEndSettles(1));
+    QVERIFY(displayReceived.count() <= taken.size());
+    qsizetype nextTaken = 0;
+    for (const QList<QVariant>& call : std::as_const(displayReceived)) {
+        const qsizetype at = taken.indexOf(call.at(0).toByteArray(), nextTaken);
+        QVERIFY2(at >= 0, "a large message arrived that was not taken, or out of order");
+        nextTaken = at + 1;
+    }
+    const int stillToCome = int(taken.size() - displayReceived.count());
+
+    // The other thread sends while the owner drains its events, as the
+    // display thread does beside the station thread: a send that meets a
+    // busy channel waits for the owner's drain to free it, and every
+    // message is taken. What the far end passes on is whole and in the
+    // order sent; it keeps the newest when more wait for one drain than it
+    // holds (kMaxPendingDisplayMessages, counted as dropped), and the
+    // channel may lose one, as above. A late chunk from above may arrive
+    // among them and is set aside.
+    displayReceived.clear();
+    const quint64 droppedBefore = answerer.telemetry()->displayMessagesDropped;
+    constexpr int kAlongside = 200;
+    std::atomic<bool> alongsideDone{false};
+    // Set when the wait below runs out, so the sender stops and the join
+    // returns: a run that never drains fails here instead of hanging.
+    std::atomic<bool> alongsideGiveUp{false};
+    std::vector<int> takenInOrder;
+    std::thread alongside([&] {
+        for (int index = 0; index < kAlongside
+                 && !alongsideGiveUp.load(std::memory_order_acquire); ++index) {
+            QByteArray message(256, char(0x33));
+            message[0] = char(index >> 8);
+            message[1] = char(index & 0xff);
+            Result result = sink->submitDisplay(message);
+            while (result == Result::Busy && !alongsideGiveUp.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                result = sink->submitDisplay(message);
+            }
+            if (result == Result::Sent || result == Result::Queued) {
+                takenInOrder.push_back(index);
+            }
+        }
+        alongsideDone.store(true, std::memory_order_release);
+    });
+    const bool alongsideFinished = QTest::qWaitFor(
+        [&] { return alongsideDone.load(std::memory_order_acquire); }, 20'000);
+    alongsideGiveUp.store(true, std::memory_order_release);
+    alongside.join();
+    QVERIFY(alongsideFinished);
+    QCOMPARE(int(takenInOrder.size()), kAlongside);
+    QVERIFY(farEndSettles(1));
+    int previous = -1;
+    int passedOn = 0;
+    int lateChunks = 0;
+    for (const QList<QVariant>& call : std::as_const(displayReceived)) {
+        const QByteArray received = call.at(0).toByteArray();
+        if (taken.contains(received)) {
+            ++lateChunks;
+            continue;
+        }
+        QCOMPARE(received.size(), qsizetype(256));
+        const int index = (int(quint8(received.at(0))) << 8) | int(quint8(received.at(1)));
+        QVERIFY2(index > previous, qPrintable(QStringLiteral("message %1 after %2")
+                                                  .arg(index).arg(previous)));
+        previous = index;
+        ++passedOn;
+    }
+    const int reachedFarEnd = int(displayReceived.count())
+        + int(answerer.telemetry()->displayMessagesDropped - droppedBefore);
+    qInfo().noquote() << QStringLiteral("alongside: %1 of %2 passed on, %3 reached the far end, "
+                                        "%4 late chunks")
+                             .arg(passedOn).arg(kAlongside).arg(reachedFarEnd).arg(lateChunks);
+    QVERIFY(passedOn >= 1);
+    QVERIFY(lateChunks <= stillToCome);
+    // Nothing is passed on or dropped twice.
+    QVERIFY(reachedFarEnd <= kAlongside + stillToCome);
+
+    // The owner stops while the other thread keeps sending: a send begun
+    // after stop() returned is refused.
+    std::atomic<bool> stopSending{false};
+    std::atomic<bool> ownerStopped{false};
+    std::atomic<int> sendsStarted{0};
+    std::atomic<int> takenAfterStop{0};
+    const QByteArray small(256, char(0x5a));
+    std::thread stream([&] {
+        while (!stopSending.load(std::memory_order_acquire)) {
+            const bool afterStop = ownerStopped.load(std::memory_order_acquire);
+            sendsStarted.fetch_add(1, std::memory_order_acq_rel);
+            const Result result = sink->submitDisplay(small);
+            if (afterStop && (result == Result::Sent || result == Result::Queued)) {
+                takenAfterStop.fetch_add(1, std::memory_order_acq_rel);
+            }
+            sink->displayBusy();
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+    });
+    QTRY_VERIFY_WITH_TIMEOUT(sendsStarted.load(std::memory_order_acquire) >= 20, 5000);
+    offerer.stop();
+    ownerStopped.store(true, std::memory_order_release);
+    QVERIFY(!sink->ready());
+    const int startedAtStop = sendsStarted.load(std::memory_order_acquire);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        sendsStarted.load(std::memory_order_acquire) >= startedAtStop + 20, 5000);
+    stopSending.store(true, std::memory_order_release);
+    stream.join();
+    QCOMPARE(takenAfterStop.load(std::memory_order_acquire), 0);
+    Result afterStop = Result::Sent;
+    std::thread late([&] { afterStop = sink->submitDisplay(taken.constFirst()); });
+    late.join();
+    QCOMPARE(afterStop, Result::Refused);
+    answerer.stop();
+}
+
+// Display send thread: never started, stopped, or gone, the sink is not
+// ready, nothing is busy and every message is refused.
+void TestMediaTransport::displaySinkRefusesUnlessReady()
+{
+    using Result = IMediaTransport::DisplaySendResult;
+    const QByteArray message(64, char(0x77));
+    std::shared_ptr<MediaDisplaySink> sink;
+    {
+        LibDataChannelMediaTransport transport;
+        sink = transport.displaySink();
+        QVERIFY(sink != nullptr);
+        QVERIFY(!sink->ready());
+        QCOMPARE(sink->submitDisplay(message), Result::Refused);
+        QCOMPARE(sink->submitIq(message), Result::Refused);
+        QVERIFY(!sink->displayBusy());
+        QVERIFY(!sink->iqBusy());
+        transport.stop();
+        QVERIFY(!sink->ready());
+        QCOMPARE(sink->submitDisplay(message), Result::Refused);
+    }
+    // The transport is gone; the sink is still valid.
+    QVERIFY(!sink->ready());
+    QCOMPARE(sink->submitDisplay(message), Result::Refused);
+    QCOMPARE(sink->submitIq(message), Result::Refused);
+    QVERIFY(!sink->displayBusy());
+    QVERIFY(!sink->iqBusy());
+}
+
+// Display send thread: the far end goes and the display channel closes
+// before the owner's thread hears of it. A send from another thread finds
+// the channel closed (libdatachannel throws) and is refused; the owner's
+// next drain reports it once, as a display error. Until the owner
+// publishes again, every later send is refused without reaching the
+// library, so the one closure is reported once.
+void TestMediaTransport::displaySinkReportsAClosedChannelOnce()
+{
+    using Result = IMediaTransport::DisplaySendResult;
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QSignalSpy displayErrors(&offerer, &IMediaTransport::displayErrorOccurred);
+    QSignalSpy errors(&offerer, &IMediaTransport::errorOccurred);
+    const std::shared_ptr<MediaDisplaySink> sink = offerer.displaySink();
+    QVERIFY(sink != nullptr);
+    startPair(offerer, answerer);
+    if (QTest::currentTestFailed()) {
+        return;
+    }
+    QVERIFY(sink->ready());
+    QVERIFY(offerer.telemetry().has_value());
+    const quint64 submittedBefore = offerer.telemetry()->submittedDisplayPayloadBytes;
+
+    // Held: this thread runs no event loop, so no drain runs and the
+    // offerer has not heard of the close when the sends are made.
+    answerer.stop();
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    const QByteArray message(256, char(0x3c));
+    constexpr int kLaterSends = 20;
+    Result first = Result::Sent;
+    quint64 submittedAfterFirst = 0;
+    int laterRefused = 0;
+    std::thread sender([&] {
+        first = sink->submitDisplay(message);
+        submittedAfterFirst = offerer.telemetry()->submittedDisplayPayloadBytes;
+        for (int send = 0; send < kLaterSends; ++send) {
+            if (sink->submitDisplay(message) == Result::Refused) {
+                ++laterRefused;
+            }
+        }
+    });
+    sender.join();
+    QCOMPARE(first, Result::Refused);
+    QCOMPARE(submittedAfterFirst, submittedBefore + quint64(message.size()));
+    QCOMPARE(laterRefused, kLaterSends);
+    QCOMPARE(offerer.telemetry()->submittedDisplayPayloadBytes, submittedAfterFirst);
+
+    QTRY_COMPARE_WITH_TIMEOUT(displayErrors.count(), 1, 10'000);
+    QVERIFY2(displayErrors.at(0).at(0).toString().contains(QStringLiteral("DataChannel")),
+             qPrintable(displayErrors.at(0).at(0).toString()));
+    QTest::qWait(100);
+    QCOMPARE(displayErrors.count(), 1);
+    QCOMPARE(errors.count(), 0);
 }
 
 void TestMediaTransport::queuedDisplayOverflowDropsOldestAndCountsIt()
@@ -802,6 +1399,7 @@ void TestMediaTransport::queuedDisplayOverflowDropsOldestAndCountsIt()
     LibDataChannelMediaTransport answerer;
     QSignalSpy displayReceived(&answerer, &IMediaTransport::displayReceived);
     startPair(offerer, answerer);
+    if (QTest::currentTestFailed()) { return; }
 
     QList<QByteArray> sent;
     quint64 sentBytes = 0;
@@ -850,6 +1448,7 @@ void TestMediaTransport::heldBurstAfterAStallIsDeliveredWhole()
     LibDataChannelMediaTransport answerer;
     QSignalSpy displayReceived(&answerer, &IMediaTransport::displayReceived);
     startPair(offerer, answerer);
+    if (QTest::currentTestFailed()) { return; }
 
     // The largest delta the operator's Core logged: 2150 bytes, 3 fragments.
     constexpr qsizetype kDeltaBytes = 2150;
@@ -892,6 +1491,7 @@ void TestMediaTransport::telemetryCountsValidatedTrafficAndResets()
     QSignalSpy displayReceived(&answerer, &IMediaTransport::displayReceived);
     QSignalSpy rtpReceived(&answerer, &IMediaTransport::rtpReceived);
     startPair(offerer, answerer);
+    if (QTest::currentTestFailed()) { return; }
 
     QVERIFY(offerer.telemetry().has_value());
     QVERIFY(answerer.telemetry().has_value());
@@ -960,8 +1560,8 @@ void TestMediaTransport::telemetryCountsValidatedTrafficAndResets()
     QVERIFY(answerer.telemetry().has_value());
     QVERIFY(countersAreZero(*offerer.telemetry()));
     QVERIFY(countersAreZero(*answerer.telemetry()));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.size(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReady.size(), 1, 10000);
+    waitForReady(offerer, answerer, offerReady, answerReady);
+    if (QTest::currentTestFailed()) { return; }
 
     offerer.stop();
     answerer.stop();
@@ -1035,6 +1635,7 @@ void TestMediaTransport::stopCancelsOldCallbacksAndRecreates()
     LibDataChannelMediaTransport offerer;
     LibDataChannelMediaTransport answerer;
     startPair(offerer, answerer);
+    if (QTest::currentTestFailed()) { return; }
 
     QSignalSpy offerClosed(&offerer, &IMediaTransport::closed);
     QSignalSpy answerClosed(&answerer, &IMediaTransport::closed);
@@ -1053,6 +1654,7 @@ void TestMediaTransport::stopCancelsOldCallbacksAndRecreates()
     disconnect(&offerer, nullptr, &answerer, nullptr);
     disconnect(&answerer, nullptr, &offerer, nullptr);
     startPair(offerer, answerer);
+    if (QTest::currentTestFailed()) { return; }
 
     QSignalSpy displayReceived(&answerer, &IMediaTransport::displayReceived);
     QSignalSpy rtpReceived(&answerer, &IMediaTransport::rtpReceived);
@@ -1071,6 +1673,7 @@ void TestMediaTransport::signalRestartDropsRemainingOldGenerationMedia()
     LibDataChannelMediaTransport offerer;
     LibDataChannelMediaTransport answerer;
     startPair(offerer, answerer);
+    if (QTest::currentTestFailed()) { return; }
 
     int displaysReceived = 0;
     int rtpReceived = 0;
@@ -1105,6 +1708,7 @@ void TestMediaTransport::deletionFromReceivedSignalIsSafe()
     QPointer<LibDataChannelMediaTransport> answerer =
         new LibDataChannelMediaTransport;
     startPair(offerer, *answerer);
+    if (QTest::currentTestFailed()) { return; }
 
     connect(answerer, &IMediaTransport::displayReceived, answerer,
             [&answerer](const QByteArray&) { delete answerer.data(); });
@@ -1124,11 +1728,33 @@ void TestMediaTransport::deletionFromReceivedSignalIsSafe()
 // The answerer's one drain timer is held from the end of its gathering until
 // the offerer's message has arrived, which is the interleaving the traversal
 // harness met under load.
+//
+// The answer and the answerer's candidates wait here until that hold: the
+// offerer cannot finish the handshake without them, so no channel opens
+// before it. Sent on as they came, a starved owner thread took the channels'
+// opening in the same drain as the end of gathering and was ready before
+// the hold (the STRIX at 100% CPU, 2026-10-15).
 void TestMediaTransport::readyPrecedesMessagesThatArriveWithIt()
 {
     LibDataChannelMediaTransport offerer;
     LibDataChannelMediaTransport answerer;
-    wire(offerer, answerer);
+    connect(&offerer, &IMediaTransport::localDescription, &answerer,
+            [&answerer](const QString& sdp, const QString& type) {
+                QVERIFY2(answerer.acceptDescription(sdp, type), "answerer rejected offer");
+            });
+    connect(&offerer, &IMediaTransport::localCandidate, &answerer,
+            [&answerer](const QString& candidate, const QString& mid) {
+                QVERIFY2(answerer.acceptCandidate(candidate, mid),
+                         "answerer rejected host candidate");
+            });
+    std::optional<std::pair<QString, QString>> answer;
+    QList<std::pair<QString, QString>> answerCandidates;
+    connect(&answerer, &IMediaTransport::localDescription, &answerer,
+            [&answer](const QString& sdp, const QString& type) { answer.emplace(sdp, type); });
+    connect(&answerer, &IMediaTransport::localCandidate, &answerer,
+            [&answerCandidates](const QString& candidate, const QString& mid) {
+                answerCandidates.append({candidate, mid});
+            });
     const QList<QTimer*> drainTimers =
         answerer.findChildren<QTimer*>(QString(), Qt::FindDirectChildrenOnly);
     QCOMPARE(drainTimers.size(), 1);
@@ -1158,9 +1784,17 @@ void TestMediaTransport::readyPrecedesMessagesThatArriveWithIt()
     QVERIFY(answerer.start({IMediaTransport::Role::Answerer, kTestAudioSsrc}));
     QVERIFY(offerer.start({IMediaTransport::Role::Offerer, kTestAudioSsrc}));
     QTRY_VERIFY_WITH_TIMEOUT(held, 10000);
+    QVERIFY(answer.has_value());
+    QCOMPARE(answerReady.count(), 0);
+    QVERIFY2(offerer.acceptDescription(answer->first, answer->second), "offerer rejected answer");
+    for (const auto& [candidate, mid] : std::as_const(answerCandidates)) {
+        QVERIFY2(offerer.acceptCandidate(candidate, mid), "offerer rejected host candidate");
+    }
     // The offerer becomes ready without the answerer's owner thread: its
     // display channel opens on the answerer library's acknowledgement.
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+    if (!QTest::qWaitFor([&offerReady] { return offerReady.count() == 1; }, kHandshakeWaitMs)) {
+        QFAIL(qPrintable(handshakeStages(offerer, answerer)));
+    }
     QCOMPARE(answerReady.count(), 0);
 
     // The traversal helper's payload: 60000 bytes, many SCTP fragments.
@@ -1278,8 +1912,8 @@ void TestMediaTransport::answererAcceptsNewAndOldCoreOffers()
     QSignalSpy answerErrors(&answerer, &IMediaTransport::errorOccurred);
     QVERIFY(answerer.start({IMediaTransport::Role::Answerer, kTestAudioSsrc}));
     QVERIFY(offerer.start({IMediaTransport::Role::Offerer, kTestAudioSsrc, bitrate}));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    waitForReady(offerer, answerer, offerReady, answerReady);
+    if (QTest::currentTestFailed()) { return; }
     QCOMPARE(opusFormatLine(deliveredOffer),
              oldCore ? QString::fromLatin1(kOldCoreOpusParameters)
                      : opusOfferFormatParameters(bitrate));
@@ -1399,8 +2033,8 @@ void TestMediaTransport::answerKeepsTheLosslessRtpMap()
     IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, kTestAudioSsrc};
     options.offerLosslessAudio = lossless;
     QVERIFY(offerer.start(options));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    waitForReady(offerer, answerer, offerReady, answerReady);
+    if (QTest::currentTestFailed()) { return; }
 
     const QStringList answerAudio = audioFormatLines(answer);
     QVERIFY2(!answerAudio.isEmpty(), qPrintable(answer));
@@ -1480,7 +2114,10 @@ void TestMediaTransport::ordinaryMediaHostOnLoopbackIsNotAnOwnedShim()
         && !loopbackFor(answeredCandidates).isEmpty(), 10000);
     QVERIFY(offerer.acceptCandidate(loopbackFor(answeredCandidates), {}));
     QVERIFY(answerer.acceptCandidate(loopbackFor(offeredCandidates), {}));
-    QTRY_VERIFY_WITH_TIMEOUT(offerer.isReady() && answerer.isReady(), 10000);
+    if (!QTest::qWaitFor([&] { return offerer.isReady() && answerer.isReady(); },
+                         kHandshakeWaitMs)) {
+        QFAIL(qPrintable(handshakeStages(offerer, answerer)));
+    }
     QVERIFY(offerer.selectedPath());
     QVERIFY(answerer.selectedPath());
     QVERIFY(MediaIcePath::loopbackEndpoint(offerer.selectedPath()->remoteAddress,
@@ -1575,7 +2212,10 @@ void TestMediaTransport::retiredMediaSourceCannotMarkARestartedPeer()
     QVERIFY(offerer.acceptDescription(pendingAnswer, QStringLiteral("answer")));
     QVERIFY(offerer.acceptCandidate(selectedCandidate, {}));
     QVERIFY(answerer.acceptCandidate(loopbackFor(offeredCandidates), {}));
-    QTRY_VERIFY_WITH_TIMEOUT(offerer.isReady() && answerer.isReady(), 10000);
+    if (!QTest::qWaitFor([&] { return offerer.isReady() && answerer.isReady(); },
+                         kHandshakeWaitMs)) {
+        QFAIL(qPrintable(handshakeStages(offerer, answerer)));
+    }
     QVERIFY(offerer.selectedPath());
     QVERIFY(MediaIcePath::loopbackEndpoint(offerer.selectedPath()->remoteAddress,
                                            offerer.selectedPath()->remotePort));
@@ -1603,8 +2243,8 @@ void TestMediaTransport::losslessAudioCrossesRealEncryptedLoopback()
     IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, kTestAudioSsrc};
     options.offerLosslessAudio = true;
     QVERIFY(offerer.start(options));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    waitForReady(offerer, answerer, offerReady, answerReady);
+    if (QTest::currentTestFailed()) { return; }
     QVERIFY(offerer.losslessAudioNegotiated());
     QVERIFY(offerer.selectedPath());
     QVERIFY(answerer.selectedPath());
@@ -1713,8 +2353,8 @@ void TestMediaTransport::undeclaredStreamIsDeliveredByTheOneAudioLine()
     IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, kTestAudioSsrc};
     options.receiverAudioSsrcs = kTestReceiverSsrcs;
     QVERIFY(offerer.start(options));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    waitForReady(offerer, answerer, offerReady, answerReady);
+    if (QTest::currentTestFailed()) { return; }
     QCOMPARE(audioSsrcLines(deliveredOffer),
              QStringList{QStringLiteral("a=ssrc:%1 cname:nereus-mixed-stereo")
                              .arg(kTestAudioSsrc)});
@@ -1804,8 +2444,8 @@ void TestMediaTransport::receiverStreamsAreDeclaredOnlyWhenAsked()
         }
         QVERIFY(answerer.start(answerOptions));
         QVERIFY(offerer.start(offerOptions));
-        QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
-        QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+        waitForReady(offerer, answerer, offerReady, answerReady);
+        if (QTest::currentTestFailed()) { return; }
 
         QCOMPARE(audioFormatLines(offer), todaysAudio);
         QCOMPARE(offer.count(QStringLiteral("m=audio")), 1);
@@ -1859,8 +2499,8 @@ void TestMediaTransport::declaredReceiverStreamsCrossBesideTheMainOne()
     offerOptions.receiverAudioSsrcs = kTestReceiverSsrcs;
     QVERIFY(answerer.start(answerOptions));
     QVERIFY(offerer.start(offerOptions));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    waitForReady(offerer, answerer, offerReady, answerReady);
+    if (QTest::currentTestFailed()) { return; }
     QVERIFY(offerer.losslessAudioNegotiated());
 
     QList<QByteArray> received;
@@ -1939,8 +2579,8 @@ void TestMediaTransport::receiveQueueHoldsEveryDeclaredStream()
     offerOptions.receiverAudioSsrcs = receiverSsrcs;
     QVERIFY(answerer.start(answerOptions));
     QVERIFY(offerer.start(offerOptions));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    waitForReady(offerer, answerer, offerReady, answerReady);
+    if (QTest::currentTestFailed()) { return; }
 
     QList<QByteArray> received;
     connect(&answerer, &IMediaTransport::rtpReceived, this,
@@ -2047,8 +2687,8 @@ void TestMediaTransport::headphonesMixIsDeclaredLastAndCrossesBesideTheOthers()
     offerOptions.headphonesAudioSsrc = kHeadphones;
     QVERIFY(answerer.start(answerOptions));
     QVERIFY(offerer.start(offerOptions));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    waitForReady(offerer, answerer, offerReady, answerReady);
+    if (QTest::currentTestFailed()) { return; }
 
     QStringList expected{QStringLiteral("a=ssrc:%1 cname:nereus-mixed-stereo").arg(kTestAudioSsrc)};
     for (qsizetype index = 0; index < kTestReceiverSsrcs.size(); ++index) {
@@ -2106,8 +2746,8 @@ void TestMediaTransport::micLineIsOfferedOnlyWhenAsked()
         }
         QVERIFY(answerer.start(answerOptions));
         QVERIFY(offerer.start(offerOptions));
-        QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
-        QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+        waitForReady(offerer, answerer, offerReady, answerReady);
+        if (QTest::currentTestFailed()) { return; }
         QCOMPARE(answerErrors.count(), 0);
         QCOMPARE(offerErrors.count(), 0);
 
@@ -2165,8 +2805,8 @@ void TestMediaTransport::micPacketsReportTheirWaitForTheOwnerThread()
     offerOptions.micAudioSsrc = kTestMicSsrc;
     QVERIFY(answerer.start(answerOptions));
     QVERIFY(offerer.start(offerOptions));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    waitForReady(offerer, answerer, offerReady, answerReady);
+    if (QTest::currentTestFailed()) { return; }
 
     QElapsedTimer sinceSent;
     QList<qint64> heldUs;
@@ -2252,8 +2892,8 @@ void TestMediaTransport::micLineWarnsOfALongGapFromItsOwnThread()
     offerOptions.micAudioSsrc = kTestMicSsrc;
     QVERIFY(answerer.start(answerOptions));
     QVERIFY(offerer.start(offerOptions));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    waitForReady(offerer, answerer, offerReady, answerReady);
+    if (QTest::currentTestFailed()) { return; }
 
     std::atomic<int> delivered{0};
     QVERIFY(offerer.setMicPacketSink(
@@ -2374,7 +3014,110 @@ struct StalledOwnerRun {
     int postRefused{0};
     int sendRefused{0};
     bool ownerExposed{false};
+    // On the steady clock, in us: the owner's stalls, each packet the line
+    // handed to the receiver (on whichever thread delivered it), and the
+    // underruns counted, as the feed placed them.
+    std::vector<std::pair<qint64, qint64>> stallsUs;
+    std::vector<qint64> deliveriesUs;
+    std::vector<qint64> underrunsUs;
 };
+
+qint64 steadyNowUs()
+{
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+// One underrun placed against the gap in the line's packets it fell in and
+// the owner's stalls. A stalled owner is asleep and holds nothing: anything
+// that waits on it moves only once its stall has ended. So a gap is the
+// machine's (it kept the transport's own threads from running) when it is
+// longer than the buffer's target and its closing packet came while no
+// stall it overlaps had ended: before the stall, between stalls, or with
+// the owner still asleep. A gap that a stall's end closes, a short gap, or
+// an underrun in no gap is never explained.
+struct UnderrunPlace {
+    bool inGap{false};
+    qint64 fromUs{0};               // the packet before the gap
+    qint64 toUs{0};                 // the packet that closed it
+    bool touchesStall{false};
+    bool closedAfterAStallEnded{false};
+    bool starvation{false};         // explained as the machine's
+};
+
+UnderrunPlace placeUnderrun(const StalledOwnerRun& run, qint64 atUs)
+{
+    // The pump notices an empty buffer on its next block, up to one block
+    // after the late packet was handed over.
+    constexpr qint64 kBlockUs =
+        (static_cast<qint64>(RemoteMicConfig::kPumpBlockFrames) * 1'000'000
+         + RemoteMicConfig::kSampleRate - 1) / RemoteMicConfig::kSampleRate;
+    constexpr qint64 kCoveredGapUs = static_cast<qint64>(RemoteMicConfig::kTargetDepthMs) * 1000;
+    UnderrunPlace place;
+    for (std::size_t i = 1; i < run.deliveriesUs.size(); ++i) {
+        const qint64 from = run.deliveriesUs[i - 1];
+        const qint64 to = run.deliveriesUs[i];
+        if (atUs <= from || atUs > to + kBlockUs) {
+            continue;
+        }
+        place.inGap = true;
+        place.fromUs = from;
+        place.toUs = to;
+        for (const auto& [stallFromUs, stallToUs] : run.stallsUs) {
+            if (from < stallToUs && to > stallFromUs) {
+                place.touchesStall = true;
+                place.closedAfterAStallEnded = place.closedAfterAStallEnded || to >= stallToUs;
+            }
+        }
+        place.starvation = to - from >= kCoveredGapUs && !place.closedAfterAStallEnded;
+        break;
+    }
+    return place;
+}
+
+// Each underrun of a run placed against the owner's stalls and the gap in
+// the line's packets around it, for a message.
+QString describeUnderruns(const StalledOwnerRun& run)
+{
+    const qint64 originUs = run.stallsUs.empty() ? 0 : run.stallsUs.front().first;
+    const auto ms = [originUs](qint64 us) { return QString::number((us - originUs) / 1000); };
+    QStringList stalls;
+    for (const auto& [stallFromUs, stallToUs] : run.stallsUs) {
+        stalls << ms(stallFromUs) + QLatin1Char('-') + ms(stallToUs);
+    }
+    QStringList underruns;
+    for (const qint64 atUs : run.underrunsUs) {
+        const UnderrunPlace place = placeUnderrun(run, atUs);
+        if (!place.inGap) {
+            underruns << QStringLiteral("at %1 ms in no gap").arg(ms(atUs));
+            continue;
+        }
+        underruns << QStringLiteral("at %1 ms in a %2 ms gap without a packet (%3-%4 ms)%5")
+                         .arg(ms(atUs))
+                         .arg(static_cast<double>(place.toUs - place.fromUs) / 1000.0, 0, 'f', 1)
+                         .arg(ms(place.fromUs), ms(place.toUs),
+                              place.closedAfterAStallEnded
+                                  ? QStringLiteral(", closed after a stall ended")
+                                  : place.touchesStall ? QStringLiteral(", closed during a stall")
+                                                       : QString());
+    }
+    return QStringLiteral("%1 underruns, %2 placed: %3; stalls at %4 ms")
+        .arg(run.underruns)
+        .arg(run.underrunsUs.size())
+        .arg(underruns.join(QStringLiteral(", ")), stalls.join(QStringLiteral(", ")));
+}
+
+// Whether every underrun of a run is explained as the machine's (and the
+// feed placed each one).
+bool underrunsAreStarvation(const StalledOwnerRun& run)
+{
+    if (run.underruns <= 0 || static_cast<int>(run.underrunsUs.size()) != run.underruns) {
+        return false;
+    }
+    return std::all_of(run.underrunsUs.begin(), run.underrunsUs.end(),
+                       [&run](qint64 atUs) { return placeUnderrun(run, atUs).starvation; });
+}
 
 } // namespace
 
@@ -2462,22 +3205,33 @@ void TestMediaTransport::aStalledOwnerLeavesTheMicrophoneLineWhole()
         std::atomic<int> sent{0};
         std::atomic<int> delivered{0};
         std::mutex sinkThreadLock;
+        // Room for every packet of the run, so the line's thread never
+        // allocates while it delivers.
+        run.deliveriesUs.reserve(4096);
         if (lineThread) {
             run.sinkSet = offerer.setMicPacketSink(
                 [&receiver, &delivered, &run, &sinkThreadLock](const QByteArray& packet,
                                                                 qint64 heldUs) {
-                    if (delivered.fetch_add(1) == 0) {
+                    {
                         const std::lock_guard lock(sinkThreadLock);
-                        run.sinkThread = QThread::currentThread()->objectName();
+                        if (delivered.load() == 0) {
+                            run.sinkThread = QThread::currentThread()->objectName();
+                        }
+                        run.deliveriesUs.push_back(steadyNowUs());
                     }
+                    delivered.fetch_add(1);
                     receiver.submit(packet, heldUs);
                 });
         }
         connect(&offerer, &IMediaTransport::micRtpReceived, this,
-                [&receiver, &run](const QByteArray& packet, qint64 heldUs) {
+                [&receiver, &run, &sinkThreadLock](const QByteArray& packet, qint64 heldUs) {
                     ++run.ownerReports;
                     // Without a sink the owner delivers, as before.
                     if (!run.sinkSet) {
+                        {
+                            const std::lock_guard lock(sinkThreadLock);
+                            run.deliveriesUs.push_back(steadyNowUs());
+                        }
                         receiver.submit(packet, heldUs);
                     }
                 });
@@ -2492,10 +3246,14 @@ void TestMediaTransport::aStalledOwnerLeavesTheMicrophoneLineWhole()
             std::atomic<qint64> pumpBlocks{0};
             std::thread coordinator([&]() {
                 std::vector<float> out(kBlock);
+                // On Windows a std sleep lasts a whole 15.6 ms scheduler
+                // tick, which would pace the 1.33 ms pulls at one a tick
+                // (HighResolutionWait.h).
+                NereusSDR::Test::HighResolutionWait wait;
                 Clock::time_point deadline = Clock::now();
                 quint64 packetIndex = 0;
                 for (qint64 tick = 0; !stop.load(); ++tick) {
-                    std::this_thread::sleep_until(deadline);
+                    wait.until(deadline);
                     if (stop.load()) {
                         break;
                     }
@@ -2533,10 +3291,13 @@ void TestMediaTransport::aStalledOwnerLeavesTheMicrophoneLineWhole()
             // The owner thread: works, then stalls.
             QTest::qWait(kWarmupMs);
             const int underrunsAtWarmup = feed.stats().underflows;
+            const qint64 measuredFromUs = steadyNowUs();
             for (const int stall : stallsMs) {
                 const int sentBefore = sent.load();
                 const qint64 pulledBefore = pumpBlocks.load();
+                const qint64 stallFromUs = steadyNowUs();
                 std::this_thread::sleep_for(std::chrono::milliseconds(stall));
+                run.stallsUs.emplace_back(stallFromUs, steadyNowUs());
                 // Prove both sides did more work than the maximum buffer can
                 // hold during at least one owner stall, independent of fill.
                 run.ownerExposed = run.ownerExposed
@@ -2545,9 +3306,18 @@ void TestMediaTransport::aStalledOwnerLeavesTheMicrophoneLineWhole()
                 QTest::qWait(kBetweenStallsMs);
             }
             underrunsAtEnd.store(feed.stats().underflows - underrunsAtWarmup);
+            const qint64 measuredToUs = steadyNowUs();
             stop.store(true);
             coordinator.join();
             run.underruns = underrunsAtEnd.load();
+            const RemoteMicFeed::Stats placed = feed.stats();
+            for (int i = 0; i < placed.underrunsPlacedCount
+                            && i < RemoteMicFeed::Stats::kMaxUnderrunsPlaced; ++i) {
+                const qint64 atUs = placed.underrunsPlaced[static_cast<std::size_t>(i)].atSteadyUs;
+                if (atUs >= measuredFromUs && atUs <= measuredToUs) {
+                    run.underrunsUs.push_back(atUs);
+                }
+            }
             // What the phone sent reaches the Core (a packet or two may
             // still be in flight).
             QTest::qWait(100);
@@ -2566,7 +3336,19 @@ void TestMediaTransport::aStalledOwnerLeavesTheMicrophoneLineWhole()
     };
 
     const StalledOwnerRun owner = runOnce(false);
-    const StalledOwnerRun line = runOnce(true);
+    StalledOwnerRun line = runOnce(true);
+    // A busy machine can keep the transport's own threads (libdatachannel's
+    // receipt, the line's thread) from running for longer than the buffer's
+    // margin while the owner has no part in it. Such a run proves nothing
+    // about the owner, so it is measured once more. An underrun in a gap a
+    // stall's end closed, or in no measured gap, still fails.
+    if (underrunsAreStarvation(line)) {
+        qInfo().noquote()
+            << QStringLiteral("the machine held the line's packets up, not the owner (%1): "
+                              "measured again")
+                   .arg(describeUnderruns(line));
+        line = runOnce(true);
+    }
     qInfo().noquote()
         << QStringLiteral("seven owner stalls of 80-420 ms: delivered by the owner, %1 "
                           "underruns (longest wait %2 ms); by the line's thread, %3 underruns "
@@ -2586,9 +3368,21 @@ void TestMediaTransport::aStalledOwnerLeavesTheMicrophoneLineWhole()
     // Delivered by the owner: the stalls reach the buffer and run it dry.
     QVERIFY2(owner.underruns >= 1, qPrintable(QString::number(owner.underruns)));
     QVERIFY(owner.ownerWaitMaxMs >= 80.0);
+    // The owner's stalls make gaps that only a stall's end closes, so an
+    // underrun in one is never taken for the machine's.
+    int ownerStallUnderruns = 0;
+    for (const qint64 atUs : owner.underrunsUs) {
+        const UnderrunPlace place = placeUnderrun(owner, atUs);
+        if (place.touchesStall) {
+            ++ownerStallUnderruns;
+            QVERIFY2(place.closedAfterAStallEnded && !place.starvation,
+                     qPrintable(describeUnderruns(owner)));
+        }
+    }
+    QVERIFY2(ownerStallUnderruns >= 1, qPrintable(describeUnderruns(owner)));
     // Delivered by the line's own thread: the line stays whole, every
     // packet comes by that thread, and nothing reaches the owner's signal.
-    QCOMPARE(line.underruns, 0);
+    QVERIFY2(line.underruns == 0, qPrintable(describeUnderruns(line)));
     QVERIFY(line.sinkSet);
     QCOMPARE(line.sinkThread, QStringLiteral("NereusMicRx"));
     QVERIFY2(line.sent > 0 && line.delivered == line.sent,
@@ -2617,8 +3411,8 @@ void TestMediaTransport::micLineCarriesTheAnswerersMicrophoneAlone()
     offerOptions.micAudioSsrc = kTestMicSsrc;
     QVERIFY(answerer.start(answerOptions));
     QVERIFY(offerer.start(offerOptions));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    waitForReady(offerer, answerer, offerReady, answerReady);
+    if (QTest::currentTestFailed()) { return; }
 
     QList<QByteArray> offererMain;
     QList<QByteArray> offererMic;
@@ -2688,8 +3482,8 @@ void TestMediaTransport::micLineCarriesLosslessWhenOffered()
         offerOptions.offerLosslessAudio = lossless;
         QVERIFY(answerer.start(answerOptions));
         QVERIFY(offerer.start(offerOptions));
-        QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
-        QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+        waitForReady(offerer, answerer, offerReady, answerReady);
+        if (QTest::currentTestFailed()) { return; }
 
         const QStringList micOffer = mediaSectionLines(offer, QStringLiteral("mic"));
         QVERIFY2(!micOffer.isEmpty(), qPrintable(offer));

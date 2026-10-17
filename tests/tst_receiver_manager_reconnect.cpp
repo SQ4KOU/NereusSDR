@@ -10,7 +10,19 @@
 #include <QtTest/QtTest>
 #include <QSignalSpy>
 
+#include <QMap>
+#include <QMutex>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include "core/codec/CodecContext.h"
+#include "core/HpsdrModel.h"
+
+// Inspect lock availability without adding a production test interface.
+#define private public
 #include "core/ReceiverManager.h"
+#undef private
 
 using NereusSDR::ReceiverManager;
 using NereusSDR::ReceiverConfig;
@@ -19,7 +31,230 @@ class TstReceiverManagerReconnect : public QObject
 {
     Q_OBJECT
 
+private:
+    static bool routingMutexAvailable(ReceiverManager& rm)
+    {
+        bool acquired = false;
+        std::thread probe([&rm, &acquired]() {
+            acquired = rm.m_routingMutex.tryLock();
+            if (acquired) {
+                rm.m_routingMutex.unlock();
+            }
+        });
+        probe.join();
+        return acquired;
+    }
+
 private slots:
+
+    void frequencyCallbackRemappingUsesCurrentHardware()
+    {
+        ReceiverManager rm;
+        const int rx = rm.createReceiver();
+        rm.setDdcMapping(rx, 2);
+        rm.activateReceiver(rx);
+        QSignalSpy hardware(&rm, &ReceiverManager::hardwareFrequencyChanged);
+        connect(&rm, &ReceiverManager::receiverFrequencyChanged, &rm,
+                [&rm, rx](int, quint64) { rm.setDdcMapping(rx, 3); }, Qt::DirectConnection);
+
+        rm.setReceiverFrequency(rx, 7100000);
+
+        // Both the mapping replay and the final retune target the new DDC.
+        QCOMPARE(hardware.count(), 2);
+        for (const QList<QVariant>& args : hardware) {
+            QCOMPARE(args.at(0).toInt(), 3);
+            QCOMPARE(args.at(1).toULongLong(), quint64(7100000));
+        }
+    }
+
+    void frequencyCallbackCtunChangeSuppressesHardwareRetune()
+    {
+        ReceiverManager rm;
+        const int rx = rm.createReceiver();
+        rm.activateReceiver(rx);
+        QSignalSpy hardware(&rm, &ReceiverManager::hardwareFrequencyChanged);
+        connect(&rm, &ReceiverManager::receiverFrequencyChanged, &rm,
+                [&rm](int, quint64) { rm.setDdcFrequencyLocked(true); }, Qt::DirectConnection);
+
+        rm.setReceiverFrequency(rx, 7100000);
+
+        QCOMPARE(hardware.count(), 0);
+        QCOMPARE(rm.receiverConfig(rx).frequencyHz, quint64(7100000));
+    }
+
+    void frequencyCallbackDeactivationSuppressesHardwareRetune()
+    {
+        ReceiverManager rm;
+        const int rx = rm.createReceiver();
+        rm.activateReceiver(rx);
+        QSignalSpy hardware(&rm, &ReceiverManager::hardwareFrequencyChanged);
+        connect(&rm, &ReceiverManager::receiverFrequencyChanged, &rm,
+                [&rm, rx](int, quint64) { rm.deactivateReceiver(rx); }, Qt::DirectConnection);
+
+        rm.setReceiverFrequency(rx, 7100000);
+
+        QCOMPARE(hardware.count(), 0);
+        QVERIFY(!rm.isReceiverActive(rx));
+    }
+
+    void controlNotificationsReleaseRoutingMutex_data()
+    {
+        QTest::addColumn<QString>("operation");
+        for (const char* operation : {"create", "activate", "deactivate", "map",
+                                      "apply", "destroy", "reset", "frequency", "force"}) {
+            QTest::newRow(operation) << QString::fromLatin1(operation);
+        }
+    }
+
+    void controlNotificationsReleaseRoutingMutex()
+    {
+        QFETCH(QString, operation);
+        ReceiverManager rm;
+        const int rx = rm.createReceiver();
+        rm.activateReceiver(rx);
+        const int other = rm.createReceiver();
+        int notifications = 0;
+        bool available = true;
+        QStringList order;
+        const auto observe = [&](const QString& name) {
+            ++notifications;
+            available = routingMutexAvailable(rm) && available;
+            order.append(name);
+        };
+        connect(&rm, &ReceiverManager::receiverCreated, &rm,
+                [&]() { observe("created"); }, Qt::DirectConnection);
+        connect(&rm, &ReceiverManager::activeReceiverCountChanged, &rm,
+                [&]() { observe("activeCount"); }, Qt::DirectConnection);
+        connect(&rm, &ReceiverManager::hardwareSlotsChanged, &rm,
+                [&]() { observe("slots"); }, Qt::DirectConnection);
+        connect(&rm, &ReceiverManager::hardwareReceiverCountChanged, &rm,
+                [&]() { observe("hardwareCount"); }, Qt::DirectConnection);
+        connect(&rm, &ReceiverManager::hardwareFrequencyChanged, &rm,
+                [&]() { observe("hardwareFrequency"); }, Qt::DirectConnection);
+        connect(&rm, &ReceiverManager::receiverActivated, &rm,
+                [&]() { observe("activated"); }, Qt::DirectConnection);
+        connect(&rm, &ReceiverManager::receiverDeactivated, &rm,
+                [&]() { observe("deactivated"); }, Qt::DirectConnection);
+        connect(&rm, &ReceiverManager::receiverDestroyed, &rm,
+                [&]() { observe("destroyed"); }, Qt::DirectConnection);
+        connect(&rm, &ReceiverManager::receiverFrequencyChanged, &rm,
+                [&]() { observe("logicalFrequency"); }, Qt::DirectConnection);
+
+        QStringList expected;
+        if (operation == "create") {
+            rm.createReceiver();
+            expected = {"created"};
+        } else if (operation == "activate") {
+            rm.activateReceiver(other);
+            expected = {"activeCount", "slots", "hardwareCount", "hardwareFrequency",
+                        "hardwareFrequency", "activated"};
+        } else if (operation == "deactivate") {
+            rm.deactivateReceiver(rx);
+            expected = {"activeCount", "slots", "hardwareCount", "deactivated"};
+        } else if (operation == "map") {
+            rm.setDdcMapping(rx, 2);
+            expected = {"activeCount", "slots", "hardwareCount", "hardwareFrequency"};
+        } else if (operation == "apply") {
+            rm.applyDdcMapping({2, 3, -1, -1, -1}, 3);
+            expected = {"activeCount", "slots", "hardwareCount", "hardwareFrequency",
+                        "hardwareFrequency", "activated"};
+        } else if (operation == "destroy") {
+            rm.destroyReceiver(rx);
+            expected = {"activeCount", "slots", "hardwareCount", "destroyed"};
+        } else if (operation == "reset") {
+            rm.reset();
+            expected = {"destroyed", "destroyed", "activeCount", "slots", "hardwareCount"};
+        } else if (operation == "frequency") {
+            rm.setReceiverFrequency(rx, 7100000);
+            expected = {"logicalFrequency", "hardwareFrequency"};
+        } else if (operation == "force") {
+            rm.forceHardwareFrequency(rx, 7100000);
+            expected = {"hardwareFrequency"};
+        }
+
+        QVERIFY(notifications > 0);
+        QVERIFY2(available, "A control callback retained the routing mutex");
+        QCOMPARE(order, expected);
+    }
+
+    void mappingCallbackSeesCompleteRoutingPlan()
+    {
+        ReceiverManager rm;
+        const int first = rm.createReceiver();
+        const int second = rm.createReceiver();
+        rm.applyDdcMapping({2, 3, -1, -1, -1}, 3);
+        rm.setReceiverFrequency(first, 7100000);
+        rm.setReceiverFrequency(second, 14200000);
+        QSignalSpy routed(&rm, &ReceiverManager::iqDataForReceiver);
+        QSignalSpy hardware(&rm, &ReceiverManager::hardwareFrequencyChanged);
+        connect(&rm, &ReceiverManager::hardwareSlotsChanged, &rm, [&](quint32 mask) {
+            QCOMPARE(mask, quint32(12));
+            QCOMPARE(rm.receiverConfig(first).hardwareRx, 3);
+            QCOMPARE(rm.receiverConfig(second).hardwareRx, 2);
+            rm.feedIqData(2, {1.0f, 0.0f});
+            rm.feedIqData(3, {0.0f, 1.0f});
+        }, Qt::DirectConnection);
+
+        rm.applyDdcMapping({3, 2, -1, -1, -1}, 3);
+
+        QCOMPARE(routed.count(), 2);
+        QCOMPARE(routed.at(0).at(0).toInt(), second);
+        QCOMPARE(routed.at(1).at(0).toInt(), first);
+        QCOMPARE(hardware.count(), 2);
+        QCOMPARE(hardware.at(0).at(0).toInt(), 3);
+        QCOMPARE(hardware.at(0).at(1).toULongLong(), quint64(7100000));
+        QCOMPARE(hardware.at(1).at(0).toInt(), 2);
+        QCOMPARE(hardware.at(1).at(1).toULongLong(), quint64(14200000));
+    }
+
+    void frequencyCallbackRemovalDoesNotConsumeReceiverCapacity()
+    {
+        ReceiverManager rm;
+        rm.setMaxReceivers(1);
+        const int rx = rm.createReceiver();
+        QCOMPARE(rx, 0);
+        rm.activateReceiver(rx);
+        QSignalSpy hardware(&rm, &ReceiverManager::hardwareFrequencyChanged);
+        connect(&rm, &ReceiverManager::receiverFrequencyChanged, &rm,
+                [&rm](int receiverIndex, quint64) {
+                    rm.destroyReceiver(receiverIndex);
+                }, Qt::DirectConnection);
+
+        rm.setReceiverFrequency(rx, 7100000);
+
+        // A post-callback lookup must not resurrect the removed receiver.
+        QCOMPARE(rm.createReceiver(), 1);
+        QCOMPARE(rm.receiverConfig(rx).receiverIndex, -1);
+        QCOMPARE(hardware.count(), 0);
+    }
+
+    void frequencyCallbackRetuneDoesNotPublishSupersededFrequency()
+    {
+        ReceiverManager rm;
+        const int rx = rm.createReceiver();
+        rm.activateReceiver(rx);
+        const int hardwareRx = rm.receiverConfig(rx).hardwareRx;
+        QSignalSpy logical(&rm, &ReceiverManager::receiverFrequencyChanged);
+        QSignalSpy hardware(&rm, &ReceiverManager::hardwareFrequencyChanged);
+        connect(&rm, &ReceiverManager::receiverFrequencyChanged, &rm,
+                [&rm, rx](int receiverIndex, quint64 frequencyHz) {
+                    if (receiverIndex == rx && frequencyHz == 7100000) {
+                        rm.setReceiverFrequency(rx, 14200000);
+                    }
+                }, Qt::DirectConnection);
+
+        rm.setReceiverFrequency(rx, 7100000);
+
+        QCOMPARE(logical.count(), 2);
+        QCOMPARE(logical.at(0).at(1).toULongLong(), quint64(7100000));
+        QCOMPARE(logical.at(1).at(1).toULongLong(), quint64(14200000));
+        QCOMPARE(rm.receiverConfig(rx).frequencyHz, quint64(14200000));
+        // The nested retune is the latest command; the outer notification
+        // must not send its older frequency after the nested one completed.
+        QCOMPARE(hardware.count(), 1);
+        QCOMPARE(hardware.at(0).at(0).toInt(), hardwareRx);
+        QCOMPARE(hardware.at(0).at(1).toULongLong(), quint64(14200000));
+    }
 
     void firstConnectAssignsReceiver0ToDdc2()
     {

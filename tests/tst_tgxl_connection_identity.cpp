@@ -37,7 +37,10 @@ QPointer<QTcpSocket> acceptPeer(QTcpServer& server)
     QElapsedTimer wait;
     wait.start();
     while (peer.isNull() && wait.elapsed() < 2000) {
-        if (server.waitForNewConnection(10)) {
+        // processEvents() below can let the server's own notifier queue the
+        // connection; waitForNewConnection() then waits for another one that
+        // never comes, so take a queued connection first.
+        if (server.hasPendingConnections() || server.waitForNewConnection(10)) {
             peer = server.nextPendingConnection();
         }
         QCoreApplication::processEvents();

@@ -2,8 +2,11 @@
 // src/core/WdspEngine.cpp  (NereusSDR)
 // =================================================================
 //
-// Ported from Thetis source:
+// Ported from Thetis sources:
 //   Project Files/Source/ChannelMaster/cmaster.c, original licence from Thetis source is included below
+//   Project Files/Source/Console/radio.cs, original licence from Thetis source is included below
+//     (CreateDSP and DestroyDSP's impulse cache handling, radio.cs:135-158,
+//     163-180 [v2.10.3.15])
 //
 //   2026-09-24 - R-R3-39: FFTW's planner made thread-safe once per process
 //                (fftw_make_planner_thread_safe), because WDSP's planning
@@ -17,6 +20,13 @@
 //                AI-assisted via Anthropic Claude Code.
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-15 - Each profile keeps an impulse cache file of its own in the
+//                 shared DSP folder, so one profile's close never deletes
+//                 the cache another profile saved; a plans rebuild clears
+//                 every profile's file. radio.cs's header, missing until
+//                 now for the CreateDSP and DestroyDSP impulse cache port,
+//                 is carried below. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-10-03 - Qualify the opaque DEXP struct declaration against the
 //                 Microsoft CRT function name. J.J. Boyd (KG4VCF),
 //                 AI-assisted via OpenAI Codex.
@@ -70,7 +80,25 @@
 //                 channel was created with, not its input rate. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-10-15 - openRxChannelWdsp seeds AGC Fixed Gain (20 dB) and Max
+//                 Gain (90 dB) from RxChannel's cached defaults instead of
+//                 leaving WDSP's create values (60 dB, 80 dB). J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-10-16 - On Windows, the RX channel map's lock is taken once in the
+//                constructor, so the first lock never races winpthreads'
+//                lazy rwlock setup (the loser of that race runs unlocked).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), with AI-assisted
+//                implementation via Anthropic Claude Code.
+//   2026-10-10 - Every receive channel is given the engine handle its
+//                 DSP > Options apply needs (RxChannel::onModeChanged), at
+//                 creation and at a rebuild; the first channel alone had it,
+//                 so no other receiver ever took a buffer size, filter size
+//                 or filter type. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
+
+// --- From cmaster.c ---
 
 /*  cmaster.c
 
@@ -98,6 +126,51 @@ warren@wpratt.com
 
 */
 
+// --- From radio.cs ---
+
+//=================================================================
+// radio.cs
+//=================================================================
+// PowerSDR is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+// Copyright (C) 2019-2026  Richard Samphire
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//=================================================================
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
 #include "WdspEngine.h"
 #include "DspControlThread.h"
 #include "RxChannel.h"
@@ -107,6 +180,7 @@ warren@wpratt.com
 #include "PsFeedbackChannel.h"
 #include "RadeChannel.h"
 #include "AppSettings.h"
+#include "DspCacheLocation.h"
 #include "LogCategories.h"
 #include "wdsp_api.h"
 #include "core/platform/ThreadPlacement.h"
@@ -148,6 +222,15 @@ namespace NereusSDR {
 WdspEngine::WdspEngine(QObject* parent)
     : QObject(parent)
 {
+#ifdef Q_OS_WIN
+    // With MinGW, std::shared_mutex is a pthread rwlock that winpthreads sets
+    // up on its first lock, and a thread that loses that race gets EINVAL,
+    // which libstdc++ checks only under _GLIBCXX_ASSERTIONS, and runs without
+    // the lock. Lock once here, before the DSP worker can see the map.
+    m_rxChannelsMutex.lock();
+    m_rxChannelsMutex.unlock();
+#endif
+
     // Before anything this engine does can plan (a test may open channels
     // without initialize()).
     makeFftwPlannersThreadSafe();
@@ -225,6 +308,11 @@ void WdspEngine::prepareConfigDir(const QString& configDir)
     if (!m_configDir.endsWith(QLatin1Char('/')) && !m_configDir.endsWith(QLatin1Char('\\'))) {
         m_configDir += QLatin1Char('/');
     }
+
+    // Every profile shares this folder, so each keeps an impulse cache file
+    // of its own in it (DspCacheLocation::impulseCacheFileName).
+    m_impulseCacheFile = m_configDir
+        + DspCacheLocation::impulseCacheFileName(AppSettings::profileOverride());
 }
 
 bool WdspEngine::setNnrModelPaths(const std::array<QString, 2>& paths, QString* reason)
@@ -330,11 +418,16 @@ bool WdspEngine::initialize(const QString& configDir)
     // Wisdom rebuild also invalidates any saved impulse cache —
     // From Thetis radio.cs:140-152 [v2.10.3.13]: delete impulse_cache.bin
     // when wisdom is rebuilt so we start afresh.
+    // From Thetis radio.cs:137-147 [v2.10.3.15]. Every profile's cache file
+    // in the folder goes: they were all built on the plans being rebuilt.
     if (needsGeneration) {
-        QString cacheFile = m_configDir + QStringLiteral("impulse_cache.bin");
-        if (QFile::exists(cacheFile)) {
-            QFile::remove(cacheFile);
-            qCInfo(lcDsp) << "Deleted stale impulse cache (wisdom rebuilt)";
+        // wisdom00 rebuilt, so remove any existing impulse cache as it is now invalid
+        // best that we start afresh, because depending on config this may be left behind
+        const QStringList cacheNames = DspCacheLocation::impulseCacheFileNames(m_configDir);
+        for (const QString& cacheName : cacheNames) {
+            if (QFile::remove(m_configDir + cacheName)) {
+                qCInfo(lcDsp) << "Deleted stale impulse cache" << cacheName << "(wisdom rebuilt)";
+            }
         }
     }
 
@@ -421,7 +514,8 @@ void WdspEngine::finishInitialization(bool wisdomWasRebuilt)
     //       WDSP.read_impulse_cache(...);
     // Skip loading if wisdom was just rebuilt — the old cache is stale.
     if (saveRestore && !wisdomWasRebuilt) {
-        QString cacheFile = m_configDir + QStringLiteral("impulse_cache.bin");
+        // read any impulse cache if we have previously saved it. Ignored if wisdom00 is rebuilt
+        const QString& cacheFile = m_impulseCacheFile;
         if (QFile::exists(cacheFile)) {
             QByteArray cachePath = cacheFile.toUtf8();
             int cacheResult = read_impulse_cache(cachePath.constData());
@@ -518,12 +612,20 @@ void WdspEngine::shutdown()
     //   else
     //       // try to remove file if exists
     //       File.Delete(file)
+    //
+    // Ours differs: the save and the delete use this profile's own file.
+    // Thetis keeps impulse_cache.dat in its data folder, one folder per
+    // instance beside that instance's settings (console.cs:657-699
+    // [v2.10.3.15], -datapath:), so its delete only ever meets the file its
+    // own settings saved. NereusSDR profiles share the folder of saved FFT
+    // plans (DspCacheLocation.h), and with one shared file a profile with
+    // the save off deleted the cache another profile had saved.
     {
         const auto& s = AppSettings::instance();
         const bool cacheEnabled = s.value("DspOptionsCacheImpulse",           "False").toString() == "True";
         const bool saveRestore  = s.value("DspOptionsCacheImpulseSaveRestore", "False").toString() == "True";
 
-        QString cacheFile = m_configDir + QStringLiteral("impulse_cache.bin");
+        const QString& cacheFile = m_impulseCacheFile;
 
         if (cacheEnabled && saveRestore) {
             QByteArray cachePath = cacheFile.toUtf8();
@@ -671,7 +773,17 @@ void WdspEngine::openRxChannelWdsp(int channelId, int inputBufferSize, int dspBu
     SetRXABandpassFreqs(channelId, -2850.0, -150.0);
     RXANBPSetFreqs(channelId, -2850.0, -150.0);
     SetRXAAGCMode(channelId, static_cast<int>(AGCMode::Med));
-    SetRXAAGCTop(channelId, 80.0);
+    // AGC Max Gain: seed RxChannel's cached default (90 dB, Thetis's), not
+    // WDSP's create value (80 dB, RXA.c:383); a cache and WDSP that disagree
+    // let setAgcMaxGain skip the push that should set it.
+    // [WDSP call as at Thetis Project Files/Source/Console/radio.cs:1032 [v2.10.3.15]]
+    SetRXAAGCTop(channelId, static_cast<double>(RxChannel::kDefaultAgcMaxGainDb));
+    // Fixed Gain (AGC Off): WDSP opens at 60 dB (RXA.c:385, fixed_gain
+    // 1000.0); RxChannel caches kDefaultAgcFixedGainDb, so without this
+    // seed the slice's default push hits the setter's equality guard and
+    // AGC Off runs at 60 dB after every open and rebuild.
+    // [WDSP call as at Thetis Project Files/Source/Console/radio.cs:1013 [v2.10.3.15]]
+    SetRXAAGCFixed(channelId, static_cast<double>(RxChannel::kDefaultAgcFixedGainDb));
 
     // Dual-mono audio output. WDSP's create_panel default is copy=0
     // (binaural — I and Q carry separate phase-shifted content for
@@ -1579,9 +1691,11 @@ void WdspEngine::openTxChannelWdsp(int channelId, int inputBufferSize, int dspBu
     // From Thetis ChannelMaster cmaster.c:130-157 [v2.10.3.13] — verbatim
     // create_dexp call site.  Every argument matches the upstream value;
     // the only deviations are:
-    //   - id        : NereusSDR's WDSP channel id (1) instead of Thetis's
-    //                 transmitter index (0) — they happen to coincide for
-    //                 single-RX layouts but the semantics differ slightly
+    //   - id        : TxChannel::kDexpId, the transmitter index (0), as
+    //                 Thetis passes.  Issue #365: this used to be the WDSP
+    //                 channel id (5), past the end of WDSP's four-slot
+    //                 pdexp[] table; on Windows that slot aliased the RX
+    //                 channel table and xdexp crashed once RX 0 opened.
     //   - in / out  : NereusSDR's private dexpBuf (parallel-only — see
     //                 buffer architecture comment above) instead of
     //                 Thetis's pcm->in[in_id] (chain-inserted)
@@ -1589,7 +1703,7 @@ void WdspEngine::openTxChannelWdsp(int channelId, int inputBufferSize, int dspBu
     //                 the real callback later via SendCBPushDexpVox
     //                 (avoids ordering problems; see comment above)
     create_dexp(
-        channelId,                // transmitter id, txid
+        TxChannel::kDexpId,       // transmitter id, txid
         0,                        // dexp initially set to OFF
         inputBufferSize,          // input buffer size
         dexpBuf,                  // input buffer
@@ -1850,10 +1964,10 @@ void WdspEngine::destroyTxChannel(int channelId)
             // the channel BEFORE destroying its DEXP module.
             CloseChannel(channelId);
             ThreadPlacement::instance().forgetChannel(channelId);
-            destroy_dexp(channelId);
+            destroy_dexp(TxChannel::kDexpId);
             // destroy_dexp frees the object but does not clear WDSP's lookup slot.
             // Native wrapper guards use a null slot to recognize absent DEXP.
-            pdexp[channelId] = nullptr;
+            pdexp[TxChannel::kDexpId] = nullptr;
 #endif
             buffer.reset();
             retireTxChannel(std::move(channel));
@@ -1879,10 +1993,10 @@ void WdspEngine::destroyTxChannel(int channelId)
     // the channel BEFORE destroying its DEXP module.
     CloseChannel(channelId);
     ThreadPlacement::instance().forgetChannel(channelId);
-    destroy_dexp(channelId);
+    destroy_dexp(TxChannel::kDexpId);
     // destroy_dexp frees the object but does not clear WDSP's lookup slot.
     // Native wrapper guards use a null slot to recognize absent DEXP.
-    pdexp[channelId] = nullptr;
+    pdexp[TxChannel::kDexpId] = nullptr;
 #endif
 
     // Drop the DEXP buffer slot regardless of HAVE_WDSP — the non-HAVE_WDSP

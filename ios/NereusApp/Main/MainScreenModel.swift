@@ -24,6 +24,50 @@ final class MainScreenModel: ObservableObject {
     let slices: BandSlicesModel
     let subscriber: BandSubscriber
     let rx: RxPanelModel
+    /// Setup edits either the focused supportedPan1 or the device master.
+    /// Rendering/subscription always uses the same effective liveBandModel.
+    enum DisplayEditScope: Hashable { case pan, all }
+    @Published var displayEditScope: DisplayEditScope = .pan
+    /// Accepted HTML445/1108: All edits an independently chosen kept band;
+    /// Pan1 always edits its actual band. Choosing here never retunes a slice.
+    @Published var displayBandChoice: String? = nil
+    var displayEditingBand: String? {
+        displayEditScope == .all ? displayBandChoice ?? band.settings.scaleBand : band.settings.scaleBand
+    }
+    var displayEditingSettings: BandDisplaySettings {
+        guard displayEditScope == .all else { return band.settings }
+        var settings = displaySettings.masterSettings(forPan: BandSubscriber.panId)
+        settings.enterBand(displayEditingBand)
+        return settings
+    }
+    func ownDisplayFields(among fields: Set<String>) -> Set<String> {
+        displaySettings.ownFields(forPan: BandSubscriber.panId, among: fields)
+    }
+    func resetDisplayPicture(fields: Set<String>) {
+        guard displayEditScope == .pan else { return }
+        displaySettings.resetPicture(forPan: BandSubscriber.panId, fields: fields)
+        reloadDisplaySettings()
+    }
+    func copyOwnDisplayPictureToMaster(fields: Set<String>) -> Bool {
+        guard displayEditScope == .pan, !ownDisplayFields(among: fields).isEmpty else { return false }
+        displaySettings.copyOwnPictureToMaster(forPan: BandSubscriber.panId, fields: fields)
+        reloadDisplaySettings()
+        return true
+    }
+    func changeDisplay(fields: Set<String>, _ change: (inout BandDisplaySettings) -> Void) {
+        changeDisplay(selectedFields: fields, change)
+    }
+    func displayEffectiveValue(_ readout: SetupDescription.EffectiveReadout) -> Double? {
+        guard displayEditScope == .pan else { return nil }
+        switch readout {
+        case .waterfallLow: return band.effectiveWaterfallLevels.map { Double($0.lowDbm) }
+        case .waterfallHigh: return band.effectiveWaterfallLevels.map { Double($0.highDbm) }
+        case .spectrumMax, .spectrumMin:
+            if band.settings.gridFollowsNoiseFloor && band.settings.waterfallLevelMode == .clarity
+                && band.gridTracker.clarityFloorDbm == nil { return nil }
+            return readout == .spectrumMax ? band.drawnSettings.scaleRange.upperBound : band.drawnSettings.scaleRange.lowerBound
+        }
+    }
     /// The toolbar's Pan 1 and Display sheets.
     let pan: PanSheetModel
     let display: DisplaySheetModel
@@ -54,6 +98,8 @@ final class MainScreenModel: ObservableObject {
     let micLevel: LiveMicLevel
     /// The Core's amplifiers and tuner, for their pages under the Radio tab.
     let accessories: AccessoriesModel
+    /// The Core's rotor, for the Rotor page the Radio and Tools tabs share.
+    let rotor: RotorModel
     let keyedMeters: KeyedMetersModel
     /// The iPad's analog S-meter and its menu (D86).
     let sMeter: SMeterModel
@@ -144,13 +190,22 @@ final class MainScreenModel: ObservableObject {
         sliceList = SliceListModel(store: mirror, slices: slices, commands: commands)
         accessories = AccessoriesModel(mirror: mirror, commands: commands, slices: slices, catalogFeed: catalogFeed,
                                        settings: settings)
+        rotor = RotorModel(mirror: mirror, commands: commands)
         let band = band
         // A keyed zoom the band remembers is kept like any other change.
-        band.keepSettings = { [displaySettings] kept in
+        band.keepSettings = { [weak band, displaySettings] kept in
             displaySettings.setSettings(kept, forPan: BandSubscriber.panId)
+            guard let band else { return }
+            var saved = displaySettings.settings(forPan: BandSubscriber.panId)
+            saved.sideways = band.settings.sideways
+            band.settings = saved
         }
+        // A weak local owner is filled only after initialization. The existing
+        // sheet/Core/pan callbacks then share this same scope/store transaction,
+        // without another subscriber, live pan registry or strong ownership cycle.
+        weak var displayOwner: MainScreenModel?
         let change: (_ change: (inout BandDisplaySettings) -> Void) -> Void = { change in
-            Self.changeDisplay(change, band: band, store: displaySettings)
+            displayOwner?.changeDisplay(change)
         }
         pan = PanSheetModel(store: mirror, slices: slices, catalogFeed: catalogFeed, commands: commands, band: band,
                             changeDisplay: change)
@@ -241,6 +296,8 @@ final class MainScreenModel: ObservableObject {
             guard let take else { return false }
             return take.inFlight || take.questionUp
         }
+        displayOwner = self
+        display.focusPan = { [weak self] in self?.displayEditScope = .pan }
     }
 
     /// The notice kind for a tuner tune that ended without keying.
@@ -271,7 +328,77 @@ final class MainScreenModel: ObservableObject {
     /// Changes this pan's display settings on this phone: kept at once, and
     /// the band redraws. The subscription follows only if its request changed.
     func changeDisplay(_ change: (inout BandDisplaySettings) -> Void) {
-        Self.changeDisplay(change, band: band, store: displaySettings)
+        changeDisplay(selectedFields: nil, change)
+    }
+
+    private func reloadDisplaySettings() {
+        var saved = displaySettings.settings(forPan: BandSubscriber.panId)
+        saved.sideways = band.settings.sideways // Current orientation is runtime-only.
+        band.settings = saved
+        objectWillChange.send()
+    }
+
+    private func changeDisplay(selectedFields: Set<String>?, _ change: (inout BandDisplaySettings) -> Void) {
+        let before = displayEditingSettings
+        var edited = before
+        change(&edited)
+        let selected = selectedFields ?? Self.changedDisplayFields(before, edited)
+        if displayEditScope == .all {
+            // The edited copy carries the chosen band's dictionaries. Restore
+            // the real active band before saving so no runtime band/frame/VFO
+            // changes, and editing a picture field never materializes a new
+            // band's untouched defaults.
+            if selected.isDisjoint(with: ["scaleTopDbm", "scaleBottomDbm", "threeDFloorDb", "bandScales", "threeDFloors"]) {
+                edited.bandScales = band.settings.bandScales
+                edited.threeDFloors = band.settings.threeDFloors
+            }
+            edited.enterBand(band.settings.scaleBand)
+            // Shared/device fields retain their existing authority. Master
+            // picture writes explicitly clear the selected closed-pan own fields,
+            // even when a selected value already equals the master.
+            displaySettings.setSettings(edited, forPan: BandSubscriber.panId, includingPicture: false)
+            displaySettings.setMasterSettings(edited, fields: selected)
+        } else if edited != before {
+            displaySettings.setSettings(edited, forPan: BandSubscriber.panId)
+        }
+        // Refresh the accepted snapshot, including a newer master/shared field
+        // a stale local save was correctly forbidden from overwriting.
+        reloadDisplaySettings()
+    }
+
+    /// Smooth's profile fields follow All's ordinary winner rule; its mode
+    /// conversion is separate so closed nonmanual tuples are not overwritten.
+    func applySmoothDisplayDefaults() {
+        guard displayEditScope == .all else {
+            changeDisplay(PhoneSetupKeys.smoothDefaults)
+            return
+        }
+        // Each named profile row reaches every pan even if its master
+        // already equals the preset (the reference's forced put calls).
+        let fields: Set<String> = ["waterfallPaletteId", "spectrumAveraging", "spectrumAverageTimeMs",
+            "traceColour", "traceLineColour", "traceFill", "waterfallPeriodMs"]
+        changeDisplay(fields: fields) { settings in
+            let clarity = settings.clarityEnabled, agc = settings.waterfallAgc
+            let floor = settings.waterfallNfAgc, scale = settings.useSpectrumMinMax
+            PhoneSetupKeys.smoothDefaults(&settings)
+            settings.clarityEnabled = clarity; settings.waterfallAgc = agc
+            settings.waterfallNfAgc = floor; settings.useSpectrumMinMax = scale
+        }
+        displaySettings.convertManualWaterfallModesForSmooth(forPan: BandSubscriber.panId)
+        reloadDisplaySettings()
+    }
+
+    private static func changedDisplayFields(_ before: BandDisplaySettings, _ after: BandDisplaySettings) -> Set<String> {
+        func values(_ settings: BandDisplaySettings) -> [String: Any] {
+            guard let data = try? JSONEncoder().encode(settings),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+            return object
+        }
+        let old = values(before), new = values(after)
+        return Set(Set(old.keys).union(new.keys).filter { key in
+            key != "storeSnapshotVersion"
+                && !NSDictionary(dictionary: ["value": old[key] ?? NSNull()]).isEqual(to: ["value": new[key] ?? NSNull()])
+        })
     }
 
     /// The main screen is turned sideways or upright: the band takes that
@@ -281,17 +408,6 @@ final class MainScreenModel: ObservableObject {
             return
         }
         band.settings.sideways = sideways
-    }
-
-    private static func changeDisplay(_ change: (inout BandDisplaySettings) -> Void, band: BandModel,
-                                      store: BandDisplaySettingsStore) {
-        var settings = band.settings
-        change(&settings)
-        guard settings != band.settings else {
-            return
-        }
-        band.settings = settings
-        store.setSettings(settings, forPan: BandSubscriber.panId)
     }
 
     /// The Core offers the 3D view: its Setup description reaches version

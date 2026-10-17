@@ -4,12 +4,18 @@
 // per-board counts at construction time. Phase 3P-C Step 2 + Step 3.
 // R-R3-46 / R-R3-21 (2026-09-23): in a remote window the combo shows and
 // writes the Core's preamp mode (the `stepAtt` object).
+// Modification history (NereusSDR):
+//   2026-10-14 - Local late-capability RX1 preamp regression. J.J. Boyd
+//                 (KG4VCF), AI-assisted via OpenAI Codex.
 
 #include <QtTest/QtTest>
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QStackedWidget>
+#include <QScopeGuard>
+#include <QSignalSpy>
+#include "core/P2RadioConnection.h"
 
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
@@ -251,6 +257,107 @@ private slots:
         // ...and the window's choice is written to the Core's object.
         combo->setCurrentIndex(5);
         QCOMPARE(stepAtt->preampMode(), combo->itemData(5).toInt());
+    }
+
+    void local_rx1_preamp_toggle_arrives_with_late_caps_and_is_reused()
+    {
+        P2RadioConnection connection;
+        connection.setBoardForTest(HPSDRHW::OrionMKII);
+        RadioModel model;
+        QVERIFY(model.ownsLocalDsp());
+        QVERIFY(!model.boardCapabilities().p2PreampPerAdc);
+        model.injectConnectionForTest(&connection);
+        const auto uninject = qScopeGuard([&model] { model.injectConnectionForTest(nullptr); });
+        RxApplet applet(nullptr, &model);
+        QVERIFY(!applet.findChild<QCheckBox*>(QStringLiteral("RxRx1PreampToggle")));
+        quint8 before[1444]{};
+        connection.composeCmdHighPriorityForTest(before);
+        QCOMPARE(before[1403] & 0x02, 0);
+
+        model.setBoardForTest(HPSDRHW::OrionMKII);
+        QVERIFY(model.boardCapabilities().p2PreampPerAdc);
+        applet.setBoardCapabilities(model.boardCapabilities());
+        QCheckBox* const toggle = applet.findChild<QCheckBox*>(QStringLiteral("RxRx1PreampToggle"));
+        QVERIFY(toggle);
+        QVERIFY(!toggle->isHidden());
+        QVERIFY(toggle->isEnabled());
+        QVERIFY(!toggle->isChecked());
+        quint8 after[1444]{};
+        connection.composeCmdHighPriorityForTest(after);
+        QCOMPARE(after[1403], before[1403]);
+
+        // The existing local edit is queued, and still reaches the bare
+        // connection after event delivery without init/connect/socket I/O.
+        toggle->click();
+        QVERIFY(toggle->isChecked());
+        QTRY_VERIFY(([&] {
+            quint8 packet[1444]{};
+            connection.composeCmdHighPriorityForTest(packet);
+            return (packet[1403] & 0x02) != 0;
+        })());
+        QSignalSpy edits(toggle, &QCheckBox::toggled);
+        applet.setBoardCapabilities(model.boardCapabilities());
+        QCOMPARE(applet.findChildren<QCheckBox*>(QStringLiteral("RxRx1PreampToggle")).size(), 1);
+        QCOMPARE(applet.findChild<QCheckBox*>(QStringLiteral("RxRx1PreampToggle")), toggle);
+        QVERIFY(toggle->isChecked());
+
+        for (HPSDRHW board : {HPSDRHW::Hermes, HPSDRHW::Unknown, HPSDRHW::Saturn}) {
+            model.setBoardForTest(board);
+            QVERIFY(!model.boardCapabilities().p2PreampPerAdc);
+            applet.setBoardCapabilities(model.boardCapabilities());
+            QVERIFY(toggle->isHidden());
+            QVERIFY(toggle->isChecked());
+        }
+        model.setBoardForTest(HPSDRHW::OrionMKII);
+        applet.setBoardCapabilities(model.boardCapabilities());
+        QCOMPARE(applet.findChild<QCheckBox*>(QStringLiteral("RxRx1PreampToggle")), toggle);
+        QVERIFY(!toggle->isHidden());
+        QVERIFY(toggle->isChecked());
+        QCOMPARE(edits.count(), 0);
+        QCoreApplication::processEvents();
+        connection.composeCmdHighPriorityForTest(after);
+        QVERIFY((after[1403] & 0x02) != 0);
+        QCOMPARE(connection.socketReceiveBufferForTest(), -1);
+    }
+
+    void local_unsupported_caps_do_not_create_rx1_preamp_toggle()
+    {
+        RadioModel model;
+        RxApplet applet(nullptr, &model);
+        for (HPSDRHW board : {HPSDRHW::Unknown, HPSDRHW::Hermes, HPSDRHW::Saturn}) {
+            model.setBoardForTest(board);
+            QVERIFY(!model.boardCapabilities().p2PreampPerAdc);
+            applet.setBoardCapabilities(model.boardCapabilities());
+            QVERIFY(!applet.findChild<QCheckBox*>(QStringLiteral("RxRx1PreampToggle")));
+        }
+    }
+
+    void local_late_rx1_preamp_toggle_is_held_while_listening()
+    {
+        P2RadioConnection connection;
+        connection.setBoardForTest(HPSDRHW::OrionMKII);
+        RadioModel model;
+        model.injectConnectionForTest(&connection);
+        const auto uninject = qScopeGuard([&model] { model.injectConnectionForTest(nullptr); });
+        RxApplet applet(nullptr, &model);
+        VfoWidget::SliceAccess access;
+        access.state = VfoWidget::SliceAccess::State::Listening;
+        access.heldReason = QStringLiteral("Shack iPad controls this slice");
+        applet.setSliceAccess(access);
+        model.setBoardForTest(HPSDRHW::OrionMKII);
+        applet.setBoardCapabilities(model.boardCapabilities());
+        QCheckBox* const toggle = applet.findChild<QCheckBox*>(QStringLiteral("RxRx1PreampToggle"));
+        QVERIFY(toggle);
+        QVERIFY(!toggle->isEnabled());
+        QCOMPARE(toggle->toolTip(), access.heldReason);
+        QVERIFY(applet.heldControlsForTest().contains(toggle));
+        // Bypass widget disablement to prove the write-site listener guard.
+        toggle->setChecked(true);
+        QCoreApplication::processEvents();
+        quint8 packet[1444]{};
+        connection.composeCmdHighPriorityForTest(packet);
+        QCOMPARE(packet[1403] & 0x02, 0);
+        QCOMPARE(connection.socketReceiveBufferForTest(), -1);
     }
 
     // R-R3-46: a remote window is built before the Core's radio is known.

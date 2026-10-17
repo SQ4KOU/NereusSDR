@@ -8,7 +8,8 @@ namespace NereusSDR {
 inline void applyComboStyle(QComboBox* combo)
 {
     combo->setFixedHeight(Style::kButtonH);
-    combo->setStyleSheet(QStringLiteral(
+    // Workspace preview: the Longpath look; unchanged when the switch is off.
+    combo->setStyleSheet(WorkspacePreview::lookQss(QStringLiteral(
         "QComboBox {"
         "  background: %1; color: %2;"
         "  border: 1px solid %3; border-radius: 3px;"
@@ -27,7 +28,7 @@ inline void applyComboStyle(QComboBox* combo)
         "  border: 1px solid %3;"
         "}"
     ).arg(Style::kButtonBg, Style::kTextPrimary,
-          Style::kBorder, Style::kAccent));
+          Style::kBorder, Style::kAccent), combo));
 }
 
 } // namespace NereusSDR

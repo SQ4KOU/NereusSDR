@@ -99,6 +99,26 @@ public:
 #endif
     }
 
+    // proc/stat for cores that each spend busyPercent of every 100 ticks
+    // busy, after `step` intervals of 100 ticks.
+    void perCoreStat(quint64 step, const QList<int>& busyPercent)
+    {
+        QByteArray cores;
+        quint64 busyAll = 0;
+        quint64 idleAll = 0;
+        for (int cpu = 0; cpu < busyPercent.size(); ++cpu) {
+            const quint64 busy = step * quint64(busyPercent.at(cpu));
+            const quint64 idle = step * quint64(100 - busyPercent.at(cpu));
+            busyAll += busy;
+            idleAll += idle;
+            cores += "cpu" + QByteArray::number(cpu) + ' ' + QByteArray::number(busy)
+                + " 0 0 " + QByteArray::number(idle) + " 0 0 0 0 0 0\n";
+        }
+        write(QStringLiteral("proc/stat"),
+              "cpu  " + QByteArray::number(busyAll) + " 0 0 " + QByteArray::number(idleAll)
+                  + " 0 0 0 0 0 0\n" + cores + "intr 12345 0 0 0\nctxt 999\n");
+    }
+
     void standardProc()
     {
         write(QStringLiteral("proc/stat"),
@@ -341,6 +361,7 @@ private slots:
         QCOMPARE(sampler->watchedCpus(), (QList<int>{0, 1, 2, 3}));
         qint64 now = 0;
         SharedHostSampler shared(std::move(sampler), [&now] { return now; });
+        shared.setGovernorCpus({3, 1, 0, 2, 2}); // any order, duplicates
         QVERIFY(!shared.reading().systemCpuPercent.has_value());
         QVERIFY(!shared.governorCpuPercent().has_value());
 
@@ -375,10 +396,85 @@ private slots:
         QCOMPARE(run(placed), 1);
         QCOMPARE(run(PlacementPlan{}), 0);
 
-        // A different set restarts only the watched measurement.
+        // A different set is read from the same two samples: every core
+        // keeps its own baseline, so nothing restarts.
         shared.setGovernorCpus({0, 1});
-        QVERIFY(!shared.governorCpuPercent().has_value());
+        QCOMPARE(shared.governorCpuPercent(), std::optional<double>(100.0));
         QCOMPARE(shared.reading().systemCpuPercent, std::optional<double>(80.0));
+    }
+
+    // R-R3-40/41: on the Rock spectrum runs on the fast cores, so the
+    // governor reads two sets, the housekeeping cores and the cores only
+    // spectrum adds, and judges by the busier. An average over all eight
+    // would hide saturated housekeeping cores behind idle fast ones.
+    void theGovernorReadsTheBusierCoreSet()
+    {
+        const QList<int> housekeeping{0, 1, 2, 3};
+        const QList<int> spectrumOnly{4, 5, 6, 7};
+        const auto governorFigure = [&](const QList<int>& load, const QList<int>& a,
+                                        const QList<int>& b) {
+            Fixture f;
+            f.standardProc();
+            f.perCoreStat(1, load);
+            qint64 now = 0;
+            SharedHostSampler shared(std::make_unique<HostTelemetrySampler>(f.root()),
+                                     [&now] { return now; });
+            shared.setGovernorCpus(a, b);
+            shared.reading();
+            f.perCoreStat(2, load);
+            now = SharedHostSampler::kMinimumIntervalMs;
+            return shared.governorCpuPercent();
+        };
+        // Slow cores saturated, fast cores light: busy (85 % or more).
+        QCOMPARE(governorFigure({95, 95, 95, 95, 40, 40, 40, 40}, housekeeping, spectrumOnly),
+                 std::optional<double>(95.0));
+        // The other way round: the fast cores decide.
+        QCOMPARE(governorFigure({70, 70, 70, 70, 100, 100, 100, 100}, housekeeping,
+                                spectrumOnly),
+                 std::optional<double>(100.0));
+        // Equal cores: spectrum stays on the housekeeping cores, which are
+        // the only set.
+        QCOMPARE(governorFigure({50, 50, 100, 100}, {0, 1}, {}),
+                 std::optional<double>(50.0));
+        // Only one set reads (a spectrum core with no line): that one.
+        QCOMPARE(governorFigure({95, 95, 95, 95, 40, 40, 40, 40}, housekeeping, {4, 9}),
+                 std::optional<double>(95.0));
+        // Neither: absent.
+        QVERIFY(!governorFigure({95, 95}, {8}, {9}).has_value());
+        QVERIFY(!governorFigure({95, 95}, {}, {}).has_value());
+    }
+
+    // R-R3-40: a key edge with VOX changes the spectrum-only set (4-7 to
+    // 4-5 and back). The next sample still gives a figure.
+    void aChangedCoreSetLosesNoSample()
+    {
+        const QList<int> load{95, 95, 95, 95, 40, 40, 100, 100};
+        Fixture f;
+        f.standardProc();
+        f.perCoreStat(1, load);
+        qint64 now = 0;
+        SharedHostSampler shared(std::make_unique<HostTelemetrySampler>(f.root()),
+                                 [&now] { return now; });
+        shared.setGovernorCpus({0, 1, 2, 3}, {4, 5, 6, 7});
+        shared.reading();
+        f.perCoreStat(2, load);
+        now = SharedHostSampler::kMinimumIntervalMs;
+        QCOMPARE(shared.governorCpuPercent(), std::optional<double>(95.0));
+
+        // Keyed: the transmit roles take 6 and 7.
+        shared.setGovernorCpus({0, 1, 2, 3}, {4, 5});
+        f.perCoreStat(3, {95, 95, 95, 95, 40, 40, 100, 100});
+        now = 2 * SharedHostSampler::kMinimumIntervalMs;
+        QCOMPARE(shared.governorCpuPercent(), std::optional<double>(95.0));
+        QCOMPARE(shared.reading().systemCpuPercent, std::optional<double>(82.5));
+
+        // Unkeyed, with the fast cores now the busier.
+        shared.setGovernorCpus({0, 1, 2, 3}, {4, 5, 6, 7});
+        f.perCoreStat(4, {95, 95, 95, 95, 40, 40, 100, 100});
+        now = 3 * SharedHostSampler::kMinimumIntervalMs;
+        QCOMPARE(shared.governorCpuPercent(), std::optional<double>(95.0));
+        shared.setGovernorCpus({0, 1, 2, 3}, {6, 7});
+        QCOMPARE(shared.governorCpuPercent(), std::optional<double>(100.0));
     }
 
     // R-R3-40: the governor judges a settling step only on a host sample

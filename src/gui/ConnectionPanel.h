@@ -14,6 +14,14 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-10-08  J.J. Boyd (KG4VCF): test seam that skips starting
+//               discovery (setDiscoveryStartSkippedForTest), for offscreen
+//               tests and the visual preview. AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-10  J.J. Boyd (KG4VCF): pillStyleSheet(), the state pill's
+//               sheet per state. AI-assisted via Anthropic Claude Code.
+//   2026-10-15  J.J. Boyd (KG4VCF): resetRadioTableBeforeRowChange.
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  ucRadioList.cs
@@ -112,6 +120,11 @@ public:
     // Update the connection status display.
     void setStatusText(const QString& text);
 
+    // Test seam: true makes the constructor skip starting discovery, so an
+    // offscreen test or the visual preview can build and show the panel
+    // without a network scan. Process-wide; tests set it back to false.
+    static void setDiscoveryStartSkippedForTest(bool skipped);
+
     // -------------------------------------------------------------------------
     // State pill — represents the recency / connectivity of a discovered radio.
     //
@@ -131,6 +144,9 @@ public:
     // Pure function — easy to test, easy to reuse.
     // lastSeenMs == 0 → Offline (never seen).
     static StatePill statePillForLastSeen(qint64 lastSeenMs, qint64 nowMs);
+
+    // The style sheet of the pill's circle in one state, as a row sets it.
+    static QString pillStyleSheet(StatePill pill);
 
 public slots:
     void onRadioDiscovered(const NereusSDR::RadioInfo& info);
@@ -161,6 +177,7 @@ private:
     void buildUI();
     QWidget* buildStatusStrip();    // Phase 3Q Task 5 — top-of-panel connection status widget
     void setPillIconForRow(int row, const QString& mac);  // Pixmap pill icon (3Q polish)
+    void resetRadioTableBeforeRowChange();
     void updateButtonStates();
     void applyRowColor(int row, const RadioInfo& info);
     void populateRow(int row, const RadioInfo& info);

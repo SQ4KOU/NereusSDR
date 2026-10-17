@@ -4,6 +4,7 @@
 #include "core/AppSettings.h"
 #include "core/MoxController.h"
 #include "core/SliceOwnership.h"
+#include "core/StepAttenuatorController.h"
 #include "core/TwoToneController.h"
 #include "core/safety/TransmitHolder.h"
 #include "core/session/StationServer.h"
@@ -64,6 +65,15 @@ bool DesktopStationController::start(bool profileOwnershipEstablished)
         return false;
     }
     m_host = std::move(host);
+    // A change a signed-in window or phone makes to the attenuator or the
+    // preamp is on disk a short while after this Core applies it, as on
+    // nereusd (DaemonApp::start()), not only when the window closes. Only
+    // what this Core turned on is turned off again in stop().
+    StepAttenuatorController* const stepAtt = m_model ? m_model->stepAttController() : nullptr;
+    if (stepAtt && !stepAtt->debouncedSaveEnabled()) {
+        stepAtt->setDebouncedSaveEnabled(true);
+        m_savingStepAtt = stepAtt;
+    }
     emit hostingStateChanged(enabled());
     if (!self) { return false; }
     return enabled();
@@ -82,6 +92,10 @@ void DesktopStationController::stop()
     // As in start(), keep the Host alive through callbacks that may delete
     // this controller while its stop() is on the stack.
     auto host = std::move(m_host);
+    // Taken now for the same reason: no member is safe to read after the
+    // calls below.
+    const QPointer<StepAttenuatorController> savingStepAtt(m_savingStepAtt);
+    m_savingStepAtt.clear();
     StationHost* const startingHost = m_startingHost;
     if (startingHost) {
         // Latch the cancel before stopAllTx() can emit a reentrant callback.
@@ -104,6 +118,13 @@ void DesktopStationController::stop()
     }
     if (host) {
         host->stop();
+    }
+    // Ingress is closed, so no client change can arrive after this. Write a
+    // change still waiting to be saved, then go back to how a window with no
+    // Core saves.
+    if (savingStepAtt) {
+        savingStepAtt->flushPendingSave();
+        savingStepAtt->setDebouncedSaveEnabled(false);
     }
     host.reset();
     if (self) {

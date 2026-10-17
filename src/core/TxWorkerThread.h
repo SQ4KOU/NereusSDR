@@ -47,6 +47,7 @@
 // themselves live in src/core/audio/TxMicSource.{h,cpp}).
 
 #pragma once
+#include "audio/WaveformPublisher.h"
 
 #include <QByteArray>
 #include <QMutex>
@@ -58,6 +59,7 @@
 #include <vector>
 
 #include "core/audio/RadeTxFilters.h"
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
@@ -114,7 +116,7 @@ class TxMicSource;
 //   5. Destruct (after stopPump and after TxChannel is moved back to
 //      its original thread by RadioModel).
 // ---------------------------------------------------------------------------
-class TxWorkerThread : public QThread {
+class NEREUS_CORE_EXPORT TxWorkerThread : public QThread {
     Q_OBJECT
 
 public:
@@ -138,6 +140,11 @@ public:
                     // the WDSP tick; K-bench wires the mic feed in.
     };
 
+    // Runtime observation source: -1 waiting, 0 PC, 1 radio, 2 VAX, 3 remote, 4 TCI.
+    int microphoneWaveformSource() const { return m_waveformMicSource.load(std::memory_order_acquire); }
+    quint64 microphoneWaveformEpoch() const { return m_waveformMicEpoch.load(std::memory_order_acquire); }
+    WaveformPublisher* rawWaveformPublisher() { return &m_rawWaveform; }
+    WaveformPublisher* conditionedWaveformPublisher() { return &m_conditionedWaveform; }
     explicit TxWorkerThread(QObject* parent = nullptr);
     ~TxWorkerThread() override;
 
@@ -412,6 +419,10 @@ protected:
     void run() override;
 
 private:
+    std::atomic<int> m_waveformMicSource{-1};
+    std::atomic<quint64> m_waveformMicEpoch{0};
+    WaveformPublisher m_rawWaveform{WaveformKind::RawMicrophone, 48000};
+    WaveformPublisher m_conditionedWaveform{WaveformKind::ConditionedMicrophone, 16000};
     /// Body of one pump tick.  Used by both run() and tickForTest().
     /// Assumes the caller has already drained the block into m_in
     /// (or the caller is the worker loop, which does the drain itself).

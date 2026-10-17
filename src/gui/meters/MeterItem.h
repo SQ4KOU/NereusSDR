@@ -10,6 +10,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Shared accessory display readings and independent legal
+//                 marker / display scale by J.J. Boyd (KG4VCF),
+//                 AI-assisted via OpenAI Codex.
 //   2026-10-04 — Selected RX source identity and RX-only presentation reset by
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-02 — Composite reading/replay/cadence contracts by J.J. Boyd
@@ -241,6 +244,7 @@ public:
     // GUI source handoff: RX presentation only, preserving TX/PA/MMIO state.
     virtual void resetRxSource();
     virtual void setPowerScale(int watts);
+    virtual void setPowerScale(int limitWatts, double topWatts);
     // Composites can render individual unavailable channels while keeping
     // useful siblings visible. Empty reason restores availability.
     virtual void setBindingUnavailable(int binding, const QString& reason) { m_unavailableBindings[binding] = reason; }

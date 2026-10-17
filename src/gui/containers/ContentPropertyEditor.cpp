@@ -1,5 +1,14 @@
 // no-port-check: NereusSDR-original contextual draft property editor.
 // Modification history (NereusSDR):
+//   2026-10-08 - Workspace preview only: the declared-property group is
+//                 built only when it has rows (named declaredProperties), and
+//                 Advanced bindings are disabled while a declared type is
+//                 unavailable. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-08 - Workspace preview only: controls for the properties a
+//                 widget type declares (ContentProperty), written to the
+//                 entry config; Longpath instruments get a real editor.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-10-04 — Selected RX source identity and RX-only presentation reset by
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-03 — Plain applet source explanations by J.J. Boyd (KG4VCF),
@@ -10,7 +19,10 @@
 #include "meter_property_editors/SignalTextItemEditor.h"
 #include "gui/meters/presets/CompositePresetItem.h"
 #include "gui/meters/presets/BarPresetItem.h"
+#include "gui/meters/WaveformMeterItem.h"
+#include "gui/widgets/GuardedComboBox.h"
 #include <QFormLayout>
+#include <algorithm>
 #include <QVBoxLayout>
 #include <QGroupBox>
 #include <QLineEdit>
@@ -26,6 +38,7 @@
 #include <QHBoxLayout>
 #include <QSignalBlocker>
 #include <QRegularExpression>
+#include <QStandardItemModel>
 #include <limits>
 #include "gui/meters/MeterPoller.h"
 namespace NereusSDR {
@@ -69,6 +82,9 @@ bool ContentPropertyEditor::property(const QString& key,const QJsonValue& value,
     bool accepted=false;
     if(auto* face=qobject_cast<CompositePresetItem*>(m_item.get())) { accepted=face->applyConfiguration(change); }
     if(auto* bar=qobject_cast<BarPresetItem*>(m_item.get())) { accepted=bar->applyConfiguration(change); }
+    if (auto* waveform = qobject_cast<WaveformMeterItem*>(m_item.get())) {
+        accepted = waveform->applyConfiguration(change);
+    }
     if(!accepted) { if(m_error) {m_error->setText(tr("Value rejected: check the range, history duration or color."));} return false; }
     if(m_error) {m_error->clear();}
     captureRenderer();
@@ -94,11 +110,20 @@ QJsonValue ContentPropertyEditor::effectiveProperty(const QString& key,int chann
     QJsonObject config;
     if(auto* face=qobject_cast<CompositePresetItem*>(m_item.get())) {config=face->configuration();}
     if(auto* bar=qobject_cast<BarPresetItem*>(m_item.get())) {config=bar->configuration();}
+    if (auto* waveform = qobject_cast<WaveformMeterItem*>(m_item.get())) {
+        config = waveform->configuration();
+    }
     return channel<0?config[key]:config["channels"].toArray()[channel].toObject()[key];
 }
 namespace {
 QString fieldLabel(QString key)
 {
+    if (key == "viewWindowMs") {
+        return QObject::tr("Time span");
+    }
+    if (key == "sourceStage") {
+        return QObject::tr("Microphone stage");
+    }
     if(key=="bindingId") {return QObject::tr("Primary reading");}
     if(key=="secondaryBindingId") {return QObject::tr("Average reading");}
     if(key=="decay") {return QObject::tr("Release (0–1)");}
@@ -108,10 +133,67 @@ QString fieldLabel(QString key)
     return key;
 }
 }
+namespace {
+QJsonValue declaredValue(const ContentProperty& property, const QJsonObject& config)
+{
+    if(config.contains(property.key)) {return config.value(property.key);}
+    if(property.effectiveDefault) {return property.effectiveDefault(config);}
+    return property.defaultValue;
+}
+}
+QWidget* ContentPropertyEditor::declaredControl(const ContentProperty& p, QWidget* parent)
+{
+    const QJsonValue value=declaredValue(p,m_entry.config);
+    QWidget* widget=nullptr;
+    if(p.kind==ContentProperty::Kind::Toggle) {
+        auto* check=new QCheckBox(parent);check->setChecked(value.toBool());
+        connect(check,&QCheckBox::toggled,this,[this,key=p.key](bool on){m_entry.config[key]=on;publish();});
+        widget=check;
+    } else if(p.kind==ContentProperty::Kind::Text) {
+        auto* edit=new QLineEdit(value.toString(),parent);edit->setPlaceholderText(p.placeholder);
+        connect(edit,&QLineEdit::editingFinished,this,[this,edit,key=p.key]{
+            if(edit->text().isEmpty()) {m_entry.config.remove(key);} else {m_entry.config[key]=edit->text();}
+            publish();
+        });
+        widget=edit;
+    } else {
+        auto* combo=new QComboBox(parent);
+        for(const auto& choice:p.choices) {
+            combo->addItem(choice.label,choice.value.toVariant());
+            if(!choice.enabled) {
+                if(auto* model=qobject_cast<QStandardItemModel*>(combo->model())) {
+                    QStandardItem* item=model->item(combo->count()-1);
+                    item->setEnabled(false);item->setToolTip(choice.disabledReason);
+                }
+            }
+        }
+        int current=-1;
+        for(int i=0;i<p.choices.size();++i) {if(p.choices.at(i).value==value) {current=i;}}
+        if(current<0 && !value.isNull() && !value.isUndefined()) {
+            combo->addItem(tr("Stored value %1").arg(value.toVariant().toString()),value.toVariant());
+            current=combo->count()-1;
+        }
+        combo->setCurrentIndex(current);
+        connect(combo,qOverload<int>(&QComboBox::currentIndexChanged),this,[this,combo,key=p.key]{
+            const QJsonValue chosen=QJsonValue::fromVariant(combo->currentData());
+            if(chosen.isNull() || chosen.isUndefined()) {m_entry.config.remove(key);} else {m_entry.config[key]=chosen;}
+            publish();
+        });
+        widget=combo;
+    }
+    widget->setObjectName(QStringLiteral("property_")+p.key);
+    return widget;
+}
 QWidget* ContentPropertyEditor::control(const QString& key,const QJsonValue& value,int channel)
 {
     QWidget* widget=nullptr;
-    if(key.endsWith("BindingId") || key=="bindingId") {
+    if(key=="viewWindowMs" || key=="sourceStage") {
+        auto* combo=new GuardedComboBox(this);
+        if(key=="viewWindowMs") {combo->addItem(tr("5 seconds"),5000);combo->addItem(tr("1 second"),1000);combo->addItem(tr("100 milliseconds"),100);}
+        else {combo->addItem(tr("Conditioned encoder input"),"Conditioned");combo->addItem(tr("Raw microphone"),"RawMic");}
+        combo->setCurrentIndex(combo->findData(value.toVariant()));
+        connect(combo,qOverload<int>(&QComboBox::currentIndexChanged),this,[this,key,combo]{if(!property(key,QJsonValue::fromVariant(combo->currentData()))) {const QSignalBlocker blocker(combo);combo->setCurrentIndex(combo->findData(effectiveProperty(key,-1).toVariant()));}});widget=combo;
+    } else if(key.endsWith("BindingId") || key=="bindingId") {
         auto* combo=new QComboBox(this);combo->addItem(tr("Unassigned"),-1);
         // Existing GUI binding names are the source of truth, including gaps.
         for(int id=0;id<=MeterBinding::RotatorEle;++id) {const auto title=readingName(id);if(!title.isEmpty()) {combo->addItem(title,id);}}
@@ -129,7 +211,7 @@ QWidget* ContentPropertyEditor::control(const QString& key,const QJsonValue& val
             auto* spin=new QSpinBox(this);int low=0;
             if(key=="updateIntervalMs") {low=1;}if(key=="historyCapacity") {low=2;}if(key=="fontSize") {low=8;}
             if(key=="historyMs") {low=qobject_cast<CompositePresetItem*>(m_item.get())?100:effectiveProperty("updateIntervalMs",channel).toInt(1);}if(key=="rowHeight") {low=72;}
-            if(key=="faceHeight") {low=qobject_cast<CompositePresetItem*>(m_item.get())->minimumConfiguredFaceHeight();}
+            if(key=="faceHeight") {low=qobject_cast<WaveformMeterItem*>(m_item.get())?180:qobject_cast<CompositePresetItem*>(m_item.get())->minimumConfiguredFaceHeight();}
             spin->setRange(low,1000000);spin->setValue(value.toInt());if(key.endsWith("Ms")) {spin->setSuffix(tr(" ms"));}if(key.endsWith("Height") || key=="fontSize") {spin->setSuffix(tr(" px"));}
             connect(spin,qOverload<int>(&QSpinBox::valueChanged),this,[this,key,channel,spin](int v){if(!property(key,v,channel)) {const QSignalBlocker block(spin);spin->setValue(effectiveProperty(key,channel).toInt());spin->setToolTip(tr("Value rejected; the previous effective value is restored."));}});widget=spin;
         } else {
@@ -172,6 +254,7 @@ void ContentPropertyEditor::setEntry(const ContentEntry& entry)
         QSize minimum=m_editMinimum.toSize().expandedTo(QSize(24,24));
         if(auto* face=qobject_cast<CompositePresetItem*>(m_item.get())) {minimum=face->minimumFaceSize();}
         if(auto* face=qobject_cast<BarPresetItem*>(m_item.get())) {minimum=face->minimumFaceSize();}
+        if(auto* face=qobject_cast<WaveformMeterItem*>(m_item.get())) {minimum=face->minimumFaceSize();}
         for(int axis=0;axis<4;++axis) {
             auto* field=new QDoubleSpinBox(group);field->setObjectName(keys[axis]);field->setDecimals(13);field->setRange(-QWIDGETSIZE_MAX,QWIDGETSIZE_MAX);field->setValue(values[axis]);field->setKeyboardTracking(false);fields->addRow(labels[axis],field);
             connect(field,qOverload<double>(&QDoubleSpinBox::valueChanged),this,[this,axis,minimum](double value){
@@ -188,8 +271,39 @@ void ContentPropertyEditor::setEntry(const ContentEntry& entry)
     }
     QString reason=entry.extensions.value("unavailableReason").toString();
     if(reason.isEmpty() && !m_registry.isAvailable(entry.typeId)) { reason=m_registry.unavailableReason(entry.typeId); }
-    if(!reason.isEmpty() || (!m_item && !entry.typeId.startsWith("applet:"))) {
+    // Workspace preview: a widget type with declared properties (no MeterItem).
+    const QVector<ContentProperty> schema=m_item?QVector<ContentProperty>{}:m_registry.declaredProperties(entry.typeId);
+    const bool declared=!schema.isEmpty();
+    if(!reason.isEmpty() || (!m_item && !entry.typeId.startsWith("applet:") && !declared)) {
         auto* note=new QLabel(reason.isEmpty()?tr("Unsupported configuration. Original data is retained; this object can be removed explicitly."):reason,this); note->setWordWrap(true); root->addWidget(note);
+    } else if(declared) {
+        // The group exists only when it has rows, so nothing is built and
+        // thrown away.
+        const bool hasRows=std::any_of(schema.cbegin(),schema.cend(),
+            [](const ContentProperty& p){return p.kind!=ContentProperty::Kind::Reading;});
+        if(hasRows) {
+            auto* group=new QGroupBox(tr("Appearance and behavior"),this); group->setObjectName("declaredProperties");
+            auto* fields=new QFormLayout(group); root->addWidget(group);
+            for(const auto& p:schema) {
+                if(p.kind!=ContentProperty::Kind::Reading) {fields->addRow(p.label,declaredControl(p,group));}
+            }
+        }
+    } else if (auto* waveform = qobject_cast<WaveformMeterItem*>(m_item.get())) {
+        auto* group = new QGroupBox(tr("Appearance and waveform"), this);
+        auto* fields = new QFormLayout(group);
+        root->addWidget(group);
+        const auto props = waveform->configuration();
+        QStringList keys{"title", "showTitle", "viewWindowMs", "faceHeight", "traceColor"};
+        if (waveform->waveformKind() != WaveformKind::DecodedSpeech) {
+            keys.append("sourceStage");
+        }
+        for (const auto& key : keys) {
+            fields->addRow(fieldLabel(key), control(key, props[key]));
+        }
+        auto* note = new QLabel(tr("Fixed amplitude −1 to +1. The waveform observes existing audio; "
+                                  "microphone setup is available through Raw microphone."), this);
+        note->setWordWrap(true);
+        root->addWidget(note);
     } else if(auto* composite=qobject_cast<CompositePresetItem*>(m_item.get())) {
         const auto props=composite->configuration();
         auto* group=new QGroupBox(tr("Appearance and behavior"),this); auto* fields=new QFormLayout(group); root->addWidget(group);
@@ -234,12 +348,18 @@ void ContentPropertyEditor::setEntry(const ContentEntry& entry)
         for(const auto& key:{QStringLiteral("bindingId"),QStringLiteral("secondaryBindingId")}) {if(bar && props.contains(key)) {bindings->addRow(fieldLabel(key),control(key,props[key]));}}
         if(composite) {const auto channels=props["channels"].toArray();for(int i=0;i<channels.size();++i) {bindings->addRow(tr("%1 reading").arg(channels[i].toObject()["name"].toString(tr("Channel %1").arg(i+1))),control("bindingId",channels[i].toObject()["bindingId"],i));}}
     }
+    if(declared && reason.isEmpty()) {
+        for(const auto& p:schema) {
+            if(p.kind==ContentProperty::Kind::Reading) {bindings->addRow(p.label,declaredControl(p,advanced));}
+        }
+    }
     const bool applet=entry.typeId.startsWith("applet:");
     if((composite && composite->typeId()=="meter.clock") || entry.typeId=="CLOCK") {
         advanced->setEnabled(false);advanced->setToolTip(tr("This clock uses local time independently of radio and MMIO sources. Stored context is retained."));
     } else if(applet && entry.typeId!="applet:s_meter") {
         advanced->setEnabled(false);advanced->setToolTip(tr("This applet keeps its current radio and slice. Saved source choices are retained."));
-    } else if(!m_item && !applet) {advanced->setEnabled(false);advanced->setToolTip(tr("Unsupported content retains its stored bindings."));}
+    } else if(!m_item && !applet && !declared) {advanced->setEnabled(false);advanced->setToolTip(tr("Unsupported content retains its stored bindings."));}
+    else if(declared && !reason.isEmpty()) {advanced->setEnabled(false);advanced->setToolTip(reason);}
     auto* source=new QComboBox(advanced); source->setObjectName("contentSlice");
     const int inherited=m_defaults.contains("sliceId")?m_defaults["sliceId"].toInt():m_defaults["rxSource"].toInt(1)-1;
     source->addItem(m_defaults.value("rxSourceMode").toString()==QStringLiteral("followSelectedRx")
@@ -255,7 +375,8 @@ void ContentPropertyEditor::setEntry(const ContentEntry& entry)
         else if(source->currentData().toInt()>=0) {m_entry.context["sliceId"]=source->currentData().toInt();} publish();
     });
     for(const QString& key:{QStringLiteral("sessionId"),QStringLiteral("mmioGuid"),QStringLiteral("mmioVariable")}) {
-        if(applet && key!="sessionId") {continue;}
+        // Declared widget types read no MMIO source.
+        if((applet || declared || qobject_cast<WaveformMeterItem*>(m_item.get())) && key!="sessionId") {continue;}
         auto* edit=new QLineEdit(entry.context[key].toString(),advanced); edit->setObjectName(key);
         edit->setPlaceholderText(key=="sessionId"?tr("Container default — %1").arg(m_defaults[key].toString(tr("current session"))):tr("Unassigned"));
         bindings->addRow(key=="sessionId"?tr("Radio session"):key=="mmioGuid"?tr("MMIO source UUID"):tr("MMIO variable"),edit);

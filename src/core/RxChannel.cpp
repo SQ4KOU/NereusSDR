@@ -59,6 +59,17 @@
 //                 AF level, a departure from Thetis radio.cs, which sets AF
 //                 as SetRXAPanelGain1. By J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-14 - The FM squelch threshold sent to WDSP follows Thetis's
+//                 slider mapping (console.cs:47295-47304 [v2.10.3.15]):
+//                 fmsqThresholdForWdsp sends 10^(-2n/100) for n = 0..100
+//                 from the -160..0 slider, replacing a dB-to-linear
+//                 conversion that kept FM muted. By J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
+//                 Later the same day: the console.cs header block brought
+//                 up to the v2.10.3.15 upstream header (the ApacheLabs G2E
+//                 line and the final-modifications block).
+//                 2026-10-15: n moved into fmsqScaleValue so
+//                 Setup > DSP > FM can show the number Thetis shows.
 // =================================================================
 
 //=================================================================
@@ -139,6 +150,7 @@
 // Modifications for using the new database import function.  W2PA, 29 May 2017
 // Support QSK, possible with Protocol-2 firmware v1.7 (Orion-MkI and Orion-MkII), and later.  W2PA, 5 April 2019 
 // Modfied heavily - Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+// ApacheLabs G2E support added throughout Thetis in various files, all changes marked  //N1GP G2E added
 //
 //============================================================================================//
 // Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
@@ -152,6 +164,11 @@
 // its original terms and is not affected by this dual-licensing statement in any way.        //
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
+//
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Final modifictions by MW0LGE Richard Samphire - 19th April 2026
+// Nothing further added by him after this date, and his repo is now in archive https://github.com/ramdor/Thetis
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
@@ -293,6 +310,7 @@ warren@wpratt.com
 #include "DspControlThread.h"
 #include "LogCategories.h"
 #include "NbFamily.h"
+#include "NoiseFloorTracker.h"  // kAgcReferenceFftSize, asserted against kDspSize
 #include "SampleRateCatalog.h"  // bufferSizeForRate() — for setSampleRate()
 #include "WdspEngine.h"
 #include "wdsp_api.h"
@@ -319,6 +337,7 @@ extern "C" {
 #include <fftw3.h>       // fftw_plan_dft_1d, fftw_execute, fftw_alloc_complex, etc.
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <string_view>
@@ -625,8 +644,8 @@ DSPMode RxChannel::wdspModeFor(DSPMode mode)
     // as non-WDSP slice modes. The RX K-bench pipeline runs WDSP as
     // the SSB demod front-end in both, so the WDSP-facing equivalent
     // is USB for RADE_U and LSB for RADE_L.
-    if (mode == DSPMode::RADE_U) return DSPMode::USB;
-    if (mode == DSPMode::RADE_L) return DSPMode::LSB;
+    if (isRadeUpperDspMode(mode)) { return DSPMode::USB; }
+    if (isRadeLowerDspMode(mode)) { return DSPMode::LSB; }
     return mode;
 }
 
@@ -729,6 +748,9 @@ double RxChannel::readBackAgcThreshAt(int sampleRate) const
     //   (MW0LGE_21k7 on the FFT-size line that follows)
     // kDspSize must match the size passed to SetRXAAGCThresh (4096).
     static constexpr double kDspSize = 4096.0;
+    // Auto AGC-T refers its noise floor to this size (NoiseFloorTracker).
+    static_assert(kDspSize == static_cast<double>(NoiseFloorTracker::kAgcReferenceFftSize),
+                  "Auto AGC-T's reference FFT size must be the size GetRXAAGCThresh is given");
     double thresh = 0.0;
     GetRXAAGCThresh(m_channelId, &thresh, kDspSize, static_cast<double>(sampleRate));
     return std::clamp(thresh, -160.0, 2.0);
@@ -788,6 +810,9 @@ void RxChannel::setAgcThreshold(int dBu)
         // NB: 'size' is the DSP analysis buffer size (4096, matching OpenChannel dsp_size),
         //     NOT the fexchange2 input chunk size (m_bufferSize).
         static constexpr double kDspSize = 4096.0;
+        // Auto AGC-T refers its noise floor to this size (NoiseFloorTracker).
+        static_assert(kDspSize == static_cast<double>(NoiseFloorTracker::kAgcReferenceFftSize),
+                      "Auto AGC-T's reference FFT size must be the size SetRXAAGCThresh is given");
         SetRXAAGCThresh(m_channelId, static_cast<double>(dBu),
                         kDspSize,
                         static_cast<double>(sampleRate));
@@ -2158,19 +2183,64 @@ void RxChannel::setFmsqThresh(double dB)
 {
 #ifdef HAVE_WDSP
     runKeyed(laneParameter("setFmsqThresh"), 0, [=, this]() {
-        // From Thetis Project Files/Source/Console/radio.cs:1274-1291
+        // From Thetis Project Files/Source/Console/radio.cs:1278-1291 [v2.10.3.15]
         //   WDSP.SetRXAFMSQThreshold(WDSP.id(thread, subrx), value)
-        //   Thetis fm_squelch_threshold = 1.0f is LINEAR (0..1 scale).
-        //   SliceModel stores in dB domain (m_fmsqThresh = -150.0 default).
-        //   Convert dB → linear before passing to WDSP.
-        //   -150.0 dB → ~3.16e-8 (effectively muted = squelch open on FM)
-        // WDSP third_party/wdsp/src/fmsq.c:244 — assigns threshold directly to tail_thresh (linear)
-        const double linear = std::pow(10.0, dB / 20.0);
+        // The value is SliceModel fmsqThresh, Thetis's -160..0 squelch
+        // slider position; fmsqThresholdForWdsp maps it to the linear
+        // threshold, as console.cs does before it sets FMSquelchThreshold.
+        // WDSP third_party/wdsp/src/fmsq.c:247-251 stores it as tail_thresh
+        // and 0.9 times it as unmute_thresh; the squelch opens while the
+        // noise average is below unmute_thresh (fmsq.c:162,189).
+        const double linear = fmsqThresholdForWdsp(dB);
         SetRXAFMSQThreshold(m_channelId, linear);
     });
 #else
     Q_UNUSED(dB);
 #endif
+}
+
+namespace {
+// FM squelch slider to WDSP threshold.
+// From Thetis console.cs:47295-47304 [v2.10.3.15]
+//   if (_rx1_dsp_mode == DSPMode.FM) //FM Squelch
+//   //nValue = ptbSquelch.Value; // 0-100
+//   //[2.10.3.5]MW0LGE convert to a 0-100 scale from a -160 to 0 scale
+//   nValue = (int)(((ptbSquelch.Value + 160) / 160f) * 100f);
+//   radio.GetDSPRX(0, 0).FMSquelchThreshold = (float)Math.Pow(10.0, -2.0 * nValue / 100.0);
+// The second receiver does the same at console.cs:47645-47653 [v2.10.3.15].
+constexpr float  kFmsqSliderOffset     = 160.0f;
+constexpr float  kFmsqSliderSpan       = 160.0f;
+constexpr float  kFmsqScaleMaximum     = 100.0f;
+constexpr double kFmsqExponentScale    = -2.0;
+constexpr double kFmsqExponentDivisor  = 100.0;
+} // namespace
+
+int RxChannel::fmsqScaleValue(double sliderValue)
+{
+    // ptbSquelch holds -160..0, so the value is held to that range first.
+    // From Thetis console.Designer.cs:7572-7573 [v2.10.3.15]
+    const float value = static_cast<float>(std::clamp(
+        sliderValue,
+        static_cast<double>(ControlRanges::kFmsqThreshMinDb),
+        static_cast<double>(ControlRanges::kFmsqThreshMaxDb)));
+
+    // From Thetis console.cs:47295-47304 [v2.10.3.15]
+    //FM Squelch
+    //nValue = ptbSquelch.Value; // 0-100
+    //[2.10.3.5]MW0LGE convert to a 0-100 scale from a -160 to 0 scale
+    return static_cast<int>(
+        ((value + kFmsqSliderOffset) / kFmsqSliderSpan) * kFmsqScaleMaximum);
+}
+
+double RxChannel::fmsqThresholdForWdsp(double sliderValue)
+{
+    const int nValue = fmsqScaleValue(sliderValue);
+
+    // From Thetis console.cs:47303-47304 [v2.10.3.15]
+    // Thetis narrows the result to float (the FMSquelchThreshold property,
+    // radio.cs:1278) before SetRXAFMSQThreshold widens it back to double.
+    return static_cast<double>(static_cast<float>(
+        std::pow(10.0, kFmsqExponentScale * nValue / kFmsqExponentDivisor)));
 }
 
 // ---------------------------------------------------------------------------

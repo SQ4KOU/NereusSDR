@@ -194,7 +194,9 @@ struct BandSlicesModelTests {
         let commands = CommandClient(send: { message in outbox.record(message) })
         await commands.handle(.stateChanged(.ready))
         let clock = Clock()
-        let model = BandSlicesModel(store: store, commands: commands, now: { clock.now })
+        let catalog = BandFlagShotTests.catalogue()
+        #expect(catalog != nil, "the answered-control fixture needs the Core's mode catalogue")
+        let model = BandSlicesModel(store: store, commands: commands, catalog: catalog, now: { clock.now })
         return (model, store, outbox, clock, commands)
     }
 
@@ -244,6 +246,22 @@ struct BandSlicesModelTests {
     }
 
     static let foreignWords = "That slice belongs to MacBook Pro. It can be changed only there."
+
+    @Test("direct mode writes follow the Core's default-off catalogue")
+    func directModeWriteRequiresCatalogueOffer() async {
+        let (model, _, outbox, _, _) = await makeAnsweredModel()
+        model.setMode(1, sliceId: 0)
+        #expect(await settle { lastWrite(outbox, "dspMode") != nil })
+        let writes = outbox.messages.count
+
+        model.setMode(14, sliceId: 0)
+        model.setMode(15, sliceId: 0)
+        model.setMode(999, sliceId: 0)
+        for _ in 0..<100 {
+            await Task.yield()
+        }
+        #expect(outbox.messages.count == writes)
+    }
 
     @Test("a refused tune shows the Core's words as sent; the slice keeps the Core's frequency; the next kept one clears them")
     func refusedTuneShowsTheCoresWords() async {

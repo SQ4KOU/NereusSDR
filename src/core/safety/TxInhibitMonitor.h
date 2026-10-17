@@ -97,6 +97,7 @@
 #pragma once
 
 #include "core/HpsdrModel.h"
+#include "core/NereusCoreExport.h"
 
 #include <QObject>
 #include <QTimer>
@@ -145,7 +146,7 @@ namespace NereusSDR::safety {
 /// The QTimer fires on that same thread. Cross-thread callers in Task 17 must
 /// use QMetaObject::invokeMethod(monitor, [=]{ ... }, Qt::QueuedConnection)
 /// or queued signal-slot connections.
-class TxInhibitMonitor : public QObject
+class NEREUS_CORE_EXPORT TxInhibitMonitor : public QObject
 {
     Q_OBJECT
 public:

@@ -6,14 +6,22 @@
 // (R-R3-43) one receiver's own tap, or (R-R3-45) the speakers' mix alone or
 // the headphones mix, to owned 40 ms stereo blocks for the remote audio
 // sender.
+//
+// Modification history (NereusSDR):
+//   2026-10-10: R-AUD-SEND: DaemonAudioBlockWake, told on the DSP thread
+//               the moment a block is queued, so the thread that sends it
+//               wakes then instead of at its next tick. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
 
 #include <QObject>
 #include <QPointer>
+#include <QSemaphore>
 #include <QVector>
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -60,6 +68,49 @@ struct DaemonAudioSourceTelemetry {
     std::uint64_t invalidIngressDrops = 0;
 };
 
+/// R-AUD-SEND: wakes the thread that takes a source's blocks
+/// (DaemonAudioSendThread) the moment one is queued. Several sources may
+/// share one.
+///
+/// notify() runs on the DSP thread, under the audio tap contract
+/// (AudioEngine.h, MasterMixAudioTap: no blocking, no allocation). It is
+/// one atomic exchange, and only when no wake is already pending one
+/// QSemaphore::release(). Qt 6's QSemaphore is a futex wherever the system
+/// has one (qsemaphore.cpp; qfutex_p.h: futex on Linux, __ulock_wake on
+/// macOS in qfutex_mac_p.h, WakeByAddress on Windows): release() is an
+/// atomic add, and a wake system call only while the waiter is asleep. It
+/// takes no lock and allocates nothing. A condition variable was not used:
+/// its notify without the waiter's mutex can be lost between the waiter's
+/// check and its sleep, and with the mutex the DSP thread could block.
+class DaemonAudioBlockWake final {
+public:
+    DaemonAudioBlockWake() = default;
+    DaemonAudioBlockWake(const DaemonAudioBlockWake&) = delete;
+    DaemonAudioBlockWake& operator=(const DaemonAudioBlockWake&) = delete;
+
+    /// Any thread; never blocks.
+    void notify() noexcept
+    {
+        if (!m_pending.exchange(true, std::memory_order_acq_rel)) {
+            m_semaphore.release();
+        }
+    }
+
+    /// The waiting thread: returns at a notify(), or after timeoutMs. A
+    /// block queued before this returns is there for the caller to take; a
+    /// notify() after it makes the next wait return at once.
+    bool wait(int timeoutMs)
+    {
+        const bool notified = m_semaphore.tryAcquire(1, timeoutMs);
+        m_pending.store(false, std::memory_order_release);
+        return notified;
+    }
+
+private:
+    QSemaphore m_semaphore;
+    std::atomic<bool> m_pending{false};
+};
+
 class DaemonAudioSource final : public QObject {
     Q_OBJECT
 
@@ -83,6 +134,11 @@ public:
     /// DSP thread reads it; set it before start(). An empty clock keeps the
     /// current one.
     bool setCaptureClock(CaptureClock clock);
+
+    /// R-AUD-SEND: what to wake each time a block is queued (null, the
+    /// default: nothing). Refused (false) while running, because the DSP
+    /// thread reads it; set it before start().
+    bool setBlockWake(std::shared_ptr<DaemonAudioBlockWake> wake);
 
     /// R-R3-43: which audio this source captures. kMasterMix (the default)
     /// is the master mix, exactly as before; a slice id >= 0 is that
@@ -148,6 +204,14 @@ public:
     // Deterministic race seam: runs on the consumer thread inside
     // takeBlock() while it holds the bridge lock, before the ring is read.
     void setTakeBlockLockedHookForTest(std::function<void()> hook);
+    // Test seam, the producer's thread only, no production caller. A block
+    // that completed while the consumer held the bridge lock stays with the
+    // producer until its next callback (it never waits). A radio's DSP
+    // thread calls again within a few milliseconds; a test that feeds a
+    // fixed number of blocks and then stops never does, and the last block
+    // would stay there. This is that next callback's hand-over, without its
+    // samples: it returns once nothing is held back.
+    void handOverPendingForTest();
 #endif
 
 private:

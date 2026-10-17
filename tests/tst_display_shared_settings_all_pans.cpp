@@ -1,8 +1,6 @@
-// no-port-check: NereusSDR-original test. Display settings stored once for
-// every pan (the spectrum overlays, normalize, the peak value readout, the
-// grid's noise-floor tracking, the band plan text size, and the per-band
-// grid and 3D floor slots) must reach every pan when one changes, or a
-// later save from another pan writes the old value back.
+// no-port-check: NereusSDR-original test. Setup's All pans controls write
+// the display master and reach every open pan, while a direct pan edit is
+// a sparse override and must not leak to its neighbours.
 //
 // Modification history (NereusSDR):
 //   2026-09-28  J.J. Boyd / KG4VCF  Created. AI-assisted via Anthropic
@@ -11,6 +9,7 @@
 #include <QtTest/QtTest>
 
 #include "core/AppSettings.h"
+#include "core/settings/PanDisplayKeys.h"
 #include "gui/ColorSwatchButton.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/setup/DisplaySetupPages.h"
@@ -61,18 +60,33 @@ private slots:
         auto& s = AppSettings::instance();
         for (const char* key : kSharedKeys) {
             s.remove(QLatin1String(key));
+            for (int pan = 0; pan < 4; ++pan) {
+                s.remove(PanDisplayKeys::panKey(QString::fromLatin1(key), pan));
+            }
         }
     }
 
-    void setupChangeReachesEveryPanAndSurvivesTheirSaves()
+    void setupMasterReachesEveryPanWhileDirectPanEditStaysLocal()
     {
         RadioModel model;
         SpectrumWidget first;
         SpectrumWidget second;
         auto third = std::make_unique<SpectrumWidget>();
-        model.setSpectrumWidget(&first);   // Setup points at the first pan
+        first.setPanIndex(0);
+        second.setPanIndex(1);
+        third->setPanIndex(2);
+        for (SpectrumWidget* pan : {&first, &second, third.get()}) {
+            pan->loadSettingsForTest();
+        }
+        model.setSpectrumWidget(&first);
         SpectrumDefaultsPage spectrum(&model);
         GridScalesPage grid(&model);
+        SetupDisplayProviders providers;
+        providers.panWidgets = [&first, &second, &third]() {
+            return QList<SpectrumWidget*>{&first, &second, third.get()};
+        };
+        spectrum.setDisplayProviders(providers);
+        grid.setDisplayProviders(providers);
 
         byId<QCheckBox>(spectrum, "display.spectrumDefaults.showBinWidth")->setChecked(true);
         byId<QCheckBox>(spectrum, "display.spectrumDefaults.showNoiseFloor")->setChecked(true);
@@ -89,10 +103,6 @@ private slots:
         byId<QCheckBox>(grid, "display.gridScales.adjustGridMinToNoiseFloor")->setChecked(true);
         byId<QSpinBox>(grid, "display.gridScales.noiseFloorOffset")->setValue(-7);
         byId<QCheckBox>(grid, "display.gridScales.maintainGridRange")->setChecked(true);
-        first.setBandPlanFontSize(12);
-        first.setNoiseFloorFastColor(QColor(0x70, 0x80, 0x90));
-        first.setPeakValueColor(QColor(0xA0, 0xB0, 0xC0));
-        first.setShowNoiseFloorPosition(SpectrumWidget::OverlayPosition::TopLeft);
 
         for (SpectrumWidget* pan : {&first, &second, third.get()}) {
             QVERIFY(pan->showBinWidth());
@@ -101,24 +111,40 @@ private slots:
             QCOMPARE(pan->noiseFloorLineWidth(), 2.5f);
             QCOMPARE(pan->noiseFloorColor(), QColor(0x10, 0x20, 0x30));
             QCOMPARE(pan->noiseFloorTextColor(), QColor(0x40, 0x50, 0x60));
-            QCOMPARE(pan->noiseFloorFastColor(), QColor(0x70, 0x80, 0x90));
             QVERIFY(pan->dispNormalize());
             QVERIFY(pan->showPeakValueOverlay());
             QCOMPARE(pan->peakValuePosition(), SpectrumWidget::OverlayPosition::BottomRight);
             QCOMPARE(pan->peakTextDelayMs(), 900);
-            QCOMPARE(pan->peakValueColor(), QColor(0xA0, 0xB0, 0xC0));
             QVERIFY(pan->adjustGridMinToNoiseFloor());
             QCOMPARE(pan->nfOffsetGridFollow(), -7);
             QVERIFY(pan->maintainNFAdjustDelta());
-            QCOMPARE(pan->bandPlanFontSize(), 12);
-            QCOMPARE(pan->showNoiseFloorPosition(), SpectrumWidget::OverlayPosition::TopLeft);
         }
 
-        // Another pan saving (after a zoom, say) writes the same values.
+        // A direct edit belongs only to pan 0 and becomes its sparse
+        // override when that pan saves.
+        first.setShowBinWidth(false);
+        first.setNoiseFloorFastColor(QColor(0x70, 0x80, 0x90));
+        first.setPeakValueColor(QColor(0xA0, 0xB0, 0xC0));
+        first.setShowNoiseFloorPosition(SpectrumWidget::OverlayPosition::TopLeft);
+        first.saveSettingsForTest();
+        QVERIFY(!first.showBinWidth());
+        QVERIFY(second.showBinWidth());
+        QVERIFY(third->showBinWidth());
+        QCOMPARE(first.noiseFloorFastColor(), QColor(0x70, 0x80, 0x90));
+        QVERIFY(second.noiseFloorFastColor() != first.noiseFloorFastColor());
+        QCOMPARE(first.peakValueColor(), QColor(0xA0, 0xB0, 0xC0));
+        QVERIFY(second.peakValueColor() != first.peakValueColor());
+        QCOMPARE(first.showNoiseFloorPosition(), SpectrumWidget::OverlayPosition::TopLeft);
+        QVERIFY(second.showNoiseFloorPosition() != first.showNoiseFloorPosition());
+
+        // Neighbour saves leave both the master and pan 0's override intact.
         second.saveSettingsForTest();
         third->saveSettingsForTest();
         auto& s = AppSettings::instance();
         QCOMPARE(s.value(QStringLiteral("DisplayShowBinWidth")).toString(), QStringLiteral("True"));
+        QCOMPARE(s.value(QStringLiteral("DisplayShowBinWidth_0")).toString(), QStringLiteral("False"));
+        QVERIFY(!s.contains(QStringLiteral("DisplayShowBinWidth_1")));
+        QVERIFY(!s.contains(QStringLiteral("DisplayShowBinWidth_2")));
         QCOMPARE(s.value(QStringLiteral("DisplayShowNoiseFloor")).toString(), QStringLiteral("True"));
         QCOMPARE(s.value(QStringLiteral("DisplayNoiseFloorShiftDb")).toString(), QStringLiteral("3.5"));
         QCOMPARE(s.value(QStringLiteral("DisplayDispNormalize")).toString(), QStringLiteral("True"));
@@ -126,20 +152,14 @@ private slots:
         QCOMPARE(s.value(QStringLiteral("DisplayAdjustGridMinToNoiseFloor")).toString(),
                  QStringLiteral("True"));
         QCOMPARE(s.value(QStringLiteral("DisplayNFOffsetGridFollow")).toString(), QStringLiteral("-7"));
-        QCOMPARE(s.value(QStringLiteral("BandPlanFontSize")).toString(), QStringLiteral("12"));
 
-        // A pan made later starts with them.
+        // A later pan has no override and therefore takes the master.
         SpectrumWidget later;
-        later.loadSettingsForTest();   // as MainWindow does when it wires a pan
+        later.setPanIndex(3);
+        later.loadSettingsForTest();
+        QVERIFY(later.showBinWidth());
         QVERIFY(later.showNoiseFloor());
         QCOMPARE(later.nfOffsetGridFollow(), -7);
-        QCOMPARE(later.bandPlanFontSize(), 12);
-
-        // A removed pan drops out of the shared list.
-        third.reset();
-        first.setShowBinWidth(false);
-        QVERIFY(!second.showBinWidth());
-        QVERIFY(!later.showBinWidth());
     }
 
     // The per-band grid, the global dB step and the per-band 3D floor are

@@ -7,6 +7,8 @@
 // the real amp's (StationPgxlController.h names the captures). No real
 // accessory is contacted, nothing keys a radio, and a scan only listens.
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
+// 2026-10-11: and this computer's own OPERATE click on an app that does not
+// share its accessories (setPgxlOperateFromApplet).
 #include <QtTest/QtTest>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -356,6 +358,70 @@ private slots:
         QCOMPARE(model.pgxlConnection()->socketAttemptToken(), token);
         QVERIFY(model.amplifierModel()->configuredHost().isEmpty());
         QCOMPARE(model.amplifierModel()->connectionPhase(), Phase::Disconnected);
+    }
+
+    // An app that runs its own radio and does not share its accessories
+    // (every desktop app; only nereusd calls enableStationAccessoryIdentity):
+    // this computer's own OPERATE click still reaches the amp. It went
+    // through setPgxlOperateForStation, which refuses there, so the button
+    // did nothing.
+    void theLocalAppletSwitchesTheAmpOnAnAppThatDoesNotShareIt()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+        RadioModel model;
+        model.setReceiveOnlyStationPolicy(true);
+        QVERIFY(!model.stationAccessoryIdentityEnabled());
+        QSignalSpy frames(model.pgxlConnection(), &PgxlConnection::testFrameWrittenForTesting);
+
+        QString reason;
+        // Not connected to the amp: nothing to send it to.
+        QVERIFY(!model.setPgxlOperateFromApplet(true, &reason));
+        QCOMPARE(reason, QStringLiteral("The Power Genius is not connected."));
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        QCOMPARE(frames.count(), 0);
+
+        model.pgxlConnection()->connectToPgxl(QStringLiteral("127.0.0.1"), server.serverPort());
+        QVERIFY(QTest::qWaitFor([&] { return server.hasPendingConnections(); }, 2000));
+        QTcpSocket* peer = server.nextPendingConnection();
+        peer->write("V3.8.9\n");
+        peer->flush();
+        QTRY_VERIFY_WITH_TIMEOUT(model.pgxlConnection()->isConnected(), 2000);
+        QByteArray pending;
+        QStringList lines;
+        const auto operateLines = [&] {
+            return receivedCommands(peer, pending, lines).filter(
+                QRegularExpression(QStringLiteral("^operate")));
+        };
+
+        // A window's request is still refused here: this app shares nothing.
+        QVERIFY(!model.setPgxlOperateForStation(true, &reason));
+        QCOMPARE(reason,
+                 QStringLiteral("This Core cannot change its amplifier and tuner settings."));
+
+        // On the air nothing reaches the amp.
+        model.transmitModel().setMox(true);
+        QVERIFY(!model.setPgxlOperateFromApplet(true, &reason));
+        QCOMPARE(reason, QStringLiteral("The radio is on the air. Try again when it stops."));
+        QVERIFY(!model.setPgxlOperateFromApplet(false, &reason));
+        model.transmitModel().setMox(false);
+        QTest::qWait(100);
+        QVERIFY(operateLines().isEmpty());
+
+        // Off the air: the applet's own line, and the model follows the
+        // amp's report, not the request.
+        QVERIFY(model.setPgxlOperateFromApplet(true, &reason));
+        QVERIFY(reason.isEmpty());
+        QTRY_COMPARE(operateLines(), QStringList{QStringLiteral("operate=1")});
+        QVERIFY(!model.amplifierModel()->operate());
+        peer->write("S0|status state=OPERATE\n");
+        peer->flush();
+        QTRY_VERIFY(model.amplifierModel()->operate());
+        QVERIFY(model.setPgxlOperateFromApplet(false, &reason));
+        QTRY_COMPARE(operateLines(),
+                     (QStringList{QStringLiteral("operate=1"), QStringLiteral("operate=0")}));
+        // Nothing was keyed.
+        QVERIFY(!model.isTransmitting());
     }
 };
 

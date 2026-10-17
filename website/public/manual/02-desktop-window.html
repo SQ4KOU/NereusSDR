@@ -293,20 +293,20 @@ change AF by a small amount while listening. Confirm both the number and the
 sound change. Then select another slice and verify its identity before using
 the same control. This establishes which controls follow selection without
 keying the transmitter or changing station hardware.</p>
-<h2 id="set-this-computers-master-listening-output">Set this computer's master listening output</h2>
-<p>The title bar's speaker button and adjacent slider are <strong>Master mute</strong> and
-<strong>Master volume</strong> for this computer. Click the speaker to mute/unmute; adjust
-the slider from 0 to 100 percent and check its adjacent level readout. Master
-mute can silence a correctly configured slice, so check it before changing
-receiver gain or the Core's DSP. This control also affects this computer's
-playback in a remote desktop window.</p>
-<p>Right-click the speaker button for <strong>Output device</strong>. Choose the intended
-playback device and verify the checkmark/current route, then listen at a
-comfortable volume. <strong>No output devices</strong> means no destination is available
-from the current audio backend. Use <a href="/manual/01-desktop-connect.html#choose-this-computers-receive-and-transmit-audio-routes">Audio &gt; Devices</a>
-to inspect the opened format or repair a missing route. The picker changes
-this computer's speakers destination; it does not change the station's
-microphone input or a different operator's phone output. The selected slice's
-personal volume/mute remains a separate stage, so check both when one slice
-is silent.</p>
+<h2 id="set-the-pc-and-radio-listening-volume">Set the PC and RADIO listening volume</h2>
+<p>The title bar has two volume controls, each a speaker button with a slider and a level readout from 0 to 100.</p>
+<ul>
+<li><strong>PC</strong> is this computer's speakers. Click the speaker to mute or unmute; drag the slider to set the volume. It is the same control as <strong>Volume</strong> under <strong>This computer</strong> in <strong>File &gt; Settings… &gt; Audio &gt; Outputs</strong>. It does not change the headphones.</li>
+<li><strong>RADIO</strong> is the radio's own speaker output. It plays the receiving slices, and each slice's AF level and mute still apply. In a window connected to a remote Core it is the speaker at the Core, shared with every window and the phone, and its tooltip reads <strong>Radio speaker at the Core (shared with every window and the phone)</strong>. With no radio connected it is greyed and its tooltip reads <strong>No radio connected</strong>; on a Hermes Lite 2 without the audio add-on board the tooltip adds that it needs the board.</li>
+</ul>
+<p>PC mute can silence a correctly configured slice, so check it before changing receiver gain or the Core's DSP. PC also controls this computer's playback in a remote desktop window.</p>
+<p>Point at the PC speaker for its tooltip: <strong>PC volume. Click to mute, right-click for speakers.</strong> If the chosen device is missing or held by another program the tooltip adds that, and where the sound plays meanwhile. Right-click the PC speaker for the speakers menu. Its heading names the driver in use, for example <strong>SPEAKERS · Core Audio</strong>, followed by:</p>
+<ul>
+<li><strong>(platform default)</strong>, then each device on that driver, with the current choice ticked. An interface with several pairs lists each pair under the interface's name.</li>
+<li>A missing choice in amber at the top, ticked, as <strong><name> (not connected)</strong> or <strong><name> (in use by another program)</strong>, with <strong>Playing on <device> until it comes back.</strong> beneath it.</li>
+<li><strong>No ASIO devices present</strong> when ASIO is the driver and none is installed.</li>
+<li><strong>The device lists are not ready.</strong> with the entries greyed, shortly after start.</li>
+<li><strong>Sound setup…</strong>, which opens Audio &gt; Outputs.</li>
+</ul>
+<p>Choose the intended device and listen at a comfortable volume. The menu changes this computer's speakers only. It does not change the station's microphone input or a different operator's phone output. A newly plugged in device appears in the menu within about a second. The selected slice's personal volume and mute remain a separate stage, so check both when one slice is silent. Use <a href="/manual/01-desktop-connect.html#choose-this-computers-receive-and-transmit-audio-routes">Audio &gt; Outputs</a> to inspect the opened format or repair a missing route.</p>
 <div class="page-next"><a href="/manual/01-desktop-connect.html">Previous chapter</a><a href="/manual/03-receive.html">Next chapter</a></div></main></div></body></html>

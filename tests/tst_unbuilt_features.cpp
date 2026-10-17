@@ -68,6 +68,12 @@
 //                                    feature for marking one built, and
 //                                    four ctest entries (main()).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-06  J.J. Boyd / KG4VCF  R-SPK-21: the microphone card's rows
+//                                    are on Setup > Audio > Microphone.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-17  J.J. Boyd / KG4VCF  CI speed round: marking one built
+//                                    runs as six entries, not three.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -153,13 +159,16 @@ StationStartupSelection remoteCore()
 
 // True when `w` would be on screen once `root` is: nothing between them is
 // hidden, except by a stacked widget choosing another page (a tab not
-// selected is still offered).
+// selected is still offered). R-SPK-21 / D14: a device card's folded
+// "Device details" section (objectName "deviceDetails") is offered too, one
+// click away, as a tab is.
 bool shownWithin(const QWidget* w, const QWidget* root)
 {
     if (w == nullptr) { return false; }
     for (const QWidget* p = w; p != nullptr && p != root; p = p->parentWidget()) {
         const bool stackPage = qobject_cast<const QStackedWidget*>(p->parentWidget()) != nullptr;
-        if (p->isHidden() && !stackPage) { return false; }
+        const bool foldedDetails = p->objectName() == QLatin1String("deviceDetails");
+        if (p->isHidden() && !stackPage && !foldedDetails) { return false; }
     }
     return true;
 }
@@ -611,7 +620,7 @@ QMap<F, QList<Surface>> surfaces()
     map[F::Memories] = {menu(QStringLiteral("&Memory Manager...")),
                         spot(QStringLiteral("displayMemoriesToggle"))};
     map[F::Cat] = {menu(QStringLiteral("&CAT Control...")), setupPage(QStringLiteral("Serial Ports")),
-                   setupPage(QStringLiteral("TCP/IP CAT")), status(QStringLiteral("statusCatIndicator"))};
+                   setupPage(QStringLiteral("TCP/IP CAT")), setupPage(QStringLiteral("CAT Options")), setupPage(QStringLiteral("CAT PTT")), status(QStringLiteral("statusCatIndicator"))};
     map[F::Midi] = {menu(QStringLiteral("&MIDI Mapping...")), setupPage(QStringLiteral("MIDI Control"))};
     map[F::Help] = {menu(QStringLiteral("&Getting Started")), menu(QStringLiteral("&NereusSDR Help")),
                     menu(QStringLiteral("Understanding &Data Modes"))};
@@ -811,19 +820,19 @@ QMap<F, QList<Surface>> surfaces()
                 }},
         Surface{QStringLiteral("container Click Box Add"), Host::Container,
                 [](Hosts& h) { return actionShown(h.containerDialog(), QStringLiteral("Click Box")); }}};
-    map[F::AudioBitDepth] = {onPage(QStringLiteral("Devices"), QStringLiteral("bit depth"),
+    map[F::AudioBitDepth] = {onPage(QStringLiteral("Microphone"), QStringLiteral("bit depth"),
                                    text(QStringLiteral("Bit depth:")))};
-    map[F::AudioAutoMatch] = {onPage(QStringLiteral("Devices"), QStringLiteral("auto match"),
+    map[F::AudioAutoMatch] = {onPage(QStringLiteral("Microphone"), QStringLiteral("auto match"),
                                     text(QStringLiteral("Auto-match")))};
-    map[F::AudioMonitorTxInput] = {onPage(QStringLiteral("Devices"), QStringLiteral("monitor TX input"),
+    map[F::AudioMonitorTxInput] = {onPage(QStringLiteral("Microphone"), QStringLiteral("monitor TX input"),
                                          text(QStringLiteral("Monitor TX input during transmit")))};
-    map[F::AudioToneCheck] = {onPage(QStringLiteral("Devices"), QStringLiteral("tone check"),
+    map[F::AudioToneCheck] = {onPage(QStringLiteral("Microphone"), QStringLiteral("tone check"),
                                     text(QStringLiteral("Enable tone check (A-440 Hz burst on PTT)")))};
     map[F::WaterfallLowColor] = {onPage(QStringLiteral("Colors & Theme"), QStringLiteral("low color"),
                                       text(QStringLiteral("Low Level Color:")))};
     map[F::MultimeterAveraging] = {onPage(QStringLiteral("Multimeter"), QStringLiteral("averaging"),
                                          text(QStringLiteral("Averaging window:")))};
-    map[F::TxGridScale] = {onPage(QStringLiteral("TX Display"), QStringLiteral("grid scale"),
+    map[F::TxGridScale] = {onPage(QStringLiteral("Transmit Display"), QStringLiteral("grid scale"),
                                  [](QWidget* p) { return groupShown(p, QStringLiteral("TX Grid Scale")); })};
     return map;
 }
@@ -895,7 +904,7 @@ private slots:
             QVERIFY2(!keys.contains(entry.key), qPrintable(entry.key));
             keys.insert(entry.key);
             QCOMPARE(UnbuiltFeatures::key(entry.feature), entry.key);
-            QVERIFY2(!UnbuiltFeatures::isBuilt(entry.feature), qPrintable(entry.key));
+            QCOMPARE(UnbuiltFeatures::isBuilt(entry.feature), entry.feature == F::Cat);
             QVERIFY2(map.contains(entry.feature) && !map.value(entry.feature).isEmpty(),
                      qPrintable(QStringLiteral("%1 has no surface checks").arg(entry.key)));
         }
@@ -927,7 +936,7 @@ private slots:
         GuiSessionCoordinator sessions;
         for (bool remote : {false, true}) {
             Hosts hosts(sessions, remote);
-            QWidget* page = hosts.page(QStringLiteral("TCI"));
+            QWidget* page = hosts.page(QStringLiteral("Digital modes"));
             QVERIFY2(page != nullptr, remote ? "remote" : "local");
             QVERIFY2(usableShown(page, QStringLiteral("tciStreamChannelsCombo")),
                      remote ? "remote" : "local");
@@ -971,8 +980,11 @@ private slots:
             Hosts hosts(sessions, remote);
             QVERIFY(hosts.window() != nullptr);
             QCOMPARE(hosts.window()->radioModel()->ownsLocalDsp(), !remote);
+            QCOMPARE(shownSurfaces(map.value(F::Cat),hosts).size(),map.value(F::Cat).size());
+            QAction* catAction=hosts.window()->findChild<QAction*>("catControlAction"); QVERIFY(catAction); QVERIFY(catAction->isEnabled());
             QStringList shown;
             for (const UnbuiltFeatures::Entry& entry : UnbuiltFeatures::all()) {
+                if (UnbuiltFeatures::isBuilt(entry.feature)) { continue; }
                 for (const QString& s : shownSurfaces(map.value(entry.feature), hosts)) {
                     shown << entry.key + QStringLiteral(": ") + s;
                 }
@@ -1019,7 +1031,7 @@ private slots:
 
             QStringList others;
             for (auto it = map.constBegin(); it != map.constEnd(); ++it) {
-                if (it.key() == entry.feature) { continue; }
+                if (it.key() == entry.feature || it.key() == F::Cat) { continue; }
                 for (const QString& s : shownSurfaces(it.value(), hosts, &used)) {
                     others << UnbuiltFeatures::key(it.key()) + QStringLiteral(": ") + s;
                 }
@@ -1048,6 +1060,13 @@ private slots:
             QVERIFY(action->isCheckable());
             QCOMPARE(action->text(), QStringLiteral("Display duplex (DUP)"));
             QVERIFY(!action->isChecked());
+            QPushButton* dup = hosts.window()->findChild<QPushButton*>(QStringLiteral("TxAppletDupBtn"));
+            QVERIFY(dup);
+            QVERIFY(!dup->isHidden());
+            QVERIFY(dup->isCheckable());
+            QCOMPARE(dup->isChecked(), action->isChecked());
+            QCOMPARE(dup->isEnabled(), action->isEnabled());
+            QCOMPARE(dup->toolTip(), action->toolTip());
             QVERIFY(OperatorWording::isPlain(action->toolTip()));
             if (remote) {
                 QVERIFY(!action->isEnabled());
@@ -1055,13 +1074,30 @@ private slots:
                          QStringLiteral("This Core does not show the receiver while "
                                         "transmitting for this app. Updating the Core may "
                                         "help."));
+                hosts.window()->radioModel()->setStationTxDisplayVersion(3);
+                QVERIFY(action->isEnabled());
+                QVERIFY(dup->isEnabled());
+                QCOMPARE(dup->toolTip(), action->toolTip());
+                dup->click();
+                QVERIFY(action->isChecked());
+                QVERIFY(dup->isChecked());
+                hosts.window()->radioModel()->setStationTxDisplayVersion(2);
+                QVERIFY(!action->isEnabled());
+                QVERIFY(!dup->isEnabled());
+                QCOMPARE(dup->toolTip(), action->toolTip());
+                QVERIFY(dup->isChecked());
+                hosts.window()->radioModel()->setStationTxDisplayVersion(3);
+                action->trigger();
+                QVERIFY(!dup->isChecked());
             } else {
                 QVERIFY(action->isEnabled());
-                action->trigger();
+                dup->click();
                 QVERIFY(action->isChecked());
+                QVERIFY(dup->isChecked());
                 QCOMPARE(AppSettings::instance().value(QStringLiteral("DisplayDuplex")).toString(),
                          QStringLiteral("True"));
                 action->trigger();
+                QVERIFY(!dup->isChecked());
                 QCOMPARE(AppSettings::instance().value(QStringLiteral("DisplayDuplex")).toString(),
                          QStringLiteral("False"));
             }
@@ -1519,9 +1555,12 @@ int main(int argc, char** argv)
     // a fresh window and its Setup pages for each listed feature (115 s
     // alone at load 64 to 177). Its rows, one per feature and built here
     // from the list its _data function reads, run as three ctest entries,
-    // tst_unbuilt_features_each1 to _each3, every third feature each; the
-    // rest as tst_unbuilt_features (tests/CMakeLists.txt).
-    constexpr int kEachEntries = 3;
+    // tst_unbuilt_features_each1 to _each6, every sixth feature each; the
+    // rest as tst_unbuilt_features (tests/CMakeLists.txt). CI speed round,
+    // 2026-10-17: with three entries, 20 rows each, _each1 and _each3
+    // passed 19 rows and timed out at 120 s in a hosted Linux shard
+    // running four tests at once (_each2 passed in 119.6 s), so six.
+    constexpr int kEachEntries = 6;
     QList<NereusSDR::TestFunctionGroups::Group> groups;
     for (int k = 0; k < kEachEntries; ++k) {
         groups.append({QStringLiteral("each%1").arg(k + 1), {}});

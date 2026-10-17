@@ -76,6 +76,38 @@ if printf '%s\n' "$ldd_out" | grep -q 'not found'; then printf '%s\n' "$ldd_out"
 env LD_LIBRARY_PATH="$unpack/usr/local/lib" "$unpack/usr/local/bin/nereusd" --help > /dev/null
 echo 'libraries resolve and nereusd starts on this CPU'
 
+# BEGIN receive buffer limit
+# The radio socket asks for a 4 MB receive buffer and Linux grants at most
+# net.core.rmem_max, 212992 bytes on the Rock 5C as found (2026-10-10). A
+# stage that carries the setting gets it installed where the system reads it
+# at every start (packaging/nereusd-receive-buffer.conf, which the .deb
+# packages ship too), and applied now, only ever upward, by the helper the
+# stage carries. An older stage carries neither, and whatever is installed is
+# left as found. Where the installer rolls back, the file an earlier install
+# left is put back (it goes into files.tar) and one this install added is
+# removed. A limit already raised is never lowered.
+sysctl_conf=/usr/lib/sysctl.d/10-nereusd.conf
+rmem_max_file=/proc/sys/net/core/rmem_max
+sysctl_conf_added=0
+sysctl_conf_saved=()
+if [[ -e "$sysctl_conf" || -L "$sysctl_conf" ]]; then sysctl_conf_saved=("${sysctl_conf#/}"); fi
+install_receive_buffer_limit() {
+    local shipped="$1/usr/lib/sysctl.d/10-nereusd.conf"
+    local helper="$1/usr/local/libexec/nereusd/raise-receive-buffer-limit"
+    if [[ ! -s "$shipped" || ! -s "$helper" ]]; then
+        echo "this stage carries no network receive buffer setting; $sysctl_conf left as found"
+        return 0
+    fi
+    if [[ "${#sysctl_conf_saved[@]}" == 0 ]]; then sysctl_conf_added=1; fi
+    install -d -m 755 "$(dirname "$sysctl_conf")"
+    install -m 644 "$shipped" "$sysctl_conf"
+    sh "$helper" "$sysctl_conf" "$rmem_max_file" \
+        || echo "WARNING: the network receive buffer limit was not applied now; $sysctl_conf applies it at the next system start" >&2
+}
+remove_added_receive_buffer_limit() {
+    if [[ "$sysctl_conf_added" == 1 ]]; then rm -f "$sysctl_conf" || return 1; fi
+}
+# END receive buffer limit
 echo '==== install'
 install -m 755 "$unpack/usr/local/bin/nereusd" /usr/local/bin/nereusd
 install -d /usr/local/lib
@@ -99,6 +131,28 @@ else
 fi
 if ldd /usr/local/bin/nereusd | grep -q 'not found'; then echo 'installed nereusd has unresolved libraries'; exit 1; fi
 /usr/local/bin/nereusd --help > "$keep/installed-help.txt"
+# Sound cards and serial accessories: the unit runs as a DynamicUser account
+# with no groups, so drop-ins grant the audio and dialout groups, as the
+# station images do (packaging/station-image/common/nereusd-audio.conf and
+# nereusd-serial.conf).
+audio_dropin=/etc/systemd/system/nereusd.service.d/audio.conf
+serial_dropin=/etc/systemd/system/nereusd.service.d/serial.conf
+install -d -m 755 /etc/systemd/system/nereusd.service.d
+cat > "$audio_dropin" <<'AUDIO'
+# Sound cards on a Core: /dev/snd/* is root:audio on Debian, and a DynamicUser
+# account has no groups of its own.
+[Service]
+SupplementaryGroups=audio
+AUDIO
+chmod 644 "$audio_dropin"
+cat > "$serial_dropin" <<'SERIAL'
+# Serial accessories on a station image: /dev/ttyUSB* and /dev/ttyACM* are
+# root:dialout on Debian, and a DynamicUser account has no groups of its own.
+[Service]
+SupplementaryGroups=dialout
+SERIAL
+chmod 644 "$serial_dropin"
+install_receive_buffer_limit "$unpack"
 systemd-analyze verify /usr/lib/systemd/system/nereusd.service
 sha256sum /usr/local/bin/nereusd /usr/local/lib/libNereusCore.so /usr/local/lib/librade.so.0.1 \
     /usr/lib/systemd/system/nereusd.service /etc/nereusd.conf \

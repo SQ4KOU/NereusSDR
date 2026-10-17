@@ -208,6 +208,21 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-15  J.J. Boyd / KG4VCF  setSessionIceConfigurationForTest:
+//                                    a test stands in for the ICE settings
+//                                    of a session through the service.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-12 — J.J. Boyd (KG4VCF), gate experimental RADE V2 opt-in;
+//                AI-assisted implementation via OpenAI Codex.
+//   2026-10-09  J.J. Boyd / KG4VCF  Core speaker: coreSpeakerAvailable
+//                                    and coreSpeakerNeedsNewerCore
+//                                    (coreSpeakerVersion 1, native audio
+//                                    plan Task 21). AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-10-06  J.J. Boyd / KG4VCF  Radio speaker: radioSpeakerAvailable
+//                                    and radioSpeakerNeedsNewerCore
+//                                    (radioSpeakerVersion 1, R-SPK-14).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Level Cal: rx2PreampModeAvailable,
 //                                    RX2's own preamp mode on the Core
 //                                    (radioHardwareVersion 12). AI-assisted
@@ -461,6 +476,20 @@
 //   2026-09-30: inbound sibling fix round 4: unresolvedDeltaCancelRuleNames()
 //               checks the rule table against the schemas. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-07: CAT setup from a connected desktop: the stationCat feature
+//               and the four CAT requests. J.J. Boyd (KG4VCF). AI tooling:
+//               Claude Code.
+//   2026-10-07: requestCatLog and the `catLog` records for the CAT log
+//               window, with a backlog. J.J. Boyd (KG4VCF). AI tooling:
+//               Claude Code.
+//   2026-10-08: Rotor control plan Task 4b: the `rotor` object mirrored
+//               and the seven rotor requests. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-10: txPeakReadingsAvailable (txReadingsVersion 4). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: pathPairUnknown(), a rank of ServiceRelayed that only
+//               means the ICE pair is not known yet; setPathRankForTest().
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/NereusCoreExport.h"
@@ -779,6 +808,14 @@ public:
     /// (DataChannelTransport::mediaIceConfiguration()); none for a
     /// WebSocket session.
     std::optional<IceConfiguration> sessionIceConfiguration() const;
+    /// Test seam: what sessionIceConfiguration() returns, as a session
+    /// through the service would (a test link is not a
+    /// DataChannelTransport). Empty: the session's own. No production
+    /// caller.
+    void setSessionIceConfigurationForTest(std::optional<IceConfiguration> ice)
+    {
+        m_sessionIceForTest = std::move(ice);
+    }
     /// Task 29 step 2b (link section 21, "The media tunnel"): the Core told
     /// mediaTunnelVersion 1, so the media start may declare the tunnel even
     /// before a later path move to a direct WebSocket.
@@ -839,6 +876,16 @@ public:
     /// The rank of the path the session runs on (PathRacer::Rank), or -1
     /// when it did not come from a race.
     int pathRank() const { return m_pathRank; }
+    /// True while pathRank() is ServiceRelayed only because libjuice had
+    /// not reported the selected ICE pair: not known to be the relay.
+    bool pathPairUnknown() const { return m_pathPairUnknown; }
+    /// Test seam: the path rank and whether its pair is known, as a race
+    /// or the service dial sets them.
+    void setPathRankForTest(int rank, bool pairUnknown)
+    {
+        m_pathRank = rank;
+        m_pathPairUnknown = pairUnknown;
+    }
     /// Moves of this session to a better path (link section 21.2).
     int pathSwitches() const { return m_pathSwitches; }
     /// Test seams: the upgrade schedule (PathRacer::kUpgradeRetryMs; the
@@ -1061,6 +1108,8 @@ public:
     bool remoteRfKitControlAvailable() const override;
     // R-R3-47 / R-R3-22: see IStationLink.
     bool accessoryDataAvailable() const override;
+    // Rotor control plan Task 4b: see IStationLink.
+    bool rotorControlAvailable() const override;
     // R-R3-47 / R-R3-22: see IStationLink.
     bool pgxlDeviceSettingsAvailable() const override;
     bool tgxlDeviceSettingsAvailable() const override;
@@ -1112,6 +1161,11 @@ public:
     /// 3): `txState`'s eqDb, levelerDb, levelerGainDb, cfcDb, cfcGainDb,
     /// alcGainDb and alcGroupDb.
     bool txStageReadingsAvailable() const;
+    /// The Core also sends the six peak readings a local window's container
+    /// meter bars show as their main value (txReadingsVersion 4):
+    /// `txState`'s micPeakDb, alcPeakDb, compressionPeakDb, eqPeakDb,
+    /// levelerPeakDb and cfcPeakDb.
+    bool txPeakReadingsAvailable() const;
     /// Parity Task 33: whether this window shows the CFC bar chart. While
     /// true (and the Core sends it) the window subscribes to the Core's
     /// txCfcCompression stream, again after each reconnect; false
@@ -1165,6 +1219,9 @@ public:
     /// window could take it: transmitTakeAvailable() and a holder that is
     /// not this window.
     bool transmitHeldElsewhere() const;
+    /// Take transmit is offered: tx.take may be sent and this window does
+    /// not hold transmit, whether another device does or nobody does.
+    bool transmitTakeOffered() const;
     /// `tx.take`: with `shown`, the holder epoch and on-air state the
     /// operator was shown before confirming (ruling 8.7), so the Core takes
     /// at once when nothing changed. Returns the command id, 0 when it
@@ -1389,12 +1446,32 @@ public:
     CommandOutcome requestDisconnectStationTciClient(const QString& id) override;
     // JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1).
     bool stationTciSettingsAvailable() const override;
+    // CAT setup from a connected desktop (stationCatVersion 1).
+    bool stationCatAvailable() const override;
+    CommandOutcome requestStationCatChannel(int channel, const QString& configJson) override;
+    CommandOutcome requestStationCatGlobal(const QString& configJson) override;
+    CommandOutcome requestStationCatTest(qint64 requestId, int channel,
+                                         const QString& command) override;
+    CommandOutcome requestStationCatRefreshDevices() override;
+    void requestCatLog(bool follow, int backlog = 0) override;
     CommandOutcome requestStationTciSetting(const QByteArray& name,
                                             const QVariant& value) override;
     CommandOutcome requestTxInterlockPolicy(int mode, int graceMs, bool swrGateEnabled,
                                             double swrGateMax) override;
     CommandOutcome requestPgxlPowerCap(bool enabled, int watts) override;
     CommandOutcome requestClearAccessoryFaults(const QString& device) override;
+    // Rotor control plan Task 4b: see IStationLink.
+    CommandOutcome requestRotorTarget(double azimuthDeg, double elevationDeg) override;
+    CommandOutcome requestTurnRotorToCall(const QString& call, bool longPath) override;
+    CommandOutcome requestStopRotor() override;
+    CommandOutcome requestNudgeRotor(int direction, bool active) override;
+    CommandOutcome requestConfigureRotor(int driver, const QString& serialPort, int baud,
+                                         const QString& host, int port, int hamlibModel,
+                                         int axes, int endStop, int rangeDeg,
+                                         double offsetDeg) override;
+    CommandOutcome requestDisconnectRotor() override;
+    CommandOutcome requestRefreshRotorPorts() override;
+    CommandOutcome requestRotorPresets(const QString& presets) override;
     CommandOutcome requestPgxlName(const QString& name) override;
     CommandOutcome requestPgxlHardware(const QString& setting, const QString& value) override;
     CommandOutcome requestPgxlNetwork(bool dhcp, const QString& address,
@@ -1495,6 +1572,19 @@ public:
     /// Level Cal: the Core's stepAtt carries rx2PreampMode
     /// (radioHardwareVersion 12).
     bool rx2PreampModeAvailable() const override;
+    /// Radio speaker (R-SPK-14): the Core advertised radioSpeakerVersion 1
+    /// on this session, so radio carries the radio speaker's properties.
+    bool radioSpeakerAvailable() const override;
+    /// Signed in, this session's capabilities arrived, and they carry no
+    /// radioSpeakerVersion 1.
+    bool radioSpeakerNeedsNewerCore() const override;
+    /// Core speaker (native audio plan Task 21): the Core advertised
+    /// coreSpeakerVersion 1 on this session, so radio carries the Core
+    /// speaker's properties.
+    bool coreSpeakerAvailable() const override;
+    /// Signed in, this session's capabilities arrived, and they carry no
+    /// coreSpeakerVersion 1.
+    bool coreSpeakerNeedsNewerCore() const override;
     /// Parity Task 16 (dspInfoVersion 1). Verb "dsp.filterResponse". The
     /// answer goes to RadioModel::reportStationFilterResponse.
     CommandOutcome requestFilterResponse(int sliceId, bool highResolution) override;
@@ -1825,6 +1915,7 @@ private:
     void reconcileSlicesAgainstStation();
 
     void handleAudioCatalogue(const QList<MirrorUpdate>& updates);
+    void handleRadeCatalogue(const QList<MirrorUpdate>& updates);
     void handleObjectCreate(const SessionMessage& message);
     void handleObjectDestroy(const SessionMessage& message);
     void handleDelta(const SessionMessage& message);
@@ -1942,6 +2033,11 @@ private:
     quint16 m_agreedMinor = 0;
     // Parity Task 33: this window shows the CFC bar chart.
     bool m_cfcCompressionWanted = false;
+    // CAT setup from a connected desktop: the CAT log window follows the
+    // Core's `catLog` stream, subscribed again after each snapshot.
+    bool m_catLogWanted = false;
+    // The recent lines asked for with each subscription.
+    int m_catLogBacklog = 0;
     void sendCfcCompressionSubscription(bool subscribe);
 
     /// iPhone app Task 4: this client's link majors (oldest first) and
@@ -2048,6 +2144,11 @@ private:
     /// emit on m_handshakeComplete, so a station that was simply down
     /// produced no signal whatsoever.
     bool m_sessionActive = false;
+
+    /// True once this session's capabilities arrived; cleared at every
+    /// attach and session end. radioSpeakerNeedsNewerCore needs it so a
+    /// link that is down or still signing in never reads as an older Core.
+    bool m_capabilitiesThisSession = false;
 
     /// True once a frame has actually arrived from the station. Gates the
     /// heartbeat: a wss dial can take seconds, and counting missed pongs
@@ -2186,6 +2287,7 @@ private:
     int m_raceWinnerLine = -1;
     QList<PathRacer::Line> m_raceLines;
     int m_pathRank = -1;
+    bool m_pathPairUnknown = false;
     int m_pathSwitches = 0;
     QString m_stationRendezvousId;
     QTimer* m_upgradeTimer = nullptr;
@@ -2197,6 +2299,8 @@ private:
     /// The ICE settings of the connection through the service this session
     /// left, so its media keeps the service's STUN server (link 21.3).
     std::optional<IceConfiguration> m_serviceIce;
+    // setSessionIceConfigurationForTest.
+    std::optional<IceConfiguration> m_sessionIceForTest;
     /// The last STUN server a session through the service used (the
     /// direct media ladder's fallback); never saved.
     mutable std::optional<IceServerAddress> m_lastServiceStun;

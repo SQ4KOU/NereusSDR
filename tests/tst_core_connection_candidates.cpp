@@ -1,12 +1,24 @@
 // no-port-check: NereusSDR-original.
 // 2026-10-02 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+// 2026-10-15 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code: a
+// saved Core whose learned addresses are IPv6 only still moves to its own
+// IPv4 address.
 #include <QtTest>
 #include "core/session/RemoteStationOptions.h"
 #include "gui/GuiConnectionController.h"
 #include "RendezvousTestHarness.h"
 #include "gui/RemoteConnectionController.h"
 #include "core/session/RendezvousWire.h"
+#include "core/session/StationRendezvous.h"
+#include "core/session/PathRacer.h"
+#include "core/settings/SettingsProxy.h"
 using namespace NereusSDR;
+
+namespace {
+// A refused loopback dial reports in milliseconds on Linux and macOS but
+// takes about 3.4 s on Windows, which retries the SYN after the reset.
+constexpr int kRefusedDialMs = 8000;
+}
 class TstCoreConnectionCandidates : public QObject {
     Q_OBJECT
 private slots:
@@ -103,7 +115,7 @@ private slots:
         QObject::connect(&client, &StationClient::reconnectScheduled, &client, [&](int, int) { alive = false; });
         QSignalSpy ended(&client, &StationClient::sessionEnded);
         client.connectToStation({}, {}, {}, false, QByteArray(32, 'i'));
-        QTRY_VERIFY_WITH_TIMEOUT(reads >= 2, 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(reads >= 2, kRefusedDialMs);
         QTRY_VERIFY_WITH_TIMEOUT(!client.isConnectionActive(), 1000);
         QVERIFY(client.connectedUrl().isEmpty()); QVERIFY(!client.isReconnectPending());
         QVERIFY(ended.last().at(0).toString().contains(QStringLiteral("saved Core changed")));
@@ -140,9 +152,72 @@ private slots:
             if (attempt == 1) { retained = {core.url()}; }
         });
         client.connectToStation({}, {}, {}, false, core.server->stationIdentity().fingerprint());
-        QTRY_VERIFY_WITH_TIMEOUT(!retries.isEmpty(), 1500);
+        QTRY_VERIFY_WITH_TIMEOUT(!retries.isEmpty(), kRefusedDialMs);
         QTRY_VERIFY_WITH_TIMEOUT(client.isHandshakeComplete(), 3000);
         QCOMPARE(client.connectedUrl(), core.url());
+        client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // A saved Core whose learned Core addresses are IPv6 only (a Core behind
+    // a home router lists no private IPv4, CoreAddresses::dialable) and
+    // whose own address is the IPv4 listener that answers. The IPv6
+    // addresses fail at once, as on a computer with no IPv6 route home; the
+    // service wins; then the IPv4 listener opens and the better-path search
+    // must move the session to it.
+    void ipv6OnlyLearnedAddressesStillReachTheEntryAddress() {
+        using namespace NereusSDR::Test::Rendezvous;
+        LocalService service;
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
+        Core core;
+        const quint16 port = freeTcpPort();
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        AppSettings::instance().setValue(QStringLiteral("RemoteAccessServers"), service.url().toString());
+        const auto restore = qScopeGuard([] {
+            AppSettings::instance().setValue(QStringLiteral("RemoteAccessServers"), QStringLiteral("ws://127.0.0.1:1"));
+        });
+        QTemporaryDir keyDir;
+        const auto key = std::make_shared<const ClientDeviceIdentity>(ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        QVERIFY(core.pairComputer(*key));
+
+        SavedCoreTarget target;
+        target.id = QStringLiteral("legacy-core");
+        target.label = QStringLiteral("127.0.0.1");
+        target.connection.url = QStringLiteral("wss://127.0.0.1:%1").arg(port);
+        target.connection.identityFingerprint = core.server->stationIdentity().fingerprint();
+        target.connection.rendezvousId = rendezvous.client()->stationId();
+        target.connection.relayAllowed = 1;
+        target.connection.controlChannelVersion = 1;
+        const QString v6a = QStringLiteral("wss://[::1]:%1").arg(freeTcpPort());
+        const QString v6b = QStringLiteral("wss://[::1]:%1").arg(freeTcpPort());
+        target.connection.coreAddresses = {v6a, v6b};
+        target.connection.cachedAddresses = {v6a, v6b, target.connection.url};
+
+        RadioModel remote{RadioModel::Role::Remote};
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        client.setDeviceIdentity(key, QStringLiteral("Test computer"));
+        client.setHeartbeatIntervalMs(0);
+        client.setUpgradeScheduleForTest({300});
+        QSignalSpy moved(&client, &StationClient::pathChanged);
+        RemoteConnectionController controls(&client, &remote, target.connection);
+        controls.setCurrentOptionsSource([&] {
+            RemoteStationOptions current = GuiConnectionController::connectionOptionsForTarget(target);
+            return std::optional(current);
+        });
+        QVERIFY(controls.canConnect());
+        controls.connectToStation();
+        QString why;
+        QVERIFY2(waitForHandshake(client, kServiceConnectBudgetMs, &why), qPrintable(why));
+        QVERIFY2(client.pathRank() > int(PathRacer::ThisNetwork),
+                 qPrintable(client.connectionAttempt().summary()));
+
+        QVERIFY(core.server->listen(QHostAddress::LocalHost, port));
+        QTRY_COMPARE_WITH_TIMEOUT(moved.size(), 1, 30000);
+        QCOMPARE(client.pathRank(), int(PathRacer::ThisNetwork));
+        QCOMPARE(client.connectedUrl(), QUrl(target.connection.url));
         client.disconnectFromStation(QStringLiteral("test complete"));
     }
 

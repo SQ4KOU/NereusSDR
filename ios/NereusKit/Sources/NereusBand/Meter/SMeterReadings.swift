@@ -1,6 +1,8 @@
 // NereusSDR for iOS: the Core's readings the S-meter can show, and why a mode it cannot show is off
 // SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-NereusSDR-AppStore-permission
 
+import NereusModels
+
 /// What the Core sends the S-meter (D86): the active slice's receive
 /// readings and the radio's transmit readings, and which of them this Core
 /// sends at all. A mode whose reading the Core does not send is shown in
@@ -24,6 +26,7 @@ public struct SMeterReadings: Equatable, Sendable {
     public var transmitSent: Bool
     /// The Core's `txReadingsVersion`, 0 without it.
     public var txReadingsVersion: Int64
+    public var meterRule: TransmitMeterRule? = nil
     public var forwardWatts: Double
     public var swr: Double
     /// The mic level in dB; nil for none.
@@ -78,8 +81,10 @@ public struct SMeterReadings: Equatable, Sendable {
         }
         switch mode {
         case .power:
+            if let meterRule { return meterRule.forwardW }
             return forwardWatts
         case .swr:
+            if let meterRule { return meterRule.swr }
             return swr
         case .level:
             return Self.reading(micLevelDb)

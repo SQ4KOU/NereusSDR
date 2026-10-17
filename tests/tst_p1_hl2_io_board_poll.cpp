@@ -213,6 +213,19 @@ private slots:
         QCOMPARE(banks, expected);
     }
 
+    void experimentalRadeWritesDigitalBoardModes()
+    {
+        for (int id : {14, 15}) {
+            P1RadioConnection conn;
+            conn.setBoardForTest(HPSDRHW::HermesLite);
+            IoBoardHl2 io;
+            io.setDetected(true);
+            conn.setIoBoard(&io);
+            conn.setIoBoardTxState(id, 14236000);
+            compare(step(conn, io), {write(32, id == 14 ? 7 : 9)});
+        }
+    }
+
     void radeModesWriteTheMatchingDigitalMode()
     {
         // The I/O board's REG_OP_MODE takes Thetis DSPMode values (mi0bot

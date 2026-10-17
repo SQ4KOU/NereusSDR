@@ -90,6 +90,11 @@ public final class SetupControlDispatcher: ObservableObject {
     /// Whether this phone's microphone line to the Core is open now (V15's
     /// `gate.micLine`); nil reads as closed.
     public var microphoneLineOpen: (() -> Bool)?
+    /// The FFT size this phone's pan runs now, and its bin width in hertz
+    /// (V28's Sizing: what the Size and Hz/bin Target rows show while
+    /// another choice is in charge); nil before a pan runs.
+    public var runningFftSize: (() -> Int?)?
+    public var runningBinWidthHz: (() -> Double?)?
     /// The station catalogue's transmit range by name (V15's `rangeFrom`),
     /// or nil before the catalogue arrives.
     public var catalogueTransmitRange: ((String) -> SetupDescription.Range?)?
@@ -151,7 +156,8 @@ public final class SetupControlDispatcher: ObservableObject {
             ? stagedValues[control.id] ?? value(of: control, sliceId: selectedSlice())
             : value(of: control, sliceId: selectedSlice())
         if let reason = unavailableReason(control, in: category, sliceId: selectedSlice()) {
-            return SetupControlState(value: value, editable: false, reason: reason)
+            // A Sizing row not in charge shows what runs, not what is stored.
+            return SetupControlState(value: sizingShown(control, stored: value), editable: false, reason: reason)
         }
         return SetupControlState(value: value, editable: true, reason: nil)
     }
@@ -266,12 +272,22 @@ public final class SetupControlDispatcher: ObservableObject {
             guard let identity = admission.settingsIdentity else {
                 return .notSent(Self.changedFirstReason)
             }
+            // Read before the choice is written: the target the choice sets.
+            let sizingTarget = key == Sizing.settingsKey ? sizingTargetText(choosing: text) : nil
             let outcome = await settings.writeBound(key, text, expectedSnapshotIdentity: identity,
                                                     authority: admission.permit, onLateOutcome: { [weak self] outcome in
                 self?.deliverLate(Self.settingOutcome(outcome), admission: admission, to: onLateOutcome)
             })
             switch outcome {
             case .accepted:
+                if let sizingTarget {
+                    // The choice, then the target it sets, as the desktop writes them.
+                    return Self.settingOutcome(await settings.writeBound(
+                        Sizing.targetKey, sizingTarget, expectedSnapshotIdentity: identity,
+                        authority: admission.permit, onLateOutcome: { [weak self] outcome in
+                            self?.deliverLate(Self.settingOutcome(outcome), admission: admission, to: onLateOutcome)
+                        }))
+                }
                 return .applied
             case .rejected(let reason):
                 if Self.waitsForConfirmation(reason) {
@@ -344,7 +360,15 @@ public final class SetupControlDispatcher: ObservableObject {
                 let held = min(max(Double(rate), range.minimum), range.maximum)
                 return await edit(fps, in: admission.category, to: .integer(Int64(held.rounded())))
             }
-            guard let phone, phone.perform(key, argument: phoneArgument(control)) else {
+            guard let phone else { return .notSent(Self.notOnThisPhoneReason) }
+            let performed: Bool
+            if key == "resetColors" || key == "smoothDefaults" {
+                performed = phone.perform(key, argument: phoneArgument(control),
+                    descriptionVersion: control.requiresDescriptionVersion ?? SetupDescription.highestVersion)
+            } else {
+                performed = phone.perform(key, argument: phoneArgument(control))
+            }
+            guard performed else {
                 return .notSent(Self.notOnThisPhoneReason)
             }
             return .applied
@@ -355,7 +379,14 @@ public final class SetupControlDispatcher: ObservableObject {
             if let whole = value.whole, let reason = phone?.unavailableOptions(forPhoneKey: key)[whole] {
                 return .notSent(reason)
             }
-            guard let phone, phone.set(value, forPhoneKey: key) else {
+            let phoneValue: SetupValue
+            if control.modern?.optionLiterals.isEmpty == false {
+                guard let token = SetupValueCoding.encodeSetting(value, for: control) else {
+                    return .notSent(Self.outOfRangeReason)
+                }
+                phoneValue = .text(token)
+            } else { phoneValue = value }
+            guard let phone, phone.set(phoneValue, forPhoneKey: key) else {
                 return .notSent(Self.notOnThisPhoneReason)
             }
             return .applied
@@ -432,6 +463,17 @@ public final class SetupControlDispatcher: ObservableObject {
         guard currentControl(control.id, in: category) == control else {
             return Self.updatingReason
         }
+        // Accepted selected-pan TX reason takes precedence for these two
+        // canonical29 Levels rows, even on a Core lacking their RX feature.
+        // Strict metadata/session/current-row checks above still run first;
+        // All has no local TX reason and keeps the original capability gate.
+        if category == "display", feed.description(for: category)?.version == 29,
+           control.requiresDescriptionVersion == 29,
+           control.id == "display.gridScales.noiseFloorOffset" || control.id == "display.gridScales.maintainGridRange",
+           case .phone(let key)? = control.binding,
+           let reason = phone?.unavailableReason(forPhoneKey: key) {
+            return reason
+        }
         if let reason = gateReason(control.gate) {
             return lowPassGateReason(control, reason)
         }
@@ -452,13 +494,11 @@ public final class SetupControlDispatcher: ObservableObject {
             guard settings.currentSnapshotIdentity != nil else {
                 return Self.notConnectedReason
             }
-            guard let text = settings.value(key), SetupValueCoding.decodeSetting(text, for: control) != nil else {
+            guard let text = settingText(key, for: control), SetupValueCoding.decodeSetting(text, for: control) != nil else {
                 return Self.valueMissingReason
             }
-            if let dependency = control.enabledWhen {
-                guard let chosen = settings.value(dependency.setting), dependency.oneOf.contains(chosen) else {
-                    return Self.dependsReason
-                }
+            if let dependency = control.enabledWhen, !holds(dependency) {
+                return Self.dependsReason
             }
             return nil
         case .property(let reference)?:
@@ -509,6 +549,17 @@ public final class SetupControlDispatcher: ObservableObject {
             guard let phone, phone.canPerform(key) else {
                 return phone?.unavailableReason(forPhoneKey: key) ?? Self.notOnThisPhoneReason
             }
+            if control.requiresDescriptionVersion == 29 {
+                // V29 local actions (the two gradient editors and Retune)
+                // obey the same eligibility path as local value rows.
+                // Earlier button admission retains its existing behavior.
+                for dependency in control.phoneDependencies {
+                    guard let chosen = phone.value(forPhoneKey: dependency.phone),
+                          dependency.oneOf.contains(where: { Self.matches(chosen, $0) }) else {
+                        return Self.dependsReason
+                    }
+                }
+            }
             return nil
         case .radioSetting(let path)?:
             return radioSettingReason(control, path: path)
@@ -519,7 +570,8 @@ public final class SetupControlDispatcher: ObservableObject {
             guard let phone, phone.value(forPhoneKey: key) != nil else {
                 return Self.notOnThisPhoneReason
             }
-            if let dependency = control.phoneDependency {
+            // V12's single dependency, or every term of V26's allOf.
+            for dependency in control.phoneDependencies {
                 guard let chosen = phone.value(forPhoneKey: dependency.phone),
                       dependency.oneOf.contains(where: { Self.matches(chosen, $0) }) else {
                     return Self.dependsReason
@@ -581,7 +633,7 @@ public final class SetupControlDispatcher: ObservableObject {
     func value(of control: SetupDescription.Control, sliceId: Int?) -> SetupValue? {
         switch control.binding {
         case .setting(let key)?:
-            return settings.value(key).flatMap { SetupValueCoding.decodeSetting($0, for: control) }
+            return settingText(key, for: control).flatMap { SetupValueCoding.decodeSetting($0, for: control) }
         case .property(let reference)?:
             return read(reference, sliceId: sliceId).flatMap { modernDecode($0, for: control, sliceId: sliceId) }
         case .command(let command)?:
@@ -590,7 +642,12 @@ public final class SetupControlDispatcher: ObservableObject {
         case .radioSetting(let path)?:
             return radioSettingValue(control, path: path)
         case .phone(let key)?:
-            return phone?.value(forPhoneKey: key)
+            let value = phone?.value(forPhoneKey: key)
+            if control.modern?.optionLiterals.isEmpty == false {
+                guard case .text(let token)? = value else { return nil }
+                return SetupValueCoding.decodeSetting(token, for: control)
+            }
+            return value
         default:
             return nil
         }
@@ -749,9 +806,7 @@ public final class SetupControlDispatcher: ObservableObject {
         guard unavailable == nil || (allowsMissingValue && unavailable == Self.valueMissingReason) else { return false }
         if case .setting? = admission.control.binding {
             guard let identity = admission.settingsIdentity, settings.isCurrent(identity) else { return false }
-            if let dependency = admission.control.enabledWhen {
-                guard let value = settings.value(dependency.setting), dependency.oneOf.contains(value) else { return false }
-            }
+            if let dependency = admission.control.enabledWhen, !holds(dependency) { return false }
         }
         if case .property(let reference)? = admission.control.binding {
             guard let key = admission.objectKey,

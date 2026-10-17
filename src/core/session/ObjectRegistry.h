@@ -81,6 +81,7 @@
 #include <QPointer>
 
 #include "core/session/MirrorSchema.h"
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
@@ -88,7 +89,7 @@ class RadioModel;
 class SliceModel;
 class StateMirror;
 
-class ObjectRegistry : public QObject {
+class NEREUS_CORE_EXPORT ObjectRegistry : public QObject {
     Q_OBJECT
 
 public:

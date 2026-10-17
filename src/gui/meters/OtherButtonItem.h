@@ -62,6 +62,7 @@ mw0lge@grange-lane.co.uk
 //============================================================================================//
 
 #include "ButtonBoxItem.h"
+#include "gui/NereusGuiExport.h"
 #include "gui/UnbuiltFeatures.h"
 
 #include <QVector>
@@ -72,7 +73,7 @@ namespace NereusSDR {
 
 // Miscellaneous control buttons + 31 macro slots.
 // Ported from Thetis clsOtherButtons (MeterManager.cs:8225+).
-class OtherButtonItem : public ButtonBoxItem {
+class NEREUS_GUI_EXPORT OtherButtonItem : public ButtonBoxItem {
     Q_OBJECT
 
 public:

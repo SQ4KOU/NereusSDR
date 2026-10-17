@@ -1,4 +1,5 @@
 #pragma once
+#include "models/RadeWaveformModel.h"
 #include <QVector>
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 //
@@ -96,6 +97,7 @@
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "core/session/media/RemoteSpectrumContext.h"
+#include "gui/NereusGuiExport.h"
 #include "gui/PanStatusText.h"
 #include "gui/RemoteAudioStatus.h"
 #include <QHash>
@@ -107,6 +109,7 @@
 #include <vector>
 
 namespace NereusSDR {
+class AudioEngine;
 class RemoteTciAudioStage;
 class StationClient;
 class RadioModel;
@@ -140,7 +143,7 @@ struct RemoteDisplayTelemetry {
 /// Owns the GUI's media session and one bounded subscription per logical pan.
 /// Layout reparenting does not retire a pan; removing it from the stack does.
 /// Display data never passes through the control/property mirror.
-class RemoteMediaController final : public QObject {
+class NEREUS_GUI_EXPORT RemoteMediaController final : public QObject {
     Q_OBJECT
 public:
     using AllocationClock = std::function<qint64()>;
@@ -281,6 +284,7 @@ public:
     /// Core to stop the stream. GUI thread only.
     void releaseReceiverAudio(int sliceId, IReceiverPcmSink* sink);
     bool remoteIqNegotiated() const;
+    bool waveformNegotiated() const;
     void requestRawIq(int sliceId);
     void releaseRawIq(int sliceId);
     /// R-R3-43: each wanted receiver stream's measured health, by slice id.
@@ -407,7 +411,15 @@ public:
     /// How often the uplink moves captured audio to the line.
     static constexpr int kMicPumpIntervalMs = 10;
     /// How long after the last program audio the microphone is heard again.
+    /// A program key that brings its own audio (programAudioKey()) never
+    /// hears the microphone: silence follows its audio instead.
     static constexpr int kProgramAudioHoldMs = 200;
+    // 2026-10-12: how long the microphone's collector may take no audio,
+    // with capture ready, before the window says so in its log.
+    static constexpr int kMicCollectorStallMs = 1000;
+    // 2026-10-15 (fix wave): the most 20 ms reads a VAX feed that starts
+    // or comes back makes to drop what waits on the VAX TX device (5 s).
+    static constexpr int kVaxBacklogDiscardPulls = 256;
     /// R-R3-37: how long a pan in budget mode may wait for the Core's first
     /// answer before it says "Waiting for the Core". A Core that answers
     /// within this (the usual case at session start) never flashes the line.
@@ -421,6 +433,17 @@ public:
     /// (kPlannerIntervalMs), so a drag, whose steps come far faster, asks
     /// once when it stops, not at every step.
     static constexpr int kResizeSettleMs = 2 * kPlannerIntervalMs;
+    /// The longest a pan's ask waits to be for its slice's new receiver
+    /// once the Core has moved the slice to one. The Core says at once that
+    /// the display is retired; the slice's new frequency and receiver come
+    /// with its next mirrored update (StationServer::kDefaultDeltaFlushMs,
+    /// 50 ms, plus the link), and the pan then follows its slice. The ask
+    /// goes out as soon as both have happened. Past this the pan asks for
+    /// the view it has, as it always did, so a pan is never left blank by a
+    /// move this window was not told of (a slice sent away and back between
+    /// two updates). Under kPanWaitingGraceMs, so the wait shows no status
+    /// line.
+    static constexpr int kReceiverMoveSettleMs = 10 * kPlannerIntervalMs;
     /// R-R3-37: what the pan named `panId` was last told about its remote
     /// display, including its zoom-detail limit. The pan paints
     /// buildPanStatusText() of this.
@@ -485,8 +508,62 @@ public:
     /// due waits instead of running; releasing runs it (through the same
     /// fence as ever). No production caller.
     void holdAudioRestartForTest(bool held);
-    /// Test only: whether a backoff step came due while held.
+    /// Test only: whether a backoff step came due while held (each one
+    /// that did runs, in order, on release).
     bool audioRestartStepHeldForTest() const;
+    /// Test only: how many backoff steps came due while held.
+    int audioRestartStepsHeldForTest() const;
+    /// Test only: how long the speakers wait for this computer's first
+    /// device list before the wait shows as a problem (10 s otherwise).
+    void setSpeakerDeviceListWaitForTest(qint64 ms);
+    /// Test only: the speakers' receiver asks for a restart with `fault`,
+    /// as it does itself, so a test can raise a fault a real stream cannot
+    /// produce on demand. No production caller.
+    void raiseAudioRestartForTest(RemoteAudioReceiver::Fault fault);
+    /// Test only: the speakers' receiver reports a failure with `fault`, as
+    /// it does itself when playback cannot start, so a test can raise a
+    /// fault a real stream cannot produce on demand. No production caller.
+    void raiseAudioFailureForTest(RemoteAudioReceiver::Fault fault);
+    /// Test only (R-R3-44): the clock the receiver audio streams for apps
+    /// on this computer (requestReceiverAudio) stamp arrivals and release
+    /// by, for streams made after this call. Empty, the default, is the
+    /// receiver's own steady clock. A test whose source and devices run on
+    /// one clock gives it here, so the streams' jitter hold runs on that
+    /// clock as well. It is read on each stream's receive worker, so it
+    /// must be safe to call from any thread. No production caller.
+    void setReceiverAudioClockForTest(RemoteAudioReceiver::Clock clock);
+    /// Test only: the clock, in ms, that paces a program key's silence and
+    /// times its audio hold (the controller's own elapsed clock when unset),
+    /// so a test can stall the pump without waiting. No production caller.
+    void setMicClockForTest(std::function<qint64()> clock);
+    /// Test only: whether the microphone line holds its capture lease
+    /// (2026-10-09). No production caller.
+    bool micCaptureLeaseHeldForTest() const;
+    /// Test only (2026-10-10), for every controller in the process: while
+    /// set, the microphone's collector has no thread; the pump collects
+    /// inline before it drains (and collectMicNowForTest collects between
+    /// pumps), so a test that drives the pump with its own microphone and
+    /// clock stays on one thread. Off, the default, is production: the
+    /// collector's real-time thread. No production caller.
+    static void setMicCollectorInlineForTest(bool inlineMode);
+    /// Test only (2026-10-10): one step of the collector, as its thread
+    /// takes every 5 ms; the frames it collected. Does nothing unless the
+    /// collector is inline and the capture lease is held. No production
+    /// caller.
+    int collectMicNowForTest();
+    /// Test only (2026-10-10): one microphone pump, as the pump's timer
+    /// runs it. No production caller.
+    void pumpMicUplinkForTest();
+    /// Test only (2026-10-10): whether the collector's thread is running.
+    bool micCollectorThreadRunningForTest() const;
+    /// Test only: the current media peer reports itself closed, as a lost
+    /// media connection does, while the control session stays up
+    /// (2026-10-09). No production caller.
+    void dropMediaPeerForTest();
+    /// Test only (R-DISP-HOLD): runs the planner's tick now, as its 100 ms
+    /// timer does, so a test moves the injected clock and plans without
+    /// waiting on a real timer. No production caller.
+    void planNowForTest();
     /// iPhone app plan Task 29 fix wave (review Important 1): media follows
     /// every move of the session. A move marks a replacement pending; it
     /// starts as soon as it can (the media connection ready, unkeyed, VOX
@@ -565,6 +642,11 @@ private:
     // Parity Task 32: the monitor-audio request and its answer.
     void requestMonitorAudio();
     void sendIqRequest(int sliceId, bool enabled);
+    void reconcileWaveformDemand(const QList<WaveformRequest>& requests);
+    void sendWaveformRequest(int sliceId, WaveformKind kind, bool enabled);
+    void receiveWaveformContext(const QJsonObject& payload);
+    void receiveWaveformFrame(const QByteArray& bytes);
+    void updateWaveformClock();
     void receiveIqContext(const QJsonObject& payload);
     void receiveIqFrame(const QByteArray& message);
     void failIqStream(int sliceId, const QString& reason);
@@ -584,7 +666,7 @@ private:
     PanDisplayState statusWithGrant(const QString& panId, PanDisplayState status) const;
     void refreshPanGrantStatus(const QString& panId);
     PanDisplayState perPanRefusalStatus(const QString& panId) const;
-    void refreshCtunState();
+    void refreshCtunState(bool restorePreference = true);
     // R-R3-18/19: a C-Tune centre gesture from one pan, at most one request
     // in flight per stream, never a zoom on a stream other receivers share.
     void requestCentreFromGesture(quint32 endpointId, double centreHz);
@@ -595,6 +677,9 @@ private:
     void reportDisplayDrops();
     void requestKeyframe(quint32 endpointId);
     void requestAudio();
+    // R-R3-21, 2026-10-16: the next request on the restart backoff, for a
+    // restart or a speaker failure; one waits at a time.
+    void scheduleAudioRetry();
     void sendReceiverAudioRequest(int sliceId, bool enabled);
     void requestWantedReceiverAudio();
     void receiveReceiverAudioContext(const QJsonObject& payload);
@@ -610,6 +695,9 @@ private:
     void receiveHeadphonesAudioContext(const QJsonObject& payload);
     void onHeadphonesRestart(const QString& reason, RemoteAudioReceiver::Fault fault);
     void onHeadphonesError(const QString& reason, RemoteAudioReceiver::Fault fault);
+    // R-R3-51: the Core stopped transmitting; streams its silence stopped
+    // are asked for again at once.
+    void resumeAudioAfterTransmit();
     void setHeadphonesProblem(const QString& problem);
     void refreshAudioStatus();
     void resetMicrophoneQuality();
@@ -624,10 +712,25 @@ private:
     // Task 36: the microphone uplink.
     bool micUplinkWanted() const;
     void reconcileMicUplink();
+    /// 2026-10-10: the microphone's collector thread: started while the
+    /// capture lease is held, joined before the lease or the engine goes.
+    // 2026-10-15: vax: the collector pulls the VAX TX device
+    // (AudioEngine::pullVaxTxMic) instead of the PC microphone.
+    void startMicCollector(AudioEngine* engine, bool vax);
+    void stopMicCollector();
+    /// Logs, once, what the collector dropped during the key that ends.
+    void reportMicDropped();
     // Fix wave 2 (M8): emits micLineChanged when micLineOpen() moved.
     void noteMicLine();
     /// Sends the whole packets `pending` holds and keeps the rest.
     void sendMicAudio(std::vector<float>& pending);
+    /// The microphone line sends lossless packets now (else Opus).
+    bool micLineLossless() const;
+    /// The microphone line's clock in ms (setMicClockForTest).
+    qint64 micNowMs() const;
+    /// 2026-10-08: a program key's silence owed by `nowMs`, at 48 kHz,
+    /// appended to the program's pending audio.
+    void queueProgramSilence(qint64 nowMs);
     void receiveClockEcho(const QJsonObject& payload, qint64 receivedNs);
     bool send(QJsonObject payload);
     // iPhone app plan Task 29: a peer's callbacks as the current peer, one
@@ -637,6 +740,13 @@ private:
     void deliverRtp(const QByteArray& packet);
     void receiveReplacementControl(const QJsonObject& payload);
     void promoteReplacement();
+    // 2026-10-16: after a move, asks again for each audio stream, the
+    // transmit monitor and each display whose request is still unanswered
+    // (lost to the move).
+    void askAgainAfterMove();
+    // 2026-10-16: the audio disable a playback failure sends; a move that
+    // loses it sends it again.
+    void sendAudioDisable();
     void dropReplacement(const QString& why);
     // The direct media ladder: a plain replace, a direct-only one, and the
     // silence fallback's plain replace onto the tunnel alone.
@@ -650,7 +760,9 @@ private:
     void updateDirectUpgrade(bool viaTunnel);
     void markReplacePending();
     void tryPendingReplace();
-    std::optional<IceConfiguration> mediaIceConfiguration();
+    // fromTunnel, when given, says whether the settings are the media
+    // tunnel's.
+    std::optional<IceConfiguration> mediaIceConfiguration(bool* fromTunnel = nullptr);
     void retireOldPeer();
 };
 } // namespace NereusSDR

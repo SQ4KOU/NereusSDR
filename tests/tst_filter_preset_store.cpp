@@ -229,10 +229,10 @@ private slots:
         store.followStationSetting(QStringLiteral("filters"));
         QCOMPARE(spy.count(), 2);
 
-        // A whole snapshot: every one of the 14 modes.
+        // A whole snapshot: every one of the 16 modes.
         spy.clear();
         store.followStationSetting(QString());
-        QCOMPARE(spy.count(), 14);
+        QCOMPARE(spy.count(), 16);
     }
 
     // ── 7. The presets are the Core's in a remote window (D40) ──────────────

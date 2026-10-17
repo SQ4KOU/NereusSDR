@@ -2430,6 +2430,8 @@ Recommendation: (a): `PanadapterModel` on the Core already owns per-band grids, 
 serves every window; it needs your bench check, since which side moves the pan decides what
 you see today.
 
+> Note 2026-10-10: as built by the display pill work (`2026-10-09-display-pill-and-levels-design.md`), the Core has no pan object. Each window pan applies the Core's per-band values itself, and pans are not mirrored on the link.
+
 **C13. View > Performance Overlay in a remote window.**
 - (a) Show the Core's radio-link drops and underruns from telemetry beside this window's own
   counters, each labelled.

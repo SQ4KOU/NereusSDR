@@ -124,6 +124,9 @@ struct Ps3StatusSnapshot {
     std::uint64_t restoreGeneration{0};
     bool restorePending{false};
     int restoreResult{0};
+
+    // Every field, so one added later is compared too.
+    friend bool operator==(const Ps3StatusSnapshot&, const Ps3StatusSnapshot&) = default;
 };
 
 enum class Ps3FileOperationKind : int {

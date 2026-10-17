@@ -54,6 +54,11 @@ mw0lge@grange-lane.co.uk
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+// Modification history (NereusSDR):
+//   2026-10-12 - Apply the approved workspace-only 11 px text minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
+#include "gui/styles/WorkspacePreview.h"
 #include "DialItem.h"
 #include "ResponsiveText.h"
 
@@ -127,7 +132,7 @@ void DialItem::paintStatic(QPainter& p, const QRect& dialRect)
     //            2=bottom-left(ACCEL), 3=bottom-right(LOCK)
     QFont labelFont;
     const double scale=objectTextScale(dialRect,{120,120});
-    labelFont.setPixelSize(qMax(1,qRound(9*scale)));
+    labelFont.setPixelSize(WorkspacePreview::readableTextPixelSize(qMax(1,qRound(9*scale))));
     p.setFont(labelFont);
     p.setPen(m_textColour);
     p.setBrush(Qt::NoBrush);

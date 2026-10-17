@@ -1,6 +1,8 @@
 // no-port-check: smoke test for Antenna Control sub-sub-tab UI construction + AlexController wiring
 #include <QtTest/QtTest>
 #include <QApplication>
+#include <QLabel>
+#include <QRadioButton>
 #include <QSignalSpy>
 
 #include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
@@ -8,6 +10,10 @@
 #include "core/accessories/AlexController.h"
 #include "models/Band.h"
 #include "core/AppSettings.h"
+
+#include "GridHeaderAlignment.h"
+#include "core/RadioDiscovery.h"
+#include "gui/setup/HardwarePage.h"
 
 using namespace NereusSDR;
 
@@ -110,6 +116,60 @@ private slots:
         // Phase 3P-I-b T3: default rxOnlyAnt is now 0 ("none selected") per
         // Thetis Alex.cs:58 — was 1 under the 3P-I-a NereusSDR-native default.
         QCOMPARE(model.alexController().rxOnlyAnt(Band::Band20m), 0);  // unaffected (default)
+    }
+    // Each column label ("1", "2", "3" under RX1, the RX-only labels and
+    // TX "Ant 1".."Ant 3") sits over its column of radio buttons, every
+    // band row, in today's look and the workspace look (the RX "1" and "2"
+    // sat off their columns).
+    void column_labels_sit_over_their_columns_data()
+    {
+        QTest::addColumn<bool>("workspace");
+        QTest::newRow("today") << false;
+        QTest::newRow("look") << true;
+    }
+
+    void column_labels_sit_over_their_columns()
+    {
+        QFETCH(bool, workspace);
+        const GridHeaderAlignment::AppLook look(workspace);
+        RadioModel model;
+        model.setBoardForTest(HPSDRHW::Saturn);
+        HardwarePage page(&model);
+        RadioInfo info;
+        info.boardType  = HPSDRHW::Saturn;
+        info.protocol   = ProtocolVersion::Protocol2;
+        info.macAddress = QStringLiteral("aa:bb:cc:11:22:33");
+        page.onCurrentRadioChanged(info);
+        QVERIFY(page.showAntennaTab());
+        auto* tab = page.findChild<AntennaAlexAntennaControlTab*>();
+        QVERIFY(tab != nullptr);
+        look.apply(&page);
+        page.resize(1400, 900);
+        page.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&page));
+        int columns = 0;
+        for (QLabel* header : tab->findChildren<QLabel*>()) {
+            const QString column = header->property("nereusAntennaColumn").toString();
+            if (column.isEmpty()) {
+                continue;
+            }
+            ++columns;
+            const qreal headerX = GridHeaderAlignment::labelCentreX(header, &page);
+            int buttons = 0;
+            for (QRadioButton* button : tab->findChildren<QRadioButton*>()) {
+                if (button->property("nereusAntennaColumn").toString() != column) {
+                    continue;
+                }
+                ++buttons;
+                const qreal buttonX = GridHeaderAlignment::indicatorCentreX(button, &page);
+                QVERIFY2(qAbs(buttonX - headerX) <= 1.0,
+                         qPrintable(QStringLiteral("%1: label centre %2, button centre %3 (band %4)")
+                                        .arg(column).arg(headerX).arg(buttonX)
+                                        .arg(button->property("nereusAntennaBand").toInt())));
+            }
+            QVERIFY(buttons > 0);
+        }
+        QCOMPARE(columns, 9);
     }
 };
 

@@ -16,6 +16,7 @@
 
 #include "core/session/RemoteDevicesState.h"
 #include "gui/multidevice/DeviceWords.h"
+#include "gui/styles/WorkspacePreview.h"
 
 #include <QHeaderView>
 #include <QLabel>
@@ -147,11 +148,12 @@ void ConnectedDevicesList::rebuild()
         auto* item = new QTreeWidgetItem(m_tree,
                                          rowFor(device, !self.isEmpty() && device.deviceId == self));
         if (device.holdsTransmit) {
-            item->setForeground(5, QColor(0xff, 0x60, 0x60));
+            item->setForeground(5, WorkspacePreview::roleColour(QColor(0xff, 0x60, 0x60), "tx"));
         }
         if (device.state == QStringLiteral("away")) {
             for (int c = 0; c < 4; ++c) {
-                item->setForeground(c, QColor(0x90, 0x98, 0xa4));
+                item->setForeground(
+                    c, WorkspacePreview::roleColour(QColor(0x90, 0x98, 0xa4), "text-tertiary"));
             }
         }
         shown.insert(device.deviceId);

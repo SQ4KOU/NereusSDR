@@ -21,6 +21,9 @@
 #include <QScopeGuard>
 #include <QSignalSpy>
 
+#include <atomic>
+#include <thread>
+
 class TstCalibrationController : public QObject {
     Q_OBJECT
 
@@ -32,6 +35,7 @@ private slots:
     void setUsing10MHzRef_emitsChanged();
     void effectiveFreqCorrectionFactor_normalMode();
     void effectiveFreqCorrectionFactor_10MHzMode();
+    void effectiveFreqCorrectionFactorIsReadSafelyFromAnotherThread();
     void setRx1_6mLnaOffset_emitsChanged();
     void setRx2_6mLnaOffset_emitsChanged();
     void setTxDisplayOffsetDb_emitsChanged();
@@ -130,6 +134,40 @@ void TstCalibrationController::effectiveFreqCorrectionFactor_10MHzMode()
     ctrl.setUsing10MHzRef(true);
     // 10 MHz mode: returns the 10 MHz factor
     QCOMPARE(ctrl.effectiveFreqCorrectionFactor(), 0.999998);
+}
+
+// The P1 EP2 sender and the P2 connection thread read the effective factor
+// while the main thread sets it. Every read is a factor that was set, and
+// under ThreadSanitizer the reads and writes do not race.
+void TstCalibrationController::effectiveFreqCorrectionFactorIsReadSafelyFromAnotherThread()
+{
+    NereusSDR::CalibrationController ctrl;
+    constexpr double kA = 1.000002;
+    constexpr double kB = 0.999998;
+    ctrl.setFreqCorrectionFactor(kA);
+    ctrl.setFreqCorrectionFactor10M(kB);
+
+    std::atomic<bool> run{true};
+    std::atomic<int> reads{0};
+    std::atomic<int> strange{0};
+    std::thread reader([&] {
+        while (run.load()) {
+            const double f = ctrl.effectiveFreqCorrectionFactor();
+            if (f != kA && f != kB && f != 1.0) {
+                strange.fetch_add(1);
+            }
+            reads.fetch_add(1);
+        }
+    });
+    for (int i = 0; i < 20000; ++i) {
+        ctrl.setUsing10MHzRef((i & 1) != 0);
+        ctrl.setFreqCorrectionFactor((i & 2) != 0 ? kA : 1.0);
+        ctrl.setFreqCorrectionFactor10M((i & 4) != 0 ? kB : 1.0);
+    }
+    QVERIFY(QTest::qWaitFor([&] { return reads.load() > 1000; }, 5000));
+    run.store(false);
+    reader.join();
+    QCOMPARE(strange.load(), 0);
 }
 
 void TstCalibrationController::setRx1_6mLnaOffset_emitsChanged()

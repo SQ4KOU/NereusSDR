@@ -111,6 +111,13 @@ public enum MediaControlEvent: Sendable, Equatable {
         /// false for the receiver's; nil on a connection whose `start`
         /// declared no `txDisplayVersion`, whose contexts never carry it.
         public var transmit: Bool? = nil
+        /// `pictureGeneration`: the context generation at which the Core
+        /// last started the picture these frames continue. Two contexts of
+        /// an endpoint with the same value are one picture carried on (the
+        /// Core kept its averaged trace, noise floor and waterfall levels);
+        /// nil on a connection whose `start` declared no
+        /// `spectrumPictureVersion`, whose contexts never carry it.
+        public var pictureGeneration: UInt32? = nil
 
         /// The widest span this context allows: the ADC's half rate when
         /// the Core says the extended view is available and that is wider,

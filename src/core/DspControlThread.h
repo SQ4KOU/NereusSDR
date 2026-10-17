@@ -41,6 +41,7 @@
 #include <mutex>
 #include <optional>
 #include <utility>
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
@@ -52,7 +53,7 @@ namespace detail {
 /// thread of its own (moved to no thread), so the lane may emit it and
 /// delete it; the queued connection to the context is broken by Qt if the
 /// context is deleted first.
-class DspRequestRelay final : public QObject {
+class NEREUS_CORE_EXPORT DspRequestRelay final : public QObject {
     Q_OBJECT
 public:
     DspRequestRelay() = default;

@@ -217,9 +217,9 @@ void FilterPresetStore::resetAll()
 
 void FilterPresetStore::followStationSetting(const QString& key)
 {
-    // All 14 modes, DSPMode 0 to 13 (resetAll() above covers only the 12
+    // All declared modes (resetAll() above covers only the 12
     // WDSP modes; a snapshot can carry RADE presets too).
-    constexpr int kModeCount = static_cast<int>(DSPMode::RADE_L) + 1;
+    constexpr int kModeCount = static_cast<int>(DSPMode::RADE2_L) + 1;
     if (key.isEmpty()) {
         for (int id = 0; id < kModeCount; ++id) {
             emit presetsChanged(static_cast<DSPMode>(id));

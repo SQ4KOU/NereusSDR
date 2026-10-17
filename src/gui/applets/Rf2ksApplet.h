@@ -16,11 +16,15 @@
 //   remoteRfKitControlVersion 4), wait while the radio is on the air, and
 //   follow the amp's report; coreDiagnosticsText. J.J. Boyd (KG4VCF),
 //   AI-assisted via Anthropic Claude Code.
+//   2026-10-12  The three HGauge bars become one large forward power bar
+//   and slim reflected, SWR and temperature rows.
+//   J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 #include "AppletWidget.h"
 #include "core/Rf2ksConnection.h"
 #include "models/TunerModel.h"
+#include "gui/NereusGuiExport.h"
 
 #include <QHash>
 #include <QSet>
@@ -32,7 +36,7 @@ class QMenu;
 
 namespace NereusSDR {
 
-class HGauge;
+class BarInstrument;
 class RadioModel;
 class RfKitModel;
 
@@ -44,7 +48,8 @@ class RfKitModel;
 //   - OPERATE/STANDBY toggle button: emits operateToggled(bool).
 //
 // Section B (Task 8): gauges + telemetry strip.
-//   - 3 HGauge bars (Fwd, SWR, Temp).
+//   - Forward power as a large bar; reflected, SWR and temperature as
+//     slim rows (AccessoryReadouts).
 //   - Telemetry label: mains voltage + drain current.
 //
 // Section C (Task 8): antennas + tuner status + greyed TUNE/BYPASS.
@@ -55,7 +60,7 @@ class RfKitModel;
 // Section D (Task 9): right-click context menu.
 //
 // Layout patterns from AmpApplet.{h,cpp} (AetherSDR port, GPLv3).
-class Rf2ksApplet : public AppletWidget {
+class NEREUS_GUI_EXPORT Rf2ksApplet : public AppletWidget {
     Q_OBJECT
 public:
     explicit Rf2ksApplet(RadioModel* model, QWidget* parent = nullptr);
@@ -78,6 +83,14 @@ public:
     int     fwdGaugeValueForTesting()                  const;
     float   swrGaugeValueForTesting()                  const;
     float   tempGaugeValueForTesting()                 const;
+    // The reflected power row, and whether each row shows a value (true)
+    // or the instrument's dashes (false). The value accessors return the
+    // last value a row was given, also while it shows dashes.
+    int     reflectedValueForTesting()                 const;
+    bool    fwdHasValueForTesting()                    const;
+    bool    reflectedHasValueForTesting()              const;
+    bool    swrHasValueForTesting()                    const;
+    bool    tempHasValueForTesting()                   const;
     QString telemetryStripTextForTesting()             const;
     QString antennaButtonTextForTesting(int number)    const;
     bool    antennaButtonIsActiveForTesting(int number)   const;
@@ -140,6 +153,8 @@ protected:
 private slots:
     // R-R3-47: the RfKitModel's readings into the header, gauges and strip.
     void syncFromRfKit();
+    // Every readout row to the instrument's dashes.
+    void clearReadouts();
     // R-R3-47: a remote window says when its readings are not live.
     void updateStationState();
     // R-R3-22: a remote window's connection line: the Core's phase, or the
@@ -178,9 +193,10 @@ private:
     bool         m_connected{false};
 
     // Section B widgets.
-    HGauge* m_fwdGauge{nullptr};
-    HGauge* m_swrGauge{nullptr};
-    HGauge* m_tempGauge{nullptr};
+    BarInstrument* m_fwdBar{nullptr};
+    BarInstrument* m_refBar{nullptr};
+    BarInstrument* m_swrBar{nullptr};
+    BarInstrument* m_tempBar{nullptr};
     QLabel* m_telemetryLabel{nullptr};
 
     // Section C widgets.

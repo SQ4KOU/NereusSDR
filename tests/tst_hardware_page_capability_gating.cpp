@@ -10,6 +10,7 @@
 
 #include <QtTest/QtTest>
 #include "core/SampleRateCatalog.h"
+#include "core/AppSettings.h"
 #include "gui/setup/HardwarePage.h"
 #include "gui/setup/hardware/RadioInfoTab.h"
 #include "gui/UnbuiltFeatures.h"
@@ -24,6 +25,7 @@
 #include "models/Band.h"
 
 #include <QCheckBox>
+#include <QLabel>
 #include <QRadioButton>
 #include <QScopeGuard>
 #include <QTabWidget>
@@ -391,6 +393,77 @@ private slots:
         ctl->useTxAntForRxForTest()->click();
         QVERIFY(!core->useTxAntennaForRx());
         QVERIFY(!ctl->useTxAntForRxForTest()->isChecked());
+    }
+    // A saved non-HL2 board with no connection: on first open the page
+    // shows that board's tabs, not every tab (the HL2 tabs included).
+    void saved_saturn_without_a_connection_shows_saturn_tabs()
+    {
+        AppSettings::instance().clear();
+        const auto reset = qScopeGuard([] { AppSettings::instance().clear(); });
+        RadioInfo saved;
+        saved.boardType  = HPSDRHW::Saturn;
+        saved.protocol   = ProtocolVersion::Protocol2;
+        saved.macAddress = QStringLiteral("00:1c:c0:a2:13:dd");
+        AppSettings::instance().saveRadio(saved, false, false);
+        AppSettings::instance().setLastConnected(saved.macAddress);
+
+        RadioModel model;  // never connected, board not posed
+        QVERIFY(!model.isConnected());
+        HardwarePage page(&model);
+
+        QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::RadioInfo));
+        QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::AntennaAlex));
+        QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::OcOutputs));
+        QCOMPARE(page.tabTextForTest(HardwarePage::Tab::OcOutputs), QStringLiteral("OC Outputs"));
+        QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Calibration));
+        QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Hl2Options));
+        QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Hl2IoBoard));
+    }
+
+    // The same for a saved HL2: its tabs, the OC tab under its HL2 name.
+    void saved_hl2_without_a_connection_shows_hl2_tabs()
+    {
+        AppSettings::instance().clear();
+        const auto reset = qScopeGuard([] { AppSettings::instance().clear(); });
+        RadioInfo saved;
+        saved.boardType  = HPSDRHW::HermesLite;
+        saved.protocol   = ProtocolVersion::Protocol1;
+        saved.macAddress = QStringLiteral("00:1c:c0:a2:13:de");
+        AppSettings::instance().saveRadio(saved, false, false);
+        AppSettings::instance().setLastConnected(saved.macAddress);
+
+        RadioModel model;
+        HardwarePage page(&model);
+
+        QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::AntennaAlex));
+        QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::OcOutputs));
+        QCOMPARE(page.tabTextForTest(HardwarePage::Tab::OcOutputs),
+                 QStringLiteral("Hermes Lite Control"));
+        QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Hl2Options));
+        QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Hl2IoBoard));
+    }
+
+    // The OC tab's N2ADR pointer names an HL2 tab: mi0bot shows its N2ADR
+    // control on that tab for the HL2 only (setup.cs:20191-20238
+    // [v2.10.3.13-beta2]); Thetis never shows it (setup.designer.cs:16828
+    // [v2.10.3.15], Visible = false). So it shows on an HL2 alone.
+    void n2adr_hint_shows_on_hl2_only()
+    {
+        auto hintFor = [](HPSDRHW board, ProtocolVersion protocol) {
+            RadioModel model;
+            model.setBoardForTest(board);
+            HardwarePage page(&model);
+            RadioInfo info;
+            info.boardType  = board;
+            info.protocol   = protocol;
+            info.macAddress = QStringLiteral("aa:bb:cc:11:22:33");
+            page.onCurrentRadioChanged(info);
+            auto* hint = page.findChild<QLabel*>(QStringLiteral("ocN2adrHint"));
+            return hint != nullptr && !hint->isHidden();
+        };
+        QVERIFY( hintFor(HPSDRHW::HermesLite, ProtocolVersion::Protocol1));
+        QVERIFY(!hintFor(HPSDRHW::Saturn, ProtocolVersion::Protocol2));
+        QVERIFY(!hintFor(HPSDRHW::Angelia, ProtocolVersion::Protocol1));
     }
 };
 

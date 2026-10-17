@@ -13,13 +13,14 @@
 // =================================================================
 
 #include <QWidget>
+#include "gui/NereusGuiExport.h"
 
 class QPushButton;
 class QButtonGroup;
 
 namespace NereusSDR {
 
-class VaxChannelSelector : public QWidget {
+class NEREUS_GUI_EXPORT VaxChannelSelector : public QWidget {
     Q_OBJECT
 public:
     explicit VaxChannelSelector(QWidget* parent = nullptr);

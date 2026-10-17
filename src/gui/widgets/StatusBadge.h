@@ -3,6 +3,7 @@
 
 #include <QWidget>
 #include <QString>
+#include "gui/NereusGuiExport.h"
 
 class QLabel;
 class QHBoxLayout;
@@ -13,7 +14,7 @@ namespace NereusSDR {
 // Used in the redesigned status bar (RX dashboard + right-side strip) and
 // emits clicked / rightClicked so the host wires actions per design spec
 // docs/architecture/2026-04-30-shell-chrome-redesign-design.md §Affordances.
-class StatusBadge : public QWidget {
+class NEREUS_GUI_EXPORT StatusBadge : public QWidget {
     Q_OBJECT
 
 public:

@@ -28,18 +28,28 @@
 //      Connecting and Probing, refuses a key there, and lifts on Connected.
 //   9. Fix round 2: the operator's disconnect made after such a retire, when
 //      there is no connection left to tear down, still clears the lock.
+//  10. Issue #434 follow-up: keyed, with a StepAttenuatorController wired as
+//      MainWindow wires it, a link loss or the operator's disconnect still
+//      ends with hardwareFlipped(false) (instant and real walk timers), the
+//      controller puts the RX S-ATT back, and the next over saves afresh.
+//      The disconnect's save, made while still keyed, stores the RX value;
+//      a link loss saves nothing, and a disconnect after its unkey stores
+//      the RX value too.
 
 #include <QtTest/QtTest>
 #include <QCoreApplication>
+#include <QScopeGuard>
 #include <QSignalSpy>
 
 #include "core/AppSettings.h"
 #include "core/MoxController.h"
 #include "core/RadioConnection.h"
+#include "core/StepAttenuatorController.h"
 #include "core/safety/TxRefusal.h"
 #include "core/TwoToneController.h"
 #include "core/TxChannel.h"
 #include "core/WdspEngine.h"
+#include "models/Band.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -305,6 +315,44 @@ private slots:
         QVERIFY(!rig.conn.log.contains(QStringLiteral("PS off")));
     }
 
+    void intentionalDisconnectReleasesDiscoveryConnectedMacExemption()
+    {
+        Rig rig;
+        RadioDiscovery* discovery = rig.model.discovery();
+        const QString connectedMac = QStringLiteral("AA:BB:CC:DD:EE:01");
+        const QString savedMac = QStringLiteral("AA:BB:CC:DD:EE:02");
+        RadioInfo connectedRadio;
+        connectedRadio.macAddress = connectedMac;
+        RadioInfo savedRadio;
+        savedRadio.macAddress = savedMac;
+        discovery->injectLastSeenForTest(connectedMac, connectedRadio, 0);
+        discovery->injectLastSeenForTest(savedMac, savedRadio, 0);
+        discovery->setSavedMacs({savedMac});
+        discovery->setConnectedMac(connectedMac);
+        QSignalSpy lost(discovery, &RadioDiscovery::radioLost);
+        discovery->forceStaleCheckForTest();
+        QCOMPARE(lost.count(), 0);
+
+        int lostAtDisconnected = -1;
+        connect(&rig.model, &RadioModel::connectionStateChanged, &rig.model,
+                [&](ConnectionState state) {
+                    if (state == ConnectionState::Disconnected) {
+                        discovery->forceStaleCheckForTest();
+                        lostAtDisconnected = lost.count();
+                    }
+                }, Qt::DirectConnection);
+
+        rig.model.disconnectFromRadio();
+
+        QCOMPARE(rig.model.connectionState(), ConnectionState::Disconnected);
+        QCOMPARE(lostAtDisconnected, 1);
+        QCOMPARE(lost.count(), 1);
+        QCOMPARE(lost.at(0).at(0).toString(), connectedMac);
+        const QList<RadioInfo> remaining = discovery->discoveredRadios();
+        QCOMPARE(remaining.size(), 1);
+        QCOMPARE(remaining.first().macAddress, savedMac);
+    }
+
     void disconnectAfterLinkLossClearsTheLock()
     {
         Rig rig;
@@ -431,6 +479,105 @@ private slots:
         QVERIFY(rig.model.transmitLockReasonAlongside(QString()) != reason);
         QVERIFY(rig.model.moxController()->transmitBlockReason() != reason);
         QVERIFY(!rig.model.moxController()->isRadioLinkDown());
+    }
+
+    void keyedLinkLossOrDisconnectRestoresTheRxAttenuation_data()
+    {
+        QTest::addColumn<bool>("realTimers");
+        QTest::addColumn<bool>("operatorDisconnect");
+        QTest::newRow("instant timers, link loss") << false << false;
+        QTest::newRow("instant timers, disconnect") << false << true;
+        QTest::newRow("real timers, link loss") << true << false;
+        QTest::newRow("real timers, disconnect") << true << true;
+    }
+
+    // Item 10: a StepAttenuatorController wired as MainWindow wires it (the
+    // model's controller, hardwareFlipped through a queued connection, its
+    // radio connection cleared at the disconnect).
+    void keyedLinkLossOrDisconnectRestoresTheRxAttenuation()
+    {
+        QFETCH(bool, realTimers);
+        QFETCH(bool, operatorDisconnect);
+        const QString mac = QStringLiteral("aa:bb:cc:00:04:34");
+        auto& s = AppSettings::instance();
+        const QString bandKey = QStringLiteral("options/stepAtt/rx1Band/")
+                                + bandKeyName(Band::Band20m);
+
+        Rig rig;
+        MoxController* mox = rig.model.moxController();
+        if (realTimers) {
+            mox->setTimerIntervals(30, 10, 0, 10, 20, 0);
+        }
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setBand(Band::Band20m);
+        ctrl.loadSettings(mac);
+        ctrl.setIsHpsdrBoard(false);
+        ctrl.setAttOnTxEnabled(true);
+        ctrl.setForceAttWhenPsOff(true);
+        ctrl.setPsActive(false);
+        ctrl.setCurrentDspMode(DSPMode::USB);
+        ctrl.setTxAttenuationForBand(Band::Band20m, 20);
+        ctrl.setRadioConnection(&rig.conn);
+        ctrl.setAttenuation(5, 0);          // the operator's RX S-ATT
+        NereusSDR::RadioInfo info;
+        info.macAddress = mac;
+        rig.model.setLastRadioInfoForTest(info);
+        rig.model.setStepAttController(&ctrl);
+        const auto unwire = qScopeGuard([&rig, &ctrl]() {
+            rig.model.setStepAttController(nullptr);
+            ctrl.setRadioConnection(nullptr);
+        });
+        QList<bool> flips;
+        connect(mox, &MoxController::hardwareFlipped, &ctrl,
+                [&flips, &ctrl](bool isTx) {
+                    flips.append(isTx);
+                    ctrl.onMoxHardwareFlipped(isTx);
+                }, Qt::QueuedConnection);
+
+        // Every row shares the MAC: a marker shows which save each row made.
+        const QString valueKey = QStringLiteral("options/stepAtt/rx1Value");
+        constexpr int kNotSaved = 99;
+        s.setHardwareValue(mac, valueKey, QString::number(kNotSaved));
+        s.setHardwareValue(mac, bandKey, QString::number(kNotSaved));
+
+        mox->setMox(true);
+        QTRY_VERIFY(rig.model.mox());
+        QTRY_COMPARE(flips, (QList<bool>{true}));
+        QCOMPARE(ctrl.attenuatorDb(), 31);   // force-31 (PS off + flag)
+
+        if (operatorDisconnect) {
+            // The teardown saves while keyed (checked below).
+            rig.model.disconnectFromRadio();
+            ctrl.setRadioConnection(nullptr);   // as MainWindow does
+        } else {
+            // A lost link saves nothing (no teardown); a later disconnect
+            // does, after the unkey below.
+            rig.conn.setStateForTest(ConnectionState::LinkLost);
+            rig.model.onConnectionStateChangedForTest(ConnectionState::LinkLost);
+            QCOMPARE(s.hardwareValue(mac, valueKey).toInt(), kNotSaved);
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(flips.size(), 2, 5000);
+        QCOMPARE(flips.last(), false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        pump();
+        QCOMPARE(flips.size(), 2);
+        QCOMPARE(ctrl.attenuatorDb(), 5);    // put back at the unkey
+        if (!operatorDisconnect) {
+            rig.model.disconnectFromRadio();
+            ctrl.setRadioConnection(nullptr);
+        }
+        // Either save stored the RX value, never 31.
+        QCOMPARE(s.hardwareValue(mac, valueKey).toInt(), 5);
+        QCOMPARE(s.hardwareValue(mac, bandKey).toInt(), 5);
+
+        // The unkey cleared what the key saved: the next over saves afresh
+        // and comes back to the new RX value, not to 5.
+        ctrl.setAttenuation(7, 0);
+        ctrl.onMoxHardwareFlipped(true);
+        QCOMPARE(ctrl.attenuatorDb(), 31);
+        ctrl.onMoxHardwareFlipped(false);
+        QCOMPARE(ctrl.attenuatorDb(), 7);
     }
 };
 

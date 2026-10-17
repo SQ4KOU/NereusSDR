@@ -9,6 +9,9 @@
 // mode sent as the local applet and page send them, and a saved address
 // shown without dialling. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 // Claude Code.
+// 2026-10-11: StationAccessoryAdmission: a desktop window that shares its
+// accessories uses the device at the typed address, as it did before.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/StationRfKitController.h"
 
 namespace NereusSDR {
@@ -21,10 +24,15 @@ const QString kTciInterface = QStringLiteral("TCI");
 } // namespace
 
 StationRfKitController::StationRfKitController(Rf2ksConnection* connection,
-                                               RfKitModel* model, QObject* parent)
+                                               RfKitModel* model, QObject* parent,
+                                               StationAccessoryAdmission admission)
     : QObject(parent), m_connection(connection), m_model(model)
 {
-    connection->setIdentityAdmissionRequired(true);
+    // TypedAddress: whatever answers /info at the typed address is used,
+    // as in a window with no controller (no "device" name is asked for).
+    if (admission == StationAccessoryAdmission::Identified) {
+        connection->setIdentityAdmissionRequired(true);
+    }
     if (model) {
         // This controller, not the raw connection signals, reports phases.
         model->setConnectionStateOwnedByController(true);

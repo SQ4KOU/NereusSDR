@@ -8,6 +8,11 @@
 // Modification history (NereusSDR):
 //   2026-05-27 Created in C++20/Qt6 for NereusSDR by J.J. Boyd (KG4VCF),
 //              with AI-assisted transformation via Anthropic Claude Code.
+//   2026-10-09 The frame rule names the toast itself, which paints it
+//              (paintEvent), so its labels are no longer boxed
+//              with a bar each; the check mark is U+2713 (the UTF-8 bytes
+//              in a UTF-16 literal read as three characters). J.J. Boyd
+//              (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // no-port-check: NereusSDR-original
@@ -18,7 +23,10 @@
 
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPainter>
 #include <QPushButton>
+#include <QStyle>
+#include <QStyleOption>
 #include <QVBoxLayout>
 
 namespace NereusSDR {
@@ -27,15 +35,20 @@ AntennaSwitchToast::AntennaSwitchToast(const QString& message, QWidget* parent)
     : QWidget(parent, Qt::FramelessWindowHint | Qt::Tool)
 {
     setAttribute(Qt::WA_TranslucentBackground);
+    // The frame belongs to the toast alone: an unnamed QWidget rule reached
+    // every child and drew a box and a bar around each label. The toast
+    // draws its own frame in paintEvent: a translucent window skips the
+    // style sheet background Qt would otherwise paint.
+    setObjectName(QStringLiteral("antennaSwitchToast"));
     setStyleSheet(QStringLiteral(
-        "QWidget { background: %1; border: 1px solid %2;"
+        "QWidget#antennaSwitchToast { background: %1; border: 1px solid %2;"
         " border-left: 3px solid #00ff88; border-radius: 3px; }"
     ).arg(Style::kPanelBg, Style::kBorder));
 
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(12, 8, 12, 8);
 
-    auto* checkLbl = new QLabel(QStringLiteral("\xE2\x9C\x93"), this); // UTF-8 checkmark
+    auto* checkLbl = new QLabel(QString(QChar(0x2713)), this); // U+2713 check mark
     checkLbl->setStyleSheet(QStringLiteral("color: #00ff88; font-size: 14px;"));
     layout->addWidget(checkLbl);
 
@@ -73,5 +86,13 @@ AntennaSwitchToast::AntennaSwitchToast(const QString& message, QWidget* parent)
 }
 
 AntennaSwitchToast::~AntennaSwitchToast() = default;
+
+void AntennaSwitchToast::paintEvent(QPaintEvent* /*event*/)
+{
+    QStyleOption opt;
+    opt.initFrom(this);
+    QPainter painter(this);
+    style()->drawPrimitive(QStyle::PE_Widget, &opt, &painter, this);
+}
 
 } // namespace NereusSDR

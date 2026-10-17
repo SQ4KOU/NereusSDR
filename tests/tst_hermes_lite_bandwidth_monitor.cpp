@@ -6,6 +6,9 @@
 // These tests cover both the byte-rate port and the throttle state machine.
 #include <QtTest/QtTest>
 #include <QSignalSpy>
+#include <barrier>
+#include <cmath>
+#include <thread>
 #include "core/HermesLiteBandwidthMonitor.h"
 
 using namespace NereusSDR;
@@ -13,6 +16,72 @@ using namespace NereusSDR;
 class TestHermesLiteBandwidthMonitor : public QObject {
     Q_OBJECT
 private slots:
+
+    // Cached readouts are polled on the GUI/daemon thread while the single
+    // connection writer ticks. Removing their atomic publication is detected
+    // by ThreadSanitizer: accesses after each barrier release are unordered.
+    void cached_readouts_safe_during_connection_ticks()
+    {
+        HermesLiteBandwidthMonitor monitor;
+        constexpr int kEpochs = 16;
+        constexpr int kTicksPerEpoch = HermesLiteBandwidthMonitor::kThrottleTickThreshold + 2;
+        constexpr int kPollsPerEpoch = 256;
+        std::barrier epochBoundary(2);
+        bool validReadouts = true;
+        int previousEvents = 0;
+
+        std::thread producer([&]() {
+            monitor.recordEp6Bytes(1024);
+            monitor.recordEp2Bytes(512);
+            monitor.tick();
+            for (int epoch = 0; epoch < kEpochs; ++epoch) {
+                epochBoundary.arrive_and_wait();
+                for (int tick = 0; tick < kTicksPerEpoch; ++tick) {
+                    // Advance the real rate clock without introducing any
+                    // synchronization with the polling reader.
+                    QTest::qSleep(2);
+                    if (epoch % 2 == 0) {
+                        monitor.recordEp6Bytes(1024);
+                    }
+                    monitor.recordEp2Bytes(512);
+                    monitor.tick();
+                }
+                epochBoundary.arrive_and_wait();
+            }
+        });
+
+        for (int epoch = 0; epoch < kEpochs; ++epoch) {
+            epochBoundary.arrive_and_wait();
+            for (int poll = 0; poll < kPollsPerEpoch; ++poll) {
+                const double ingress = monitor.ep6IngressBytesPerSec();
+                const double egress = monitor.ep2EgressBytesPerSec();
+                const bool throttled = monitor.isThrottled();
+                const int events = monitor.throttleEventCount();
+                // These are independent scalar snapshots; do not require
+                // a coherent relationship between throttle and event count.
+                Q_UNUSED(throttled);
+                validReadouts = validReadouts && std::isfinite(ingress)
+                    && ingress >= 0.0 && std::isfinite(egress) && egress >= 0.0
+                    && events >= previousEvents && events <= kEpochs * kTicksPerEpoch;
+                previousEvents = events;
+            }
+            epochBoundary.arrive_and_wait();
+        }
+        producer.join();
+
+        QVERIFY(validReadouts);
+        QVERIFY(monitor.isThrottled());
+        QCOMPARE(monitor.throttleEventCount(), kEpochs / 2);
+        QVERIFY(monitor.ep2EgressBytesPerSec() > 0.0);
+
+        // reset() remains a lifecycle operation after the connection writer
+        // is quiescent, matching connect/teardown rather than racing tick().
+        monitor.reset();
+        QCOMPARE(monitor.ep6IngressBytesPerSec(), 0.0);
+        QCOMPARE(monitor.ep2EgressBytesPerSec(), 0.0);
+        QVERIFY(!monitor.isThrottled());
+        QCOMPARE(monitor.throttleEventCount(), 0);
+    }
 
     // Initial state: not throttled, zero counts, zero rates.
     void initial_state_clear()

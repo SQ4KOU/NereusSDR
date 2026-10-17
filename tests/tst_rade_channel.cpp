@@ -64,6 +64,8 @@ class TestRadeChannel : public QObject {
     Q_OBJECT
 
 private slots:
+    void observerPreservesActualDecoderOutput_data();
+    void observerPreservesActualDecoderOutput();
     void initialState();
     void startStop();
     void modelLoadFailureDisablesChannel();
@@ -535,6 +537,46 @@ void TestRadeChannel::endOfOverWhileInactiveSendsNothing()
 // KG4VCF); its modem audio, the real leg as a radio's SSB receiver hands it
 // back (I = audio, Q = 0), goes into a second channel, which reports the
 // callsign once with no grid.
+void TestRadeChannel::observerPreservesActualDecoderOutput_data()
+{
+    QTest::addColumn<bool>("v2");
+    QTest::newRow("V1") << false;
+    QTest::newRow("V2") << true;
+}
+
+void TestRadeChannel::observerPreservesActualDecoderOutput()
+{
+    QFETCH(bool, v2);
+    RadeChannel tx, baseline, observed;
+    const RadeChannel::Version version = v2 ? RadeChannel::Version::V2 : RadeChannel::Version::V1;
+    tx.setVersion(version);
+    baseline.setVersion(version);
+    observed.setVersion(version);
+    QVERIFY(tx.start("dummy"));QVERIFY(baseline.start("dummy"));QVERIFY(observed.start("dummy"));
+    QByteArray air;
+    connect(&tx,&RadeChannel::txModemReady,this,[&](const QByteArray& block){air.append(block);});
+    for(int i=0;i<12;++i){tx.txEncode(makeSyntheticSpeech16k(2000));}
+    air.append(QByteArray(24000*2*2*int(sizeof(float)), '\0'));
+    observed.speechWaveformPublisher()->setBindingToken(77);
+    QVector<WaveformBatchPtr> batches;
+    connect(observed.speechWaveformPublisher(),&WaveformPublisher::batchReady,this,[&](WaveformBatchPtr batch){batches.append(batch);});
+    QVector<QByteArray> a,b;
+    connect(&baseline,&RadeChannel::rxSpeechReady,this,[&](const QByteArray& block){a.append(block);});
+    connect(&observed,&RadeChannel::rxSpeechReady,this,[&](const QByteArray& block){b.append(block);});
+    const auto* stereo=reinterpret_cast<const float*>(air.constData());const int frames=air.size()/int(2*sizeof(float));
+    for(int offset=0;offset<frames;offset+=2048){
+        const int count=std::min(2048,frames-offset);QByteArray iq(count*int(2*sizeof(float)),Qt::Uninitialized);auto* output=reinterpret_cast<float*>(iq.data());
+        for(int i=0;i<count;++i){output[2*i]=stereo[2*(offset+i)];output[2*i+1]=0;}
+        baseline.processIq(iq);observed.processIq(iq);
+    }
+    QCOMPARE(a,b);QVERIFY(!batches.isEmpty());QCOMPARE(batches[0]->sampleRate,24000);
+    QVERIFY(std::any_of(batches[0]->samples.begin(),batches[0]->samples.end(),[](float x){return x!=0;}));
+    // Full/unacknowledged telemetry leaves all subsequent playback chunks identical.
+    QCOMPARE(batches.size(),1);
+    RadeChannel padding;QVERIFY(padding.start("dummy"));padding.speechWaveformPublisher()->setBindingToken(88);
+    QSignalSpy silence(padding.speechWaveformPublisher(),&WaveformPublisher::batchReady);padding.processIq(makeSyntheticIq(4));QCOMPARE(silence.size(),0);
+}
+
 void TestRadeChannel::endOfOverCallsignReachesAnotherChannel()
 {
     RadeChannel tx;

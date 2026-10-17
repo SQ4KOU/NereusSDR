@@ -9,6 +9,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 — J.J. Boyd (KG4VCF), gate experimental RADE V2 opt-in;
+//                AI-assisted implementation via OpenAI Codex.
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
@@ -58,6 +60,14 @@
 //   2026-09-30: Radio codec lane: board.radioMic and radioMicNote
 //               (radioMicVersion 1). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-10-08: Rotor control plan Task 4b: the `rotor` tool, always
+//               listed, offered only when a rotor is set up on the Core.
+//               J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-11: FFT sizing mode (pill design D46): display.controls
+//               gains Sizing, first in its group, and `rememberedKey` on
+//               Hz/bin Target; the two averaging times run from 1 ms.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCatalog.h"
@@ -74,6 +84,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/StationTciModel.h"
+#include "models/RotorModel.h"
 
 #include <QColor>
 #include <QJsonArray>
@@ -90,8 +101,8 @@ namespace {
 
 Q_LOGGING_CATEGORY(lcCatalog, "nereus.station.catalog")
 
-// The 14 modes, DSPMode 0 to 13.
-constexpr int kModeCount = static_cast<int>(DSPMode::RADE_L) + 1;
+// All declared modes, including experimental RADE v2.
+constexpr int kModeCount = static_cast<int>(DSPMode::RADE2_L) + 1;
 
 QString colourText(std::uint32_t rgb)
 {
@@ -114,11 +125,13 @@ QString sidebandOf(DSPMode mode)
     case DSPMode::LSB:
     case DSPMode::CWL:
     case DSPMode::DIGL:
+    case DSPMode::RADE2_L:
     case DSPMode::RADE_L:
         return QStringLiteral("lower");
     case DSPMode::USB:
     case DSPMode::CWU:
     case DSPMode::DIGU:
+    case DSPMode::RADE2_U:
     case DSPMode::RADE_U:
         return QStringLiteral("upper");
     case DSPMode::DSB:
@@ -151,11 +164,12 @@ QJsonObject rangeObject(double min, double max, double step)
                        {QStringLiteral("step"), step}};
 }
 
-QJsonArray modesArray()
+QJsonArray modesArray(bool radeV2Enabled)
 {
     QJsonArray modes;
     for (int id = 0; id < kModeCount; ++id) {
         const auto mode = static_cast<DSPMode>(id);
+        if (isRade2DspMode(mode) && !radeV2Enabled) { continue; }
         modes.append(QJsonObject{{QStringLiteral("id"), id},
                                  {QStringLiteral("label"), SliceModel::modeName(mode)},
                                  {QStringLiteral("sideband"), sidebandOf(mode)}});
@@ -167,6 +181,7 @@ QJsonObject filterPresetsObject(const StationCatalog::Inputs& inputs)
 {
     QJsonObject presets;
     for (const auto& [mode, list] : inputs.filterPresets) {
+        if (isRade2DspMode(mode) && !inputs.radeV2Enabled) { continue; }
         QJsonArray entries;
         for (int slot = 0; slot < list.size(); ++slot) {
             const FilterPreset& preset = list.at(slot);
@@ -311,6 +326,30 @@ QJsonObject displayObject()
     fftSize.insert(QStringLiteral("options"), fftSizes);
     fftSize.insert(QStringLiteral("default"), kDisplayFftSizeDefault);
 
+    // Sizing (pill design D38, D46): which control sets the FFT size. The
+    // setting holds a word, so each option's value is the stored token and
+    // the default is one. A phone built before this control reads an
+    // option's value as a number, cannot read this entry and leaves it out
+    // (its reader skips a control it cannot read and keeps the rest); its
+    // Hz/bin Target still moves the mode, on the Core (design D41).
+    QJsonArray sizingModes;
+    for (const DisplayFftSizingItem& item : kDisplayFftSizingItems) {
+        sizingModes.append(QJsonObject{
+            {QStringLiteral("value"), QString::fromLatin1(displayFftSizingModeToken(item.mode))},
+            {QStringLiteral("label"), QString::fromLatin1(item.label)}});
+    }
+    QJsonObject sizing = displayControl(kDisplayFftSizingModeKey, "station", "fftSize", spectrum,
+                                        fft, kDisplayFftSizingLabel, "choice");
+    sizing.insert(QStringLiteral("options"), sizingModes);
+    sizing.insert(QStringLiteral("default"),
+                  QString::fromLatin1(displayFftSizingModeToken(kDisplayFftSizingModeDefault)));
+
+    // The stored target is 0 outside the Hz/bin mode (design D39), which a
+    // phone built before Sizing reads as "Off": the entry keeps that
+    // meaning (min 0, offValue, offLabel, default 0), since a catalog is
+    // not fitted to a version. `rememberedKey` names the station setting
+    // that holds the last target chosen, for a phone that knows the mode:
+    // what a grayed control shows and what entering Hz/bin writes.
     QJsonObject hzPerBin = displaySlider(
         displayControl(kDisplayHzPerBinTargetKey, "station", "fftSize", spectrum, fft,
                        kDisplayHzPerBinTargetLabel, "slider"),
@@ -320,13 +359,18 @@ QJsonObject displayObject()
     hzPerBin.insert(QStringLiteral("offValue"), kDisplayHzPerBinTargetMin);
     hzPerBin.insert(QStringLiteral("offLabel"),
                     QString::fromLatin1(kDisplayHzPerBinTargetOffLabel));
+    hzPerBin.insert(QStringLiteral("rememberedKey"),
+                    QString::fromLatin1(kDisplayHzPerBinLastTargetKey));
 
+    // The Fast Fourier Transform group in the desktop page's order: Sizing,
+    // Size, Hz/bin Target, Window.
     const QJsonArray controls{
+        sizing,
         fftSize,
+        hzPerBin,
         displayChoice(displayControl(kDisplayFftWindowKey, "station", "windowType", spectrum,
                                      fft, kDisplayFftWindowLabel, "choice"),
                       displayChoices(kDisplayFftWindows), kDisplayFftWindowDefault),
-        hzPerBin,
         displaySlider(displayControl(kDisplaySpectrumFpsKey, "station", "fps", spectrum,
                                      rendering, kDisplaySpectrumFpsLabel, "slider"),
                       kDisplaySpectrumFpsMin, kDisplaySpectrumFpsMax, kDisplaySpectrumFpsStep,
@@ -342,7 +386,8 @@ QJsonObject displayObject()
         displaySlider(displayControl(kDisplaySpectrumAvgTimeKey, "device", "averageTimeMs",
                                      spectrum, rendering, kDisplaySpectrumAvgTimeLabel,
                                      "slider"),
-                      kDisplayAvgTimeMinMs, kDisplayAvgTimeMaxMs, kDisplayAvgTimeStepMs, "ms", 0,
+                      kDisplayAvgTimeMinMs, kDisplayAvgTimeMaxMs,
+                      kDisplayAvgTimeStepMs, "ms", 0,
                       kDisplaySpectrumAvgTimeDefaultMs),
         displaySlider(displayControl(nullptr, "device", "decimation", spectrum, rendering,
                                      kDisplayDecimationLabel, "slider"),
@@ -360,7 +405,8 @@ QJsonObject displayObject()
         displaySlider(displayControl(kDisplayWaterfallAvgTimeKey, "device",
                                      "waterfallAverageTimeMs", waterfall, wfGroup,
                                      kDisplayWaterfallAvgTimeLabel, "slider"),
-                      kDisplayAvgTimeMinMs, kDisplayAvgTimeMaxMs, kDisplayAvgTimeStepMs, "ms", 0,
+                      kDisplayAvgTimeMinMs, kDisplayAvgTimeMaxMs,
+                      kDisplayAvgTimeStepMs, "ms", 0,
                       kDisplayWaterfallAvgTimeDefaultMs),
     };
 
@@ -912,6 +958,13 @@ QJsonArray toolsArray(const StationCatalog::Inputs& inputs)
                                  {QStringLiteral("where"), QString::fromLatin1(tool.where)},
                                  {QStringLiteral("offered"), offered(tool.offer, inputs)}});
     }
+    // Rotor control plan Task 4b (remote rotor control v1, "Tools
+    // catalogue"): the rotor, last, always listed and offered only when
+    // one is set up on the Core. An app shows it greyed otherwise.
+    tools.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("rotor")},
+                             {QStringLiteral("label"), QStringLiteral("Rotor")},
+                             {QStringLiteral("where"), QStringLiteral("station")},
+                             {QStringLiteral("offered"), inputs.rotorConfigured}});
     return tools;
 }
 
@@ -964,7 +1017,8 @@ StationCatalog::~StationCatalog() = default;
 QJsonObject StationCatalog::build(const Inputs& inputs)
 {
     return QJsonObject{
-        {QStringLiteral("modes"), modesArray()},
+        {QStringLiteral("modes"), modesArray(inputs.radeV2Enabled)},
+        {QStringLiteral("radeV2Enabled"), inputs.radeV2Enabled},
         {QStringLiteral("filterPresets"), filterPresetsObject(inputs)},
         {QStringLiteral("tuneSteps"), tuneStepsArray(inputs)},
         {QStringLiteral("agc"), agcObject()},
@@ -988,6 +1042,7 @@ QJsonObject StationCatalog::build(const Inputs& inputs)
 StationCatalog::Inputs StationCatalog::inputsFrom(const RadioModel& model)
 {
     Inputs inputs;
+    inputs.radeV2Enabled = model.radeV2Enabled();
     const HardwareProfile& profile = model.hardwareProfile();
     inputs.model = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
     inputs.board = model.boardCapabilities();
@@ -1025,6 +1080,9 @@ StationCatalog::Inputs StationCatalog::inputsFrom(const RadioModel& model)
     // localAudioDevices() has no const form; it is only read here.
     const AudioEngine* audio = const_cast<RadioModel&>(model).localAudioDevices();
     inputs.vaxDevices = audio != nullptr && audio->vaxOutputsAllowed();
+    // Rotor control plan Task 4b: a rotor set up on the Core.
+    inputs.rotorConfigured = model.rotorModel() != nullptr
+        && model.rotorModel()->driver() != RotorLink::RotorModel::Driver::None;
     return inputs;
 }
 
@@ -1038,6 +1096,9 @@ void StationCatalog::bind(RadioModel* model)
         disconnect(&m_model->bandPlanManagerMutable(), nullptr, this, nullptr);
         if (StationTciModel* tci = m_model->stationTciModel()) {
             disconnect(tci, nullptr, this, nullptr);
+        }
+        if (RotorLink::RotorModel* rotor = m_model->rotorModel()) {
+            disconnect(rotor, nullptr, this, nullptr);
         }
     }
     m_model = model;
@@ -1059,6 +1120,15 @@ void StationCatalog::bind(RadioModel* model)
     // catalogue binds (RadioModel::enableStationTci publishes its state).
     if (StationTciModel* tci = model->stationTciModel()) {
         connect(tci, &StationTciModel::stateChanged, this, &StationCatalog::scheduleRefresh);
+    }
+    // Rotor control plan Task 4b: a rotor set up or removed (configureRotor)
+    // lists or drops the Rotor tool.
+    if (RotorLink::RotorModel* rotor = model->rotorModel()) {
+        connect(rotor, &RotorLink::RotorModel::stateChanged, this, [this, rotor] {
+            if ((rotor->driver() != RotorLink::RotorModel::Driver::None) != m_rotorConfigured) {
+                scheduleRefresh();
+            }
+        });
     }
     refresh();
 }
@@ -1085,7 +1155,9 @@ void StationCatalog::refresh()
     if (!m_model) {
         return;
     }
-    setInputs(inputsFrom(*m_model));
+    const Inputs inputs = inputsFrom(*m_model);
+    m_rotorConfigured = inputs.rotorConfigured;
+    setInputs(inputs);
 }
 
 void StationCatalog::scheduleRefresh()

@@ -30,10 +30,12 @@ enum StationToolList {
         case txEqualizer
         case pureSignal
         case diversity
+        case catControl
         case tciServer
         case vaxAudio
         case performance
         case supportBundle
+        case rotor
     }
 
     /// One row of the list.
@@ -61,7 +63,12 @@ enum StationToolList {
     static let unknownToolReason = "This app does not have this tool. Updating this app may help."
     static let noTciServerReason = "This Core does not run its own TCI server. Updating the Core may help."
     static let noVaxReason = "This Core's computer has no VAX audio devices."
+    static let noStationCatReason = "This Core cannot set up its CAT from this app. Updating the Core may help."
     static let notOfferedReason = "This Core does not offer this tool."
+    /// The rotor's words, as the link document's rotor section says them.
+    static let noRotorReason = "No rotor is set up on this Core."
+    static let rotorOlderCoreReason = "This Core does not control a rotor. Updating the Core may help."
+    static let rotorId = "rotor"
 
     /// The tools a radio without their hardware leaves out when the Core
     /// does not offer them (the hardware-presence exception).
@@ -76,12 +83,14 @@ enum StationToolList {
         switch id {
         case "tciServer": return noTciServerReason
         case "vaxAudio": return noVaxReason
+        case rotorId: return noRotorReason
         default: return notOfferedReason
         }
     }
 
     /// The catalogue's ids for the tools this app has pages for.
     static let performanceId = "networkDiagnostics"
+    static let catControlId = "catControl"
 
     /// One tool this app knows: its page, its title and its line.
     private struct Known {
@@ -105,6 +114,8 @@ enum StationToolList {
               tag: .core, page: .pureSignal),
         Known(id: "diversity", title: "Diversity", detail: "Two-receiver diversity and phasing",
               tag: .core, page: .diversity),
+        Known(id: "catControl", title: "CAT Control",
+              detail: "The Core's CAT channels for logging and digital-mode apps", tag: .core, page: .catControl),
         Known(id: "tciServer", title: "TCI Server", detail: "TCI apps connected to the Core",
               tag: .core, page: .tciServer),
         Known(id: "vaxAudio", title: "VAX Audio", detail: "Audio for digital-mode apps on the Core's computer",
@@ -113,12 +124,18 @@ enum StationToolList {
               detail: "Live routes, traffic, audio and Core history", tag: .both, page: .performance),
         Known(id: "supportBundle", title: "Support Bundle", detail: "This phone's log and the Core's bundle, to share",
               tag: .both, page: .supportBundle),
+        Known(id: rotorId, title: "Rotor", detail: "Turn the antenna: heading, presets and nudges",
+              tag: .core, page: .rotor),
     ]
 
     /// The list, from the Core's `tools` when it has sent them (nil when
-    /// it has not), with `connected` saying the Core is connected now and
-    /// `olderCore` that the connected Core sends no catalogue at all.
-    static func entries(tools: [StationCatalog.Tool]?, connected: Bool, olderCore: Bool) -> [Entry] {
+    /// it has not), with `connected` saying the Core is connected now,
+    /// `olderCore` that the connected Core sends no catalogue at all, and
+    /// `stationCat` that it lets this app set up its CAT
+    /// (`stationCatVersion` 1). A Core that offers CAT Control without it
+    /// keeps the row greyed with its reason.
+    static func entries(tools: [StationCatalog.Tool]?, connected: Bool, olderCore: Bool,
+                        stationCat: Bool = false) -> [Entry] {
         guard let tools else {
             let reason = olderCore ? olderCoreReason : connected ? notListedReason : notConnectedReason
             return known.map { tool in
@@ -138,7 +155,8 @@ enum StationToolList {
             }
             // This phone measures its connection itself, so that page opens whatever the Core says.
             if tool.offered || tool.id == performanceId {
-                let reason = tag == .core && !connected ? notConnectedReason : nil
+                let reason = tag == .core && !connected ? notConnectedReason
+                    : tool.id == catControlId && !stationCat ? noStationCatReason : nil
                 entries.append(entry(page, tag: tag, reason: reason))
             } else if let reason = reasonWhenNotOffered(tool.id) {
                 entries.append(entry(page, tag: tag, reason: !connected ? notConnectedReason : reason))
@@ -150,6 +168,12 @@ enum StationToolList {
             $0.id == performanceId
         }) {
             entries.append(entry(performance, tag: performance.tag, reason: nil))
+        }
+        // A Core that lists its tools but not the rotor is older than the
+        // rotor; the row stays, greyed with that reason, last as the desktop
+        // lists it.
+        if !entries.contains(where: { $0.id == rotorId }), let rotor = known.first(where: { $0.id == rotorId }) {
+            entries.append(entry(rotor, tag: rotor.tag, reason: connected ? rotorOlderCoreReason : notConnectedReason))
         }
         return entries
     }

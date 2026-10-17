@@ -7,6 +7,9 @@
 // =================================================================
 #include <QtTest/QtTest>
 #include "core/AppSettings.h"
+#include "core/BoardCapabilities.h"
+#include "core/DdcAssignment.h"
+#include "core/P2RadioConnection.h"
 #include "gui/PanadapterApplet.h"
 #include "gui/PanadapterStack.h"
 #include "gui/MainWindow.h"
@@ -134,6 +137,11 @@ private slots:
     void pan_one_wideband_toggle_changes_only_pan_ones_slice()
     {
         RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        RadioInfo info;
+        info.boardType = model.boardCapabilities().board;
+        info.protocol = ProtocolVersion::Protocol2;
+        model.setLastRadioInfoForTest(info);
         model.configureStreamPool(5, 5, 192000);
         SliceModel* first = model.sliceById(model.addSlice(QStringLiteral("pan-0")));
         SliceModel* second = model.sliceById(model.addSlice(QStringLiteral("pan-1")));
@@ -157,6 +165,320 @@ private slots:
         QVERIFY(!first->widebandExtensionRequested());
     }
 
+    void local_wide_zoom_respects_radio_capability_data()
+    {
+        QTest::addColumn<int>("modelValue");
+        QTest::addColumn<int>("protocolValue");
+        QTest::addColumn<bool>("available");
+        QTest::newRow("hl2-p1") << int(HPSDRModel::HERMESLITE)
+            << int(ProtocolVersion::Protocol1) << false;
+        QTest::newRow("g2-row-p1") << int(HPSDRModel::ANAN_G2)
+            << int(ProtocolVersion::Protocol1) << false;
+        QTest::newRow("g2-p2") << int(HPSDRModel::ANAN_G2)
+            << int(ProtocolVersion::Protocol2) << true;
+    }
+
+    void local_wide_zoom_respects_radio_capability()
+    {
+        QFETCH(int, modelValue);
+        QFETCH(int, protocolValue);
+        QFETCH(bool, available);
+        RadioModel model;
+        model.setHpsdrModelForTest(static_cast<HPSDRModel>(modelValue));
+        RadioInfo info;
+        info.boardType = model.boardCapabilities().board;
+        info.protocol = static_cast<ProtocolVersion>(protocolValue);
+        model.setLastRadioInfoForTest(info);
+        model.configureStreamPool(4, 4, 192000);
+        SliceModel* slice = model.sliceById(model.addSlice());
+        QVERIFY(slice);
+        PanadapterStack stack;
+        PanadapterApplet* pan = stack.panadapter(QStringLiteral("pan-0"));
+        pan->addSlice(slice->sliceIndex());
+        SpectrumWidget* spectrum = pan->spectrumWidget();
+        spectrum->setSampleRate(192000.0);
+        MainWindow::wireWidebandExtensionForTest(spectrum, &model, &stack, pan->panId());
+        spectrum->setDisplayWindowClamped(14.2e6, 1920000.0);
+        QCOMPARE(spectrum->bandwidth(), available ? 1920000.0 : 192000.0);
+        QCOMPARE(spectrum->extendedMode(), available);
+        QCOMPARE(slice->widebandExtensionRequested(), available);
+        QVERIFY(pan->extendedViewEnabled()); // Permission is still the operator's.
+    }
+
+    void extended_request_follows_the_pans_active_slice()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        RadioInfo info;
+        info.boardType = model.boardCapabilities().board;
+        info.protocol = ProtocolVersion::Protocol2;
+        model.setLastRadioInfoForTest(info);
+        model.configureStreamPool(4, 4, 192000);
+        SliceModel* first = model.sliceById(model.addSlice());
+        SliceModel* second = model.sliceById(model.addSlice());
+        QVERIFY(first && second);
+        PanadapterStack stack;
+        PanadapterApplet* pan = stack.panadapter(QStringLiteral("pan-0"));
+        pan->addSlice(first->sliceIndex());
+        pan->addSlice(second->sliceIndex());
+        SpectrumWidget* spectrum = pan->spectrumWidget();
+        spectrum->setSampleRate(192000.0);
+        MainWindow::wireWidebandExtensionForTest(spectrum, &model, &stack, pan->panId());
+        spectrum->setFrequencyRange(14.2e6, 1920000.0);
+        QVERIFY(first->widebandExtensionRequested());
+        QVERIFY(!second->widebandExtensionRequested());
+
+        pan->setActiveSliceIndex(second->sliceIndex());
+        QVERIFY(!first->widebandExtensionRequested());
+        QVERIFY(second->widebandExtensionRequested());
+        // Removal promotes the remaining slice without another zoom edge.
+        pan->removeSlice(second->sliceIndex());
+        QVERIFY(first->widebandExtensionRequested());
+        QVERIFY(!second->widebandExtensionRequested());
+        pan->removeSlice(first->sliceIndex());
+        QVERIFY(!first->widebandExtensionRequested());
+        QVERIFY(!spectrum->extendedMode());
+    }
+
+    void request_handoff_moves_capture_without_retiring_an_endpoint_owner()
+    {
+        P2RadioConnection connection;
+        connection.setBoardForTest(HPSDRHW::Saturn);
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        model.injectConnectionForTest(&connection);
+        RadioInfo info;
+        info.boardType = model.boardCapabilities().board;
+        info.protocol = ProtocolVersion::Protocol2;
+        model.setLastRadioInfoForTest(info);
+        model.configureStreamPool(4, 4, 192000);
+        SliceModel* first = model.sliceById(model.addSlice());
+        SliceModel* second = model.sliceById(model.addSlice());
+        QVERIFY(first && second);
+        second->setFrequency(7100000.0);
+        QVERIFY(first->streamIndex() != second->streamIndex());
+        // Explicit test routing, not a new radio capability or DDC policy.
+        DdcAssignment assignment{};
+        assignment.streamDdc[first->streamIndex()] = 2;
+        assignment.streamDdc[second->streamIndex()] = 3;
+        assignment.rate[2] = assignment.rate[3] = 192000;
+        assignment.ddcEnable = 0x0c;
+        assignment.adcCtrl1 = (1 << 6); // DDC2 -> ADC0, DDC3 -> ADC1.
+        model.publishDdcAssignmentForTest(assignment);
+        QCOMPARE(model.sliceAdcIndex(first->sliceIndex()), 0);
+        QCOMPARE(model.sliceAdcIndex(second->sliceIndex()), 1);
+        // From Thetis ChannelMaster/network.c:879 [v2.10.3.15]:
+        // packetbuf[23] = (char)_InterlockedAnd(&prn->wb_enable, 0xff);
+        constexpr int kWidebandEnableByte = 23;
+        const auto captureMask = [&connection]() {
+            quint8 packet[60] = {};
+            connection.composeCmdGeneralForTest(packet);
+            return packet[kWidebandEnableByte];
+        };
+        PanadapterStack stack;
+        PanadapterApplet* pan = stack.panadapter(QStringLiteral("pan-0"));
+        pan->addSlice(first->sliceIndex());
+        pan->addSlice(second->sliceIndex());
+        SpectrumWidget* spectrum = pan->spectrumWidget();
+        spectrum->setSampleRate(192000.0);
+        MainWindow::wireWidebandExtensionForTest(spectrum, &model, &stack, pan->panId());
+        spectrum->setFrequencyRange(14.2e6, 1920000.0);
+        QCOMPARE(captureMask(), quint8(0x01));
+        pan->setActiveSliceIndex(second->sliceIndex());
+        QCOMPARE(captureMask(), quint8(0x02));
+
+        const auto endpoint = model.acquireWidebandDemand(first->sliceIndex());
+        QVERIFY(endpoint != 0);
+        QVERIFY(model.setWidebandDemandActive(endpoint, true));
+        QCOMPARE(captureMask(), quint8(0x03));
+        pan->setExtendedViewEnabled(false);
+        QCOMPARE(captureMask(), quint8(0x01));
+        model.releaseWidebandDemand(endpoint);
+        QCOMPARE(captureMask(), quint8(0));
+    }
+
+    void routing_to_an_unavailable_adc_releases_the_local_request()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        RadioInfo info;
+        info.boardType = model.boardCapabilities().board;
+        info.protocol = ProtocolVersion::Protocol2;
+        model.setLastRadioInfoForTest(info);
+        // Synthetic capability subset to exercise per-ADC eligibility, not
+        // a hardware-table change: two inputs, only ADC0 supplies wideband.
+        model.setWidebandTopologyForTest(2, 1, 1);
+        model.configureStreamPool(4, 4, 192000);
+        SliceModel* slice = model.sliceById(model.addSlice());
+        QVERIFY(slice);
+        DdcAssignment assignment{};
+        assignment.streamDdc[slice->streamIndex()] = 0;
+        assignment.rate[0] = 192000;
+        assignment.ddcEnable = 0x01;
+        model.publishDdcAssignmentForTest(assignment);
+        PanadapterStack stack;
+        PanadapterApplet* pan = stack.panadapter(QStringLiteral("pan-0"));
+        pan->addSlice(slice->sliceIndex());
+        SpectrumWidget* spectrum = pan->spectrumWidget();
+        spectrum->setSampleRate(192000.0);
+        MainWindow::wireWidebandExtensionForTest(spectrum, &model, &stack, pan->panId());
+        spectrum->setFrequencyRange(14.2e6, 1920000.0);
+        QVERIFY(slice->widebandExtensionRequested());
+        assignment.adcCtrl1 = 1; // DDC0 -> ADC1.
+        model.publishDdcAssignmentForTest(assignment);
+        QCOMPARE(model.sliceAdcIndex(slice->sliceIndex()), 1);
+        QCOMPARE(spectrum->bandwidth(), 192000.0);
+        QVERIFY(!spectrum->extendedMode());
+        QVERIFY(!slice->widebandExtensionRequested());
+    }
+
+    void retiring_a_pan_releases_only_its_slice_request()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        RadioInfo info;
+        info.boardType = model.boardCapabilities().board;
+        info.protocol = ProtocolVersion::Protocol2;
+        model.setLastRadioInfoForTest(info);
+        model.configureStreamPool(4, 4, 192000);
+        SliceModel* owned = model.sliceById(model.addSlice());
+        SliceModel* unrelated = model.sliceById(model.addSlice());
+        QVERIFY(owned && unrelated);
+        unrelated->setWidebandExtensionRequested(true);
+        {
+            PanadapterStack stack;
+            PanadapterApplet* pan = stack.panadapter(QStringLiteral("pan-0"));
+            pan->addSlice(owned->sliceIndex());
+            SpectrumWidget* spectrum = pan->spectrumWidget();
+            spectrum->setSampleRate(192000.0);
+            MainWindow::wireWidebandExtensionForTest(spectrum, &model, &stack, pan->panId());
+            spectrum->setFrequencyRange(14.2e6, 1920000.0);
+            QVERIFY(owned->widebandExtensionRequested());
+        }
+        QVERIFY(!owned->widebandExtensionRequested());
+        QVERIFY(unrelated->widebandExtensionRequested());
+    }
+
+    void capability_loss_clamps_an_existing_wide_view()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        RadioInfo info;
+        info.boardType = model.boardCapabilities().board;
+        info.protocol = ProtocolVersion::Protocol2;
+        model.setLastRadioInfoForTest(info);
+        model.configureStreamPool(4, 4, 192000);
+        SliceModel* slice = model.sliceById(model.addSlice());
+        QVERIFY(slice);
+        PanadapterStack stack;
+        PanadapterApplet* pan = stack.panadapter(QStringLiteral("pan-0"));
+        pan->addSlice(slice->sliceIndex());
+        SpectrumWidget* spectrum = pan->spectrumWidget();
+        spectrum->setSampleRate(192000.0);
+        MainWindow::wireWidebandExtensionForTest(spectrum, &model, &stack, pan->panId());
+        spectrum->setFrequencyRange(14.2e6, 1920000.0);
+        QVERIFY(slice->widebandExtensionRequested());
+        info.protocol = ProtocolVersion::Protocol1;
+        model.setLastRadioInfoForTest(info);
+        model.emitCurrentRadioChangedForTest();
+        QCOMPARE(spectrum->bandwidth(), 192000.0);
+        QVERIFY(!spectrum->extendedMode());
+        QVERIFY(!slice->widebandExtensionRequested());
+        QVERIFY(pan->extendedViewEnabled());
+    }
+
+    void empty_startup_bridge_preserves_restored_span_until_discovery_data()
+    {
+        QTest::addColumn<int>("modelValue");
+        QTest::addColumn<int>("protocolValue");
+        QTest::addColumn<bool>("eligible");
+        QTest::addColumn<bool>("poolFirst");
+        QTest::newRow("g2-p2-deferred-binding") << int(HPSDRModel::ANAN_G2)
+            << int(ProtocolVersion::Protocol2) << true << false;
+        QTest::newRow("g2-p2-binding-before-association") << int(HPSDRModel::ANAN_G2)
+            << int(ProtocolVersion::Protocol2) << true << true;
+        QTest::newRow("hl2-p1-known-unsupported") << int(HPSDRModel::HERMESLITE)
+            << int(ProtocolVersion::Protocol1) << false << false;
+    }
+
+    void empty_startup_bridge_preserves_restored_span_until_discovery()
+    {
+        QFETCH(int, modelValue);
+        QFETCH(int, protocolValue);
+        QFETCH(bool, eligible);
+        QFETCH(bool, poolFirst);
+        AppSettings::instance().setValue(QStringLiteral("DisplayBandwidth"),
+                                         QStringLiteral("5000000"));
+        RadioModel model;
+        PanadapterStack stack;
+        PanadapterApplet* pan = stack.panadapter(QStringLiteral("pan-0"));
+        QVERIFY(pan);
+        SpectrumWidget* spectrum = pan->spectrumWidget();
+        // Production order: restore the window before installing its bridge,
+        // with no radio descriptor or slices; only then does discovery bind.
+        MainWindow::configureSpectrumForPanForTest(spectrum, pan->panId());
+        QCOMPARE(spectrum->bandwidth(), 5000000.0);
+        QVERIFY(pan->associatedSlices().isEmpty());
+        QCOMPARE(model.currentRadioInfo().boardType, HPSDRHW::Unknown);
+        MainWindow::wireWidebandExtensionForTest(spectrum, &model, &stack, pan->panId());
+        QCOMPARE(spectrum->bandwidth(), 5000000.0);
+
+        model.setHpsdrModelForTest(static_cast<HPSDRModel>(modelValue));
+        RadioInfo info;
+        info.boardType = model.boardCapabilities().board;
+        info.protocol = static_cast<ProtocolVersion>(protocolValue);
+        model.setLastRadioInfoForTest(info);
+        if (poolFirst) { model.configureStreamPool(4, 4, 192000); }
+        // connectToRadioImpl publishes Slice A before it configures the pool.
+        // MainWindow associates that still-unbound object with the pan.
+        SliceModel* slice = model.sliceById(model.addSlice());
+        QVERIFY(slice);
+        QCOMPARE(slice->streamIndex() < 0, !poolFirst);
+        pan->addSlice(slice->sliceIndex());
+        const double expectedSpan = eligible ? 5000000.0 : spectrum->sampleRate();
+        QCOMPARE(spectrum->bandwidth(), expectedSpan);
+        QCOMPARE(slice->widebandExtensionRequested(), eligible && poolFirst);
+        if (!poolFirst) {
+            model.configureStreamPool(4, 4, 192000);
+            model.bindUnboundSlices();
+        }
+        QVERIFY(slice->streamIndex() >= 0);
+        QVERIFY(model.sliceAdcIndex(slice->sliceIndex()) >= 0);
+        model.emitCurrentRadioChangedForTest();
+        QCOMPARE(spectrum->bandwidth(), expectedSpan);
+        QCOMPARE(spectrum->extendedMode(), eligible);
+        QCOMPARE(slice->widebandExtensionRequested(), eligible);
+        // Once it has a descriptor, an emptied pan still retires its intent.
+        pan->removeSlice(slice->sliceIndex());
+        QVERIFY(!slice->widebandExtensionRequested());
+        QVERIFY(!spectrum->extendedMode());
+    }
+
+    void discovery_keeps_a_supported_restored_span()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        model.configureStreamPool(4, 4, 192000);
+        SliceModel* slice = model.sliceById(model.addSlice());
+        QVERIFY(slice);
+        PanadapterStack stack;
+        PanadapterApplet* pan = stack.panadapter(QStringLiteral("pan-0"));
+        pan->addSlice(slice->sliceIndex());
+        SpectrumWidget* spectrum = pan->spectrumWidget();
+        spectrum->setSampleRate(192000.0);
+        spectrum->setFrequencyRange(14.2e6, 1920000.0);
+        MainWindow::wireWidebandExtensionForTest(spectrum, &model, &stack, pan->panId());
+        QCOMPARE(spectrum->bandwidth(), 1920000.0);
+        RadioInfo info;
+        info.boardType = model.boardCapabilities().board;
+        info.protocol = ProtocolVersion::Protocol2;
+        model.setLastRadioInfoForTest(info);
+        model.emitCurrentRadioChangedForTest();
+        QCOMPARE(spectrum->bandwidth(), 1920000.0);
+        QVERIFY(spectrum->extendedMode());
+        QVERIFY(slice->widebandExtensionRequested());
+    }
+
     void restored_wide_zoom_seeds_slice_when_bridge_is_installed()
     {
         AppSettings::instance().setValue(
@@ -164,6 +486,11 @@ private slots:
             QStringLiteral("5000000"));
 
         RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        RadioInfo info;
+        info.boardType = model.boardCapabilities().board;
+        info.protocol = ProtocolVersion::Protocol2;
+        model.setLastRadioInfoForTest(info);
         model.configureStreamPool(5, 5, 192000);
         SliceModel* const slice =
             model.sliceById(model.addSlice(QStringLiteral("pan-0")));

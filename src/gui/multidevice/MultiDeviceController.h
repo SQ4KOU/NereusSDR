@@ -63,6 +63,7 @@
 // =================================================================
 
 #include "gui/SpectrumWidget.h"
+#include "gui/NereusGuiExport.h"
 
 #include <QHash>
 #include <QObject>
@@ -83,7 +84,7 @@ struct RemotePrompt;
 struct SessionPrompt;
 class StationClient;
 
-class MultiDeviceController : public QObject {
+class NEREUS_GUI_EXPORT MultiDeviceController : public QObject {
     Q_OBJECT
 
 public:

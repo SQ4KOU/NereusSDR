@@ -209,25 +209,31 @@ On a modern laptop (M-series Mac, recent AMD/Intel desktop, decent mid-range Lin
 
 **Option A: pre-built binary (recommended for non-developers)**
 
-Grab the latest release from <https://github.com/boydsoftprez/NereusSDR/releases>. Pick the right file for your OS:
+Grab the latest release from <https://github.com/boydsoftprez/NereusSDR/releases>.
+For current installation and verification instructions, use
+[Radios and downloads in the README](../../README.md#radios-and-downloads).
+The older alpha test sections below describe their original build.
+
+Pick the right file for your OS. Replace `<version>` with the release version
+without the tag's leading `v` (for example, `2026.10.0`):
 
 | Platform | File |
 |---|---|
-| Linux x86_64 | `NereusSDR-vX.Y.Z-x86_64.AppImage` |
-| Linux aarch64 (Pi / ARM server) | `NereusSDR-vX.Y.Z-aarch64.AppImage` |
-| macOS Apple Silicon | `NereusSDR-vX.Y.Z-macOS-apple-silicon.dmg` |
-| Windows (installer) | `NereusSDR-vX.Y.Z-Windows-x64-setup.exe` |
-| Windows (portable zip) | `NereusSDR-vX.Y.Z-Windows-x64-portable.zip` |
+| Linux x86_64 | `NereusSDR-<version>-x86_64.AppImage` |
+| Linux aarch64 (Pi / ARM server) | `NereusSDR-<version>-aarch64.AppImage` |
+| macOS Apple Silicon | `NereusSDR-<version>-macOS-apple-silicon.dmg` |
+| macOS Intel | `NereusSDR-<version>-macOS-intel.dmg` |
+| Windows (installer) | `NereusSDR-<version>-Windows-x64-setup.exe` |
+| Windows (portable zip) | `NereusSDR-<version>-Windows-x64-portable.zip` |
 
-**Intel Mac:** no pre-built binary yet — GitHub Actions retired the free Intel macOS runner. Build from source (Option B).
-
-Every artifact is detached-GPG-signed (key `KG4VCF`). To verify before running:
-
-```bash
-gpg --keyserver keyserver.ubuntu.com --recv-keys KG4VCF
-gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
-sha256sum -c SHA256SUMS.txt
-```
+Release downloads include detached GPG signatures and a signed checksum list.
+Download `SHA256SUMS.txt` and `SHA256SUMS.txt.asc` from the same release as
+your chosen asset. Follow the README's
+[verification procedure](../../README.md#radios-and-downloads), which checks
+the full signing-key fingerprint
+`4A95F4D22AEE9271D8A3C01B20C284473F97D2B3` in a temporary keyring,
+verifies the signed checksum list, and checks the exact downloaded filename.
+A callsign such as `KG4VCF` is not a key ID for `gpg --recv-keys`.
 
 **Option B: build from source**
 

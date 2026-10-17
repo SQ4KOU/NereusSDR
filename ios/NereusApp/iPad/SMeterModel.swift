@@ -45,6 +45,7 @@ final class SMeterModel: ObservableObject {
         state = SMeterState(settings: store.settings)
         catalogFeed.$catalog.sink { [weak self] catalog in
             self?.meters = catalog?.meters
+            self?.queueRefresh()
         }.store(in: &watches)
         slices.$entries.sink { [weak self] _ in self?.queueRefresh() }.store(in: &watches)
         slices.$activeSliceId.sink { [weak self] _ in self?.queueRefresh() }.store(in: &watches)
@@ -199,7 +200,7 @@ final class SMeterModel: ObservableObject {
     func refresh() {
         let active = slices.active
         let maxBin = maxBinReading(for: active)
-        let readings = SMeterReadings(
+        var readings = SMeterReadings(
             peakDbm: active?.signalPeakDbm, averageDbm: active?.signalAverageDbm,
             maxBinDbm: maxBin.value, maxBinAvailable: maxBin.available,
             transmitting: transmit.report.keyed || transmit.coreOnAir || transmit.ptt.transmitting,
@@ -207,6 +208,7 @@ final class SMeterModel: ObservableObject {
             txReadingsVersion: transmit.txReadingsVersion, forwardWatts: transmit.forwardWatts, swr: transmit.swr,
             micLevelDb: transmit.micLevelDb, compressionDb: transmit.compressionDb,
             compressionSent: transmit.compressionDb != nil)
+        readings.meterRule = transmit.meterRule
         state.apply(readings, at: clock())
         startFrames()
     }

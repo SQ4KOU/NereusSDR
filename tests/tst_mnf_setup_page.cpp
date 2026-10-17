@@ -45,6 +45,16 @@
 
 using namespace NereusSDR;
 
+// MinGW imports a static constexpr member of an exported class by address
+// when it is bound to a reference (QCOMPARE does), and the Core DLL never
+// exports one, so this test did not link on Windows. It reads these
+// copies by value instead.
+namespace {
+constexpr double kMaxNotchCentreHz = NereusSDR::NotchModel::kMaxNotchCentreHz;
+constexpr double kMaxNotchWidthHz = NereusSDR::NotchModel::kMaxNotchWidthHz;
+constexpr double kMinNotchCentreHz = NereusSDR::NotchModel::kMinNotchCentreHz;
+} // namespace
+
 class TestMnfSetupPage : public QObject
 {
     Q_OBJECT
@@ -237,11 +247,11 @@ private slots:
         // From Thetis setup.designer.cs:44329-44338 [v2.10.3.15] --
         // udMNFWidth.Maximum = 10000, udMNFWidth.Minimum = 0.
         QCOMPARE(width->minimum(), 0.0);
-        QCOMPARE(width->maximum(), NotchModel::kMaxNotchWidthHz);
+        QCOMPARE(width->maximum(), kMaxNotchWidthHz);
 
         // Correction 6: the centre bounds are NotchModel's, not local copies.
-        QCOMPARE(freq->minimum(), NotchModel::kMinNotchCentreHz);
-        QCOMPARE(freq->maximum(), NotchModel::kMaxNotchCentreHz);
+        QCOMPARE(freq->minimum(), kMinNotchCentreHz);
+        QCOMPARE(freq->maximum(), kMaxNotchCentreHz);
     }
 
     void addButton_createsNotchAtVfoFrequency()

@@ -786,6 +786,8 @@ private slots:
                 QCOMPARE(updateIndex(last.updates, QByteArrayLiteral("setupDescriptionVersion")),
                          -1);
                 QCOMPARE(updateIndex(last.updates, QByteArrayLiteral("miniDisplayVersion")), -1);
+                QCOMPARE(updateIndex(last.updates,
+                                     QByteArrayLiteral("spectrumPictureVersion")), -1);
                 for (const QByteArray& name : {QByteArrayLiteral("remoteIqVersion"),
                                                QByteArrayLiteral("txModMonitorVersion"),
                                                QByteArrayLiteral("accessoryTxVersion")}) {

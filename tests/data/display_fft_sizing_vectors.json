@@ -1,0 +1,53 @@
+{
+  "about": "FFT sizing mode test vectors (design D38 to D42; R-DSP-62, R-DSP-63), read by tests/tst_display_fft_sizing.cpp against ControlRanges::planDisplayFft and displayFftSizingModeOnRead, and by the phone's twin. plan: mode, storedSize (DisplayFftSize), sampleRateHz, spanHz, hzPerBinTarget give size and hzPerBinInCharge. onRead: the stored DisplayFftSizingMode token (empty when the key is absent) and DisplayHzPerBinTarget give the mode in force.",
+  "plan": [
+    {"name": "auto 1.536 MHz 35 kHz stored default", "mode": "Auto", "storedSize": 4096, "sampleRateHz": 1536000, "spanHz": 35000, "hzPerBinTarget": 0, "size": 262144, "hzPerBinInCharge": false},
+    {"name": "auto 1.536 MHz 35 kHz stored 16384", "mode": "Auto", "storedSize": 16384, "sampleRateHz": 1536000, "spanHz": 35000, "hzPerBinTarget": 0, "size": 262144, "hzPerBinInCharge": false},
+    {"name": "auto 1.536 MHz 35 kHz stored 262144", "mode": "Auto", "storedSize": 262144, "sampleRateHz": 1536000, "spanHz": 35000, "hzPerBinTarget": 0, "size": 262144, "hzPerBinInCharge": false},
+    {"name": "auto 1.536 MHz full span stored 262144", "mode": "Auto", "storedSize": 262144, "sampleRateHz": 1536000, "spanHz": 1536000, "hzPerBinTarget": 0, "size": 4096, "hzPerBinInCharge": false},
+    {"name": "auto 192 kHz 35 kHz", "mode": "Auto", "storedSize": 4096, "sampleRateHz": 192000, "spanHz": 35000, "hzPerBinTarget": 0, "size": 32768, "hzPerBinInCharge": false},
+    {"name": "auto 192 kHz 35 kHz stored 131072", "mode": "Auto", "storedSize": 131072, "sampleRateHz": 192000, "spanHz": 35000, "hzPerBinTarget": 0, "size": 32768, "hzPerBinInCharge": false},
+    {"name": "auto 48 kHz 12 kHz", "mode": "Auto", "storedSize": 4096, "sampleRateHz": 48000, "spanHz": 12000, "hzPerBinTarget": 0, "size": 16384, "hzPerBinInCharge": false},
+    {"name": "auto 48 kHz 1 kHz reaches the time cap", "mode": "Auto", "storedSize": 4096, "sampleRateHz": 48000, "spanHz": 1000, "hzPerBinTarget": 0, "size": 32768, "hzPerBinInCharge": false},
+    {"name": "auto ignores a stray target", "mode": "Auto", "storedSize": 4096, "sampleRateHz": 192000, "spanHz": 192000, "hzPerBinTarget": 1.0, "size": 4096, "hzPerBinInCharge": false},
+    {"name": "auto with no span yet", "mode": "Auto", "storedSize": 65536, "sampleRateHz": 192000, "spanHz": 0, "hzPerBinTarget": 0, "size": 4096, "hzPerBinInCharge": false},
+
+    {"name": "hz/bin 1.536 MHz 12.5 Hz", "mode": "HzPerBin", "storedSize": 4096, "sampleRateHz": 1536000, "spanHz": 35000, "hzPerBinTarget": 12.5, "size": 131072, "hzPerBinInCharge": true},
+    {"name": "hz/bin 1.536 MHz 12.5 Hz at full span", "mode": "HzPerBin", "storedSize": 4096, "sampleRateHz": 1536000, "spanHz": 1536000, "hzPerBinTarget": 12.5, "size": 131072, "hzPerBinInCharge": true},
+    {"name": "hz/bin 1.536 MHz 12.5 Hz stored 262144", "mode": "HzPerBin", "storedSize": 262144, "sampleRateHz": 1536000, "spanHz": 35000, "hzPerBinTarget": 12.5, "size": 131072, "hzPerBinInCharge": true},
+    {"name": "hz/bin 192 kHz 35 kHz 5 Hz", "mode": "HzPerBin", "storedSize": 4096, "sampleRateHz": 192000, "spanHz": 35000, "hzPerBinTarget": 5.0, "size": 65536, "hzPerBinInCharge": true},
+    {"name": "hz/bin 192 kHz 0.5 Hz reaches the time cap", "mode": "HzPerBin", "storedSize": 4096, "sampleRateHz": 192000, "spanHz": 35000, "hzPerBinTarget": 0.5, "size": 131072, "hzPerBinInCharge": true},
+    {"name": "hz/bin 48 kHz 12 kHz 2 Hz", "mode": "HzPerBin", "storedSize": 4096, "sampleRateHz": 48000, "spanHz": 12000, "hzPerBinTarget": 2.0, "size": 32768, "hzPerBinInCharge": true},
+    {"name": "hz/bin 48 kHz 200 Hz stays at the floor", "mode": "HzPerBin", "storedSize": 16384, "sampleRateHz": 48000, "spanHz": 12000, "hzPerBinTarget": 200.0, "size": 4096, "hzPerBinInCharge": false},
+    {"name": "hz/bin with no target plans as auto", "mode": "HzPerBin", "storedSize": 4096, "sampleRateHz": 48000, "spanHz": 12000, "hzPerBinTarget": 0, "size": 16384, "hzPerBinInCharge": false},
+
+    {"name": "fixed 4096 at 1.536 MHz 35 kHz", "mode": "Fixed", "storedSize": 4096, "sampleRateHz": 1536000, "spanHz": 35000, "hzPerBinTarget": 0, "size": 4096, "hzPerBinInCharge": false},
+    {"name": "fixed 8192 at 1.536 MHz 35 kHz", "mode": "Fixed", "storedSize": 8192, "sampleRateHz": 1536000, "spanHz": 35000, "hzPerBinTarget": 0, "size": 8192, "hzPerBinInCharge": false},
+    {"name": "fixed 16384 at 1.536 MHz 35 kHz", "mode": "Fixed", "storedSize": 16384, "sampleRateHz": 1536000, "spanHz": 35000, "hzPerBinTarget": 0, "size": 16384, "hzPerBinInCharge": false},
+    {"name": "fixed 32768 at 1.536 MHz 35 kHz", "mode": "Fixed", "storedSize": 32768, "sampleRateHz": 1536000, "spanHz": 35000, "hzPerBinTarget": 0, "size": 32768, "hzPerBinInCharge": false},
+    {"name": "fixed 65536 at 1.536 MHz 35 kHz", "mode": "Fixed", "storedSize": 65536, "sampleRateHz": 1536000, "spanHz": 35000, "hzPerBinTarget": 0, "size": 65536, "hzPerBinInCharge": false},
+    {"name": "fixed 131072 at 1.536 MHz 35 kHz", "mode": "Fixed", "storedSize": 131072, "sampleRateHz": 1536000, "spanHz": 35000, "hzPerBinTarget": 0, "size": 131072, "hzPerBinInCharge": false},
+    {"name": "fixed 262144 at 1.536 MHz 35 kHz", "mode": "Fixed", "storedSize": 262144, "sampleRateHz": 1536000, "spanHz": 35000, "hzPerBinTarget": 0, "size": 262144, "hzPerBinInCharge": false},
+    {"name": "fixed 16384 ignores a span change", "mode": "Fixed", "storedSize": 16384, "sampleRateHz": 1536000, "spanHz": 1536000, "hzPerBinTarget": 0, "size": 16384, "hzPerBinInCharge": false},
+    {"name": "fixed 16384 ignores a deep zoom", "mode": "Fixed", "storedSize": 16384, "sampleRateHz": 1536000, "spanHz": 1000, "hzPerBinTarget": 0, "size": 16384, "hzPerBinInCharge": false},
+    {"name": "fixed 262144 at 48 kHz is above the time cap", "mode": "Fixed", "storedSize": 262144, "sampleRateHz": 48000, "spanHz": 12000, "hzPerBinTarget": 0, "size": 262144, "hzPerBinInCharge": false},
+    {"name": "fixed 4096 at 192 kHz 35 kHz", "mode": "Fixed", "storedSize": 4096, "sampleRateHz": 192000, "spanHz": 35000, "hzPerBinTarget": 0, "size": 4096, "hzPerBinInCharge": false},
+    {"name": "fixed 65536 at 48 kHz 12 kHz", "mode": "Fixed", "storedSize": 65536, "sampleRateHz": 48000, "spanHz": 12000, "hzPerBinTarget": 0, "size": 65536, "hzPerBinInCharge": false},
+    {"name": "fixed ignores a stray target", "mode": "Fixed", "storedSize": 8192, "sampleRateHz": 192000, "spanHz": 35000, "hzPerBinTarget": 0.5, "size": 8192, "hzPerBinInCharge": false},
+    {"name": "fixed with no span yet", "mode": "Fixed", "storedSize": 32768, "sampleRateHz": 0, "spanHz": 0, "hzPerBinTarget": 0, "size": 32768, "hzPerBinInCharge": false},
+    {"name": "fixed with a stored size that is not an FFT size", "mode": "Fixed", "storedSize": 5000, "sampleRateHz": 192000, "spanHz": 35000, "hzPerBinTarget": 0, "size": 4096, "hzPerBinInCharge": false}
+  ],
+  "onRead": [
+    {"name": "absent key, no target", "storedMode": "", "hzPerBinTarget": 0, "mode": "Auto"},
+    {"name": "absent key, target 12.5", "storedMode": "", "hzPerBinTarget": 12.5, "mode": "HzPerBin"},
+    {"name": "absent key, negative target", "storedMode": "", "hzPerBinTarget": -1, "mode": "Auto"},
+    {"name": "Auto", "storedMode": "Auto", "hzPerBinTarget": 0, "mode": "Auto"},
+    {"name": "Auto with a stray target", "storedMode": "Auto", "hzPerBinTarget": 12.5, "mode": "Auto"},
+    {"name": "HzPerBin with a target", "storedMode": "HzPerBin", "hzPerBinTarget": 0.5, "mode": "HzPerBin"},
+    {"name": "HzPerBin with no target", "storedMode": "HzPerBin", "hzPerBinTarget": 0, "mode": "Auto"},
+    {"name": "Fixed", "storedMode": "Fixed", "hzPerBinTarget": 0, "mode": "Fixed"},
+    {"name": "Fixed with a stray target", "storedMode": "Fixed", "hzPerBinTarget": 12.5, "mode": "Fixed"},
+    {"name": "an unknown token, no target", "storedMode": "Manual", "hzPerBinTarget": 0, "mode": "Auto"},
+    {"name": "an unknown token, target 3", "storedMode": "Manual", "hzPerBinTarget": 3, "mode": "HzPerBin"}
+  ]
+}

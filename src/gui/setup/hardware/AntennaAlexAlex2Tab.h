@@ -25,6 +25,9 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-13 - Declare the scoped filter-edge reset and its authority gate.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation
+//                 via OpenAI Codex.
 // =================================================================
 
 //=================================================================
@@ -95,6 +98,9 @@
 #include <QWidget>
 #include <vector>
 
+#include "gui/NereusGuiExport.h"
+
+class QPushButton;
 class QCheckBox;
 class QDoubleSpinBox;
 class QFrame;
@@ -122,7 +128,7 @@ class RadioModel;
 // TODO: add hasAlex2 cap field to BoardCapabilities in a future phase.
 //
 // Source: Thetis Console/setup.designer.cs:25539-26857 (tpAlex2FilterControl) [@501e3f5]
-class AntennaAlexAlex2Tab : public QWidget {
+class NEREUS_GUI_EXPORT AntennaAlexAlex2Tab : public QWidget {
     Q_OBJECT
 public:
     explicit AntennaAlexAlex2Tab(RadioModel* model, QWidget* parent = nullptr);
@@ -163,6 +169,7 @@ signals:
     void settingChanged(const QString& key, const QVariant& value);
 
 private slots:
+    void resetFilterDefaults();
     void onHpfCheckChanged(bool checked, const QString& settingsKey);
     void onHpfSpinChanged(double value, const QString& settingsKey);
     void onLpfSpinChanged(double value, const QString& settingsKey);
@@ -201,6 +208,9 @@ private:
     };
 
     static QDoubleSpinBox* makeFreqSpin(double defaultMhz, QWidget* parent);
+
+    QPushButton* m_resetFilterDefaults{nullptr};
+    void updateResetFilterGate();
 
     RadioModel* m_model{nullptr};
     QString     m_currentMac;

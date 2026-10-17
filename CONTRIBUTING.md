@@ -170,6 +170,23 @@ See `docs/protocols/` for detailed protocol documentation.
   and `GuardedComboBox` convenience wrappers will be added in a future phase.
 - Disable `autoDefault` on QPushButtons inside QDialogs.
 
+### Windows DLL Boundaries
+
+On Windows the Core (`NereusCore`) and the GUI (`NereusSDRLib`) are separate
+DLLs, and test programs link against them from outside. The export macros
+are empty on macOS and Linux, so these mistakes only show up on Windows.
+
+- A class used from another binary needs `NEREUS_CORE_EXPORT` (from
+  `core/NereusCoreExport.h`) or `NEREUS_GUI_EXPORT`. Without it, `&Class::signal`
+  taken in the other binary is not the address moc compares, so `QSignalSpy`
+  reports "Null signal is not valid" and `connect()` reports "signal not
+  found". An alias (`using Foo = Bar;`) needs the macro on the real class.
+- Do not bind a `static constexpr` data member of an exported class to a
+  reference from another binary. `QCOMPARE` and `QTest::newRow` do that.
+  MinGW then imports the member by address, the DLL never exports one, and
+  the test does not link. Compare a file-local copy instead:
+  `namespace { constexpr int kLimit = Foo::kLimit; }`.
+
 ### Optional Dependencies
 
 Features gated behind compile-time flags:

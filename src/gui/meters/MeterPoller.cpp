@@ -7,6 +7,19 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Shared accessory display readings and independent legal
+//                 marker / display scale by J.J. Boyd (KG4VCF),
+//                 AI-assisted via OpenAI Codex.
+//   2026-10-08 - Workspace preview only: a reading consumer's cached
+//                 readings are replayed to that consumer alone (a callback,
+//                 not readingUpdated), and cachedReading() seeds inert
+//                 previews. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-08 - Task 5b (workspace visual review): addReadingConsumer /
+//                 removeReadingConsumer, so a Longpath needle or bar gets
+//                 readings for its own context on the same timer frame,
+//                 and rxSourceChanged when the slice behind it changes.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-10-04 — Selected RX source identity and RX-only presentation reset by
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-01  J.J. Boyd / KG4VCF. Resolve remote Max Bin by the slice
@@ -105,6 +118,15 @@
 //                 group meters read the Core's stage readings
 //                 (txReadingsVersion 3); below it they name the reason.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - A remote window's MIC, ALC, COMP, EQ, Leveler and CFC peak
+//                 meters read the Core's peak readings (txReadingsVersion
+//                 4), so a bar shows the same peak a local window's does;
+//                 below it they name the reason. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - D35 / R-DSP-47: a remote window with no S-meter item still
+//                 feeds the VFO flag level meters, with the signal average
+//                 (pollRemoteRxMeters() had returned before the flag loop).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -147,7 +169,11 @@ mw0lge@grange-lane.co.uk
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+#include "core/ControlRanges.h"
+#include "models/MainPowerMeter.h"
 #include "MeterPoller.h"
+#include "WaveformMeterItem.h"
+#include <QEvent>
 #include "MeterWidget.h"
 
 #include <algorithm>  // std::clamp (Task 3.1 setIntervalMs / setAverageWindow)
@@ -188,9 +214,16 @@ MeterPoller::MeterPoller(QObject* parent)
     m_clock.start();
     m_timer.setInterval(100);  // 10 fps default (from Thetis UpdateInterval=100ms)
     connect(&m_timer, &QTimer::timeout, this, &MeterPoller::poll);
+    m_waveformTimer.setInterval(33);
+    connect(&m_waveformTimer, &QTimer::timeout, this, &MeterPoller::pollWaveforms);
 }
 
-MeterPoller::~MeterPoller() = default;
+MeterPoller::~MeterPoller()
+{
+    if (m_waveformDemandSource) {
+        m_waveformDemandSource({});
+    }
+}
 
 void MeterPoller::setRxChannel(RxChannel* channel)
 {
@@ -306,9 +339,9 @@ void MeterPoller::setRemoteTransmitState(TransmitState* state,
         setInTx(state->keyed());
         if (m_remoteModel) {
             m_remoteModel->radioStatus().setPowerReadings(state->forwardPowerWatts(), state->reflectedPowerWatts(), state->swr());
-            publishGlobalReading(MeterBinding::TxPower, state->forwardPowerWatts());
+            if (!m_mainPowerMeter) { publishGlobalReading(MeterBinding::TxPower, state->forwardPowerWatts()); }
             publishGlobalReading(MeterBinding::TxReversePower, state->reflectedPowerWatts());
-            publishGlobalReading(MeterBinding::TxSwr, state->swr());
+            if (!m_mainPowerMeter) { publishGlobalReading(MeterBinding::TxSwr, state->swr()); }
         }
         // Power, reflected power and SWR go into this window's RadioStatus,
         // which the S-meter's TX needle, the TX applet's power gauge and the
@@ -335,6 +368,10 @@ void MeterPoller::setRemoteTransmitState(TransmitState* state,
         });
     } else {
         for (int b = MeterBinding::TxPower; b <= MeterBinding::TxCfcPeak; ++b) { publishAvailability(b, tr("No transmit source.")); }
+    }
+    if (state && m_mainPowerMeter) {
+        publishGlobalReading(MeterBinding::TxPower, m_mainPowerMeter->forwardW());
+        publishGlobalReading(MeterBinding::TxSwr, m_mainPowerMeter->swr());
     }
     refreshRemoteTxAvailability(/*force=*/true);
 }
@@ -371,6 +408,18 @@ bool MeterPoller::remoteTxStageReadingsAvailable() const
     return m_remoteTxStageReadingsAvailable && m_remoteTxStageReadingsAvailable();
 }
 
+void MeterPoller::setRemoteTxPeakReadingsAvailable(std::function<bool()> available)
+{
+    for (int binding : remoteTxPeakBindingsNotSent()) { publishGlobalReading(binding, kNoMeterReadingDbm); }
+    m_remoteTxPeakReadingsAvailable = std::move(available);
+    refreshRemoteTxAvailability(/*force=*/true);
+}
+
+bool MeterPoller::remoteTxPeakReadingsAvailable() const
+{
+    return m_remoteTxPeakReadingsAvailable && m_remoteTxPeakReadingsAvailable();
+}
+
 QString MeterPoller::remoteTransmitUnavailableText() const
 {
     return m_remoteTransmitUnavailable ? m_remoteTransmitUnavailable() : QString();
@@ -384,14 +433,17 @@ void MeterPoller::refreshRemoteTxAvailability(bool force)
     const QString unavailable = remoteTransmitUnavailableText();
     const bool readings = remoteTxReadingsAvailable();
     const bool stages = remoteTxStageReadingsAvailable();
+    const bool peaks = remoteTxPeakReadingsAvailable();
     if (!force && m_remoteTxAvailabilityShown && unavailable == m_remoteTxUnavailableShown
-        && readings == m_remoteTxReadingsShown && stages == m_remoteTxStageReadingsShown) {
+        && readings == m_remoteTxReadingsShown && stages == m_remoteTxStageReadingsShown
+        && peaks == m_remoteTxPeakReadingsShown) {
         return;
     }
     m_remoteTxAvailabilityShown = true;
     m_remoteTxUnavailableShown = unavailable;
     m_remoteTxReadingsShown = readings;
     m_remoteTxStageReadingsShown = stages;
+    m_remoteTxPeakReadingsShown = peaks;
     // Parity Task 33 follow-up: the COMP reading comes with the Core's
     // transmit readings (txReadingsVersion 1).
     const QString compReason = readings ? QString() : TransmitState::txReadingNotSentText();
@@ -399,7 +451,8 @@ void MeterPoller::refreshRemoteTxAvailability(bool force)
     for (int bindingId = MeterBinding::TxPower; bindingId <= MeterBinding::TxCfcPeak; ++bindingId) {
         QString reason = unavailable;
         if (reason.isEmpty() && !stages && notSent.contains(bindingId)) { reason = remoteTxMeterNotSentText(); }
-        if (reason.isEmpty() && remoteTxPeakBindingsNotSent().contains(bindingId)) { reason = remoteTxMeterNotSentText(); }
+        // Only a Core below txReadingsVersion 4 leaves the six peaks out.
+        if (reason.isEmpty() && !peaks && remoteTxPeakBindingsNotSent().contains(bindingId)) { reason = remoteTxMeterNotSentText(); }
         if (reason.isEmpty() && bindingId == MeterBinding::TxComp) { reason = compReason; }
         publishAvailability(bindingId, reason);
         if (!reason.isEmpty()) { publishGlobalReading(bindingId, kNoMeterReadingDbm); }
@@ -452,6 +505,18 @@ void MeterPoller::pollRemoteTxMeters()
         handOutTxReading(MeterBinding::TxCfcGain, state->cfcGainDb());
         handOutTxReading(MeterBinding::TxAlcGain, state->alcGainDb());
         handOutTxReading(MeterBinding::TxAlcGroup, state->alcGroupDb());
+    }
+    // The six peak readings, from a Core that sends them (txReadingsVersion
+    // 4), already worked as the local poll works its own transmit
+    // channel's (thetisTxReading, kTxReadings), so a bar's main value is
+    // the peak here as it is in a local window.
+    if (remoteTxPeakReadingsAvailable()) {
+        handOutTxReading(MeterBinding::TxMicPeak, state->micPeakDb());
+        handOutTxReading(MeterBinding::TxAlcPeak, state->alcPeakDb());
+        handOutTxReading(MeterBinding::TxCompPeak, state->compressionPeakDb());
+        handOutTxReading(MeterBinding::TxEqPeak, state->eqPeakDb());
+        handOutTxReading(MeterBinding::TxLevelerPeak, state->levelerPeakDb());
+        handOutTxReading(MeterBinding::TxCfcPeak, state->cfcPeakDb());
     }
 }
 
@@ -547,6 +612,10 @@ void MeterPoller::setInTx(bool isTx)
         if (it.key() >= MeterBinding::TxPower && it.key() <= MeterBinding::TxCfcPeak) { it = m_globalReadings.erase(it); }
         else { ++it; }
     }
+    if (isTx && m_mainPowerMeter) {
+        publishGlobalReading(MeterBinding::TxPower, m_mainPowerMeter->forwardW());
+        publishGlobalReading(MeterBinding::TxSwr, m_mainPowerMeter->swr());
+    }
 }
 
 namespace {
@@ -556,7 +625,7 @@ void MeterPoller::rememberPresentation(const MeterWidget* widget)
 {
     if (!widget) { return; }
     m_unitMode = widget->unitMode();
-    if (widget->powerScale() > 0) { m_powerScale = widget->powerScale(); }
+    if (!m_mainPowerMeter && widget->powerScale() > 0) { m_powerScale = widget->powerScale(); }
 }
 void MeterPoller::addTarget(MeterWidget* widget)
 {
@@ -567,8 +636,15 @@ void MeterPoller::addTarget(MeterWidget* widget)
         if (target) { rememberPresentation(target); }
     }
     m_targets.append(widget);
+    widget->installEventFilter(this);
+    connect(widget, &MeterWidget::displayVisibilityChanged, this,
+            [this] { m_waveformTimer.start(); });
+    m_waveformTimer.start();
     connect(widget, &MeterWidget::itemAdded, this, [this, widget](MeterItem* item) {
         if (item && item->hasMmioBinding()) { replayMmioReading(widget, item); }
+        if (qobject_cast<WaveformMeterItem*>(item)) {
+            m_waveformTimer.start();
+        }
     });
     connect(widget, &MeterWidget::aboutToDestroy, this, [this, widget] { removeTarget(widget); });
     connect(widget, &QObject::destroyed, this, [this, widget] {
@@ -591,7 +667,8 @@ void MeterPoller::removeTarget(MeterWidget* widget)
     m_targets.removeIf([widget](const QPointer<MeterWidget>& target) { return !target || target.data() == widget; });
     m_targets.removeAll(QPointer<MeterWidget>(nullptr));
     m_targetContexts.remove(widget);
-    if (registered) { disconnect(widget, nullptr, this, nullptr); }
+    if (registered) { disconnect(widget, nullptr, this, nullptr); widget->removeEventFilter(this); }
+    pollWaveforms();
 }
 void MeterPoller::setTargetContext(MeterWidget* widget, const QJsonObject& context)
 {
@@ -607,6 +684,100 @@ void MeterPoller::setTargetContext(MeterWidget* widget, const QJsonObject& conte
     }
     addTarget(widget);
     if (existing && changed) { replayReadings(widget, context); }
+}
+void MeterPoller::addReadingConsumer(QObject* owner, const QJsonObject& context, const QList<int>& bindings,
+                                     const std::function<void(int, double)>& replay)
+{
+    if (!owner) { return; }
+    removeReadingConsumer(owner);
+    ReadingConsumer consumer;
+    consumer.context = context;
+    consumer.bindings = bindings;
+    consumer.destroyed = connect(owner, &QObject::destroyed, this, [this, owner] { removeReadingConsumer(owner); });
+    m_readingConsumers.insert(owner, consumer);
+    if (m_rxSourceIdentitySource && !m_consumerIdentities.contains(contextKey(context))) {
+        m_consumerIdentities.insert(contextKey(context), m_rxSourceIdentitySource(context));
+    }
+    // Global (TX, PA) readings reach every known context.
+    m_knownContexts[contextKey(context)] = context;
+    if (replay) {
+        for (int b : bindings) {
+            if (const std::optional<double> value = cachedReading(context, b)) { replay(b, *value); }
+        }
+    }
+}
+void MeterPoller::removeReadingConsumer(QObject* owner)
+{
+    const auto it = m_readingConsumers.find(owner);
+    if (it == m_readingConsumers.end()) { return; }
+    disconnect(it->destroyed);
+    const QJsonObject context = it->context;
+    m_readingConsumers.erase(it);
+    // A context nobody uses leaves the poll set. The empty context is the
+    // legacy active RX, which the producers keep publishing regardless.
+    if (!context.isEmpty() && !contextInUse(context)) {
+        m_knownContexts.remove(contextKey(context));
+        m_contextReadings.remove(contextKey(context));
+    }
+    bool consumerLeft = false;
+    for (auto c = m_readingConsumers.cbegin(); c != m_readingConsumers.cend(); ++c) {
+        if (c->context == context) { consumerLeft = true; break; }
+    }
+    if (!consumerLeft) { m_consumerIdentities.remove(contextKey(context)); }
+}
+void MeterPoller::synchronizeConsumerSources()
+{
+    // Mirrors synchronizeRxSource for targets: when the resolved identity
+    // behind a consumer's context changes, the old source's readings and
+    // peak no longer apply. Targets get MeterWidget::resetRxSource from
+    // the same check in pollContextReadings' reset pass.
+    if (!m_rxSourceIdentitySource) { return; }
+    QSet<QByteArray> checked;
+    for (auto it = m_readingConsumers.cbegin(); it != m_readingConsumers.cend(); ++it) {
+        const QByteArray key = contextKey(it->context);
+        if (checked.contains(key)) { continue; }
+        checked.insert(key);
+        const QByteArray identity = m_rxSourceIdentitySource(it->context);
+        const auto previous = m_consumerIdentities.constFind(key);
+        const bool changed = previous != m_consumerIdentities.cend() && previous.value() != identity;
+        m_consumerIdentities.insert(key, identity);
+        if (changed) {
+            m_contextReadings.remove(key);
+            emit rxSourceChanged(it->context);
+        }
+    }
+}
+bool MeterPoller::contextInUse(const QJsonObject& context) const
+{
+    for (auto it = m_targetContexts.cbegin(); it != m_targetContexts.cend(); ++it) {
+        if (it.value() == context) { return true; }
+    }
+    for (auto it = m_readingConsumers.cbegin(); it != m_readingConsumers.cend(); ++it) {
+        if (it->context == context) { return true; }
+    }
+    return false;
+}
+std::optional<double> MeterPoller::cachedReading(const QJsonObject& context, int b) const
+{
+    // The values copyCachedReadings seeds a target with.
+    const bool remoteReady = !m_remoteRole || (m_remoteModel && m_remoteModel->isConnected() && m_remoteSnapshotReady && m_remoteSnapshotReady());
+    if (b >= MeterBinding::SignalPeak && b <= MeterBinding::PbSnr) {
+        const double value = remoteReady && m_localRxReadingAvailable && !m_inTx
+            ? (m_rxReadingSource ? m_rxReadingSource(context, b)
+                                 : m_contextReadings.value(contextKey(context)).value(b, kNoMeterReadingDbm))
+            : kNoMeterReadingDbm;
+        return std::isfinite(value) ? value : kNoMeterReadingDbm;
+    }
+    if (m_globalReadings.contains(b)) {
+        const bool sameCachedSession = m_cachedSessionId == (m_sessionIdSource ? m_sessionIdSource() : QString());
+        return remoteReady && sameCachedSession && acceptsGlobalReading(context)
+            ? m_globalReadings.value(b) : kNoMeterReadingDbm;
+    }
+    if ((b >= MeterBinding::TxPower && b <= MeterBinding::TxCfcPeak)
+        || (b >= MeterBinding::HwVolts && b <= MeterBinding::HwTemperature)) {
+        return kNoMeterReadingDbm;
+    }
+    return std::nullopt;
 }
 void MeterPoller::setRxReadingSource(std::function<double(const QJsonObject&, int)> source)
 {
@@ -664,7 +835,7 @@ void MeterPoller::rescalePowerMeters(int watts)
 {
     if (watts <= 0) { return; }
     m_powerScale = watts;
-    for (const auto& target : m_targets) { if (target) { target->rescalePowerMeters(watts); } }
+    applyMainPowerScale();
 }
 MeterPoller::MmioReading MeterPoller::mmioReading(const MeterItem* item) const
 {
@@ -694,15 +865,16 @@ void MeterPoller::replayReadings(MeterWidget* widget, const QJsonObject& context
     widget->clearReadingCache();
     widget->resetForTxTransition(m_inTx);
     widget->setUnitMode(m_unitMode);
-    widget->rescalePowerMeters(m_powerScale);
+    applyMainPowerScale(widget);
     copyCachedReadings(widget, context);
 }
 void MeterPoller::copyCachedReadings(MeterWidget* widget, const QJsonObject& context) const
 {
     if (!widget) { return; }
+    copyCachedWaveforms(widget,context);
     synchronizeRxSource(widget, context);
     if (widget->unitMode()!=m_unitMode) { widget->setUnitMode(m_unitMode); }
-    if (m_powerScale>0 && widget->powerScale()!=m_powerScale) { widget->rescalePowerMeters(m_powerScale); }
+    applyMainPowerScale(widget);
     for(auto it=m_bindingSupport.cbegin();it!=m_bindingSupport.cend();++it) {
         const bool global=it.key()>=MeterBinding::TxPower;
         widget->setBindingSupport(it.key(),global && !acceptsGlobalReading(context)?MeterItem::BindingSupport::Unknown:it.value());
@@ -810,7 +982,7 @@ void MeterPoller::refreshBindingSupport()
     }
     const Support rxSupport=(m_rxReadingSource || m_rxChannel || (m_remoteRole && model && model->isConnected() && m_remoteSnapshotReady && m_remoteSnapshotReady()))?Support::Supported:Support::Unknown;
     for(int binding=MeterBinding::SignalPeak;binding<=MeterBinding::PbSnr;++binding) { publishSupport(binding,rxSupport); }
-    for(int binding:{MeterBinding::TxPower,MeterBinding::TxSwr}) { publishSupport(binding,m_radioStatus?Support::Supported:Support::Unknown); }
+    for(int binding:{MeterBinding::TxPower,MeterBinding::TxSwr}) { publishSupport(binding,(m_radioStatus || m_mainPowerMeter)?Support::Supported:Support::Unknown); }
 }
 void MeterPoller::invalidateReadings(bool rx, bool tx, bool hardware)
 {
@@ -824,6 +996,7 @@ void MeterPoller::invalidateReadings(bool rx, bool tx, bool hardware)
             for (int b = MeterBinding::SignalPeak; b <= MeterBinding::PbSnr; ++b) { target->updateMeterValue(b, kNoMeterReadingDbm); }
             contexts.insert(contextKey(context));
         }
+        for (auto it = m_readingConsumers.cbegin(); it != m_readingConsumers.cend(); ++it) { contexts.insert(contextKey(it->context)); }
         contexts.insert(contextKey({}));
         for (const QByteArray& key : contexts) {
             const QJsonObject context = QJsonDocument::fromJson(key).object();
@@ -850,6 +1023,7 @@ void MeterPoller::pollContextReadings()
         const QJsonObject context = m_targetContexts.value(target);
         if (synchronizeRxSource(target, context)) { m_contextReadings.remove(contextKey(context)); }
     }
+    synchronizeConsumerSources();
     QSet<QByteArray> visited;
     for (const auto& target : m_targets) {
         if (!target) { continue; }
@@ -865,6 +1039,28 @@ void MeterPoller::pollContextReadings()
             for (const auto& recipient : m_targets) {
                 if (recipient && m_targetContexts.value(recipient) == context) { recipient->updateMeterValue(b, value); }
             }
+            emit readingUpdated(context, b, value);
+        }
+    }
+    // Task 5b: the contexts only non-MeterWidget readers use join the same
+    // frame, with only the RX bindings those readers asked for.
+    QHash<QByteArray, QList<int>> consumerBindings;
+    for (auto it = m_readingConsumers.cbegin(); it != m_readingConsumers.cend(); ++it) {
+        const QByteArray key = contextKey(it->context);
+        m_knownContexts[key] = it->context;
+        if (visited.contains(key)) { continue; }
+        QList<int>& wanted = consumerBindings[key];
+        for (int b : it->bindings) {
+            if (b >= MeterBinding::SignalPeak && b <= MeterBinding::PbSnr && !wanted.contains(b)) { wanted.append(b); }
+        }
+    }
+    for (auto it = consumerBindings.begin(); it != consumerBindings.end(); ++it) {
+        const QJsonObject context = m_knownContexts.value(it.key());
+        std::sort(it->begin(), it->end());
+        for (int b : std::as_const(*it)) {
+            const double v = sourceReady ? m_rxReadingSource(context, b) : kNoMeterReadingDbm;
+            const double value = std::isfinite(v) ? v : kNoMeterReadingDbm;
+            m_contextReadings[it.key()][b] = value;
             emit readingUpdated(context, b, value);
         }
     }
@@ -1156,30 +1352,36 @@ void MeterPoller::pollRemoteRxMeters()
     publishContextReading({}, MeterBinding::AgcGain, agcGain);
     publishContextReading({}, MeterBinding::AgcPeak, agcPeak);
     publishContextReading({}, MeterBinding::AgcAvg, agcAverage);
-    if (!m_sMeter) { return; }
-    double level = slice ? peak : kNoReadingDbm;
-    switch (m_sMeter->rxMode()) {
-    case SMeterWidget::RxMode::SMeter:
-    case SMeterWidget::RxMode::SMeterPeak:
-        break;
-    case SMeterWidget::RxMode::SignalAverage:
-        level = slice ? average : kNoReadingDbm;
-        break;
-    case SMeterWidget::RxMode::MaxBin:
-        level = maxBin;
-        break;
+    if (m_sMeter) {
+        double level = slice ? peak : kNoReadingDbm;
+        switch (m_sMeter->rxMode()) {
+        case SMeterWidget::RxMode::SMeter:
+        case SMeterWidget::RxMode::SMeterPeak:
+            break;
+        case SMeterWidget::RxMode::SignalAverage:
+            level = slice ? average : kNoReadingDbm;
+            break;
+        case SMeterWidget::RxMode::MaxBin:
+            level = maxBin;
+            break;
+        }
+        if (m_rxReadingSource) { pollAdaptedSMeter(); }
+        else { m_sMeter->setLevel(static_cast<float>(level)); }
     }
-    if (m_rxReadingSource) { pollAdaptedSMeter(); }
-    else { m_sMeter->setLevel(static_cast<float>(level)); }
 
     // Keep each flag on the same selected meter source as the applet,
     // resolving stable slice IDs on every tick rather than caching channels.
+    // With no S-meter item in the window the flags still get a level: the
+    // signal average, the fallback the local window's flags use
+    // (MainWindow's SliceMeterPump source selector).
     if (!m_remoteModel) { return; }
+    const SMeterWidget::RxMode flagMode =
+        m_sMeter ? m_sMeter->rxMode() : SMeterWidget::RxMode::SignalAverage;
     for (const SliceModel* flagSlice : m_remoteModel->slices()) {
         if (!flagSlice) { continue; }
         double flagLevel = kNoReadingDbm;
         if (ready) {
-            switch (m_sMeter->rxMode()) {
+            switch (flagMode) {
             case SMeterWidget::RxMode::SMeter:
             case SMeterWidget::RxMode::SMeterPeak:
                 flagLevel = flagSlice->signalPeakDbm();
@@ -1423,6 +1625,50 @@ double MeterPoller::compressionReading(double rawTxaCompAv)
                            [rawTxaCompAv](TxMeterType) { return rawTxaCompAv; });
 }
 
+// The optional common source takes only forward power and SWR. Reverse
+// power remains the radio's reading, and callers without this source keep
+// the original RadioStatus/remote-state path.
+void MeterPoller::setMainPowerMeter(MainPowerMeter* meter)
+{
+    if (m_mainPowerMeter) { disconnect(m_mainPowerMeter, nullptr, this, nullptr); }
+    m_mainPowerMeter = meter;
+    if (meter) {
+        const auto publish = [this, meter] {
+            publishGlobalReading(MeterBinding::TxPower, meter->forwardW());
+            publishGlobalReading(MeterBinding::TxSwr, meter->swr());
+        };
+        connect(meter, &MainPowerMeter::readingChanged, this, publish);
+        connect(meter, &MainPowerMeter::scaleChanged, this, [this] { applyMainPowerScale(); });
+        connect(meter, &QObject::destroyed, this, [this] { setMainPowerMeter(nullptr); });
+        if (m_powerScale <= 0) { m_powerScale = meter->visualLimitW(); }
+        publish();
+    } else if (m_radioStatus) {
+        publishGlobalReading(MeterBinding::TxPower, m_radioStatus->forwardPowerWatts());
+        publishGlobalReading(MeterBinding::TxSwr, m_radioStatus->swrRatio());
+    } else {
+        publishGlobalReading(MeterBinding::TxPower, kNoMeterReadingDbm);
+        publishGlobalReading(MeterBinding::TxSwr, kNoMeterReadingDbm);
+    }
+    refreshBindingSupport();
+    if (meter) { publishGlobalReading(MeterBinding::TxPower, meter->forwardW()); publishGlobalReading(MeterBinding::TxSwr, meter->swr()); }
+    applyMainPowerScale();
+}
+
+void MeterPoller::applyMainPowerScale(MeterWidget* target) const
+{
+    const bool amplifying = m_mainPowerMeter && m_mainPowerMeter->onAmplifier();
+    const int limit = amplifying ? MainPowerMeter::kAmplifierLegalLimitW : m_powerScale;
+    const double top = amplifying ? MainPowerMeter::kAmplifierScaleW : limit * ControlRanges::kRfPowerGaugeHeadroom;
+    const auto apply = [limit, top, amplifying](MeterWidget* widget) {
+        if (widget && (widget->powerScale() != limit || widget->powerScaleTop() != top)) {
+            if (amplifying) { widget->rescalePowerMeters(limit, top); }
+            else { widget->rescalePowerMeters(limit); }
+        }
+    };
+    if (target) { apply(target); }
+    else { for (const auto& widget : m_targets) { apply(widget.data()); } }
+}
+
 void MeterPoller::setRadioStatus(RadioStatus* status)
 {
     // Disconnect any previous connection before re-wiring.
@@ -1431,14 +1677,14 @@ void MeterPoller::setRadioStatus(RadioStatus* status)
         m_powerConn = QMetaObject::Connection{};
     }
     disconnect(m_statusDestroyed);
-    for (int binding = MeterBinding::TxPower; binding <= MeterBinding::TxSwr; ++binding) { publishGlobalReading(binding, kNoMeterReadingDbm); }
+    for (int binding = MeterBinding::TxPower; binding <= MeterBinding::TxSwr; ++binding) { if (!m_mainPowerMeter || binding == MeterBinding::TxReversePower) { publishGlobalReading(binding, kNoMeterReadingDbm); } }
     m_radioStatus = status;
     refreshBindingSupport();
     if (m_radioStatus) {
-        m_statusDestroyed = connect(status, &QObject::destroyed, this, [this] { for (int binding = MeterBinding::TxPower; binding <= MeterBinding::TxSwr; ++binding) { publishGlobalReading(binding, kNoMeterReadingDbm); } });
-        publishGlobalReading(MeterBinding::TxPower, status->forwardPowerWatts());
+        m_statusDestroyed = connect(status, &QObject::destroyed, this, [this] { for (int binding = MeterBinding::TxPower; binding <= MeterBinding::TxSwr; ++binding) { if (!m_mainPowerMeter || binding == MeterBinding::TxReversePower) { publishGlobalReading(binding, kNoMeterReadingDbm); } } });
+        if (!m_mainPowerMeter) { publishGlobalReading(MeterBinding::TxPower, status->forwardPowerWatts()); }
         publishGlobalReading(MeterBinding::TxReversePower, status->reflectedPowerWatts());
-        publishGlobalReading(MeterBinding::TxSwr, status->swrRatio());
+        if (!m_mainPowerMeter) { publishGlobalReading(MeterBinding::TxSwr, status->swrRatio()); }
         // From Thetis console.cs PollPAPWR loop [v2.10.3.13]:
         // RadioStatus::powerChanged aggregates forward/reflected/swr from
         // PollPAPWR's alex_fwd / alex_rev / swr locals and emits them
@@ -1447,11 +1693,107 @@ void MeterPoller::setRadioStatus(RadioStatus* status)
         m_powerConn = connect(
             m_radioStatus, &RadioStatus::powerChanged,
             this, [this](double fwd, double rev, double swr) {
-                publishGlobalReading(MeterBinding::TxPower, fwd);
+                if (!m_mainPowerMeter) { publishGlobalReading(MeterBinding::TxPower, fwd); }
                 publishGlobalReading(MeterBinding::TxReversePower, rev);
-                publishGlobalReading(MeterBinding::TxSwr, swr);
+                if (!m_mainPowerMeter) { publishGlobalReading(MeterBinding::TxSwr, swr); }
             });
     }
+    // Refreshing binding support may invalidate the cache. Reseed the
+    // common values even when its selected amplifier reading did not change.
+    if (m_mainPowerMeter) {
+        publishGlobalReading(MeterBinding::TxPower, m_mainPowerMeter->forwardW());
+        publishGlobalReading(MeterBinding::TxSwr, m_mainPowerMeter->swr());
+    }
+
 }
 
 } // namespace NereusSDR
+
+namespace NereusSDR {
+QByteArray MeterPoller::waveformKey(const QJsonObject& context, WaveformKind kind) const
+{
+    const QByteArray identity =
+        m_rxSourceIdentitySource ? m_rxSourceIdentitySource(context) : contextKey(context);
+    return identity + ":" + QByteArray::number(int(kind));
+}
+bool MeterPoller::eventFilter(QObject* watched, QEvent* event)
+{
+    if (event->type() == QEvent::Show || event->type() == QEvent::Hide) {
+        m_waveformTimer.start();
+    }
+    return QObject::eventFilter(watched, event);
+}
+void MeterPoller::pollWaveforms()
+{
+    struct Recipient {
+        MeterWidget* widget;
+        WaveformMeterItem* face;
+        QJsonObject context;
+        QByteArray key;
+    };
+    QList<Recipient> recipients;
+    QList<WaveformContextRequest> requests;
+    QSet<QByteArray> demanded;
+    bool anyTyped = false;
+    for (const auto& target : m_targets) {
+        if (!target) {
+            continue;
+        }
+        for (MeterItem* item : target->items()) {
+            auto* face = qobject_cast<WaveformMeterItem*>(item);
+            if (!face) {
+                continue;
+            }
+            if (!target->isVisible() || !target->shouldRender(face)) {
+                if (face->setSnapshot({})) {
+                    target->invalidatePresentation(face);
+                }
+                continue;
+            }
+            anyTyped = true;
+            const QJsonObject context = m_targetContexts.value(target);
+            synchronizeRxSource(target, context);
+            const QByteArray key = waveformKey(context, face->waveformKind());
+            recipients.append({target, face, context, key});
+            if (!demanded.contains(key)) {
+                demanded.insert(key);
+                requests.append({context, face->waveformKind()});
+            }
+        }
+    }
+    if (m_waveformDemandSource) {
+        m_waveformDemandSource(requests);
+    }
+    QHash<QByteArray, WaveformSnapshotPtr> cache;
+    for (const Recipient& recipient : recipients) {
+        if (!cache.contains(recipient.key)) {
+            cache.insert(recipient.key, m_waveformSource ? m_waveformSource(recipient.context,
+                                                                            recipient.face->waveformKind())
+                                                         : WaveformSnapshotPtr());
+        }
+        if (recipient.face->setSnapshot(cache.value(recipient.key))) {
+            recipient.widget->invalidatePresentation(recipient.face);
+        }
+    }
+    m_waveformCache = std::move(cache);
+    if (anyTyped) {
+        m_waveformTimer.start();
+    } else {
+        m_waveformTimer.stop();
+    }
+    emit waveformFrameAdvanced(waveformNowNs() / 1000000);
+}
+void MeterPoller::copyCachedWaveforms(MeterWidget* widget, const QJsonObject& context) const
+{
+    if (!widget) {
+        return;
+    }
+    for (MeterItem* item : widget->items()) {
+        if (auto* face = qobject_cast<WaveformMeterItem*>(item)) {
+            if (face->setSnapshot(m_waveformCache.value(waveformKey(context, face->waveformKind())))) {
+                widget->invalidatePresentation(face);
+            }
+        }
+    }
+}
+}

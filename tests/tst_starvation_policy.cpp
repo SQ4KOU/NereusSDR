@@ -21,6 +21,8 @@
 //   2026-09-25: original test for NereusSDR by J.J. Boyd (KG4VCF), iPhone
 //               app plan Task 37 (R-IOS-13), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-10-16: the device id is logged in hex on every starvation path.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/safety/StarvationPolicy.h"
@@ -129,7 +131,8 @@ struct Rig {
 const QList<DSPMode>& unkeyModes()
 {
     static const QList<DSPMode> modes{DSPMode::AM,  DSPMode::SAM,    DSPMode::FM,
-                                      DSPMode::DRM, DSPMode::RADE_U, DSPMode::RADE_L};
+                                      DSPMode::DRM, DSPMode::RADE_U, DSPMode::RADE_L,
+                                      static_cast<DSPMode>(14), static_cast<DSPMode>(15)};
     return modes;
 }
 
@@ -157,13 +160,15 @@ private slots:
     void noTransmitModeKnownIsTheSafeAnswer();
     void audioAgainIsNotAStop();
     void theStopSentenceIsPlain();
+    void theDeviceIdIsLoggedInHex_data();
+    void theDeviceIdIsLoggedInHex();
 };
 
 void TestStarvationPolicy::theTableCoversEveryModeOnce()
 {
-    QCOMPARE(unkeyModes().size(), 6);
+    QCOMPARE(unkeyModes().size(), 8);
     QCOMPARE(keepModes().size(), 8);
-    for (int value = static_cast<int>(DSPMode::LSB); value <= static_cast<int>(DSPMode::RADE_L);
+    for (int value = static_cast<int>(DSPMode::LSB); value <= 15;
          ++value) {
         const DSPMode mode = static_cast<DSPMode>(value);
         const bool unkey = unkeyModes().contains(mode);
@@ -276,6 +281,60 @@ void TestStarvationPolicy::theStopSentenceIsPlain()
              QStringLiteral("No microphone audio arrived from JJ's iPhone, so the Core stopped transmitting."));
     QVERIFY2(OperatorWording::isPlain(sentence), qPrintable(sentence));
     QVERIFY(OperatorWording::coreCalledStationIn(sentence).isEmpty());
+}
+
+
+namespace {
+QStringList* g_logged = nullptr;
+
+void keepMessage(QtMsgType, const QMessageLogContext&, const QString& message)
+{
+    if (g_logged) {
+        g_logged->push_back(message);
+    }
+}
+} // namespace
+
+void TestStarvationPolicy::theDeviceIdIsLoggedInHex_data()
+{
+    QTest::addColumn<int>("mode");
+    QTest::addColumn<bool>("microphoneUnused");
+    QTest::newRow("stays keyed") << static_cast<int>(DSPMode::DIGU) << false;
+    QTest::newRow("stops") << static_cast<int>(DSPMode::AM) << false;
+    QTest::newRow("TUNE") << static_cast<int>(DSPMode::AM) << true;
+}
+
+void TestStarvationPolicy::theDeviceIdIsLoggedInHex()
+{
+    QFETCH(int, mode);
+    QFETCH(bool, microphoneUnused);
+    // A device id is binary; the log line names it in hex, never as raw bytes.
+    const QByteArray id = QByteArray::fromHex("85c8ce8584") + QByteArrayLiteral("ABg");
+    StarvationPolicy policy;
+    StarvationPolicy::Hooks hooks;
+    hooks.transmitMode = [mode] { return std::optional<DSPMode>(static_cast<DSPMode>(mode)); };
+    hooks.microphoneUnused = [microphoneUnused] { return microphoneUnused; };
+    hooks.stopAllTx = [](const QString&) {};
+    policy.setHooks(std::move(hooks));
+
+    QStringList logged;
+    g_logged = &logged;
+    const QtMessageHandler previous = qInstallMessageHandler(keepMessage);
+    policy.onStarved(id, true);
+    qInstallMessageHandler(previous);
+    g_logged = nullptr;
+
+    QStringList lines;
+    for (const QString& line : logged) {
+        if (line.contains(QStringLiteral("Microphone line from"))) {
+            lines.push_back(line);
+        }
+    }
+    QCOMPARE(lines.size(), 1);
+    QVERIFY2(lines.front().contains(QString::fromLatin1(id.toHex())), qPrintable(lines.front()));
+    for (const QChar c : lines.front()) {
+        QVERIFY2(c.unicode() >= 0x20 && c.unicode() < 0x7f, qPrintable(lines.front()));
+    }
 }
 
 QTEST_GUILESS_MAIN(TestStarvationPolicy)

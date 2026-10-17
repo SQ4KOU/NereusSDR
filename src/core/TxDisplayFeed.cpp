@@ -61,6 +61,15 @@ TxDisplayFeed::TxDisplayFeed(RadioModel* model, TxAnalyzer* analyzer, QObject* p
         connect(mox, &MoxController::moxStateChanged, this,
                 &TxDisplayFeed::onMoxStateChanged);
     }
+    // Tune can start while MOX is already up, without another key edge.
+    // Its public flag is emitted before the saved tone mode is prepared;
+    // read the final NCO origin after that synchronous setup has finished.
+    connect(&m_model->transmitModel(), &TransmitModel::tuneChanged, this,
+            [this](bool) {
+        if (m_keyed) {
+            recompute();
+        }
+    }, Qt::QueuedConnection);
     if (TxSliceArbiter* arbiter = m_model->txSliceArbiter()) {
         connect(arbiter, &TxSliceArbiter::txBoundSliceChanged, this, [this](int, int) {
             if (m_keyed) {
@@ -179,9 +188,10 @@ double TxDisplayFeed::carrierHz() const
     if (slice == nullptr) {
         return m_view.carrierHz;
     }
-    // The transmitter's own number (dial plus XIT when XIT is on), so the
-    // display and the transmitter cannot disagree about the carrier.
-    return static_cast<double>(m_model->txFrequencyForSlice(slice));
+    // The analyzer sees the generator's baseband before radio upconversion.
+    // Its zero therefore belongs at the actual NCO, including Tune's signed
+    // tone compensation, so its peak is labeled at the transmitted RF.
+    return static_cast<double>(m_model->txNcoFrequencyForSlice(slice));
 }
 
 void TxDisplayFeed::onMoxStateChanged(bool keyed)

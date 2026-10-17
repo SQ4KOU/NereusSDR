@@ -20,6 +20,7 @@
 #include <QDialog>
 #include <QList>
 #include <QString>
+#include "gui/NereusGuiExport.h"
 
 class QLabel;
 class QLineEdit;
@@ -50,7 +51,7 @@ struct ConnectionTargetRow {
     bool pairable = false;
 };
 
-class ConnectionSelector final : public QDialog {
+class NEREUS_GUI_EXPORT ConnectionSelector final : public QDialog {
     Q_OBJECT
 
 public:

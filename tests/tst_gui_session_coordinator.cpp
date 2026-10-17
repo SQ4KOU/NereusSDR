@@ -2,6 +2,15 @@
 // iPhone app Task 71 (R-IOS-02): an end the operator did not ask for is the
 // Core retiring the token, now that a second window is admitted beside the
 // first. J.J. Boyd (KG4VCF), 2026-09-25, AI-assisted via Anthropic Claude Code.
+// Rotor control plan Task 4c: a Local window's model owns the rotor; a window
+// on a remote Core never does. J.J. Boyd (KG4VCF), 2026-10-08, AI-assisted via
+// Anthropic Claude Code.
+// 2026-10-11: a Local window's model owns its Tuner Genius, Power Genius and
+// RF-Kit for the windows and phones signed in to it, at the typed address; a
+// window on a remote Core owns none. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
+// 2026-10-17: run as three ctest entries (TestFunctionGroups). J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QApplication>
 #include <QCloseEvent>
@@ -16,7 +25,9 @@
 #include <QScopeGuard>
 
 #include "OperatorWording.h"
+#include "TestFunctionGroups.h"
 #include "core/AppSettings.h"
+#include "core/cat/CatService.h"
 #include "core/SliceOwnership.h"
 #include "core/RadioConnection.h"
 #include "core/RadioDiscovery.h"
@@ -124,6 +135,8 @@ private slots:
         QVERIFY2(sessions.replace({}, false, &error), qPrintable(error));
         auto* model = sessions.window()->radioModel();
         QVERIFY(!model->isConnected());
+        QVERIFY(model->catService()->isStarted());
+        QVERIFY(!model->catService()->isListening(1));
         QVERIFY(!sessions.desktopRuntime()->controller()->server());
         const auto generation = sessions.generation();
         for (int i = 0; i < 3; ++i) {
@@ -134,6 +147,40 @@ private slots:
         QCOMPARE(sessions.generation(), generation);
         QVERIFY(!model->isConnected());
         QVERIFY(!QFileInfo::exists(service.profileDirectory + "/station-identity.pem"));
+    }
+
+    // 2026-10-06 J.J. Boyd (KG4VCF), AI-assisted via Claude Code.
+    void catStartsWhenCoreListenerCannotOpen()
+    {
+        AppSettings& settings = AppSettings::instance();
+        StationHandover ownership(AppSettings::profileOverride());
+        QString error;
+        QVERIFY2(ownership.acquire(0, &error), qPrintable(error));
+        QTcpServer busy;
+        QVERIFY(busy.listen(QHostAddress::LocalHost, 0));
+        QFile config(QFileInfo(settings.filePath()).absolutePath() + QStringLiteral("/station.conf"));
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        const QByteArray configBytes = QStringLiteral("remote_bind = 127.0.0.1\nremote_port = %1\n"
+            "status_page = off\nrendezvous_servers =\n").arg(busy.serverPort()).toUtf8();
+        QCOMPARE(config.write(configBytes), configBytes.size());
+        config.close();
+        settings.setValue(QStringLiteral("DesktopCore/Run"), true);
+        QTemporaryDir serviceHome;
+        QVERIFY(serviceHome.isValid());
+        StationServiceOptions options;
+        options.homeDirectory = serviceHome.path();
+        options.runner = [](const QString&, const QStringList&) {
+            return StationServiceCommandResult{0, {}};
+        };
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.configureDesktopStation(AppSettings::profileOverride(),
+                                                   ownership.ownsProfile(), options));
+        QVERIFY2(sessions.replace({}, false, &error), qPrintable(error));
+        auto* model = sessions.window()->radioModel();
+        QVERIFY(!sessions.desktopRuntime()->controller()->server());
+        QVERIFY(sessions.desktopRuntime()->stationOwnershipActive());
+        QVERIFY(model->catService()->isStarted());
+        sessions.shutdown();
     }
 
     void desktopReclaimKeepsCoreRadioChoice_data()
@@ -460,9 +507,43 @@ private slots:
         QVERIFY(competitor.acquire(0, &error));
     }
 
+    // Rotor control plan Task 4c.
+    void localWindowOwnsTheRotorAndARemoteWindowNever()
+    {
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.replace({}, false));
+        QPointer<StationRotorController> local =
+            sessions.window()->radioModel()->stationRotorController();
+        QVERIFY(local);
+        // 2026-10-11: and its Tuner Genius, Power Genius and RF-Kit, which a
+        // signed-in window or phone is offered because of this
+        // (StationServer::accessoryStatusVersion). The links keep the plain
+        // handshake this window always used (TypedAddress).
+        QVERIFY(sessions.window()->radioModel()->stationAccessoryIdentityEnabled());
+        QVERIFY(!sessions.window()->radioModel()->pgxlConnection()->identityAdmissionRequired());
+        QVERIFY(!sessions.window()->radioModel()->tgxlConnection()->identityAdmissionRequired());
+        QVERIFY(!sessions.window()->radioModel()->rfKitConnection()->identityAdmissionRequired());
+        QCOMPARE(sessions.window()->radioModel()->findChildren<StationRotorController*>().size(), 1);
+
+        // On a remote Core the old rotor is gone with its model, and the
+        // window follows the Core's rotor instead of holding one.
+        QVERIFY(sessions.replace(core(QStringLiteral("a")), false));
+        QVERIFY(local.isNull());
+        QVERIFY(sessions.window()->radioModel()->stationRotorController() == nullptr);
+        QVERIFY(!sessions.window()->radioModel()->stationAccessoryIdentityEnabled());
+
+        // Back on this computer's radio, a rotor again from the saved setup.
+        QVERIFY(sessions.replace({}, false));
+        QVERIFY(sessions.window()->radioModel()->stationRotorController() != nullptr);
+        sessions.shutdown();
+    }
+
     void replacesWholeSessionAndRetiresQueuedPickerAndProxy()
     {
-        AppSettings::instance().setValue(QStringLiteral("DisplayFftSize"), QStringLiteral("2048"));
+        // A size the slider offers that is not the default: a local window
+        // puts a stored size that is not one of the seven back to 4096
+        // (display pill plan Task 20, issue 296), which 2048 was.
+        AppSettings::instance().setValue(QStringLiteral("DisplayFftSize"), QStringLiteral("8192"));
         GuiSessionCoordinator sessions;
         QSignalSpy pickerRequests(&sessions, &GuiSessionCoordinator::connectionsRequested);
         QVERIFY(sessions.replace({}, false));
@@ -521,7 +602,7 @@ private slots:
         QVERIFY(!AppSettings::instance().remoteBackend());
         QVERIFY(sessions.window()->radioModel()->ownsLocalDsp());
         QCOMPARE(AppSettings::instance().value(QStringLiteral("DisplayFftSize")).toString(),
-                 QStringLiteral("2048"));
+                 QStringLiteral("8192"));
         sessions.shutdown();
         QVERIFY(!sessions.window());
     }
@@ -963,5 +1044,34 @@ private slots:
     }
 };
 
-QTEST_MAIN(TestGuiSessionCoordinator)
+int main(int argc, char** argv)
+{
+    QApplication app(argc, argv);
+    app.setAttribute(Qt::AA_Use96Dpi, true);
+    TestGuiSessionCoordinator test;
+    QTEST_SET_MAIN_SOURCE_PATH
+    // 79 s by itself on a hosted CI runner, nearly every case a window of
+    // its own, and past ctest's 120 s with every case still passing when
+    // the runner ran four tests at once (CI run 38999633360). Two groups
+    // run as their own ctest entries, tst_gui_session_coordinator_startup
+    // and _replacement (tests/CMakeLists.txt); the rest as
+    // tst_gui_session_coordinator. The limit is not raised.
+    const std::optional<QStringList> arguments = NereusSDR::TestFunctionGroups::arguments(
+        test.metaObject(), app.arguments(), "NEREUS_GUI_SESSION_COORDINATOR_GROUP",
+        {{QStringLiteral("startup"),
+          {QStringLiteral("configuredDeferredLocalBootstrapOwnsSlicesWithRunOff"),
+           QStringLiteral("catStartsWhenCoreListenerCannotOpen"),
+           QStringLiteral("desktopReclaimKeepsCoreRadioChoice"),
+           QStringLiteral("hostedLostP1LinkComesBackInPlace"),
+           QStringLiteral("desktopHostRetiresBeforeModelWithoutStartingBackgroundOnReplacement"),
+           QStringLiteral("checkedQuitKeepsBackgroundIntentAndProfileUntilModelRetirement")}},
+         {QStringLiteral("replacement"),
+          {QStringLiteral("localWindowOwnsTheRotorAndARemoteWindowNever"),
+           QStringLiteral("replacesWholeSessionAndRetiresQueuedPickerAndProxy"),
+           QStringLiteral("constructedWindowBindsNotchCreateOnce"),
+           QStringLiteral("initializationCannotRetireItsOwnModel"),
+           QStringLiteral("invalidTargetAndTransmitStateLeaveCurrentSessionUntouched"),
+           QStringLiteral("radioSwitchWaitsForTransmitToReceiveHandover")}}});
+    return arguments ? QTest::qExec(&test, *arguments) : 1;
+}
 #include "tst_gui_session_coordinator.moc"

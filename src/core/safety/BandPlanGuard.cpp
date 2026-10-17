@@ -718,7 +718,9 @@ QString modeWords(DSPMode mode)
     case DSPMode::SAM:    return QStringLiteral("SAM");
     case DSPMode::DSB:    return QStringLiteral("DSB");
     case DSPMode::RADE_U: return QStringLiteral("RADE-U");
+    case DSPMode::RADE2_U: return QStringLiteral("RADE2-U");
     case DSPMode::RADE_L: return QStringLiteral("RADE-L");
+    case DSPMode::RADE2_L: return QStringLiteral("RADE2-L");
     default:              return QStringLiteral("This mode");
     }
 }
@@ -848,7 +850,9 @@ bool BandPlanGuard::isValidTxPassband(Region region, std::int64_t freqHz, DSPMod
     case DSPMode::FM:
     case DSPMode::SPEC:
     // NereusSDR-native RADE modes use the TX chain's USB/LSB geometry.
+    case DSPMode::RADE2_U:
     case DSPMode::RADE_U:
+    case DSPMode::RADE2_L:
     case DSPMode::RADE_L:
         return low <= high && inRange(low) && inRange(high);
     case DSPMode::DRM:
@@ -887,7 +891,9 @@ bool BandPlanGuard::isModeAllowedForTx(DSPMode mode) const noexcept
         case DSPMode::USB:
         case DSPMode::DIGL:
         case DSPMode::DIGU:
+        case DSPMode::RADE2_U:
         case DSPMode::RADE_U:
+        case DSPMode::RADE2_L:
         case DSPMode::RADE_L:
         // AM / SAM / DSB TX: WDSP TXA ammod stage, run-gated by SetTXAMode
         // (TXA.c:753-789 [v2.10.3.13]).  TxChannel::applyTxFilterForMode

@@ -74,6 +74,10 @@ It uses a non modified version of rmnoise and implements a ringbuffer to handle 
 //                J.J. Boyd (KG4VCF), with AI-assisted review via
 //                Anthropic Claude Code. The 2026-04-23 line describes the
 //                retired Thetis vendor only.
+//   2026-10-14 — Check processing availability under the existing instance
+//                lock and clear replaced states while holding that lock.
+//                J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                OpenAI Codex. No DSP algorithm, constant or default changes.
 // =============================================================================
 
 #define _CRT_SECURE_NO_WARNINGS
@@ -265,6 +269,9 @@ RNNR create_rnnr(int run, int position, int size, double* in, double* out, int r
 
 void xrnnr(RNNR a, int pos)
 {
+    // NereusSDR: model replacement uses this same lock. Decide whether a
+    // state can process only after acquiring it, including the bypass path.
+    EnterCriticalSection(&a->cs);
     if (a->st && a->run && pos == a->position)
     {
         int  bs = a->buffer_size;
@@ -272,7 +279,6 @@ void xrnnr(RNNR a, int pos)
         float* to_process = a->to_process_buffer;
         float* process_out = a->processed_output_buffer;
 
-        EnterCriticalSection(&a->cs);
         for (int i = 0; i < bs; i++)
         {
             ring_buffer_put(&a->input_ring, (float)a->in[2 * i + 0]);
@@ -318,7 +324,6 @@ void xrnnr(RNNR a, int pos)
                 }
             }
         }
-        LeaveCriticalSection(&a->cs);
 
         if (a->output_ring.count >= bs)
         {
@@ -338,6 +343,7 @@ void xrnnr(RNNR a, int pos)
     {
         memcpy(a->out, a->in, a->buffer_size * sizeof(complex));
     }
+    LeaveCriticalSection(&a->cs);
 }
 
 void destroy_rnnr(RNNR a) 
@@ -354,6 +360,7 @@ void destroy_rnnr(RNNR a)
 
     EnterCriticalSection(&a->cs);
     rnnoise_destroy(a->st);
+    a->st = NULL;
     LeaveCriticalSection(&a->cs);
     DeleteCriticalSection(&a->cs);
 
@@ -384,6 +391,7 @@ void RNNRloadModel(const char* file_path)
         a->run_old = a->run;
         a->run = 0;
         rnnoise_destroy(a->st);
+        a->st = NULL;
         LeaveCriticalSection(&a->cs);
     }
 

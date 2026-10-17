@@ -58,6 +58,7 @@ public enum SettingsScope: Sendable, Equatable {
         Rule(text: "radios/", scope: .operatorLocal),
         Rule(text: "ConnectionTargets/", scope: .operatorLocal),
         Rule(text: "RemoteVax/", scope: .operatorLocal),
+        Rule(text: "RemoteRigctld/", scope: .operatorLocal),
         Rule(text: "PGXL_", scope: .station),
         Rule(text: "TGXL_", scope: .station),
         Rule(text: "RfKit_", scope: .station),
@@ -89,7 +90,9 @@ public enum SettingsScope: Sendable, Equatable {
     // Tier 3.
     static let wholeKeys: [Rule] = [
         Rule(text: "DisplayFftSize", scope: .station),
+        Rule(text: "DisplayFftSizingMode", scope: .station),
         Rule(text: "DisplayFftWindow", scope: .station),
+        Rule(text: "DisplayHzPerBinLastTarget", scope: .station),
         Rule(text: "DisplayHzPerBinTarget", scope: .station),
         Rule(text: "DisplaySpectrumFps", scope: .station),
         Rule(text: "DisplayTxFftSize", scope: .station),

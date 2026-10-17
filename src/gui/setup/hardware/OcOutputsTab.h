@@ -25,6 +25,8 @@
 //                 Dig Out follows the transmit settings gate; the TX pins,
 //                 pin actions and resets follow their own gates.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - setN2adrHintVisible. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -122,6 +124,9 @@ public:
     // OcOutputsSwlTab), each with its own gate and reason.
     void setTransmitPinsPermitted(bool permitted, const QString& reason);
     void setPinActionsPermitted(bool permitted, const QString& reason);
+    // The HF tab's "N2ADR Filter (HL2)" pointer, shown on an HL2 only
+    // (HardwarePage passes caps.hasIoBoardHl2).
+    void setN2adrHintVisible(bool visible);
 
     // ── Test seams (P1 full-parity §4.3 — User Dig Out) ──────────────────
     // Exposed for tst_board_capability_flag_wiring; not part of the

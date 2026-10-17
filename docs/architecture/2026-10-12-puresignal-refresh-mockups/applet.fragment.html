@@ -1,0 +1,124 @@
+<div id="ps-study" aria-label="PureSignal instrument design study">
+  <div class="ps-preview viz-dotted-background">
+    <div class="ps-switch" aria-label="PureSignal surfaces">
+      <button type="button" data-view="applet" class="cursor-interaction">Applet</button>
+      <button type="button" data-view="window" aria-pressed="true" class="cursor-interaction">PureSignal window</button>
+      <button type="button" data-view="amp" class="cursor-interaction">AmpView</button>
+    </div>
+    <section class="ps-product" data-panel="window" aria-label="PureSignal window concept">
+      <header class="ps-title"><span>PureSignal</span><span class="ps-muted">Design study · sample data</span></header>
+      <div class="ps-content">
+        <div class="ps-heading"><div><span class="ps-kicker">LINEARIZATION</span><h2>Correction applied</h2></div><span class="ps-status">● Auto calibration</span></div>
+        <div class="ps-instruments">
+          <div class="ps-instrument"><div class="ps-label">RF FEEDBACK <span class="ps-status">In range</span></div><div class="ps-number">155 <small>level</small></div><div class="ps-meter" role="img" aria-label="Feedback level 155, within the illustrated target range"><div class="ps-target"></div><div class="ps-fill"></div><span class="ps-marker"></span></div><div class="ps-scale"><span>Low</span><span>Target</span><span>High</span></div></div>
+          <div class="ps-instrument"><div class="ps-label">CORRECTION <span class="ps-status">Applied</span></div><div class="ps-number ps-correction">Active</div><div class="ps-process"><span class="ps-status">● Feedback</span><span>→</span><span class="ps-status">● Calibration</span><span>→</span><span class="ps-status">● Correcting</span></div><div class="ps-readline"><span>Calibration attempts</span><span class="ps-mono">24</span></div></div>
+        </div>
+        <div class="ps-actions"><button type="button" class="ps-active cursor-interaction" data-toggle aria-pressed="true">Auto</button><button type="button" class="cursor-interaction" data-local="Single calibration requested · preview only">Single cal</button><button type="button" class="cursor-interaction" data-toggle aria-pressed="false">Two-tone</button><button type="button" class="cursor-interaction" data-open="amp">AmpView</button><button type="button" class="ps-quiet cursor-interaction" data-local="Correction file actions · preview only">Save / Restore…</button></div>
+        <div class="ps-section"><span>TWO-TONE MEASUREMENTS</span><label>Preview state <select class="cursor-interaction" id="ps-measure-state"><option value="waiting">Waiting for two-tone</option><option value="valid">Valid measurement</option><option value="peaks">Peaks not found</option><option value="duplex">Duplex required</option></select></label></div>
+        <div class="ps-imd" aria-live="polite"><div><span class="ps-label">IMD3</span><div class="ps-number" id="ps-imd3">— <small>dBc</small></div></div><div><span class="ps-label">IMD5</span><div class="ps-number" id="ps-imd5">— <small>dBc</small></div></div><div class="ps-imd-state"><span id="ps-imd-status">Waiting for two-tone</span><small id="ps-imd-detail">No current measurement</small></div></div>
+        <details class="ps-details"><summary class="cursor-interaction">Calibration settings and diagnostics</summary><div class="ps-detail-grid"><label>Auto attenuate <input type="checkbox" checked></label><label>Quick attenuate <input type="checkbox"></label><span>HW peak reference <b class="ps-mono">0.6121</b></span><span>MOX wait <b class="ps-mono">0.2 s</b></span><span>CAL wait <b class="ps-mono">0.5 s</b></span><span>AMP delay <b class="ps-mono">150 ns</b></span></div><p class="ps-muted">Illustrated settings only; final controls and values require source verification.</p></details>
+        <div class="ps-footer"><span>Feedback and correction are separate states</span><span class="ps-local" aria-live="polite">Sample data</span></div>
+      </div>
+    </section>
+    <section class="ps-product ps-applet" data-panel="applet" hidden aria-label="PureSignal applet concept">
+      <header class="ps-title"><span>PureSignal</span><button type="button" class="ps-quiet cursor-interaction" data-open="window" aria-label="Open PureSignal window"><i data-lucide="external-link" aria-hidden="true"></i></button></header>
+      <div class="ps-content">
+        <div class="ps-label">CORRECTION <span class="ps-status">● Applied</span></div>
+        <div class="ps-app-feedback"><span>Feedback</span><span class="ps-mono">155 <small class="ps-status">In range</small></span></div>
+        <div class="ps-meter"><div class="ps-target"></div><div class="ps-fill"></div><span class="ps-marker"></span></div>
+        <div class="ps-scale"><span>Low</span><span>Target</span><span>High</span></div>
+        <div class="ps-readline"><span>Calibration attempts</span><span class="ps-mono">24</span></div>
+        <div class="ps-actions"><button type="button" class="ps-active cursor-interaction" data-toggle aria-pressed="true">Auto</button><button type="button" class="cursor-interaction" data-local="Single calibration requested · preview only">Calibrate</button><button type="button" class="cursor-interaction" data-toggle aria-pressed="false">2-Tone</button></div>
+        <div class="ps-footer"><button type="button" class="ps-quiet cursor-interaction" data-local="Correction file actions · preview only">Save / Restore…</button><button type="button" class="ps-quiet cursor-interaction" data-open="window">Details →</button></div>
+        <div class="ps-local ps-muted" aria-live="polite">Design study · sample data</div>
+      </div>
+    </section>
+    <section class="ps-product" data-panel="amp" hidden aria-label="AmpView concept">
+      <header class="ps-title"><span>AmpView</span><span class="ps-muted">Design study · sample curves</span></header>
+      <div class="ps-content">
+        <div class="ps-heading"><div><span class="ps-kicker">AMPLIFIER RESPONSE</span><h2>Magnitude &amp; phase</h2></div><span class="ps-status">● Correction applied</span></div>
+        <div class="ps-actions"><label><input type="checkbox" id="ps-gain"> Show gain</label><label><input type="checkbox" id="ps-phase"> Phase zoom</label><label><input type="checkbox" id="ps-lowres"> Low res</label><label><input type="checkbox"> On top</label></div>
+        <div class="ps-plot-heading"><span id="ps-mag-title">Magnitude</span><span class="ps-muted">Amplifier · blue points / Correction · amber line / Reference · dashed</span></div>
+        <canvas id="ps-mag-chart" role="img" aria-label="Illustrative amplifier magnitude, correction magnitude, and reference versus normalized input magnitude"></canvas>
+        <div class="ps-plot-heading"><span>Phase <small class="ps-muted">degrees</small></span><span class="ps-muted">Amplifier · blue points / Correction · green line</span></div>
+        <canvas id="ps-phase-chart" role="img" aria-label="Illustrative amplifier and correction phase versus normalized input magnitude"></canvas>
+        <div class="ps-footer"><button type="button" class="ps-quiet cursor-interaction" data-open="window">← PureSignal</button><span>Input magnitude 0–1 · sample curves</span></div>
+      </div>
+    </section>
+  </div>
+</div>
+<style>
+#ps-study{color-scheme:dark;--ps-bg:#08080a;--ps-panel:#101013;--ps-raised:#19191e;--ps-line:#2c2c31;--ps-text:#dcdce1;--ps-muted:#a6a6ac;--ps-blue:#7098bb;--ps-amber:#d8a55f;--ps-green:#83b497;font:13px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:var(--ps-text)}
+#ps-study *{box-sizing:border-box}
+#ps-study [hidden]{display:none!important}
+#ps-study .ps-preview{padding:18px 0 24px}
+#ps-study .ps-switch{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;padding-right:90px}
+#ps-study button,#ps-study select{font:inherit;color:var(--ps-text);background:linear-gradient(#222227,#141417);border:1px solid var(--ps-line);border-radius:5px;padding:6px 10px;min-height:30px}
+#ps-study button:hover{border-color:#64646e}
+#ps-study button[aria-pressed=true]{background:#1e3d5f;border-color:#3d78b0}
+#ps-study .ps-quiet{background:transparent;border-color:transparent;color:var(--ps-muted)}
+#ps-study .ps-product{background:var(--ps-bg);border:1px solid #37373c;border-radius:9px;max-width:730px;margin:auto;overflow:hidden;box-shadow:0 12px 32px #0003}
+#ps-study .ps-title{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 16px;background:linear-gradient(#202024,#17171b);border-bottom:1px solid var(--ps-line);font-size:12px}
+#ps-study .ps-content{padding:20px}
+#ps-study .ps-heading{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:22px}
+#ps-study .ps-kicker,#ps-study .ps-label,#ps-study .ps-section>span{font-size:11px;letter-spacing:1.2px;color:var(--ps-muted)}
+#ps-study h2{font-size:21px;font-weight:500;margin:4px 0 0}
+#ps-study .ps-status{color:var(--ps-green);letter-spacing:0;font-size:12px}
+#ps-study .ps-muted{color:var(--ps-muted)}
+#ps-study .ps-instruments{display:grid;grid-template-columns:1fr 1fr;gap:22px;background:var(--ps-panel);border-radius:6px;padding:18px}
+#ps-study .ps-label{display:flex;justify-content:space-between;gap:12px}
+#ps-study .ps-number{font:500 32px/1.4 'SFMono-Regular',Consolas,monospace;color:var(--ps-amber);font-variant-numeric:tabular-nums;margin:8px 0}
+#ps-study .ps-number small{font:12px -apple-system,sans-serif;color:var(--ps-muted)}
+#ps-study .ps-correction{font-family:inherit;color:var(--ps-text)}
+#ps-study .ps-meter{height:14px;background:#25252c;position:relative;border-radius:3px;margin:12px 0 6px}
+#ps-study .ps-fill{position:absolute;inset:4px auto 4px 0;width:60.8%;background:var(--ps-blue);border-radius:2px}
+#ps-study .ps-target{position:absolute;left:50.6%;width:20.4%;top:0;bottom:0;background:#355c46}
+#ps-study .ps-marker{position:absolute;left:60.8%;top:-3px;bottom:-3px;width:2px;background:var(--ps-text)}
+#ps-study .ps-scale{display:flex;justify-content:space-between;font:11px/1.4 -apple-system,sans-serif;color:var(--ps-muted)}
+#ps-study .ps-process{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin:12px 0 8px;color:var(--ps-muted)}
+#ps-study .ps-readline{display:flex;justify-content:space-between;gap:10px;color:var(--ps-muted);margin-top:12px;font-size:12px}
+#ps-study .ps-mono{font-family:'SFMono-Regular',Consolas,monospace;font-variant-numeric:tabular-nums;color:var(--ps-amber);font-weight:400}
+#ps-study .ps-actions{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:18px 0}
+#ps-study .ps-actions label{display:flex;gap:5px;align-items:center;color:var(--ps-muted);margin-right:8px}
+#ps-study input{accent-color:var(--ps-blue)}
+#ps-study .ps-section{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;border-top:1px solid var(--ps-line);padding-top:18px}
+#ps-study .ps-section label{font-size:11px;color:var(--ps-muted);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#ps-study select{font-size:12px;max-width:100%}
+#ps-study .ps-imd{display:grid;grid-template-columns:1fr 1fr 1.2fr;gap:16px;padding:18px 0}
+#ps-study .ps-imd-state{display:flex;flex-direction:column;justify-content:center;gap:5px;color:var(--ps-muted)}
+#ps-study .ps-imd-state small{font-size:12px}
+#ps-study .ps-details{border-top:1px solid var(--ps-line);padding:14px 0;font-size:12px;color:var(--ps-muted)}
+#ps-study summary{color:var(--ps-text)}
+#ps-study .ps-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px}
+#ps-study .ps-detail-grid>*{display:flex;justify-content:space-between;gap:12px}
+#ps-study .ps-footer{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid var(--ps-line);padding-top:12px;color:var(--ps-muted);font-size:11px}
+#ps-study .ps-applet{max-width:310px}
+#ps-study .ps-applet .ps-content{padding:14px}
+#ps-study .ps-app-feedback{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:20px}
+#ps-study .ps-app-feedback .ps-mono{font-size:24px}
+#ps-study .ps-app-feedback small{display:block;text-align:right}
+#ps-study .ps-plot-heading{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12px;margin-top:14px}
+#ps-study canvas{width:100%;height:190px;display:block;background:var(--ps-panel);margin:8px 0 16px;border-radius:4px}
+@media(max-width:520px){#ps-study .ps-content{padding:14px}#ps-study .ps-instruments{grid-template-columns:1fr;gap:24px;padding:14px}#ps-study .ps-imd{grid-template-columns:1fr 1fr}#ps-study .ps-imd-state{grid-column:1/-1}#ps-study .ps-title{flex-wrap:wrap}#ps-study .ps-detail-grid{grid-template-columns:1fr}}
+@media(pointer:coarse){#ps-study button,#ps-study select{min-height:44px}}
+</style>
+<script>
+(() => {
+ const root=document.getElementById('ps-study');
+ const panels=[...root.querySelectorAll('[data-panel]')];
+ function open(view){panels.forEach(p=>p.hidden=p.dataset.panel!==view);root.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===view)));if(view==='amp')requestAnimationFrame(drawAll);}
+ root.querySelectorAll('[data-view],[data-open]').forEach(b=>b.addEventListener('click',()=>open(b.dataset.view||b.dataset.open)));
+ root.querySelectorAll('[data-toggle]').forEach(b=>b.addEventListener('click',()=>b.setAttribute('aria-pressed',String(b.getAttribute('aria-pressed')!=='true'))));
+ root.querySelectorAll('[data-local]').forEach(b=>b.addEventListener('click',()=>root.querySelectorAll('.ps-local').forEach(e=>e.textContent=b.dataset.local)));
+ const measure=root.querySelector('#ps-measure-state');
+ function imd(){const v=measure.value;root.querySelector('#ps-imd3').innerHTML=(v==='valid'?'−48.2':'—')+' <small>dBc</small>';root.querySelector('#ps-imd5').innerHTML=(v==='valid'?'−61.7':'—')+' <small>dBc</small>';root.querySelector('#ps-imd-status').textContent={valid:'Measurement valid',waiting:'Waiting for two-tone',peaks:'Peaks not found',duplex:'Duplex display required'}[v];root.querySelector('#ps-imd-detail').textContent=v==='valid'?'Illustrative values · no radio connected':'No current measurement';}
+ measure.addEventListener('change',imd);
+ const settings={meterHeight:14,accent:'#d8a55f'};
+ function renderStyle(){root.style.setProperty('--ps-amber',settings.accent);root.querySelectorAll('.ps-meter').forEach(e=>e.style.height=settings.meterHeight+'px');}
+ if(globalThis.Tweak){const tweak=new Tweak({container:root,onChange:renderStyle});tweak.addSlider(settings,'meterHeight',{label:'Feedback meter depth',min:8,max:24,unit:'px'});tweak.addColorPicker(settings,'accent',{label:'Numeric accent',reference:'--ps-amber'});}
+ function draw(canvas,phase){const w=canvas.clientWidth;if(!w)return;const h=190,dpr=window.devicePixelRatio||1;canvas.width=w*dpr;canvas.height=h*dpr;const c=canvas.getContext('2d');c.scale(dpr,dpr);const style=getComputedStyle(root),color=n=>style.getPropertyValue(n).trim();const left=40,right=w-18,top=22,bottom=150,x=t=>left+t*(right-left),gain=root.querySelector('#ps-gain').checked,zoom=root.querySelector('#ps-phase').checked;const min=phase?(zoom?-15:-45):0,max=phase?(zoom?15:45):1.5,y=v=>bottom-(v-min)/(max-min)*(bottom-top);c.font='11px -apple-system,sans-serif';c.strokeStyle=color('--ps-line');c.fillStyle=color('--ps-muted');c.textAlign='right';for(let i=0;i<4;i++){const v=min+(max-min)*i/3;c.beginPath();c.moveTo(left,y(v));c.lineTo(right,y(v));c.stroke();c.fillText(phase?Math.round(v):v.toFixed(1),left-8,y(v)+4);}c.textAlign='center';[0,.5,1].forEach(t=>{c.fillText(t.toFixed(1),x(t),bottom+17)});c.fillText('Input magnitude',w/2,h-9);const line=(fn,col,dash=[])=>{c.strokeStyle=col;c.setLineDash(dash);c.beginPath();for(let i=0;i<=80;i++){const t=i/80;i?c.lineTo(x(t),y(fn(t))):c.moveTo(x(t),y(fn(t)));}c.stroke();c.setLineDash([]);};c.save();c.beginPath();c.rect(left,top,right-left,bottom-top);c.clip();if(!phase)line(t=>gain?1:t,color('--ps-muted'),[4,5]);line(t=>phase?-9*t*t:(gain?1+.24*t*t:t+.24*t*t*t),color(phase?'--ps-green':'--ps-amber'));c.fillStyle=color('--ps-blue');const n=root.querySelector('#ps-lowres').checked?18:65;for(let i=1;i<=n;i++){const t=i/n,v=phase?9*t*t+.3*Math.sin(i*3):(gain?1-.18*t*t:t-.18*t*t*t);c.beginPath();c.arc(x(t),y(v),1.8,0,Math.PI*2);c.fill();}c.restore();}
+ function drawAll(){root.querySelector('#ps-mag-title').textContent=root.querySelector('#ps-gain').checked?'Gain':'Magnitude';draw(root.querySelector('#ps-mag-chart'),false);draw(root.querySelector('#ps-phase-chart'),true);}
+ ['ps-gain','ps-phase','ps-lowres'].forEach(id=>root.querySelector('#'+id).addEventListener('change',drawAll));
+ new ResizeObserver(drawAll).observe(root);imd();
+})();
+</script>

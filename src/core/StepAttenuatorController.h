@@ -9,6 +9,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-16 — Issue #434: a second hardware key with no unkey between
+//                 (a key again inside MoxController's unkey wait) no longer
+//                 saves the TX S-ATT or forced-off preamp as the RX value.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-13 — Route operator S-ATT edits to the displayed RX/TX lane.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -389,7 +395,8 @@ public:
 
     // R-R3-46 / R-R3-11: save this radio's settings a short while after an
     // operator change, not only at teardown.  Off by default; the Core
-    // (DaemonApp) turns it on so a change made from a remote window is on
+    // (DaemonApp, and DesktopStationController while a desktop Core runs)
+    // turns it on so a change made from a remote window is on
     // disk without waiting for the Core to stop.  Auto-attenuate's own
     // moves never schedule a save.
     void setDebouncedSaveEnabled(bool on);
@@ -456,6 +463,10 @@ public:
     // receive attenuator for rx1_band and ATTOnTX for _tx_band.
     void setTxBand(Band band) noexcept { m_txBand = band; }
     Band txBand() const noexcept { return m_txBand; }
+
+    // Operator edit of RX1's shared RX/TX readout. Generic RX setters and
+    // AutoAtt retain their existing lane; RX2 uses its own setter.
+    void setDisplayedAttenuation(int dB);
 
     // Set ATT value (e.g. from UI or persistence restore).
     void setAttenuation(int dB, int rx = 0);
@@ -723,6 +734,9 @@ private:
     // Start (or restart) the debounced save when it is enabled, a radio's
     // settings are loaded, and the radio is not transmitting.
     void scheduleSave();
+    // Puts this radio's values in the settings store without writing the
+    // file. False when saveSettings()'s gate refuses `mac`.
+    bool storeSettings(const QString& mac);
 
     // Push a new ATT value to hardware + emit signal.  Used by auto-att
     // paths that bypass setAttenuation() (which also stores per-band state).
@@ -856,6 +870,11 @@ private:
     // Classic mode undo path and serves a different purpose).
     PreampMode m_savedPreampMode{PreampMode::Off};
 
+    // Issue #434: true from the HPSDR key that saved m_savedPreampMode (and
+    // m_savedRx2PreampMode) until the matching unkey, so a second key with
+    // no unkey between does not save the forced Off as the RX mode.
+    bool m_savedRxPreampValid{false};
+
     // Saved RX att for restore on TX→RX (#175 follow-up bench, 2026-05-04).
     //
     // Stashed by onMoxHardwareFlipped(true) before swapping m_attDb to txAtt;
@@ -916,6 +935,9 @@ private:
     int m_rx2AttDb{0};
     // A routing or band change while keyed, sent on the fall.
     bool m_adcSendsHeldForMox{false};
+    // Issue #434 follow-up: RX1's band restore while keyed (with
+    // setBandRestoreToRadio), sent on the fall.
+    bool m_bandRestoreHeldForMox{false};
     // Thetis rx2_step_attenuator_by_band: the other ADC's band memory.
     std::unordered_map<int, int> m_rx2BandAttDb;
     // What each receive ADC holds: in use, and its attenuation.
@@ -999,6 +1021,13 @@ private:
     bool rx2PreampPresent() const noexcept;
     // Send RX2's mode drive (the RX2PreampMode setter's sends).
     void applyRx2PreampDrive();
+    // Issue #434 follow-up: while keyed, the RX values the hardware key
+    // saved stand in for the live ones it replaced with TX values, until
+    // the unkey puts them back.  True when the saved RX1 attenuation (a
+    // standard board) or the saved preamp modes (the HPSDR, which the
+    // unkey restores only with ATT on TX on) are the RX ones.
+    bool rxAttHeldForTx() const noexcept;
+    bool rxPreampHeldForTx() const noexcept;
 
     // --- Helpers ---
     void applyClassicAutoAtt(int adc);

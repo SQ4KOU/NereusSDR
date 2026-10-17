@@ -99,6 +99,36 @@ private slots:
         QCOMPARE(slice->dspMode(),   DSPMode::CWU);
     }
 
+    // Step persistence lane (2026-10-15), case (c)/(d): pins today's model.
+    // The tune step is kept per slice per band (Slice<N>/Band<key>/StepHz):
+    // a first visit keeps the step it arrived with, and each later visit
+    // brings back that band's own step. Thetis keeps one step for the whole
+    // console (wheel_tune_index, console.cs:3205 and 4016-4017
+    // [v2.10.3.15]); whether NereusSDR should is the maintainer's call.
+    void step_is_kept_per_band() {
+        RadioModel radio;
+        radio.addSlice();
+        radio.setActiveSlice(0);
+        SliceModel* slice = radio.sliceById(0);
+        QVERIFY(slice);
+        slice->setFrequency(3700000.0);   // 80m, so 20m and 40m are first visits
+        slice->setDspMode(DSPMode::LSB);
+
+        radio.onBandButtonClicked(Band::Band20m);
+        slice->setStepHz(1000);
+
+        radio.onBandButtonClicked(Band::Band40m);
+        QCOMPARE(slice->stepHz(), 1000);  // first visit keeps the step
+        slice->setStepHz(10);
+
+        radio.onBandButtonClicked(Band::Band20m);
+        QCOMPARE(slice->stepHz(), 1000);
+        radio.onBandButtonClicked(Band::Band40m);
+        QCOMPARE(slice->stepHz(), 10);
+        QCOMPARE(AppSettings::instance()
+                     .value(QStringLiteral("Slice0/Band20m/StepHz")).toInt(), 1000);
+    }
+
     void same_band_is_no_op() {
         RadioModel radio;
         radio.addSlice();

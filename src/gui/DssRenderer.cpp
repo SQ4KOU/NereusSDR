@@ -14,6 +14,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Retain measured folded-row quiet levels for uncovered
+//                 3D overhang. J.J. Boyd (KG4VCF), OpenAI Codex assisted.
 //   2026-08-08 — Ported/adapted in C++20/Qt6 for NereusSDR by
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.
@@ -26,6 +28,7 @@
 // =================================================================
 
 #include "gui/DssRenderer.h"
+#include "gui/DssQuietOverhang.h"
 
 #include <algorithm>
 #include <cmath>
@@ -188,6 +191,12 @@ double DssRenderer::rowBandwidthMhzAtAge(int age) const
     return m_rowBandwidthMhz[ringAtAge(age)];
 }
 
+std::optional<float> DssRenderer::rowQuietDbmAtAge(int age) const
+{
+    if (age < 0 || age >= m_count) { return std::nullopt; }
+    return m_rowQuietDbm[ringAtAge(age)];
+}
+
 double DssRenderer::rowWideCenterMhzAtAge(int age) const
 {
     return m_rowWideCenterMhz[ringAtAge(age)];
@@ -234,6 +243,7 @@ void DssRenderer::clear()
     m_rowBandwidthMhz.fill(0.0);
     m_rowWideCenterMhz.fill(0.0);
     m_rowWideBandwidthMhz.fill(0.0);
+    m_rowQuietDbm.fill(std::nullopt);
     for (std::array<quint8, kDssCols>& coverage : m_rowWideCoverage) {
         coverage.fill(0);
     }
@@ -281,6 +291,9 @@ void DssRenderer::pushRowWithWide(const QVector<float>& binsDbm,
 
     m_head = (m_head - 1 + kDssRows) % kDssRows;
     m_rows[m_head] = nr;
+    // Accepted HTML:1610-1613 captures quiet from the folded calibrated
+    // row, before existing DSS temporal smoothing or resampling.
+    m_rowQuietDbm[m_head] = dssQuietLevelFromFoldedRow(binsDbm);
     m_rowCoverage[m_head].fill(1);
     m_rowCenterMhz[m_head] = centerMhz;
     m_rowBandwidthMhz[m_head] = bandwidthMhz;
@@ -465,13 +478,19 @@ void DssRenderer::rebuild(const QSize& px, int scaleStripPx, float floorDbm,
                 value = values[lo] * (1.0f - mix) + values[hi] * mix;
                 return true;
             };
-            row[c] = floorDbm;
-            if (!sample(m_rows[ring], m_rowCoverage[ring],
-                        m_rowCenterMhz[ring], m_rowBandwidthMhz[ring], row[c])
-                && m_rowWideBandwidthMhz[ring] > 0.0) {
-                sample(m_rowWide[ring], m_rowWideCoverage[ring],
-                       m_rowWideCenterMhz[ring], m_rowWideBandwidthMhz[ring], row[c]);
+            float value = floorDbm;
+            std::optional<float> exact;
+            std::optional<float> wide;
+            if (sample(m_rows[ring], m_rowCoverage[ring],
+                       m_rowCenterMhz[ring], m_rowBandwidthMhz[ring], value)) {
+                exact = value;
+            } else if (m_rowWideBandwidthMhz[ring] > 0.0
+                    && sample(m_rowWide[ring], m_rowWideCoverage[ring],
+                              m_rowWideCenterMhz[ring], m_rowWideBandwidthMhz[ring], value)) {
+                wide = value;
             }
+            row[c] = dssSampleQuietOverhang(static_cast<float>(u), exact, wide,
+                                           m_rowQuietDbm[ring], floorDbm).dbm;
         }
         // Pass 1: geometry — noise-floor-anchored ridge heights, with the same
         // pow(s, zCurve) floor-lift the GPU shader applies.

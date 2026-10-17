@@ -132,8 +132,14 @@ private:
         const bool finished = child.waitForFinished(contended ? 10000 : 60000);
         if (!finished) { child.kill(); child.waitForFinished(10000); }
         QVERIFY2(finished, "the child did not finish while its writer remained held");
+#ifdef Q_OS_WIN
+        // Qt's abort on Windows ends the process with RaiseFailFastException,
+        // so the child's SIGABRT handler never runs to set its exit code.
+        QCOMPARE(child.exitStatus(), QProcess::CrashExit);
+#else
         QCOMPARE(child.exitStatus(), QProcess::NormalExit);
         QCOMPARE(child.exitCode(), kChildAbortExit);
+#endif
         const QByteArray stderrText = child.readAll();
         QVERIFY(stderrText.contains(kFatalMarker));
         if (contended) { QVERIFY(stderrText.contains(QByteArray("FTL: ") + kFatalMarker)); }

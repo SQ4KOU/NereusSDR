@@ -57,6 +57,15 @@
 #include "OperatorWording.h"
 
 using namespace NereusSDR;
+
+// MinGW imports a static constexpr member of an exported class by address
+// when it is bound to a reference (QCOMPARE does), and the Core DLL never
+// exports one, so this test did not link on Windows. It reads these
+// copies by value instead.
+namespace {
+constexpr double kDefaultNotchWidthHz = NereusSDR::NotchModel::kDefaultNotchWidthHz;
+} // namespace
+
 using NereusSDR::Test::LoopbackTransport;
 
 namespace {
@@ -350,7 +359,7 @@ void TstNotchAddAtSlice::landsTheDesktopsTnfNotch()
     if (static_cast<DSPMode>(mode) == DSPMode::DIGU) { demodulated += 1500.0; }
     if (static_cast<DSPMode>(mode) == DSPMode::DIGL) { demodulated += 2210.0; }
     QCOMPARE(byVerb.centerHz, demodulated + middle);
-    QCOMPARE(byVerb.widthHz, NotchModel::kDefaultNotchWidthHz);
+    QCOMPARE(byVerb.widthHz, kDefaultNotchWidthHz);
 }
 
 void TstNotchAddAtSlice::anUnknownReceiverIsRefused()
@@ -574,7 +583,7 @@ void TstNotchAddAtSlice::remoteTnfOnAVersion1CoreSendsNotchAdd()
     QCOMPARE(arguments.value(QStringLiteral("centreHz")).toDouble(),
              RadioModel::tnfCentreHzFor(*windowSlice));
     QCOMPARE(arguments.value(QStringLiteral("widthHz")).toDouble(),
-             NotchModel::kDefaultNotchWidthHz);
+             kDefaultNotchWidthHz);
     QCOMPARE(s.notches()->notches().first().centerHz, 14100000.0 + 100 + (2900 - 100) / 2);
 }
 

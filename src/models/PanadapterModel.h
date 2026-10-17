@@ -9,6 +9,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Pure unset-band baseline for the Setup band preview.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -18,6 +20,9 @@
 //                 applyStationGridSetting, so a remote window's pan takes
 //                 the Core's per-band dB max and min. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - Display pill plan Task 9: dss3DFloorDepthStored, so a
+//                 second pan on the band follows a 3D Floor edit. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -158,9 +163,20 @@ public:
     // AppSettings on every write. Reading an unset band returns the
     // Thetis uniform default (-40 / -140) that was installed at
     // construction time.
+    //
+    // An edit writes the key of the end that changed, once, whatever the
+    // number of pan models (the others take the value into their slot);
+    // the first edit of a band with nothing stored also writes its other
+    // end as drawn (storePerBandDb in the .cpp says why). An edit of both
+    // ends is one call to setPerBandDbRange, so no listener and no station
+    // write sees a half-made pair; it refuses dbMax <= dbMin.
     BandGridSettings perBandGrid(Band b) const;
+    // A separate Setup band preview uses the same unset-band baseline
+    // without copying a stored band's endpoints or writing settings.
+    BandGridSettings unsetBandGridDefault() const { return {m_unsetDbMax, m_unsetDbMin}; }
     void setPerBandDbMax(Band b, int dbMax);
     void setPerBandDbMin(Band b, int dbMin);
+    void setPerBandDbRange(Band b, int dbMax, int dbMin);
 
     // Clarity per-band floor memory (Phase 3G-9c). NaN = no data yet.
     float clarityFloor(Band b) const;
@@ -204,6 +220,16 @@ public:
     // applies at once. Any other key is ignored.
     void applyStationGridSetting(const QString& key);
 
+    // Display pill plan Task 9: the pair a band shows while it has no
+    // stored DisplayGridMax_<band> / DisplayGridMin_<band>. It is this
+    // model's alone and is never written: perBandGrid(), dBmFloor() and
+    // dBmCeiling() report it, and a key appears only with an edit
+    // (setPerBandDbMax / setPerBandDbMin). The class default is the Thetis
+    // pair (-40 / -140); a window gives its pans the range they showed
+    // before they had a band store (PanModels). An upside-down pair is
+    // refused.
+    void setUnsetBandGridDefault(int dbMax, int dbMin);
+
 signals:
     void centerFrequencyChanged(double freq);
     void bandwidthChanged(double bw);
@@ -211,11 +237,21 @@ signals:
     void fftSizeChanged(int size);
     void bandChanged(NereusSDR::Band band);
     void gridStepChanged(int step);
+    // Display pill plan Task 9: the stored 3D Floor depth of a band's slot
+    // changed (through this model or, the store being shared, another).
+    // A pan showing that band takes it (PanModels).
+    void dss3DFloorDepthStored(NereusSDR::Band band, int depth);
 
 private:
     // Reads m_perBandGrid[b] and pushes it into dBmFloor/dBmCeiling.
     // Called by setBand(); does NOT emit bandChanged itself.
     void applyBandGrid(Band b);
+
+    // The one route for a band's dB Max and dB Min (slotBand is already
+    // gridSlot()'s): storePerBandDb writes the keys and gives the pair to
+    // every model; takePerBandDb is a model taking it, with no write.
+    void storePerBandDb(Band slotBand, int dbMax, int dbMin);
+    void takePerBandDb(Band slotBand, int dbMax, int dbMin);
 
     // AppSettings persistence helpers.
     void loadPerBandGridFromSettings();
@@ -232,6 +268,8 @@ private:
     QHash<Band, BandGridSettings> m_perBandGrid;
     int m_gridStep{10};            // NereusSDR divergence from Thetis 2.
     bool m_followsBandGrid{true};  // Parity ruling C12.
+    int m_unsetDbMax{-40};         // setUnsetBandGridDefault()
+    int m_unsetDbMin{-140};
 };
 
 } // namespace NereusSDR

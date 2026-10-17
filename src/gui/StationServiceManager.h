@@ -23,10 +23,16 @@ struct StationServiceOptions {
     QString profile;
     bool inheritActiveProfile = true;
     QString profileDirectory;
+    // The folder the window's own Core keeps its saved FFT plans in; the
+    // background Core is told to use the same one. Empty: this program's
+    // own (DspCacheLocation::directory()).
+    QString dspCacheDirectory;
     QString homeDirectory;
     QString binaryPath;
     QStringList prefixArguments;
     QString userName;
+    // macOS: the numeric user id of the launchd domain. Windows: the
+    // account's SID, which the login task names as its user.
     QString userId;
     StationPlatform platform = currentStationPlatform();
     StationServiceRunner runner;
@@ -52,11 +58,15 @@ public:
 private:
     enum class ServiceState { Absent, Stopped, Pending, Running, Error };
     bool validateLaunch();
+    QStringList launchArguments() const;
     bool writeEntry(bool startAtLogin);
     bool run(const QString& program, const QStringList& args, QString* output = nullptr) const;
-    ServiceState probeState() const;
+    bool registerWindowsTask(QString* toolOutput) const;
+    ServiceState probeState(QString* toolOutput = nullptr) const;
     QString serviceName() const;
-    void fail(const QString& error);
+    // toolOutput is what the system's own tool printed; it is added to the
+    // sentence so the reason reaches the user and the log.
+    void fail(const QString& error, const QString& toolOutput = {});
 
     StationServiceOptions m_options;
     StartupMode m_startupMode = StartupMode::Disabled;

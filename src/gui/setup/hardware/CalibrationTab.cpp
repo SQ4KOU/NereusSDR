@@ -75,6 +75,19 @@
 //   2026-09-30 - Level Cal 2 review: with no slice the desktop may
 //                 change, Start is disabled with the ownership words.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - D25: the top row of groups stacks when narrow
+//                 (SetupFit::FitRow). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-10 - D25: the tab scrolls in a SetupFit::FitScrollArea, so at
+//                 the window's own size the two columns are side by side
+//                 with no scroll bar by every route to the tab, not
+//                 stacked when a bar happened to show first. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - The page's spare height goes under Volts/Amps
+//                 Calibration (a trailing stretch), not between it and the
+//                 columns, and Level Cal's message takes a row only while
+//                 there is one. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -180,6 +193,7 @@
 #include "CalibrationTab.h"
 #include "HardwareTransmitGate.h"
 #include "gui/UnbuiltFeatures.h"
+#include "gui/setup/SetupFit.h"
 
 #include "core/BoardCapabilities.h"
 #include "core/CalibrationController.h"
@@ -239,7 +253,9 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     // We lay out the 5 group boxes in a 2-column grid using two QVBoxLayouts
     // inside a QHBoxLayout (top half: col 0 = Freq Cal + Level Cal,
     // col 1 = HPSDR Diag + TX Display Cal; bottom: Volts/Amps Cal full-width).
-    auto* scrollArea = new QScrollArea(this);
+    // D25: side by side whenever the columns fit without a vertical scroll
+    // bar (SetupFit::FitScrollArea).
+    auto* scrollArea = new SetupFit::FitScrollArea(this);
     scrollArea->setWidgetResizable(true);
     auto* scrollWidget = new QWidget(scrollArea);
     auto* mainLayout   = new QVBoxLayout(scrollWidget);
@@ -248,7 +264,9 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     scrollArea->setWidget(scrollWidget);
     outerLayout->addWidget(scrollArea);
 
-    auto* topRow  = new QHBoxLayout;
+    // D25: the two columns stack, left first, when they do not fit.
+    auto* topRow  = new SetupFit::FitRow;
+    topRow->setObjectName(QStringLiteral("calibrationTopRow"));
     auto* leftCol = new QVBoxLayout;
     auto* rightCol= new QVBoxLayout;
     topRow->addLayout(leftCol, 1);
@@ -365,6 +383,8 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     m_levelCalStatusLabel->setObjectName(QStringLiteral("levelCalStatusLabel"));
     m_levelCalStatusLabel->setWordWrap(true);
     levelCalForm->addRow(m_levelCalStatusLabel);
+    // No message yet: no row (setLevelCalStatusText()).
+    levelCalForm->setRowVisible(m_levelCalStatusLabel, false);
 
     leftCol->addWidget(levelCalGroup);
     leftCol->addStretch();
@@ -498,6 +518,9 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     vaCalForm->addRow(m_logVoltsAmpsCheck);
 
     mainLayout->addWidget(vaCalGroup);
+    // The groups keep their own height; what is left of the page goes
+    // below them (JJ, 2026-10-10), as on the other Setup pages.
+    mainLayout->addStretch(1);
 
     // Note: the per-board PA forward-power cal spinbox group (PaCalibrationGroup)
     // previously lived here as Group 6.  Migrated to PA → Watt Meter
@@ -825,6 +848,17 @@ void CalibrationTab::restoreSettings(const QMap<QString, QVariant>& /*settings*/
 
 // -- Level Cal: the run -------------------------------------------------------
 
+// The run's last word under the progress bar. With nothing to say the row
+// is hidden, so Level Cal ends under its progress bar and is as tall as
+// its content needs (JJ, 2026-10-10).
+void CalibrationTab::setLevelCalStatusText(const QString& text)
+{
+    m_levelCalStatusLabel->setText(text);
+    if (auto* form = qobject_cast<QFormLayout*>(m_levelCalStatusLabel->parentWidget()->layout())) {
+        form->setRowVisible(m_levelCalStatusLabel, !text.isEmpty());
+    }
+}
+
 void CalibrationTab::refreshLevelCalControls()
 {
     if (!m_model) {
@@ -866,7 +900,7 @@ void CalibrationTab::refreshLevelCalControls()
                       : tr("Nothing to stop: no level calibration is running."));
 
     m_levelCalProgress->setValue(m_model->levelCalPercent());
-    m_levelCalStatusLabel->setText(running ? QString() : m_model->levelCalMessage());
+    setLevelCalStatusText(running ? QString() : m_model->levelCalMessage());
 
     const bool ended = m_levelCalWasRunning && !running;
     m_levelCalWasRunning = running;

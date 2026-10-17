@@ -174,7 +174,7 @@ final class TemperatureUnitKeys: SetupPhoneKeys {
         await rig.connect()
         #expect(try rig.state("g.offset").value == .integer(15))
         let writing = Task { await rig.dispatcher.edit(try! rig.control("g.offset"), in: "hardware", to: .integer(20)) }
-        #expect(await rig.route.waitForCount(1, unless: writing))
+        try #require(await rig.route.waitForCount(1, unless: writing))
         guard case .propertyWrite(let write) = rig.route.sent[0].message else { Issue.record("no write"); return }
         #expect(write.key == "radio" && write.properties.first?.value == .i64(10))
         rig.store.apply(.delta(.init(key: "radio", properties: [.init(name: "shift", value: .i64(10))])))
@@ -188,7 +188,7 @@ final class TemperatureUnitKeys: SetupPhoneKeys {
         #expect(named.options?.map(\.label) == ["Alpha", "Beta"])
         #expect(try rig.state("g.named").value == .integer(1))
         let choosing = Task { await rig.dispatcher.edit(try! rig.control("g.named"), in: "hardware", to: .integer(0)) }
-        #expect(await rig.route.waitForCount(1, unless: choosing))
+        try #require(await rig.route.waitForCount(1, unless: choosing))
         guard case .propertyWrite(let write) = rig.route.sent[0].message else { Issue.record("no write"); return }
         #expect(write.properties.first?.value == .utf8("Alpha"))
         rig.store.apply(.delta(.init(key: "radio", properties: [.init(name: "chosen", value: .utf8("Alpha"))])))
@@ -234,7 +234,7 @@ final class TemperatureUnitKeys: SetupPhoneKeys {
         #expect(rig.route.sent.count == 1)
 
         let choosing = Task { await rig.dispatcher.edit(model, in: "hardware", to: .integer(2)) }
-        #expect(await rig.route.waitForCount(2, unless: choosing))
+        try #require(await rig.route.waitForCount(2, unless: choosing))
         guard case .propertyWrite(let write) = rig.route.sent[1].message else { Issue.record("no write"); return }
         #expect(write.properties.first?.value == .utf8(long))
         rig.store.apply(.delta(.init(key: "radio", properties: [.init(name: "model", value: .utf8(long))])))
@@ -251,7 +251,7 @@ final class TemperatureUnitKeys: SetupPhoneKeys {
         #expect(rig.route.sent.isEmpty)
         #expect(try rig.state("g.held").value == .text("abcd"))
         let pressing = Task { await rig.dispatcher.edit(try! rig.control("g.send"), in: "hardware", to: nil) }
-        #expect(await rig.route.waitForCount(1, unless: pressing))
+        try #require(await rig.route.waitForCount(1, unless: pressing))
         guard case .commandInvoke(let invoke) = rig.route.sent[0].message else { Issue.record("no verb"); return }
         #expect(invoke.verb == "sendName" && invoke.args == [.init(name: "name", value: .utf8("abcd"))])
         await rig.commands.receive(.commandResult(.init(verb: invoke.verb, id: invoke.id, accepted: true, reason: "",
@@ -343,12 +343,12 @@ final class TemperatureUnitKeys: SetupPhoneKeys {
         let point = try rig.control("g.point")
         #expect(try rig.state("g.point") == .init(value: .decimal(10), editable: true, reason: nil))
         let writing = Task { await rig.dispatcher.edit(point, in: "hardware", to: .decimal(12.5)) }
-        #expect(await rig.route.waitForCount(1, unless: writing))
+        try #require(await rig.route.waitForCount(1, unless: writing))
         guard case .settingsWrite(let first) = rig.route.sent[0].message else { Issue.record("no class"); return }
         #expect(first.key == "hardware/AA:BB:CC:DD:EE:01/paCalibration/boardClass")
         #expect(first.properties.first?.value == .utf8("1"))
         rig.settings.apply(.settingsValue(.init(key: first.key, origin: first.origin, properties: first.properties)))
-        #expect(await rig.route.waitForCount(2, unless: writing))
+        try #require(await rig.route.waitForCount(2, unless: writing))
         guard case .settingsWrite(let second) = rig.route.sent[1].message else { Issue.record("no point"); return }
         #expect(second.key == "hardware/AA:BB:CC:DD:EE:01/paCalibration/point1")
         rig.settings.apply(.settingsValue(.init(key: second.key, origin: second.origin, properties: second.properties)))
@@ -380,7 +380,7 @@ final class TemperatureUnitKeys: SetupPhoneKeys {
         let again = try #require(rig.dispatcher.question(for: delete, in: "hardware", value: nil)).get()
         #expect(again.text == #"Delete profile "Alpha"?"#)
         let pressing = Task { await rig.dispatcher.edit(delete, in: "hardware", to: nil, asked: again) }
-        #expect(await rig.route.waitForCount(1, unless: pressing))
+        try #require(await rig.route.waitForCount(1, unless: pressing))
         guard case .commandInvoke(let invoke) = rig.route.sent[0].message else { Issue.record("no verb"); return }
         #expect(invoke.verb == "deleteProfile" && invoke.args == [.init(name: "name", value: .utf8("Alpha"))])
         await rig.commands.receive(.commandResult(.init(verb: invoke.verb, id: invoke.id, accepted: true, reason: "",
@@ -400,7 +400,7 @@ final class TemperatureUnitKeys: SetupPhoneKeys {
         let rig = Rig()
         await rig.connect()
         let writing = Task { await rig.dispatcher.edit(try! rig.control("g.point"), in: "hardware", to: .decimal(12.5)) }
-        #expect(await rig.route.waitForCount(1, unless: writing))
+        try #require(await rig.route.waitForCount(1, unless: writing))
         guard case .settingsWrite(let first) = rig.route.sent[0].message else { Issue.record("no class"); return }
         rig.settings.apply(.settingsReject(.init(key: first.key, properties: [], reason: SeveralDevices.waitingReason)))
         let outcome = await writing.value

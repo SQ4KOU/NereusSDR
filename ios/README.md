@@ -72,7 +72,12 @@ first: `ios/scripts/sim-ready.sh "<simulator name>" [path/to/NereusSDR.app]`
 waits until the simulator has really finished booting (`simctl bootstatus -b`
 can return early while it is still migrating data), then launches the app
 until one launch succeeds. Build with `build-for-testing`, run the script with
-the built app, then `test-without-building`. In a debug build the app, when it
+the built app, then `test-without-building`. Where the simulator has never
+booted, as on CI's runner, `ios/scripts/sim-settle.sh "<simulator name>"`
+goes between the two instead: it boots the simulator and waits for the Mac to
+go quiet, because a first boot keeps a small Mac busy for a quarter of an
+hour and tests run through it are slow enough for their waits to run out. In
+a debug build the app, when it
 hosts the unit tests, starts with an empty scene: no Keychain, no looking for
 Cores, no sound. Building needs Xcode 27. The app's Metal
 shaders ship as source (`NereusApp/Resources/Shaders`) and compile at run
@@ -91,11 +96,17 @@ from an empty cache.
 
 `ios/scripts/archive.sh` makes the Release archive for TestFlight and the App
 Store, from phone main only: its build number is the commit count of HEAD
-(`build-number.sh`), its version is `project.yml`'s, and its name comes from
+plus 1000 (`build-number.sh`), its version is `project.yml`'s, and its name comes from
 `build-tag.sh`. It refuses uncommitted changes to tracked files and a build
 name that does not name HEAD, so every archive is a commit. It writes `ios/.build/archive/NereusSDR <version> (<build>).xcarchive`
 and stops if the archived app has no privacy manifest. It signs with the
 team’s certificate, so only the controller or JJ runs it.
+
+Upload the archive with Organizer's **App Store Connect** choice, or with
+`xcodebuild -exportArchive -exportOptionsPlist ios/Config/ExportOptions.plist`.
+Never choose **TestFlight Internal Only**: App Store Connect keeps such a build
+out of external testing groups, the public TestFlight link and App Store review
+for good, and the only way back is a new archive from a newer commit.
 
 ## Testing
 
@@ -137,3 +148,14 @@ The vendored libraries (`COpus`, and `CDataChannel`, `CJuice`, `CSrtp`,
 `CUsrsctp`, `CPlog` and `CMbedTLS` for the media peer) are written by
 `ios/scripts/vendor-sources.sh` and checked against their pinned archives by
 `swift-test.sh` before every run.
+
+### Accessory meter display
+
+The app and Live Activity share `NereusModels.TransmitMeterRule` and
+`MeterReadout`. A present amplifier in OPERATE supplies the main forward-power
+and SWR meters, with Power Genius taking precedence over RF-Kit. The display
+runs from 0 to 2000 W with a 1500 W legal-limit marker. Neither value sets an
+amplifier rating or changes a control, and a reported 2300 W stays visible as
+2300 W. The transmit panel retains the radio's drive beside that meter while
+keyed. Accessory pages show forward, reflected, SWR and temperature readings;
+idle power readings use dashes while temperature stays live.

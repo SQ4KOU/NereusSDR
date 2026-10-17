@@ -97,6 +97,15 @@
 // moves it onto this model last, behind a golden test.
 //
 // Modification history (NereusSDR)
+//   2026-10-12: Query closed-pan defaults without constructing a model.
+//     J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-12: Read current per-pan values through the persistence visitor.
+//     J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-10: Display pill plan Task 9 (S9). Ref level and dynamic range
+//     are live values following the widget, no longer loaded or saved: the
+//     receive range is the band store's (PanadapterModel). Twelve fields
+//     persist per pan. J.J. Boyd / KG4VCF, AI-assisted via Anthropic
+//     Claude Code.
 //   2026-10-02: Completed-grid reflection and selected receive persistence.
 //     J.J. Boyd / KG4VCF, AI-assisted via OpenAI Codex.
 //   Created 2026-08-09 by J.J. Boyd / KG4VCF, 3D Stacked-Trace Spectrum
@@ -106,6 +115,10 @@
 
 #include "core/NereusCoreExport.h"
 #include <QObject>
+#include <QString>
+#include <QStringList>
+
+#include <functional>
 
 namespace NereusSDR {
 
@@ -124,7 +137,9 @@ namespace NereusSDR {
 // default is pan 0. dssFloorDepth is the exception: it is still an
 // ordinary in-memory field on this instance like the other fourteen, but
 // load()/save() never touch it -- see "THE ONE FIELD THAT IS NOT LIKE
-// THE OTHERS" above for why.
+// THE OTHERS" above for why. Since display pill plan Task 9 refLevel and
+// dynamicRange are not persisted either: they follow the widget's live
+// range, and the receive range is stored per band on PanadapterModel.
 class NEREUS_CORE_EXPORT DisplaySettingsModel : public QObject {
     Q_OBJECT
 
@@ -151,6 +166,8 @@ public:
     int  wfColorGain() const { return m_wfColorGain; }
     void setWfColorGain(int gain);
 
+    // 0 to 100: 50 puts black at the noise floor, up is blacker
+    // (core/spectrum/ClarityLevels.h).
     int  wfBlackLevel() const { return m_wfBlackLevel; }
     void setWfBlackLevel(int level);
 
@@ -237,17 +254,30 @@ public:
     // fourteen per-pan setters above do NOT auto-persist on every call.
     // load() populates every field (including seeding, but not writing,
     // ship defaults when a key is absent) from AppSettings for the
-    // current panIndex(), following the same pan-0-fallback-inheritance
-    // rule SpectrumWidget::loadSettings() uses (an untouched pan N reads
-    // pan 0's value until it is given one of its own). save() writes the
-    // current in-memory value of every field to AppSettings for the
-    // current panIndex(). Neither touches dssFloorDepth: it is a live
+    // current panIndex(), following the same inheritance rule
+    // SpectrumWidget::loadSettings() uses (core/settings/PanDisplayKeys.h:
+    // a pan reads its own <base>_<pan> key when it has one, else the Setup
+    // default in the bare key, else the ship default). save() writes the
+    // current in-memory value of a field to this pan's own key, and only
+    // when the pan already has that key or the value differs from what it
+    // would inherit; it never writes the bare key. Neither touches
+    // dssFloorDepth: it is a live
     // runtime mirror only (see the file header); its persistence stays
     // entirely on PanadapterModel.
     void load();
     void save();
-    // Persist the selected receive snapshot while the live grid may be TX.
-    void save(float receiveRefLevel, float receiveDynamicRange);
+    // Display pill plan Task 1: the base name of every per-pan key save()
+    // can write, in save order. A pan's own override of a base is
+    // PanDisplayKeys::panKey(base, panIndex()); the bare base is the Setup
+    // default.
+    QStringList perPanKeyBases() const;
+    // Display pill plan Task 21: the ship default load() falls back to for
+    // one of those bases, as the key stores it; empty for a base that is
+    // not this model's. Setup shows it for a default nobody has set.
+    QString perPanShipDefault(const QString& base) const;
+    static QString perPanShipDefaultForClosedPan(const QString& base);
+    // Current value in save format; pure read, including pending edits.
+    QString perPanValue(const QString& base) const;
 
 signals:
     void wfColorSchemeChanged(int scheme);
@@ -267,11 +297,19 @@ signals:
     void threeDSliceDepthChanged(bool on);
 
 private:
+    // base name, the value save() stores, the ship default load() falls
+    // back to (both as stored strings).
+    using PerPanKeyVisitor =
+        std::function<void(const QString&, const QString&, const QString&)>;
+    void visitPerPanKeys(const PerPanKeyVisitor& visit) const;
+    static void visitPerPanKeys(const DisplaySettingsModel* source,
+                                const PerPanKeyVisitor& visit);
+
     int m_panIndex{0};
 
     int   m_wfColorScheme{0};      // WfColorScheme::Default
-    int   m_wfColorGain{45};
-    int   m_wfBlackLevel{104};
+    int   m_wfColorGain{60};       // ClarityLevels::kColorGainDefault
+    int   m_wfBlackLevel{57};      // ClarityLevels::kBlackLevelDefault
     float m_refLevel{-48.0f};
     float m_dynamicRange{68.0f};
     float m_fillAlpha{0.70f};

@@ -27,6 +27,15 @@
 
 using namespace NereusSDR;
 
+// MinGW imports a static constexpr member of an exported class by address
+// when it is bound to a reference (QCOMPARE does), and the Core DLL never
+// exports one, so this test did not link on Windows. It reads these
+// copies by value instead.
+namespace {
+constexpr float kMonitorVolumeMax = NereusSDR::TransmitModel::kMonitorVolumeMax;
+constexpr float kMonitorVolumeMin = NereusSDR::TransmitModel::kMonitorVolumeMin;
+} // namespace
+
 class TstTransmitModelMon : public QObject {
     Q_OBJECT
 private slots:
@@ -111,9 +120,9 @@ private slots:
     void idempotent_monitorVolume_atMax_noSignal() {
         // Set to kMonitorVolumeMax (1.0f), then set again — must NOT emit second time.
         TransmitModel t;
-        t.setMonitorVolume(TransmitModel::kMonitorVolumeMax);
+        t.setMonitorVolume(kMonitorVolumeMax);
         QSignalSpy spy(&t, &TransmitModel::monitorVolumeChanged);
-        t.setMonitorVolume(TransmitModel::kMonitorVolumeMax);
+        t.setMonitorVolume(kMonitorVolumeMax);
         QCOMPARE(spy.count(), 0);
     }
 
@@ -121,9 +130,9 @@ private slots:
         // Set to kMonitorVolumeMin (0.0f), then set again — must NOT emit second time.
         // Exercises the qFuzzyIsNull(diff) zero-boundary case (C.3 fix-up pattern).
         TransmitModel t;
-        t.setMonitorVolume(TransmitModel::kMonitorVolumeMin);
+        t.setMonitorVolume(kMonitorVolumeMin);
         QSignalSpy spy(&t, &TransmitModel::monitorVolumeChanged);
-        t.setMonitorVolume(TransmitModel::kMonitorVolumeMin);
+        t.setMonitorVolume(kMonitorVolumeMin);
         QCOMPARE(spy.count(), 0);
     }
 
@@ -134,25 +143,25 @@ private slots:
     void monitorVolume_clampBelowMin() {
         TransmitModel t;
         t.setMonitorVolume(-0.5f);
-        QCOMPARE(t.monitorVolume(), TransmitModel::kMonitorVolumeMin);
+        QCOMPARE(t.monitorVolume(), kMonitorVolumeMin);
     }
 
     void monitorVolume_clampAboveMax() {
         TransmitModel t;
         t.setMonitorVolume(2.0f);
-        QCOMPARE(t.monitorVolume(), TransmitModel::kMonitorVolumeMax);
+        QCOMPARE(t.monitorVolume(), kMonitorVolumeMax);
     }
 
     void monitorVolume_clampAtMinBoundary() {
         TransmitModel t;
-        t.setMonitorVolume(TransmitModel::kMonitorVolumeMin);
-        QCOMPARE(t.monitorVolume(), TransmitModel::kMonitorVolumeMin);
+        t.setMonitorVolume(kMonitorVolumeMin);
+        QCOMPARE(t.monitorVolume(), kMonitorVolumeMin);
     }
 
     void monitorVolume_clampAtMaxBoundary() {
         TransmitModel t;
-        t.setMonitorVolume(TransmitModel::kMonitorVolumeMax);
-        QCOMPARE(t.monitorVolume(), TransmitModel::kMonitorVolumeMax);
+        t.setMonitorVolume(kMonitorVolumeMax);
+        QCOMPARE(t.monitorVolume(), kMonitorVolumeMax);
     }
 
     void monitorVolume_clampSignalCarriesClampedValue() {
@@ -161,7 +170,7 @@ private slots:
         QSignalSpy spy(&t, &TransmitModel::monitorVolumeChanged);
         t.setMonitorVolume(99.0f);
         QCOMPARE(spy.count(), 1);
-        QCOMPARE(spy.first().at(0).toFloat(), TransmitModel::kMonitorVolumeMax);
+        QCOMPARE(spy.first().at(0).toFloat(), kMonitorVolumeMax);
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -169,14 +178,14 @@ private slots:
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     void constants_monitorVolume_minLessThanMax() {
-        QVERIFY(TransmitModel::kMonitorVolumeMin < TransmitModel::kMonitorVolumeMax);
+        QVERIFY(kMonitorVolumeMin < kMonitorVolumeMax);
     }
 
     void constants_monitorVolume_expectedValues() {
         // Normalized volume scalar range [0.0f, 1.0f].
         // 0.5f default matches Thetis audio.cs:417 [v2.10.3.13] literal coefficient.
-        QCOMPARE(TransmitModel::kMonitorVolumeMin, 0.0f);
-        QCOMPARE(TransmitModel::kMonitorVolumeMax, 1.0f);
+        QCOMPARE(kMonitorVolumeMin, 0.0f);
+        QCOMPARE(kMonitorVolumeMax, 1.0f);
     }
 };
 

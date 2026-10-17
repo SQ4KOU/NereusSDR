@@ -34,6 +34,11 @@
 //                 beat the rise is replayed; an older Core is not asked
 //                 again. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-10-10 : Display pill plan Task 13: the rise takes Clarity off no
+//                 pan and neither edge re-primes the waterfall AGC; both
+//                 edges reach every pan first, with its band and its hold
+//                 length. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -54,16 +59,25 @@
 
 #define private public
 #include "gui/SpectrumWidget.h"
+#include "core/TwoToneController.h"
 // The test seam for a rebinding while keyed (TxSliceArbiter::flipTo moves
 // the transmit flag without requestHandoff's unkey).
 #include "core/TxSliceArbiter.h"
+#include "models/RadioModel.h"
+#include "core/WdspEngine.h"
 #undef private
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/MoxController.h"
+#include "core/PureSignal.h"
+#include "core/session/PureSignalSessionFacade.h"
 #include "core/TxAnalyzer.h"
 #include "core/TxDisplayFeed.h"
+#include "core/TxChannel.h"
+#include "core/DspControlThread.h"
+#include "core/RadioConnection.h"
+#include "core/wdsp_api.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/session/TransmitStateFacade.h"
@@ -86,6 +100,68 @@ using namespace NereusSDR;
 
 namespace {
 
+class MeasurementPreferenceGuard {
+public:
+    MeasurementPreferenceGuard()
+        : m_hadKey(AppSettings::instance().contains(m_key))
+        , m_previous(AppSettings::instance().value(m_key)) {}
+    ~MeasurementPreferenceGuard()
+    {
+        if (m_hadKey) { AppSettings::instance().setValue(m_key, m_previous); }
+        else { AppSettings::instance().remove(m_key); }
+    }
+private:
+    const QString m_key{QStringLiteral("puresignal/showTwoToneMeasurements")};
+    const bool m_hadKey;
+    const QVariant m_previous;
+};
+
+class MeasurementCoordinator : public PureSignal {
+public:
+    MeasurementCoordinator() : PureSignal(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr) {}
+    int displayConnectionCount() const
+    {
+        return receivers(SIGNAL(show2ToneMeasurementsChanged(bool)));
+    }
+};
+
+// Set authoritative state without invoking activation, MOX or hardware.
+void publishTwoToneState(RadioModel& radio, bool active)
+{
+    TwoToneController* controller = radio.twoToneController();
+    controller->m_active = active;
+    emit controller->twoToneActiveChanged(active);
+}
+
+// The real WDSP channel writes only to this in-process discard connection.
+class WaveformConnection final : public RadioConnection {
+public:
+    void init() override {}
+    void connectToRadio(const RadioInfo&) override {}
+    void disconnect() override {}
+    void setReceiverFrequency(int, quint64) override {}
+    void setTxFrequency(quint64) override {}
+    void setActiveReceiverCount(int) override {}
+    void setSampleRate(int) override {}
+    void setAttenuator(int) override {}
+    void setPreamp(bool) override {}
+    void setTxDrive(int) override {}
+    void sendTxIq(const float*, int) override {}
+    void setWatchdogEnabled(bool) override {}
+    void setAntennaRouting(AntennaRouting) override {}
+    void setMox(bool) override {}
+    void setTrxRelay(bool) override {}
+    void setMicBoost(bool) override {}
+    void setLineIn(bool) override {}
+    void setMicTipRing(bool) override {}
+    void setMicBias(bool) override {}
+    void setLineInGain(int) override {}
+    void setUserDigOut(quint8) override {}
+    void setPuresignalRun(bool) override {}
+    void setMicPTTDisabled(bool) override {}
+    void setMicXlr(bool) override {}
+};
+
 constexpr char kMissingDisplay[] =
     "This Core does not send its transmit display. Updating the Core may help.";
 
@@ -93,6 +169,9 @@ constexpr char kMissingDisplay[] =
 // from MainWindow.cpp at 9ef6c710, MoxController::moxStateChanged). Its
 // second setTxCenterFrequency / setTxSampleRate pair (the explicit sync
 // after the view move) set the same two values again and is folded in.
+// Display pill plan Task 13 took two of its calls out: Clarity is no longer
+// taken off the pan and the waterfall AGC is no longer re-primed, because
+// every pan keeps its level through a key.
 const QStringList kOldLambdaRise{
     QStringLiteral("setMoxOverlay(true)"),
     QStringLiteral("save sampleRate and ddcCenterFrequency"),
@@ -100,13 +179,64 @@ const QStringList kOldLambdaRise{
     QStringLiteral("setTxSampleRate"),
     QStringLiteral("connect txViewWindowChanged"),
     QStringLiteral("setDisplayWindowPreservingHistory(carrier)"),
-    QStringLiteral("setClarityActive(false)"),
     QStringLiteral("connect updateSpectrumFromTxPixels"),
     QStringLiteral("setTxExternalWaterfall(true)"),
     QStringLiteral("connect pushTxWaterfallRow"),
-    QStringLiteral("resetWaterfallAgc"),
     QStringLiteral("clearAvengers"),
 };
+
+// What an edge records ahead of the rise and the fall: keyedChanged, then
+// one setDisplayKeyed for each pan (in no fixed order).
+bool isEdgeCall(const QString& call)
+{
+    return call.startsWith(QStringLiteral("keyedChanged("))
+        || call.startsWith(QStringLiteral("setDisplayKeyed("));
+}
+
+QStringList edgeCalls(const QStringList& calls)
+{
+    QStringList out;
+    for (const QString& call : calls) {
+        if (isEdgeCall(call)) { out.append(call); }
+    }
+    return out;
+}
+
+QStringList withoutEdgeCalls(const QStringList& calls)
+{
+    QStringList out;
+    for (const QString& call : calls) {
+        if (!isEdgeCall(call)) { out.append(call); }
+    }
+    return out;
+}
+
+// The edge's calls: keyedChanged first, then every pan of the stack (its
+// own first pan, "one" and "two") once, each before anything of the rise or
+// the fall.
+bool edgeLeadsTheLog(const QStringList& calls, bool keyed)
+{
+    const QString state = keyed ? QStringLiteral("true") : QStringLiteral("false");
+    const QStringList edge = edgeCalls(calls);
+    QStringList pans = edge.mid(1);
+    pans.sort();
+    const QString told = QStringLiteral("setDisplayKeyed(%1) ").arg(state);
+    bool everyPanOnce = pans.size() >= 2 && pans.removeDuplicates() == 0
+        && pans.contains(told + QStringLiteral("one"))
+        && pans.contains(told + QStringLiteral("two"));
+    for (const QString& pan : std::as_const(pans)) {
+        everyPanOnce = everyPanOnce && pan.startsWith(told);
+    }
+    const bool leads = calls.value(0) == QStringLiteral("keyedChanged(%1)").arg(state)
+        && everyPanOnce && calls.mid(0, edge.size()) == edge;
+    if (!leads) {
+        qWarning().noquote() << "edge calls not leading:" << calls.join(QStringLiteral(" | "));
+    }
+    return leads;
+}
+
+// A flat receive row at `dbm`.
+QVector<float> flatRow(float dbm) { return QVector<float>(512, dbm); }
 
 // The calls the transmit source owns now (its bins' centre and span, and
 // its trace and waterfall); the controller owns the rest.
@@ -126,7 +256,6 @@ const QStringList kOldLambdaFall{
     QStringLiteral("restore sampleRate and ddcCenterFrequency"),
     QStringLiteral("disconnect txViewWindowChanged"),
     QStringLiteral("setTxCenterFrequency(0)"),
-    QStringLiteral("resetWaterfallAgc"),
     QStringLiteral("clearAvengers"),
 };
 
@@ -659,21 +788,27 @@ private slots:
         const double carrier =
             double(window.radio.txFrequencyForSlice(window.txSlice()));
 
+        // Clarity is showing on both pans before the key.
+        one->setClarityActive(true);
+        two->setClarityActive(true);
+
         window.controller->setCallRecording(true);
         window.controller->setKeyed(true, window.txSliceId);
-        const QStringList rise = window.controller->callLog();
+        // The edge comes first: keyedChanged, then every pan.
+        QVERIFY(edgeLeadsTheLog(window.controller->callLog(), true));
+        const QStringList rise = withoutEdgeCalls(window.controller->callLog());
 
-        // The same calls as the old lambda: the controller's own in the old
-        // order, then the transmit source's in the old order, then the view
-        // signal hooked last (it was hooked before the view move; the move
-        // then fed the analyzer the view the source is now handed directly).
+        // The same calls as the old lambda, less the two a key no longer
+        // makes (Clarity off, the waterfall AGC re-primed): the controller's
+        // own in the old order, then the transmit source's in the old order,
+        // then the view signal hooked last (it was hooked before the view
+        // move; the move then fed the analyzer the view the source is now
+        // handed directly).
         const QStringList expectedRise{
             QStringLiteral("setMoxOverlay(true)"),
             QStringLiteral("save sampleRate and ddcCenterFrequency"),
             QStringLiteral("setDisplayWindowPreservingHistory(carrier)"),
-            QStringLiteral("setClarityActive(false)"),
             QStringLiteral("setTxExternalWaterfall(true)"),
-            QStringLiteral("resetWaterfallAgc"),
             QStringLiteral("clearAvengers"),
             QStringLiteral("setTxCenterFrequency"),
             QStringLiteral("setTxSampleRate"),
@@ -691,11 +826,11 @@ private slots:
             QStringLiteral("setMoxOverlay(true)"),
             QStringLiteral("save sampleRate and ddcCenterFrequency"),
             QStringLiteral("setDisplayWindowPreservingHistory(carrier)"),
-            QStringLiteral("setClarityActive(false)"),
             QStringLiteral("setTxExternalWaterfall(true)"),
-            QStringLiteral("resetWaterfallAgc"),
             QStringLiteral("clearAvengers"),
         };
+        QVERIFY(!rise.contains(QStringLiteral("setClarityActive(false)")));
+        QVERIFY(!rise.contains(QStringLiteral("resetWaterfallAgc")));
         QCOMPARE(only(rise, controllerOwned, true),
                  only(kOldLambdaRise, controllerOwned, true));
         QCOMPARE(only(rise, kSourceCalls, true), only(kOldLambdaRise, kSourceCalls, true));
@@ -705,7 +840,9 @@ private slots:
         QVERIFY(two->m_moxOverlay);
         QCOMPARE(two->m_refLevel, txRef);
         QVERIFY(two->m_txExternalWaterfall);
-        QVERIFY(!two->m_clarityActive);
+        // Clarity stays on every pan through the key (#359).
+        QVERIFY(two->m_clarityActive);
+        QVERIFY(one->m_clarityActive);
         QCOMPARE(two->m_centerHz, carrier);
         QCOMPARE(two->m_txWfLowLevel, -70);
         QCOMPARE(two->m_txWfHighLevel, 30);
@@ -719,7 +856,11 @@ private slots:
 
         window.controller->clearCallLog();
         window.controller->setKeyed(false, -1);
-        QCOMPARE(window.controller->callLog(), kOldLambdaFall);
+        QVERIFY(edgeLeadsTheLog(window.controller->callLog(), false));
+        QCOMPARE(withoutEdgeCalls(window.controller->callLog()), kOldLambdaFall);
+        QVERIFY(!window.controller->callLog().contains(QStringLiteral("resetWaterfallAgc")));
+        QVERIFY(two->m_clarityActive);
+        QVERIFY(one->m_clarityActive);
         QCOMPARE(PanState::of(two), before);
         QCOMPARE(two->m_refLevel, rxRef);
         QVERIFY(window.controller->transmitPanId().isEmpty());
@@ -741,6 +882,237 @@ private slots:
         QVERIFY(window.key(false));
         QTRY_VERIFY(!window.controller->isKeyed());
         QVERIFY(!window.pan(QStringLiteral("two"))->m_moxOverlay);
+    }
+
+    // ── Display pill plan Task 13: a key edge on every pan ─────────────────
+
+    // Every pan keeps its waterfall AGC level through a key, DUP on or off:
+    // rows 40 dB hotter move nothing while keyed, the un-key puts back the
+    // level each pan had, and each pan then holds for its own length.
+    void keyKeepsEveryPansLevelAndTheFallRestoresIt_data()
+    {
+        QTest::addColumn<bool>("duplex");
+        QTest::newRow("transmit view") << false;
+        QTest::newRow("display duplex") << true;
+    }
+    void keyKeepsEveryPansLevelAndTheFallRestoresIt()
+    {
+        QFETCH(bool, duplex);
+        LocalWindow window;
+        SpectrumWidget* one = window.pan(QStringLiteral("one"));
+        SpectrumWidget* two = window.pan(QStringLiteral("two"));
+        qint64 now = 5'000'000;
+        one->setDisplayClockForTest([&now]() { return now; });
+        two->setDisplayClockForTest([&now]() { return now; });
+        // Pan one shows a long FFT; pan two has no engine of its own.
+        one->setLocalFftShape(262144, 1, 48000.0);
+        QCOMPARE(one->moxHoldLengthMs(), qint64(10922));
+        QCOMPARE(two->moxHoldLengthMs(), qint64(1000));
+        window.controller->setDisplayDuplex(duplex);
+
+        for (int row = 0; row < 200; ++row) {
+            one->composeWaterfallActiveThresholds(flatRow(-110.0f));
+            two->composeWaterfallActiveThresholds(flatRow(-120.0f));
+        }
+        QVERIFY(one->waterfallAgcRunLevel().has_value());
+        QVERIFY(two->waterfallAgcRunLevel().has_value());
+        const float levelOne = *one->waterfallAgcRunLevel();
+        const float levelTwo = *two->waterfallAgcRunLevel();
+        const float lowOne = one->wfActiveLowThreshold();
+        QVERIFY(std::abs(levelOne - levelTwo) > 5.0f);
+
+        QSignalSpy edges(window.controller.get(), &MoxDisplayController::keyedChanged);
+        window.controller->setCallRecording(true);
+        window.controller->setKeyed(true, window.txSliceId);
+        QCOMPARE(edges.count(), 1);
+        QVERIFY(edgeLeadsTheLog(window.controller->callLog(), true));
+        QVERIFY(one->displayKeyed());
+        QVERIFY(two->displayKeyed());
+        // The transmitting pan draws with its transmit levels.
+        QVERIFY(two->m_moxOverlay);
+        QCOMPARE(two->effectiveWaterfallLevelsForTest(),
+                 (std::pair<float, float>(-70.0f, 30.0f)));
+
+        // While keyed the receiver hears the transmitter.
+        for (int row = 0; row < 50; ++row) {
+            one->composeWaterfallActiveThresholds(flatRow(-70.0f));
+            two->composeWaterfallActiveThresholds(flatRow(-80.0f));
+        }
+        QCOMPARE(*one->waterfallAgcRunLevel(), levelOne);
+        QCOMPARE(one->wfActiveLowThreshold(), lowOne);
+        QCOMPARE(*two->waterfallAgcRunLevel(), levelTwo);
+
+        now += 4000;
+        window.controller->clearCallLog();
+        window.controller->setKeyed(false, -1);
+        QCOMPARE(edges.count(), 2);
+        QVERIFY(edgeLeadsTheLog(window.controller->callLog(), false));
+        QVERIFY(!window.controller->callLog().contains(QStringLiteral("resetWaterfallAgc")));
+        QVERIFY(!one->displayKeyed());
+        QVERIFY(!two->displayKeyed());
+        // The first receive rows are still hot (the FFT is refilling): the
+        // level is the one from before the key.
+        one->composeWaterfallActiveThresholds(flatRow(-70.0f));
+        two->composeWaterfallActiveThresholds(flatRow(-80.0f));
+        QCOMPARE(*one->waterfallAgcRunLevel(), levelOne);
+        QCOMPARE(one->wfActiveLowThreshold(), lowOne);
+        QCOMPARE(*two->waterfallAgcRunLevel(), levelTwo);
+        // Each pan holds for its own length.
+        QVERIFY(one->m_wfLevels.inHold(now + 10921));
+        QVERIFY(!one->m_wfLevels.inHold(now + 10922));
+        QVERIFY(two->m_wfLevels.inHold(now + 999));
+        QVERIFY(!two->m_wfLevels.inHold(now + 1000));
+        // The noise floor goes to fast attack on every pan.
+        QVERIFY(one->noiseFloorFastAttack());
+        QVERIFY(two->noiseFloorFastAttack());
+    }
+
+    // A band changed while keyed: a band with no saved level starts at the
+    // restart floor, and a band with one gets it back.
+    void bandChangedWhileKeyedStartsAtTheRestartFloor()
+    {
+        LocalWindow window;
+        SpectrumWidget* one = window.pan(QStringLiteral("one"));
+        SpectrumWidget* two = window.pan(QStringLiteral("two"));
+        QHash<QString, int> bands{{QStringLiteral("one"), 3}, {QStringLiteral("two"), 5}};
+        window.controller->setPanBandProvider(
+            [&bands](const QString& panId) { return bands.value(panId, -1); });
+        for (int row = 0; row < 200; ++row) {
+            one->composeWaterfallActiveThresholds(flatRow(-110.0f));
+            two->composeWaterfallActiveThresholds(flatRow(-120.0f));
+        }
+        const float levelOne = *one->waterfallAgcRunLevel();
+        const float levelTwo = *two->waterfallAgcRunLevel();
+
+        window.controller->setKeyed(true, window.txSliceId);
+        bands[QStringLiteral("one")] = 4;
+        window.controller->setKeyed(false, -1);
+        QCOMPARE(*one->waterfallAgcRunLevel(), WaterfallLevelFollower::kAgcRestartFloorDbm);
+        QCOMPARE(*one->waterfallAgcRunLevel(), -150.0f);
+        QCOMPARE(*two->waterfallAgcRunLevel(), levelTwo);
+
+        // Back on the first band while keyed again: its level was kept.
+        window.controller->setKeyed(true, window.txSliceId);
+        bands[QStringLiteral("one")] = 3;
+        window.controller->setKeyed(false, -1);
+        QCOMPARE(*one->waterfallAgcRunLevel(), levelOne);
+    }
+
+    // A key shorter than the RF delay never reaches the display: no edge,
+    // no purge, no hold and no change on any pan.
+    void keyShorterThanTheRfDelayChangesNothing()
+    {
+        LocalWindow window;
+        window.controller->followLocalRadio();
+        SpectrumWidget* one = window.pan(QStringLiteral("one"));
+        SpectrumWidget* two = window.pan(QStringLiteral("two"));
+        qint64 now = 5'000'000;
+        one->setDisplayClockForTest([&now]() { return now; });
+        two->setDisplayClockForTest([&now]() { return now; });
+        one->setClarityActive(true);
+        for (int row = 0; row < 200; ++row) {
+            two->composeWaterfallActiveThresholds(flatRow(-120.0f));
+        }
+        const float levelTwo = *two->waterfallAgcRunLevel();
+        const bool fastOne = one->noiseFloorFastAttack();
+        const bool fastTwo = two->noiseFloorFastAttack();
+        const PanState oneBefore = PanState::of(one);
+        const PanState twoBefore = PanState::of(two);
+
+        MoxController* mox = window.radio.moxController();
+        QVERIFY(mox != nullptr);
+        QSignalSpy radioEdges(mox, &MoxController::moxStateChanged);
+        QSignalSpy edges(window.controller.get(), &MoxDisplayController::keyedChanged);
+        window.controller->setCallRecording(true);
+        // Released before the RF delay's timer can run.
+        QVERIFY(window.key(true));
+        QVERIFY(window.key(false));
+        // The radio reports only the release.
+        QTRY_COMPARE(radioEdges.count(), 1);
+        QCOMPARE(radioEdges.at(0).at(0).toBool(), false);
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
+
+        QVERIFY(!window.controller->isKeyed());
+        QCOMPARE(edges.count(), 0);
+        QVERIFY(window.controller->callLog().isEmpty());
+        QVERIFY(!one->displayKeyed());
+        QVERIFY(!two->displayKeyed());
+        QVERIFY(one->clarityActive());
+        QCOMPARE(*two->waterfallAgcRunLevel(), levelTwo);
+        QVERIFY(!one->m_wfLevels.inHold(now));
+        QVERIFY(!two->m_wfLevels.inHold(now));
+        QCOMPARE(one->noiseFloorFastAttack(), fastOne);
+        QCOMPARE(two->noiseFloorFastAttack(), fastTwo);
+        QCOMPARE(PanState::of(one), oneBefore);
+        QCOMPARE(PanState::of(two), twoBefore);
+
+        // A repeat of the state the display is already in does nothing too.
+        window.controller->setKeyed(false, -1);
+        QCOMPARE(edges.count(), 0);
+        QVERIFY(window.controller->callLog().isEmpty());
+    }
+
+    // MOX, TUNE and a CAT key all arrive as the one edge, with one result.
+    void everyKeySourceMakesTheSameEdge_data()
+    {
+        QTest::addColumn<QString>("source");
+        QTest::newRow("MOX") << QStringLiteral("mox");
+        QTest::newRow("TUNE") << QStringLiteral("tune");
+        QTest::newRow("CAT") << QStringLiteral("cat");
+    }
+    void everyKeySourceMakesTheSameEdge()
+    {
+        QFETCH(QString, source);
+        LocalWindow window;
+        window.controller->followLocalRadio();
+        SpectrumWidget* one = window.pan(QStringLiteral("one"));
+        SpectrumWidget* two = window.pan(QStringLiteral("two"));
+        one->setClarityActive(true);
+        two->setClarityActive(true);
+        MoxController* mox = window.radio.moxController();
+        QVERIFY(mox != nullptr);
+        mox->setMoxCheck({});
+        const auto key = [&](bool on) {
+            if (source == QStringLiteral("tune")) {
+                mox->setTune(on);
+            } else if (source == QStringLiteral("cat")) {
+                mox->onCatPtt(on);
+            } else {
+                mox->setMox(on);
+            }
+        };
+        QSignalSpy edges(window.controller.get(), &MoxDisplayController::keyedChanged);
+        window.controller->setCallRecording(true);
+
+        key(true);
+        QTRY_VERIFY(window.controller->isKeyed());
+        QCOMPARE(edges.count(), 1);
+        QVERIFY(edgeLeadsTheLog(window.controller->callLog(), true));
+        QStringList rise = withoutEdgeCalls(window.controller->callLog());
+        QStringList expectedRise = kOldLambdaRise;
+        rise.sort();
+        expectedRise.sort();
+        QCOMPARE(rise, expectedRise);
+        QVERIFY(one->displayKeyed());
+        QVERIFY(two->displayKeyed());
+        QVERIFY(one->clarityActive());
+        QVERIFY(two->clarityActive());
+        QVERIFY(two->m_moxOverlay);
+        QVERIFY(!one->m_moxOverlay);
+
+        window.controller->clearCallLog();
+        key(false);
+        QTRY_VERIFY(!window.controller->isKeyed());
+        QCOMPARE(edges.count(), 2);
+        QVERIFY(edgeLeadsTheLog(window.controller->callLog(), false));
+        QCOMPARE(withoutEdgeCalls(window.controller->callLog()), kOldLambdaFall);
+        QVERIFY(!one->displayKeyed());
+        QVERIFY(!two->displayKeyed());
+        QVERIFY(one->clarityActive());
+        QVERIFY(two->clarityActive());
+        QVERIFY(one->noiseFloorFastAttack());
+        QVERIFY(two->noiseFloorFastAttack());
     }
 
     // ── Row 16: XIT while keyed ────────────────────────────────────────────
@@ -770,6 +1142,93 @@ private slots:
         QVERIFY(window.key(false));
         QTRY_VERIFY(!window.controller->isKeyed());
         QCOMPARE(PanState::of(two), before);
+    }
+
+    void tuneDisplayOffsetRestoresCurrentXit_data()
+    {
+        QTest::addColumn<bool>("remoteWindow");
+        QTest::addColumn<DSPMode>("mode");
+        QTest::addColumn<int>("xitHz");
+        QTest::addColumn<bool>("duplexBeforeRelease");
+        for (bool remoteWindow : {false, true}) {
+            for (DSPMode mode : {DSPMode::LSB, DSPMode::USB}) {
+                for (int xitHz : {0, 350}) {
+                    for (bool duplexBeforeRelease : {false, true}) {
+                        const QByteArray name = QByteArray(remoteWindow ? "remote-" : "local-")
+                            + (mode == DSPMode::LSB ? "LSB-" : "USB-")
+                            + QByteArray::number(xitHz) + (duplexBeforeRelease ? "-DUP" : "-TX");
+                        QTest::newRow(name.constData()) << remoteWindow << mode << xitHz
+                                                     << duplexBeforeRelease;
+                    }
+                }
+            }
+        }
+    }
+
+    void tuneDisplayOffsetRestoresCurrentXit()
+    {
+        QFETCH(bool, remoteWindow);
+        QFETCH(DSPMode, mode);
+        QFETCH(int, xitHz);
+        QFETCH(bool, duplexBeforeRelease);
+        // Inject the already-compensated display context without asking a
+        // RadioModel to Tune or key a radio. Both production display sources
+        // report this NCO origin to the same presentation controller.
+        const auto exercise = [&](RadioModel& model, int sliceId, SpectrumWidget* pan,
+                                  MoxDisplayController* controller,
+                                  const std::function<void(double)>& context) {
+            SliceModel* slice = model.sliceById(sliceId);
+            QVERIFY(slice);
+            slice->setFrequency(3'865'000.0);
+            slice->setDspMode(mode);
+            slice->setXitHz(xitHz);
+            slice->setXitEnabled(xitHz != 0);
+            pan->setTxVfoOffsetHz(xitHz);
+            const double carrier = double(model.txFrequencyForSlice(slice));
+            const double signedTone = mode == DSPMode::LSB ? -600.0 : 600.0;
+            // Give the local feed the same authoritative origin as the
+            // injected remote context, without running Tune's side effects.
+            model.m_isTuning = true;
+            model.m_savedTxDspMode = mode;
+            controller->setKeyed(true, sliceId);
+            context(carrier - signedTone);
+            QCOMPARE(pan->m_txVfoOffsetHz, xitHz - int(signedTone));
+
+            if (duplexBeforeRelease) {
+                controller->setDisplayDuplex(true);
+            }
+            model.m_isTuning = false;
+            controller->setKeyed(false, sliceId);
+            QCOMPARE(pan->m_txVfoOffsetHz, xitHz);
+            controller->setDisplayDuplex(false);
+            controller->setKeyed(true, sliceId);
+            context(carrier); // Ordinary SSB context equals the rise's seed.
+            QCOMPARE(pan->m_txVfoOffsetHz, xitHz);
+            controller->setKeyed(false, sliceId);
+        };
+        if (remoteWindow) {
+            RemoteWindow window(/*withAnalyzer=*/true);
+            QVERIFY(window.connect());
+            exercise(window.remote, window.txSliceId, window.pan(QStringLiteral("two")),
+                     window.controller.get(), [&](double origin) {
+                SpectrumContextMessage context;
+                context.sourceCentreHz = origin;
+                context.centreHz = origin;
+                context.spanHz = 8000.0;
+                emit window.gui->transmitContextReceived(QStringLiteral("two"), context);
+            });
+        } else {
+            LocalWindow window;
+            exercise(window.radio, window.txSliceId, window.pan(QStringLiteral("two")),
+                     window.controller.get(), [&](double origin) {
+                TxDisplayView view;
+                view.carrierHz = origin;
+                view.lowHz = -4000;
+                view.highHz = 4000;
+                view.pixels = 1024;
+                emit window.radio.txDisplayFeed()->viewChanged(view);
+            });
+        }
     }
 
     void remoteXitWhileKeyedMovesTheViewAndRestores()
@@ -802,6 +1261,227 @@ private slots:
     }
 
     // ── A remote window ────────────────────────────────────────────────────
+
+    void realTuneFrameKeepsRfCoordinatesThroughRemoteDisplay_data()
+    {
+        QTest::addColumn<DSPMode>("mode");
+        QTest::addColumn<double>("toneHz");
+        QTest::addColumn<int>("localGovernorSpanHz");
+        QTest::addColumn<int>("remoteSpanHz");
+        QTest::addColumn<double>("remoteCentreOffsetHz");
+        QTest::addColumn<bool>("toneVisible");
+        for (DSPMode mode : {DSPMode::LSB, DSPMode::USB}) {
+            const double toneHz = mode == DSPMode::LSB ? -600.0 : 600.0;
+            const QByteArray name = mode == DSPMode::LSB ? "LSB" : "USB";
+            QTest::newRow((name + "-remote-governs").constData()) << mode << toneHz << 0 << 8000 << 0.0 << true;
+            QTest::newRow((name + "-local8k-remote4k").constData()) << mode << toneHz << 8000 << 4000 << 0.0 << true;
+            QTest::newRow((name + "-local8k-remote50k").constData()) << mode << toneHz << 8000 << 50000 << 0.0 << true;
+            const double partialOffsetHz = mode == DSPMode::LSB ? -2500.0 : 2500.0;
+            QTest::newRow((name + "-partial-source").constData()) << mode << toneHz << 8000 << 4000 << partialOffsetHz << true;
+            QTest::newRow((name + "-outside-source").constData()) << mode << toneHz << 8000 << 4000 << 12000.0 << false;
+        }
+    }
+
+    void realTuneFrameKeepsRfCoordinatesThroughRemoteDisplay()
+    {
+#ifndef HAVE_WDSP
+        QSKIP("Real generator/analyzer coordinates require WDSP");
+#else
+        QFETCH(DSPMode, mode);
+        QFETCH(double, toneHz);
+        QFETCH(int, localGovernorSpanHz);
+        QFETCH(int, remoteSpanHz);
+        QFETCH(double, remoteCentreOffsetHz);
+        QFETCH(bool, toneVisible);
+        constexpr double kDialHz = 3'865'000.0;
+        constexpr int kMicFrames = 64;
+        DspControlThread lane(DspLane::Transmit);
+        lane.start();
+        WdspEngine engine;
+        engine.m_initialized = true; // No device, wisdom generation or audio worker.
+        engine.setTransmitLane(&lane);
+        TxChannel* tx = engine.createTxChannel(WdspEngine::kTxChannelId, kMicFrames,
+            WdspEngine::kTxDspBufferSize, 48000, WdspEngine::kTxDspSampleRate, 48000);
+        QVERIFY(tx);
+        QVERIFY(lane.waitIdleForTest(5000));
+        WaveformConnection connection;
+        tx->setConnection(&connection);
+        RemoteWindow window(/*withAnalyzer=*/true);
+        int localViewer = 0;
+        const auto cleanup = qScopeGuard([&] {
+            window.station.m_isTuning = false;
+            window.key(false);
+            tx->setTuneTone(false, toneHz, 0.0);
+            tx->setRunningAsync(false);
+            lane.waitIdleForTest(5000);
+            if (localViewer != 0) {
+                window.station.txDisplayFeed()->removeViewer(localViewer);
+            }
+            window.station.injectTxChannelForTest(nullptr);
+            window.station.setTxAnalyzer(nullptr);
+            window.analyzer.reset();
+            engine.shutdown();
+            engine.setTransmitLane(nullptr);
+            lane.stop();
+        });
+        SliceModel* slice = window.station.sliceById(window.txSliceId);
+        slice->setFrequency(kDialHz);
+        slice->setDspMode(mode);
+        window.station.m_isTuning = true;
+        window.station.m_savedTxDspMode = mode;
+        window.station.injectTxChannelForTest(tx);
+        SpectrumWidget* pan = window.pan(QStringLiteral("two"));
+        pan->setDisplayWindowPreservingHistory(kDialHz + 2000.0, 32000.0);
+        pan->m_txViewBandwidthHz = remoteSpanHz;
+        if (localGovernorSpanHz != 0) {
+            localViewer = window.station.txDisplayFeed()->addViewer(
+                double(window.station.txNcoFrequencyForSlice(slice)), localGovernorSpanHz,
+                1024, /*local=*/true);
+        }
+        window.analyzer->setFftSize(32768);
+        window.analyzer->setBlockSize(tx->txDspBlockSize());
+        QVERIFY(window.connect());
+        QSignalSpy contexts(window.gui.get(), &RemoteMediaController::transmitContextReceived);
+        QSignalSpy frames(window.gui.get(), &RemoteMediaController::transmitFrameReceived);
+        window.key(true);
+        QTRY_VERIFY(window.controller->isKeyed());
+        const int expectedSpanHz = localGovernorSpanHz != 0 ? localGovernorSpanHz : remoteSpanHz;
+        const double expectedCentreHz = double(window.station.txNcoFrequencyForSlice(slice));
+        QTRY_VERIFY_WITH_TIMEOUT(!contexts.isEmpty()
+            && contexts.last().at(1).value<SpectrumContextMessage>().spanHz == expectedSpanHz
+            && contexts.last().at(1).value<SpectrumContextMessage>().centreHz == expectedCentreHz
+            && pan->centerFrequency() == expectedCentreHz, 5000);
+        window.analyzer->stop(); // Drain actual WDSP planes explicitly below.
+        const TxDisplayView view = window.station.txDisplayFeed()->currentView();
+        const TxAnalyzerArgs args = window.analyzer->currentArgs();
+        const double ncoHz = double(window.station.txNcoFrequencyForSlice(slice));
+        const SpectrumContextMessage context = contexts.last().at(1).value<SpectrumContextMessage>();
+        QCOMPARE(ncoHz, kDialHz - toneHz);
+        QCOMPARE(context.sourceCentreHz, ncoHz);
+        QCOMPARE(context.centreHz, view.centreHz());
+        QCOMPARE(context.spanHz, view.spanHz());
+        if (remoteCentreOffsetHz != 0.0) {
+            pan->setDisplayWindowPreservingHistory(ncoHz + remoteCentreOffsetHz, remoteSpanHz);
+        }
+
+        // The production PostGen setter, zero-mic fexchange pump, siphon,
+        // analyzer and sign convention; no radio connection receives I/Q.
+        tx->setTuneTone(true, toneHz, TxChannel::kMaxToneMag);
+        tx->setRunningAsync(true);
+        QTRY_VERIFY_WITH_TIMEOUT(tx->isRunning(), 5000);
+        QVERIFY(lane.waitIdleForTest(5000));
+        QVector<float> trace(args.nPix), waterfall(args.nPix);
+        std::vector<double> mic(2 * kMicFrames, 0.0);
+        int captured = 0;
+        QTRY_VERIFY_WITH_TIMEOUT(([&] {
+            for (int block = 0; block < 16; ++block) {
+                tx->pumpDexp(mic.data());
+                tx->driveOneTxBlockFromInterleaved(mic.data());
+            }
+            int traceReady = 0;
+            int waterfallReady = 0;
+            GetPixels(TxAnalyzer::kTxDispId, 0, trace.data(), &traceReady);
+            GetPixels(TxAnalyzer::kTxDispId, 1, waterfall.data(), &waterfallReady);
+            if (traceReady && waterfallReady) { ++captured; }
+            return captured >= 3;
+        }()), 5000);
+        const auto peakHz = [](const QVector<float>& values, double centre, double span) {
+            const int index = int(std::max_element(values.cbegin(), values.cend()) - values.cbegin());
+            return centre - span / 2.0 + index * span / values.size();
+        };
+        const double sourceTolerance = 3.0 * view.spanHz() / args.nPix;
+        const double rawTraceHz = peakHz(trace, view.centreHz(), view.spanHz());
+        const double rawWaterfallHz = peakHz(waterfall, view.centreHz(), view.spanHz());
+        qInfo("real Tune source: mode=%d NCO=%.0f context=%.0f/%.0f raw trace=%.2f WF=%.2f",
+              int(mode), ncoHz, context.centreHz, context.spanHz, rawTraceHz, rawWaterfallHz);
+        QVERIFY(std::abs(rawTraceHz - kDialHz) <= sourceTolerance);
+        QVERIFY(std::abs(rawWaterfallHz - kDialHz) <= sourceTolerance);
+        const int rowsBefore = pan->waterfallHistoryRowsForTest();
+        QTRY_VERIFY_WITH_TIMEOUT(([&] {
+            emit window.analyzer->txFftReady(-1, trace);
+            emit window.analyzer->txWaterfallReady(-1, waterfall);
+            return !frames.isEmpty() && pan->waterfallHistoryRowsForTest() > rowsBefore;
+        }()), 5000);
+        const DisplayCodecFrame decoded = frames.last().at(1).value<DisplayCodecFrame>();
+        const QVector<float> croppedWaterfall = pan->txWaterfallRow(decoded.waterfallDbm);
+        QVERIFY(!pan->m_renderedPixels.isEmpty());
+        QVERIFY(!croppedWaterfall.isEmpty());
+        const double drawnTraceHz = peakHz(pan->m_renderedPixels, pan->centerFrequency(), pan->bandwidth());
+        const double drawnWaterfallHz = peakHz(croppedWaterfall, pan->centerFrequency(), pan->bandwidth());
+        const double displayTolerance = 4.0 * pan->bandwidth()
+            / std::min(decoded.traceDbm.size(), decoded.waterfallDbm.size());
+        qInfo("real Tune remote: trace=%.2f WF=%.2f tolerance=%.2f", drawnTraceHz, drawnWaterfallHz,
+              displayTolerance);
+        const bool sourceDoesNotCoverView = pan->centerFrequency() - pan->bandwidth() / 2.0
+                < context.centreHz - context.spanHz / 2.0
+            || pan->centerFrequency() + pan->bandwidth() / 2.0
+                > context.centreHz + context.spanHz / 2.0;
+        if (sourceDoesNotCoverView) {
+            QCOMPARE(croppedWaterfall.size(), decoded.waterfallDbm.size());
+            const auto uncoveredAtFloor = [&](const QVector<float>& values, float floor) {
+                int checked = 0;
+                const double marginHz = 2.0 * pan->bandwidth() / values.size();
+                for (int x = 0; x < values.size(); ++x) {
+                    const double hz = pan->centerFrequency() - pan->bandwidth() / 2.0
+                        + x * pan->bandwidth() / values.size();
+                    if (hz < context.centreHz - context.spanHz / 2.0 - marginHz
+                        || hz > context.centreHz + context.spanHz / 2.0 + marginHz) {
+                        ++checked;
+                        if (std::abs(values[x] - floor) >= 0.01f) { return false; }
+                    }
+                }
+                return checked > 0;
+            };
+            QVERIFY(uncoveredAtFloor(pan->m_renderedPixels,
+                *std::min_element(decoded.traceDbm.cbegin(), decoded.traceDbm.cend())));
+            QVERIFY(uncoveredAtFloor(croppedWaterfall,
+                *std::min_element(decoded.waterfallDbm.cbegin(), decoded.waterfallDbm.cend())
+                    + pan->displayCalOffsetDb()));
+        }
+        if (!toneVisible) {
+            const float traceFloor = *std::min_element(decoded.traceDbm.cbegin(), decoded.traceDbm.cend());
+            const float waterfallFloor = *std::min_element(decoded.waterfallDbm.cbegin(), decoded.waterfallDbm.cend())
+                + pan->displayCalOffsetDb();
+            QVERIFY(std::all_of(pan->m_renderedPixels.cbegin(), pan->m_renderedPixels.cend(),
+                                [traceFloor](float value) { return std::abs(value - traceFloor) < 0.01f; }));
+            QVERIFY(std::all_of(croppedWaterfall.cbegin(), croppedWaterfall.cend(),
+                                [waterfallFloor](float value) { return std::abs(value - waterfallFloor) < 0.01f; }));
+            return;
+        }
+        QVERIFY(std::abs(drawnTraceHz - kDialHz) <= displayTolerance);
+        QVERIFY(std::abs(drawnWaterfallHz - kDialHz) <= displayTolerance);
+
+        // The same painted TX row must keep its RF coordinate when the
+        // wider, differently centered receive view is restored on unkey.
+        const auto paintedPeakHz = [](const QImage& image, int row, double centre, double span) {
+            const QRgb* pixels = reinterpret_cast<const QRgb*>(image.constScanLine(row));
+            int peak = 0;
+            int brightest = -1;
+            for (int x = 0; x < image.width(); ++x) {
+                const int brightness = qRed(pixels[x]) + qGreen(pixels[x]) + qBlue(pixels[x]);
+                if (brightness > brightest) {
+                    brightest = brightness;
+                    peak = x;
+                }
+            }
+            return centre - span / 2.0 + peak * span / image.width();
+        };
+        const double txPaintedHz = paintedPeakHz(pan->m_waterfall, pan->m_wfWriteRow,
+                                                 pan->centerFrequency(), pan->bandwidth());
+        window.station.m_isTuning = false;
+        window.key(false);
+        QTRY_VERIFY(!window.controller->isKeyed());
+        QCOMPARE(pan->centerFrequency(), kDialHz + 2000.0);
+        QCOMPARE(pan->bandwidth(), 32000.0);
+        const double rxHistoryHz = paintedPeakHz(pan->m_waterfall, pan->m_wfWriteRow,
+                                                 pan->centerFrequency(), pan->bandwidth());
+        const double historyTolerance = 3.0 * pan->bandwidth() / pan->m_waterfall.width();
+        qInfo("real Tune history: TX=%.2f restored RX=%.2f tolerance=%.2f", txPaintedHz,
+              rxHistoryHz, historyTolerance);
+        QVERIFY(std::abs(txPaintedHz - kDialHz) <= displayTolerance);
+        QVERIFY(std::abs(rxHistoryHz - txPaintedHz) <= historyTolerance);
+#endif
+    }
 
     void remoteTransmitUsesAssociatedHostWhenPanKeyDoesNotResolve_data()
     {

@@ -363,6 +363,9 @@ bool ExtendedSpectrumReducer::reduce(const QVector<float>& ddcBinsLinear,
     }
     const QVector<double> noCorrection;
     QVector<float> candidate;
+    if (m_cfg.averageMode == SpectrumAvenger::kTimeWindowMode) {
+        m_avenger.setNumAverage(m_cfg.averageFrames);
+    }
     m_avenger.apply(m_linearPixels, m_cfg.averageMode, m_cfg.averageAlpha,
                     dbmScale, noCorrection, false, 0.0, candidate);
     for (const float value : candidate) {

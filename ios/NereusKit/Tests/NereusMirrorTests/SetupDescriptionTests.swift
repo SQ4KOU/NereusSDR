@@ -7,8 +7,10 @@ import Testing
 
 @Suite struct SetupDescriptionTests {
     private func resourceControl(_ category: String, _ id: String) throws -> [String: Any] {
+        let resource = category == "display" ? "legacy/display-v28"
+            : category == "appearance" ? "legacy/appearance-v27" : category
         let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .appendingPathComponent("../../../../resources/setup/\(category).json").standardizedFileURL
+            .appendingPathComponent("../../../../resources/setup/\(resource).json").standardizedFileURL
         let data = try Data(contentsOf: source)
         let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         for page in try #require(root["pages"] as? [[String: Any]]) {
@@ -101,7 +103,7 @@ import Testing
 
     @Test func malformedCategoryAndUnknownVersionAreRejected() {
         #expect(throws: SetupDescription.ParseError.self) { try SetupDescription.parse(json: "{") }
-        #expect(throws: SetupDescription.ParseError.self) { try SetupDescription.parse(json: document(control("sample.main.one"), version: 25)) }
+        #expect(throws: SetupDescription.ParseError.self) { try SetupDescription.parse(json: document(control("sample.main.one"), version: 30)) }
     }
 
     @Test func commandSourcesStayTypedAndUnknownSourcesDisable() throws {
@@ -163,18 +165,29 @@ import Testing
                      "pa", "diagnostics", "display", "appearance"]
         var rejected: [String] = []
         for name in names {
-            let data = try Data(contentsOf: source.appendingPathComponent("\(name).json"))
-            for peerVersion in 1...24 {
+            let resource = name == "display" ? "legacy/display-v28"
+                : name == "appearance" ? "legacy/appearance-v27" : name
+            let data = try Data(contentsOf: source.appendingPathComponent("\(resource).json"))
+            for peerVersion in 1...28 {
                 var root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
                 var pages = try #require(root["pages"] as? [[String: Any]])
                 var projectedPages: [[String: Any]] = []
                 var includedIds: Set<String> = []
                 let fifteen = ["dsp", "transmit", "audio", "diagnostics", "catNetwork"].contains(name)
                 for var page in pages {
+                    if name == "audio", peerVersion < 25, page["id"] as? String == "audio.txInput" {
+                        // Below 25 the Microphone page keeps its old title.
+                        page["title"] = "TX Input"
+                    }
                     var sections: [[String: Any]] = []
                     for var section in try #require(page["sections"] as? [[String: Any]]) {
                         // The Core keeps a board family's section for its own radio.
                         section.removeValue(forKey: "boardFamily")
+                        if name == "audio", peerVersion < 25, page["id"] as? String == "audio.txInput",
+                           section["title"] as? String == "Mic gain" {
+                            // And its Mic gain section its old title.
+                            section["title"] = "PC Mic"
+                        }
                         var controls: [[String: Any]] = []
                         for var control in try #require(section["controls"] as? [[String: Any]]) {
                             if name == "hardware", peerVersion < 18,
@@ -190,6 +203,23 @@ import Testing
                                 control["min"] = -34
                                 control["step"] = 1
                                 control.removeValue(forKey: "decimals")
+                            }
+                            if name == "display", peerVersion < 28 {
+                                // A peer below 28 keeps the earlier Size, Hz/bin
+                                // Target and averaging rows, and is sent no
+                                // Sizing row.
+                                guard let older = DisplayV26Fixture.row(control) else { continue }
+                                control = older
+                            }
+                            if name == "display", peerVersion < 26 {
+                                // A peer below 26 keeps the version 12 form of
+                                // Waterfall Defaults' level rows.
+                                control = DisplayV12Fixture.row(control)
+                            }
+                            if name == "appearance", peerVersion < 27 {
+                                // A peer below 27 keeps the one Trace & Fill
+                                // Color row (and is sent no Trace Color row).
+                                control = AppearanceV12Fixture.row(control)
                             }
                             if (control["requiresDescriptionVersion"] as? Int ?? 1) > peerVersion {
                                 continue
@@ -253,6 +283,10 @@ import Testing
                 if let coverage = root.removeValue(forKey: "coverageV19") as? String, peerVersion >= 19 {
                     root["coverage"] = coverage
                 }
+                // The version 25 wording (Audio's Outputs and Microphone) only to a peer at 25.
+                if let coverage = root.removeValue(forKey: "coverageV25") as? String, peerVersion >= 25 {
+                    root["coverage"] = coverage
+                }
                 if name == "dsp" {
                     // CFC's band editor comes at 19.
                     #expect(includedIds.contains("dsp.cfc.bands") == (peerVersion >= 19))
@@ -278,6 +312,11 @@ import Testing
                     // The Saturn G2's Mic Tip-Ring comes at 24; Line In Gain from 15 at every version.
                     #expect(includedIds.contains("audio.txInput.saturnMicTipRing") == (peerVersion >= 24))
                     #expect(includedIds.contains("audio.txInput.hermesLineInGain") == (peerVersion >= 15))
+                    // Outputs' radio speaker rows come at 25.
+                    for id in ["audio.outputs.radioSpeakerVolume", "audio.outputs.radioSpeakerMuted",
+                               "audio.outputs.speakerAmplifierMode"] {
+                        #expect(includedIds.contains(id) == (peerVersion >= 25), "\(id) v\(peerVersion)")
+                    }
                 }
                 if name == "pa" {
                     #expect(includedIds.contains("pa.values.paCurrent") == (peerVersion >= 5))
@@ -289,23 +328,32 @@ import Testing
                 // The Core's category versions: hardware changed at 6, 13, 16,
                 // 17, 18 and 23, PA at 5, 13, 14 and 20, transmit at 13 and 15,
                 // DSP at 15, 19 and 22, CAT & Network at 15 and 21, audio at
-                // 15 and 24, and diagnostics at 15.
+                // 15, 24 and 25, diagnostics at 15, display at 26 and 28 and
+                // appearance at 27.
                 let fitted = name == "hardware"
                     ? (peerVersion < 13 ? min(peerVersion, 6) : peerVersion < 16 ? 13 : peerVersion < 23 ? min(peerVersion, 18) : 23)
                     : name == "pa" ? (peerVersion < 13 ? min(peerVersion, 5) : peerVersion < 20 ? min(peerVersion, 14) : 20)
                     : name == "transmit" ? (peerVersion < 13 ? min(peerVersion, 3) : peerVersion < 15 ? 13 : 15)
                     : name == "dsp" ? (peerVersion < 15 ? min(peerVersion, 3) : peerVersion < 19 ? 15 : peerVersion < 22 ? 19 : 22)
                     : name == "catNetwork" ? (peerVersion < 15 ? min(peerVersion, 3) : peerVersion < 21 ? 15 : 21)
-                    : name == "audio" ? (peerVersion < 15 ? min(peerVersion, 3) : peerVersion < 24 ? 15 : 24)
+                    : name == "audio" ? (peerVersion < 15 ? min(peerVersion, 3) : peerVersion < 24 ? 15 : peerVersion < 25 ? 24 : 25)
                     : fifteen ? (peerVersion < 15 ? min(peerVersion, 3) : 15)
-                    : name == "appearance" ? (peerVersion < 7 ? min(peerVersion, 4) : peerVersion < 12 ? 7 : 12)
-                    : name == "display" ? (peerVersion < 8 ? min(peerVersion, 4) : min(peerVersion, 12))
+                    : name == "appearance" ? (peerVersion < 7 ? min(peerVersion, 4) : peerVersion < 12 ? 7 : peerVersion < 27 ? 12 : 27)
+                    : name == "display" ? (peerVersion < 8 ? min(peerVersion, 4) : peerVersion < 26 ? min(peerVersion, 12) : peerVersion < 28 ? 26 : 28)
                     : min(peerVersion, 3)
                 root["version"] = fitted
+                if name == "appearance" {
+                    #expect(includedIds.contains("appearance.colorsTheme.traceColor") == (peerVersion >= 27),
+                            "traceColor v\(peerVersion)")
+                    #expect(includedIds.contains("appearance.colorsTheme.traceFillColor"))
+                }
                 if name == "display" {
-                    // The Core's own counts: 11, 14, 21, 29, 33, 48 and 100 controls.
+                    // The Core's own counts: 11, 14, 21, 29, 33, 48 and 100
+                    // controls, and 101 with Sizing at 28.
                     let expected = peerVersion < 4 ? 11 : peerVersion < 8 ? 14 : peerVersion == 8 ? 21
-                        : peerVersion == 9 ? 29 : peerVersion == 10 ? 33 : peerVersion == 11 ? 48 : 100
+                        : peerVersion == 9 ? 29 : peerVersion == 10 ? 33 : peerVersion == 11 ? 48
+                        : peerVersion < 28 ? 100 : 101
+                    #expect(includedIds.contains("display.spectrumDefaults.fftSizing") == (peerVersion >= 28))
                     #expect(includedIds.count == expected, "display v\(peerVersion)")
                     #expect(includedIds.contains("display.spectrumPeaks.activePeakHold") == (peerVersion >= 11))
                     #expect(includedIds.contains("display.waterfallDefaults.showTxFilter") == (peerVersion >= 10))
@@ -339,6 +387,12 @@ import Testing
                         // Line In Gain in the radio's 1.5 dB steps from 24.
                         #expect(gain.range?.step == (peerVersion >= 24 ? 1.5 : 1), "lineInGain v\(peerVersion)")
                         #expect(gain.decimals == (peerVersion >= 24 ? 1 : nil), "lineInGain v\(peerVersion)")
+                    }
+                    if name == "display", let high = parsedControls.first(where: {
+                        $0.id == "display.waterfallDefaults.highThreshold" }) {
+                        // The level rows carry the allOf gate from 26, the single one below.
+                        #expect((high.phoneAllOf != nil) == (peerVersion >= 26), "highThreshold v\(peerVersion)")
+                        #expect(high.phoneDependencies.count == (peerVersion >= 26 ? 2 : 1), "highThreshold v\(peerVersion)")
                     }
                     if name == "catNetwork", let forget = parsedControls.first(where: {
                         $0.id == "catNetwork.tciServer.core.forgetRx2VfoBOnDisconnect" }) {
@@ -480,7 +534,9 @@ import Testing
         #expect(legacy.hygieneActions?[1].enabled == false && legacy.hygieneActions?[1].minimumVersion == nil)
         #expect(legacy.hygieneActions?[1].reason == "Reset to defaults is not available on this Core.")
 
-        let fft = try resourceControl("display", "display.spectrumDefaults.fftSize")
+        // The Size row as a phone below 28 is sent it.
+        let fft = try #require(DisplayV26Fixture.row(
+            try resourceControl("display", "display.spectrumDefaults.fftSize")))
         let parsedFFT = try parsedControl(fft, category: "display", version: 4)
         #expect(parsedFFT.metadataIssue == nil)
         #expect(parsedFFT.options?.map(\.value) == [4096, 8192, 16384, 32768, 65536, 131072, 262144])

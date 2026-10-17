@@ -15,6 +15,9 @@
 // 2026-09-26: iPhone app plan Task 27 (R-IOS-08, R-IOS-16):
 // rendezvous_servers and relay, J.J. Boyd (KG4VCF), AI-assisted via
 // Anthropic Claude Code.
+// 2026-10-12: resolveDaemonFolderArgument(), the rule behind --security-dir
+// and --dsp-cache-dir, J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+// Code.
 // =================================================================
 
 #include "DaemonConfig.h"
@@ -424,6 +427,26 @@ QString resolveDaemonProfileArgument(const QString& requested, bool wasSet, QStr
         return {};
     }
     return requested;
+}
+
+QString resolveDaemonFolderArgument(const QString& option, const QString& requested,
+                                    bool wasSet, QString* errorOut)
+{
+    if (errorOut) {
+        errorOut->clear();
+    }
+    if (!wasSet) {
+        return {};
+    }
+    const QString folder = QDir::fromNativeSeparators(requested);
+    if (folder.isEmpty() || !QDir::isAbsolutePath(folder)) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("%1 must be an absolute path, got \"%2\"")
+                            .arg(option, requested);
+        }
+        return {};
+    }
+    return QDir::cleanPath(folder);
 }
 
 } // namespace NereusSDR

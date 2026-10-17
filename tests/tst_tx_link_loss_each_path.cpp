@@ -63,6 +63,21 @@
 //               through the move is kept, watchdog quiet, until that end
 //               and stopped at once by it (section 18.2). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: remote transmit cut off the main thread: a Core whose
+//               main thread is held still cuts a keyed device's transmit
+//               on the connection's own thread within 500 ms of the last
+//               "tx" message; keepalives fed from another thread hold the
+//               key through the same hold; the cut's catch-up and the
+//               watchdog stop once in either order. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-15: review fix wave: a release read after the cut's post is a
+//               normal end, not a lost link; the cut's handling waits one
+//               turn, so the order tests wait for it; why the feeder may
+//               call the window's sendTx off its thread. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: re-review fixes: dropped VOX assertions that could not fail;
+//               noted the order in the stop-once test is not forced.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/safety/TransmitHolder.h"
@@ -70,8 +85,11 @@
 #include "core/AudioEngine.h"
 #include "core/MoxController.h"
 #include "core/IAudioBus.h"
+#include "core/RadioConnection.h"
+#include "core/safety/RemoteTxCutGuard.h"
 #include "core/safety/RemoteTxWatchdog.h"
 #include "core/safety/StarvationPolicy.h"
+#include "core/safety/TransmitCutLine.h"
 #include "core/session/PathRacer.h"
 #include "core/session/RemoteTransmitClient.h"
 #include "core/session/StationClient.h"
@@ -95,9 +113,15 @@
 #include <QSignalSpy>
 #include <QtTest>
 
+#include <QThread>
+
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <memory>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 using namespace NereusSDR;
 
@@ -284,6 +308,182 @@ struct MoveWhileKeying {
 const QString kStopSentence =
     QStringLiteral("The link to Shack MacBook went quiet, so the Core stopped transmitting.");
 
+// ---- Remote transmit cut off the main thread (2026-10-15) ----------------
+
+using Clock = std::chrono::steady_clock;
+
+double msBetween(Clock::time_point a, Clock::time_point b)
+{
+    return std::chrono::duration<double, std::milli>(b - a).count();
+}
+
+// The station model's radio connection: records MOX and relay writes with
+// their thread and time, from any thread (as tst_transmit_cut_line's).
+class RecordingConnection : public RadioConnection {
+    Q_OBJECT
+public:
+    struct Entry {
+        QString what;
+        QThread* thread{nullptr};
+        Clock::time_point at;
+    };
+
+    RecordingConnection() : RadioConnection(nullptr)
+    {
+        setState(ConnectionState::Connected);
+    }
+
+    void init() override {}
+    void connectToRadio(const NereusSDR::RadioInfo&) override {}
+    void disconnect() override {}
+    void setReceiverFrequency(int, quint64) override {}
+    void setTxFrequency(quint64) override {}
+    void setActiveReceiverCount(int) override {}
+    void setSampleRate(int) override {}
+    void setAttenuator(int) override {}
+    void setPreamp(bool) override {}
+    void setTxDrive(int) override {}
+    void sendTxIq(const float*, int) override {}
+    void setWatchdogEnabled(bool) override {}
+    void setAntennaRouting(AntennaRouting) override {}
+    void setMox(bool on) override { add(on ? QStringLiteral("MOX on") : QStringLiteral("MOX off")); }
+    void setTrxRelay(bool on) override
+    {
+        add(on ? QStringLiteral("relay on") : QStringLiteral("relay off"));
+    }
+    void setMicBoost(bool) override {}
+    void setLineIn(bool) override {}
+    void setMicTipRing(bool) override {}
+    void setMicBias(bool) override {}
+    void setLineInGain(int) override {}
+    void setUserDigOut(quint8) override {}
+    void setPuresignalRun(bool) override {}
+    void setMicPTTDisabled(bool) override {}
+    void setMicXlr(bool) override {}
+
+    std::vector<Entry> since(std::size_t from) const
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (from >= m_entries.size()) {
+            return {};
+        }
+        return std::vector<Entry>(m_entries.begin() + static_cast<std::ptrdiff_t>(from),
+                                  m_entries.end());
+    }
+    std::size_t count() const
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_entries.size();
+    }
+
+private:
+    void add(const QString& what)
+    {
+        const Clock::time_point now = Clock::now();
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_entries.push_back({what, QThread::currentThread(), now});
+    }
+
+    mutable std::mutex m_mutex;
+    std::vector<Entry> m_entries;
+};
+
+const RecordingConnection::Entry* findEntry(const std::vector<RecordingConnection::Entry>& list,
+                                            const QString& what)
+{
+    for (const auto& e : list) {
+        if (e.what == what) {
+            return &e;
+        }
+    }
+    return nullptr;
+}
+
+bool hasEntry(const std::vector<RecordingConnection::Entry>& list, const QString& what)
+{
+    return findEntry(list, what) != nullptr;
+}
+
+// The real Core and window on a direct media pair, as
+// dataChannelSeveredStopsWithin500ms sets them up, with the station model
+// given a recording connection on a QThread of its own (the harness's has
+// none), and both ends' transports at hand.
+struct CutRig {
+    Test::RemoteAudioSessionHarness h;
+    RecordingConnection conn;
+    QThread connThread;
+    QPointer<LibDataChannelMediaTransport> coreTransport;
+    QPointer<LibDataChannelMediaTransport> windowTransport;
+    std::unique_ptr<RemoteMediaController> remoteMedia;
+    std::unique_ptr<DaemonMediaController> daemonMedia;
+
+    CutRig()
+    {
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        attachMicrophone(h);
+        conn.moveToThread(&connThread);
+        connThread.start();
+        h.station.injectConnectionForTest(&conn);
+        remoteMedia = std::make_unique<RemoteMediaController>(
+            &h.client, &h.remote, nullptr, nullptr, [this](QObject* parent) {
+                auto* transport = new LibDataChannelMediaTransport(parent);
+                windowTransport = transport;
+                return static_cast<IMediaTransport*>(transport);
+            });
+        daemonMedia = std::make_unique<DaemonMediaController>(
+            &h.server, &h.station, nullptr, [this](QObject* parent) {
+                auto* transport = new LibDataChannelMediaTransport(parent);
+                coreTransport = transport;
+                return static_cast<IMediaTransport*>(transport);
+            });
+    }
+
+    ~CutRig()
+    {
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+        remoteMedia.reset();
+        daemonMedia.reset();
+        h.station.injectConnectionForTest(nullptr);
+        connThread.quit();
+        connThread.wait();
+    }
+
+    // Connected, the window keyed with its keepalives on the "tx" channel,
+    // and the Core's cut guard judging them.
+    bool keyOnTheTxChannel()
+    {
+        h.connectSession();
+        if (!QTest::qWaitFor([this] { return daemonMedia->micReceiver() != nullptr; }, 5000)
+            || !QTest::qWaitFor([this] { return h.client.capabilities().txPermitted; }, 5000)
+            || !remoteMedia->micLineNegotiated() || coreTransport.isNull()
+            || windowTransport.isNull() || h.server.txCutGuard() == nullptr) {
+            qWarning("cut rig: the media session did not come up");
+            return false;
+        }
+        // Give the "tx" channel time to open after media is ready.
+        QTest::qWait(300);
+        h.remote.setMoxFromButton(true);
+        RemoteTransmitClient* const transmit = h.client.remoteTransmit();
+        if (!QTest::qWaitFor(
+                [this, transmit] {
+                    return h.station.moxController()->isMox() && transmit != nullptr
+                        && transmit->channelKeepalivesSent() > 0
+                        && h.server.txCutGuard()->isJudging()
+                        && hasEntry(conn.since(0), QStringLiteral("MOX on"));
+                },
+                5000)) {
+            qWarning("cut rig: no key with the guard judging the tx channel");
+            return false;
+        }
+        // Settled: a few keepalives on the channel and none on the session.
+        QTest::qWait(500);
+        return h.station.moxController()->isMox() && h.server.txCutGuard()->isJudging()
+            && transmit->sessionKeepalivesSent() == 0
+            && h.station.keyedBy().deviceId == h.windowKey->fingerprint();
+    }
+};
+
 } // namespace
 
 class TestTxLinkLossEachPath : public QObject {
@@ -441,6 +641,294 @@ private slots:
         QCOMPARE(h.client.transmitState()->stopText(), kStopSentence);
         QTRY_VERIFY(!h.client.transmitState()->keyed());
         h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // ---- Remote transmit cut off the main thread (2026-10-15) ------------
+
+    // Keyed with the keepalives on the "tx" channel and the Core's cut
+    // guard judging them, the Core's main thread is held for a second (the
+    // window's keepalives stop with it: it runs on the same thread). The
+    // guard cuts transmit off the main thread: MOX off reaches the radio
+    // connection on its own thread within 500 ms of the last "tx" message
+    // the Core received, while main is still held. Once main runs, the
+    // model catches up: one stop with the watchdog's sentence, one MOX-off
+    // edge, the window told linkLost, the connection's cut cleared, and no
+    // key reached the connection after the cut.
+    void aStalledCoreStillCutsTransmitOffMain()
+    {
+        CutRig rig;
+        QVERIFY(rig.keyOnTheTxChannel());
+        Test::RemoteAudioSessionHarness& h = rig.h;
+        QSignalSpy tripped(h.server.txWatchdog(), &RemoteTxWatchdog::tripped);
+        QSignalSpy stopped(&h.station, &RadioModel::transmitStopped);
+        QSignalSpy moxSpy(h.station.moxController(), &MoxController::moxStateChanged);
+        const std::size_t mark = rig.conn.count();
+        const quint64 armSerial = h.server.txCutGuard()->armSerial();
+
+        const Clock::time_point holdStart = Clock::now();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        // Before the main thread runs anything again.
+        const Clock::time_point holdEnd = Clock::now();
+        const Clock::time_point lastReceipt = h.server.lastTxChannelReceiptForTest();
+        const std::vector<RecordingConnection::Entry> during = rig.conn.since(mark);
+        const bool cutDuringHold = rig.conn.transmitCut();
+        const bool judgingAfterHold = h.server.txCutGuard()->isJudging();
+
+        const RecordingConnection::Entry* const moxOff = findEntry(during, QStringLiteral("MOX off"));
+        QVERIFY2(moxOff != nullptr, "no MOX off reached the connection while main was held");
+        const double afterReceiptMs = msBetween(lastReceipt, moxOff->at);
+        qInfo("main held 1000 ms: MOX off on the connection %.1f ms after the last tx message "
+              "(%.1f ms into the hold), limit %lld",
+              afterReceiptMs, msBetween(holdStart, moxOff->at), static_cast<long long>(kBoundMs));
+        QCOMPARE(moxOff->thread, &rig.connThread);
+        QVERIFY(moxOff->thread != QThread::currentThread());
+        QVERIFY2(moxOff->at < holdEnd, "the cut waited for the main thread");
+        QVERIFY2(afterReceiptMs > double(RemoteTxWatchdog::kLinkLossDeadlineMs) - 1.0
+                     && afterReceiptMs <= double(kBoundMs),
+                 qPrintable(QString::number(afterReceiptMs)));
+        QVERIFY(hasEntry(during, QStringLiteral("relay off")));
+        QVERIFY(!hasEntry(during, QStringLiteral("MOX on")));
+        QVERIFY(cutDuringHold);
+        QVERIFY(!judgingAfterHold);   // the guard disarmed itself with its cut
+        QCOMPARE(h.server.txCutGuard()->armSerial(), armSerial);
+
+        // The main thread runs again: the model catches up.
+        QTRY_VERIFY_WITH_TIMEOUT(!h.station.moxController()->isMox()
+                                     && h.station.moxController()->state() == MoxState::Rx,
+                                 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!rig.conn.transmitCut(), 3000);
+        QTRY_COMPARE_WITH_TIMEOUT(stopped.count(), 1, 3000);
+        QCOMPARE(stopped.first().at(0).toString(), kStopSentence);
+        QTRY_COMPARE(h.client.transmitState()->stopSerial(), quint32(1));
+        QCOMPARE(h.client.transmitState()->stopReason(), QStringLiteral("linkLost"));
+        QCOMPARE(h.client.transmitState()->stopText(), kStopSentence);
+        QCOMPARE(tripped.count(), 1);
+        QVERIFY(!tripOf(tripped).linkClosed);
+
+        // A second later: still off, nothing stopped or recorded twice, and
+        // no key reached the connection after the cut.
+        QTest::qWait(1000);
+        QVERIFY(!h.station.moxController()->isMox());
+        QCOMPARE(stopped.count(), 1);
+        QCOMPARE(tripped.count(), 1);
+        QCOMPARE(h.client.transmitState()->stopSerial(), quint32(1));
+        int moxOffEdges = 0;
+        for (const QList<QVariant>& args : moxSpy) {
+            QCOMPARE(args.at(0).toBool(), false);
+            ++moxOffEdges;
+        }
+        QCOMPARE(moxOffEdges, 1);
+        QVERIFY2(!hasEntry(rig.conn.since(mark), QStringLiteral("MOX on")),
+                 "a key reached the connection after the cut");
+        QVERIFY(!rig.conn.transmitCut());
+    }
+
+    // The same hold of the Core's main thread, with the window's "tx"
+    // channel fed from a thread of its own (the window's transport, while
+    // its main thread is held too): the guard hears them off the main
+    // thread and the key is held. Nothing is cut, nothing stops, and the
+    // window's own release unkeys.
+    void aLiveChannelKeepsTheKeyWhenMainIsHeld()
+    {
+        CutRig rig;
+        QVERIFY(rig.keyOnTheTxChannel());
+        Test::RemoteAudioSessionHarness& h = rig.h;
+        QSignalSpy tripped(h.server.txWatchdog(), &RemoteTxWatchdog::tripped);
+        QSignalSpy stopped(&h.station, &RadioModel::transmitStopped);
+        const std::size_t mark = rig.conn.count();
+        const quint32 keyEpoch = h.station.keyedBy().epoch;
+        LibDataChannelMediaTransport* const window = rig.windowTransport.data();
+
+        // Sequences above anything the window's own keepalives reach in this
+        // test, so the watchdog counts the fed ones when main runs again.
+        // The feeder calls the window's sendTx off the transport's own
+        // thread. That is safe here: sendTx only reads the transport's
+        // members, and nothing writes them while the feeder runs (the
+        // transport neither starts nor stops before the feeder is joined),
+        // and the libdatachannel calls it makes are safe from any thread
+        // (libdatachannel v0.24.5: DataChannel::isOpen reads atomics,
+        // impl/datachannel.cpp:149; bufferedAmount is atomic,
+        // impl/channel.hpp:43; DataChannel::outgoing sends under the
+        // channel's shared lock, impl/datachannel.cpp:181-184).
+        std::atomic<bool> feeding{true};
+        std::atomic<int> fed{0};
+        std::thread feeder([window, keyEpoch, &feeding, &fed]() {
+            quint64 sequence = 1'000'000;
+            while (feeding.load()) {
+                if (window->sendTx(RemoteTxWatchdog::channelKeepalive(++sequence, keyEpoch))) {
+                    fed.fetch_add(1);
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(RemoteTxWatchdog::kKeepaliveIntervalMs / 2));
+            }
+        });
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        const std::vector<RecordingConnection::Entry> during = rig.conn.since(mark);
+        const bool cutDuringHold = rig.conn.transmitCut();
+        const bool judgingAfterHold = h.server.txCutGuard()->isJudging();
+        const int fedDuringHold = fed.load();
+
+        // Main runs again with the feeder still going; then the window
+        // releases.
+        QTest::qWait(300);
+        const bool keyedAfter = h.station.moxController()->isMox();
+        h.remote.setMoxFromButton(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!h.station.moxController()->isMox(), 5000);
+        feeding.store(false);
+        feeder.join();
+
+        qInfo("main held 1000 ms with the tx channel fed off main: %d fed during the hold",
+              fedDuringHold);
+        QVERIFY2(fedDuringHold >= 10, qPrintable(QString::number(fedDuringHold)));
+        QVERIFY2(during.empty(), "the connection was written while main was held");
+        QVERIFY(!cutDuringHold);
+        QVERIFY(judgingAfterHold);
+        QVERIFY(keyedAfter);
+        QCOMPARE(tripped.count(), 0);
+        for (const QList<QVariant>& args : stopped) {
+            QVERIFY(args.at(0).toString() != kStopSentence);
+        }
+        QVERIFY(!rig.conn.transmitCut());
+    }
+
+    // The two orders after a stall, made deterministic: the guard's cut
+    // (the model's cut line) and its post to the main thread
+    // (onTransmitCutOffMain) run before the watchdog's own check. The post
+    // trips the watchdog once (its stop and its record) and the watchdog no
+    // longer watches the device, so the check that was due stops nothing
+    // more; the connection's cut is cleared.
+    // The cut's handling now runs one pass later, so which of the two comes
+    // first is no longer forced; the one-stop assertions hold in either order.
+    void aCutPostedBeforeTheWatchdogsCheckStopsOnce()
+    {
+        CutRig rig;
+        QVERIFY(rig.keyOnTheTxChannel());
+        Test::RemoteAudioSessionHarness& h = rig.h;
+        QSignalSpy tripped(h.server.txWatchdog(), &RemoteTxWatchdog::tripped);
+        QSignalSpy stopped(&h.station, &RadioModel::transmitStopped);
+        const QByteArray device = h.windowKey->fingerprint();
+        const quint64 mediaEpoch = h.server.mediaEpochOfDevice(device);
+        QVERIFY(mediaEpoch != 0);
+
+        h.station.transmitCutLine()->cut();
+        QVERIFY(rig.conn.transmitCut());
+        h.server.onTransmitCutOffMain(mediaEpoch, h.server.txCutGuard()->armSerial(), 450);
+        // Its handling runs one event-loop turn later.
+        QTRY_COMPARE_WITH_TIMEOUT(tripped.count(), 1, 3000);
+        QVERIFY(!tripOf(tripped).linkClosed);
+        QVERIFY(!h.server.txWatchdog()->isWatching(device));
+        QTRY_VERIFY_WITH_TIMEOUT(!h.station.moxController()->isMox(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!rig.conn.transmitCut(), 3000);
+        QTRY_COMPARE(h.client.transmitState()->stopSerial(), quint32(1));
+        QCOMPARE(h.client.transmitState()->stopReason(), QStringLiteral("linkLost"));
+
+        QTest::qWait(1000);
+        QCOMPARE(tripped.count(), 1);
+        QCOMPARE(stopped.count(), 1);
+        QCOMPARE(stopped.first().at(0).toString(), kStopSentence);
+        QCOMPARE(h.client.transmitState()->stopSerial(), quint32(1));
+    }
+
+    // The other order: the watchdog trips first (its stop and its record);
+    // the guard's post that follows stops and records nothing more, and
+    // only clears the connection's cut.
+    void aCutPostedAfterTheWatchdogsTripStopsNothingMore()
+    {
+        CutRig rig;
+        QVERIFY(rig.keyOnTheTxChannel());
+        Test::RemoteAudioSessionHarness& h = rig.h;
+        QSignalSpy tripped(h.server.txWatchdog(), &RemoteTxWatchdog::tripped);
+        QSignalSpy stopped(&h.station, &RadioModel::transmitStopped);
+        const QByteArray device = h.windowKey->fingerprint();
+        const quint64 mediaEpoch = h.server.mediaEpochOfDevice(device);
+        QVERIFY(mediaEpoch != 0);
+        const quint64 armSerial = h.server.txCutGuard()->armSerial();
+
+        h.station.transmitCutLine()->cut();
+        QVERIFY(rig.conn.transmitCut());
+        // The watchdog's check, overdue after the stall, runs first (the
+        // same trip as its timer's).
+        QVERIFY(h.server.txWatchdog()->tripQuiet(device));
+        QCOMPARE(stopped.count(), 1);
+        h.server.onTransmitCutOffMain(mediaEpoch, armSerial, 450);
+        QCOMPARE(tripped.count(), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(!h.station.moxController()->isMox(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!rig.conn.transmitCut(), 3000);
+        QTRY_COMPARE(h.client.transmitState()->stopSerial(), quint32(1));
+
+        QTest::qWait(1000);
+        QCOMPARE(tripped.count(), 1);
+        QCOMPARE(stopped.count(), 1);
+        QCOMPARE(stopped.first().at(0).toString(), kStopSentence);
+        QCOMPARE(h.client.transmitState()->stopSerial(), quint32(1));
+        QCOMPARE(h.client.transmitState()->stopReason(), QStringLiteral("linkLost"));
+    }
+
+    // The window releases while the Core's main thread is held: its
+    // keepalives stop with the release, which waits on the session link
+    // (only the Core's main thread reads it), so the guard cuts while main
+    // is held, as it must for RF. The cut's post runs before the Core
+    // reads the release; its handling waits one turn, reads the release
+    // first, and records nothing: one MOX-off edge, no link-lost stop, the
+    // window never told linkLost, VOX untouched, the connection's cut
+    // cleared, and the next key reaches the connection.
+    void aReleaseReadAfterTheCutIsNotALostLink()
+    {
+        CutRig rig;
+        QVERIFY(rig.keyOnTheTxChannel());
+        Test::RemoteAudioSessionHarness& h = rig.h;
+        Test::LoopbackTransport* const windowEnd = h.stationLink->peerForTest();
+        QVERIFY(windowEnd != nullptr);
+        QSignalSpy tripped(h.server.txWatchdog(), &RemoteTxWatchdog::tripped);
+        QSignalSpy stopped(&h.station, &RadioModel::transmitStopped);
+        QSignalSpy moxSpy(h.station.moxController(), &MoxController::moxStateChanged);
+        const quint32 stopSerialBefore = h.client.transmitState()->stopSerial();
+        const std::size_t mark = rig.conn.count();
+
+        // The release leaves the window and waits on the link, as it does
+        // behind a stalled Core's socket.
+        windowEnd->setHoldsOutgoing(true);
+        h.remote.setMoxFromButton(false);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        // Before the main thread runs anything again.
+        const bool cutDuringHold = rig.conn.transmitCut();
+        const std::vector<RecordingConnection::Entry> during = rig.conn.since(mark);
+        // The release reaches the Core behind the cut's post.
+        windowEnd->setHoldsOutgoing(false);
+
+        QVERIFY2(cutDuringHold, "the guard did not cut while main was held");
+        QVERIFY(hasEntry(during, QStringLiteral("MOX off")));
+        QTRY_VERIFY_WITH_TIMEOUT(!h.station.moxController()->isMox()
+                                     && h.station.moxController()->state() == MoxState::Rx,
+                                 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!rig.conn.transmitCut(), 3000);
+        QTRY_VERIFY(!h.client.transmitState()->keyed());
+
+        // A second later: nothing recorded as a lost link.
+        QTest::qWait(1000);
+        QCOMPARE(tripped.count(), 0);
+        QCOMPARE(stopped.count(), 0);
+        int moxOffEdges = 0;
+        for (const QList<QVariant>& args : moxSpy) {
+            QCOMPARE(args.at(0).toBool(), false);
+            ++moxOffEdges;
+        }
+        QCOMPARE(moxOffEdges, 1);
+        QCOMPARE(h.client.transmitState()->stopSerial(), stopSerialBefore);
+        QVERIFY(h.client.transmitState()->stopReason() != QLatin1String("linkLost"));
+        // tripped == 0 carries the VOX property: VOX is disarmed only by the
+        // watchdog's stop.
+        QVERIFY(!rig.conn.transmitCut());
+
+        // The next key reaches the connection.
+        const std::size_t beforeKey = rig.conn.count();
+        h.remote.setMoxFromButton(true);
+        QTRY_VERIFY_WITH_TIMEOUT(hasEntry(rig.conn.since(beforeKey), QStringLiteral("MOX on")),
+                                 5000);
+        QVERIFY(h.station.moxController()->isMox());
+        h.remote.setMoxFromButton(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!h.station.moxController()->isMox(), 5000);
     }
 
     // ---- The Part E paths --------------------------------------------------

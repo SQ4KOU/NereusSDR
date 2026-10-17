@@ -45,6 +45,17 @@
 //               web relay's leg (RelayLeg) and its per-connection candidate
 //               sources; the computer's own proxy settings (SystemProxy).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: cancel() takes the reason for its log line; admitDirect()
+//               returns the rank it worked out, which a direct rung can
+//               take. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
+//   2026-10-15: rankForPath() ranks a pair not known yet as relayed; the
+//               rendezvous rung still names it a service path, and says
+//               whether it may take the relay. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-15: PR 524 review: rankForPath()'s doc gives the rule for a
+//               pair not known yet, and that it does not log. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/NereusCoreExport.h"
@@ -97,7 +108,7 @@ enum class PathKind { ThisNetwork, Direct, Service, Relay, WebRelay };
 /// at most and reports it with opened() (handing the transport over,
 /// unparented) or ends with ended(). stop() cancels it; it emits nothing
 /// after.
-class PathRung : public QObject {
+class NEREUS_CORE_EXPORT PathRung : public QObject {
     Q_OBJECT
 public:
     explicit PathRung(QObject* parent = nullptr) : QObject(parent) {}
@@ -209,8 +220,9 @@ public:
 
     void start();
     /// Stops everything, closes what was not taken; nothing more is
-    /// signalled.
-    void cancel();
+    /// signaled. `why`, when given, goes in the log line that names the
+    /// attempts still open.
+    void cancel(const QString& why = QString());
     /// The winner reached snapshot.complete: every rung still running
     /// stops (as "another path connected first") and every ready one not
     /// taken closes, except the standby (takeStandby()).
@@ -227,8 +239,10 @@ public:
     static int rankFor(const QUrl& url);
     /// Step 2b: the rank of a connection through the service from the pair
     /// it settled on: Floor through the web relay's loopback shim,
-    /// ServiceRelayed through TURN, ServiceDirect otherwise (and while no
-    /// pair is known).
+    /// ServiceRelayed through TURN, ServiceDirect otherwise. While no pair
+    /// is known: ServiceRelayed, so a better-path search retries ICE (a
+    /// rendezvous rung that took no relay ranks it ServiceDirect itself).
+    /// It does not log; its callers do.
     static int rankForPath(const std::optional<MediaIcePath>& path);
 
     /// Test seam: each rung's address and how long after start() it
@@ -274,7 +288,8 @@ private:
     QSet<QString> m_directTargets;
     int m_directOpening = 0;
     QList<int> m_directWaiting;
-    bool admitDirect(const QUrl& url);
+    /// The url's rank when admitted, nullopt when dropped (logged).
+    std::optional<int> admitDirect(const QUrl& url);
     void startWaitingDirect();
     void releaseDirectTurn(Entry& entry);
     bool m_started = false;
@@ -291,6 +306,9 @@ class DirectPathRung : public PathRung {
     Q_OBJECT
 public:
     DirectPathRung(const QUrl& url, quint64 maxIncomingBytes, QObject* parent = nullptr);
+    /// With the rank already worked out (PathRacer::rankFor(url)).
+    DirectPathRung(const QUrl& url, quint64 maxIncomingBytes, int rank,
+                   QObject* parent = nullptr);
     ~DirectPathRung() override;
     void start() override;
     void stop() override;
@@ -328,6 +346,8 @@ public:
     void setAnswerDeadlineMs(int ms) { m_answerDeadlineMs = ms; }
     /// RendezvousDialer::setCoreAnswersIntroductions (review Minor 5).
     void setCoreAnswersIntroductions(bool answers) { m_coreAnswersIntroductions = answers; }
+    /// Whether this rung may take the relay (false for an upgrade).
+    bool allowsRelay() const { return m_allowRelay; }
 
 private:
     void noteRelay(const RendezvousDialer* dialer);
@@ -336,6 +356,8 @@ private:
     std::shared_ptr<const ClientDeviceIdentity> m_device;
     bool m_allowRelay = true;
     int m_rank = PathRacer::ServiceDirect;
+    /// libjuice reported no selected pair at ready (rank ServiceRelayed).
+    bool m_pairUnknown = false;
     int m_dialDeadlineMs = 0;
     int m_answerDeadlineMs = 0;
     bool m_coreAnswersIntroductions = false;

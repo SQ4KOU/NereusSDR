@@ -4,6 +4,7 @@
 #include <QPointer>
 #include <QString>
 #include <QWidget>
+#include "gui/NereusGuiExport.h"
 
 class QLabel;
 class QPushButton;
@@ -54,7 +55,7 @@ class StatusBadge;
 // 2026-08-02 bottom-banner cleanup (Task A5): follows the active slice
 // instead of slice 0, dense single row replaces the 3-stage responsive
 // ladder. See docs/architecture/2026-08-02-bottom-banner-and-pan-menu-design.md §4.2.
-class RxDashboard : public QWidget {
+class NEREUS_GUI_EXPORT RxDashboard : public QWidget {
     Q_OBJECT
 
 public:

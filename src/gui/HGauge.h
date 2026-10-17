@@ -1,5 +1,10 @@
 // src/gui/HGauge.h
+// Modification history (NereusSDR):
+//   2026-10-12 - Preserve caller width constraints around the workspace text floor.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 #pragma once
+#include <QFont>
+#include <QStringList>
 #include <QWidget>
 
 namespace NereusSDR {
@@ -38,13 +43,32 @@ public:
     double filledFraction() const noexcept;
     bool isReversed() const noexcept { return m_reversed; }
 
-    QSize sizeHint() const override { return {200, 30}; }
+    // Test seam: draw the scale numbers at this pixel size instead of the
+    // 7 points the app uses (0, the default, means 7 points). 7 points is
+    // 7 px on the Mac and 9 px at 96 dpi (Windows at 100%, Linux), so a
+    // test on any platform can render either case.
+    void setScaleFontPixelSize(int pixelSize);
+    // Test seam: the same for the title in the bar, which the app draws
+    // at 8 points bold: 8 px on the Mac and 11 px at 96 dpi.
+    void setTitleFontPixelSize(int pixelSize);
+
+    QSize sizeHint() const override { return {200, heightForScale()}; }
     QSize minimumSizeHint() const override { return {100, 26}; }
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void changeEvent(QEvent* event) override;
 
 private:
+    // The font of the scale numbers under the bar.
+    QFont scaleFont(const QString& family) const;
+    // The font of the title in the bar.
+    QFont titleFont(const QString& family) const;
+    // The widget height that shows the scale numbers whole: 30 px where
+    // the scale font is 7 px, more where it is larger.
+    int heightForScale() const;
+    void updateFixedHeight();
+
     double m_min = 0.0;
     double m_max = 100.0;
     double m_value = 0.0;
@@ -56,6 +80,11 @@ private:
     QString m_title;
     QString m_unit;
     QStringList m_tickLabels;
+    int m_scaleFontPixelSize = 0;
+    int m_titleFontPixelSize = 0;
+    int m_minimumWidthBeforeTextFloor = 0;
+    int m_textFloorMinimumWidth = 0;
+    bool m_textFloorMinimumApplied = false;
 };
 
 } // namespace NereusSDR

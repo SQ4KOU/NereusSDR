@@ -56,6 +56,28 @@ class TstReceiveLayoutStore : public QObject {
     Q_OBJECT
 
 private slots:
+    void experimentalModesPersistWithReceiveOwner()
+    {
+        QTemporaryDir directory;
+        const QString path = directory.filePath(QStringLiteral("NereusSDR.settings"));
+        const QList<ReceiveSliceState> slices{
+            {0, QStringLiteral("pan-0"), 14293200.0, static_cast<DSPMode>(14)},
+            {2, QStringLiteral("pan-1"), 7200000.0, static_cast<DSPMode>(15)},
+        };
+        AppSettings settings(path);
+        QString error;
+        QVERIFY2(ReceiveLayoutStore::stage(settings, kMacA, slices, &error, 2), qPrintable(error));
+        QVERIFY(settings.save());
+        AppSettings loaded(path);
+        loaded.load();
+        const auto result = ReceiveLayoutStore::load(loaded, kMacA);
+        QCOMPARE(result.state, ReceiveLayoutStore::LoadState::Loaded);
+        QCOMPARE(result.slices.at(0).dspMode, static_cast<DSPMode>(14));
+        QCOMPARE(result.slices.at(1).dspMode, static_cast<DSPMode>(15));
+        QCOMPARE(result.radeRxOwnerId, std::optional<int>(2));
+        QVERIFY(!ReceiveLayoutStore::stage(settings, kMacB, slices, &error));
+    }
+
     void stageRoundTripsNoncontiguousIdsAndOrder()
     {
         QTemporaryDir directory;

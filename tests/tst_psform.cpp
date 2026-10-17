@@ -56,6 +56,7 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QSignalSpy>
+#include <QScopeGuard>
 #include <QSpinBox>
 
 #include "core/PureSignal.h"
@@ -84,7 +85,7 @@ private slots:
     void constructAndDestruct_withNoPureSignal_doesNotCrash()
     {
         PsForm form(/*radioModel=*/nullptr, /*pureSignal=*/nullptr);
-        QCOMPARE(form.windowTitle(), QStringLiteral("PureSignal 3.0"));
+        QCOMPARE(form.windowTitle(), QStringLiteral("PureSignal Bench"));
         QCOMPARE(form.isModal(), false);
     }
 
@@ -409,6 +410,61 @@ private slots:
 
         QCOMPARE(changed.count(), 1);
         QCOMPARE(changed.takeFirst().at(0).toBool(), check->isChecked());
+    }
+
+    void externalShowTwoToneSyncDoesNotActuateAndKeepsUserToggleBehavior()
+    {
+        AppSettings& settings = AppSettings::instance();
+        const QString key = QStringLiteral("puresignal/showTwoToneMeasurements");
+        const bool hadValue = settings.contains(key);
+        const QVariant oldValue = settings.value(key);
+        const auto restore = qScopeGuard([&settings, &key, hadValue, oldValue]() {
+            if (hadValue) {
+                settings.setValue(key, oldValue);
+            } else {
+                settings.remove(key);
+            }
+        });
+        settings.setValue(key, QStringLiteral("False"));
+
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        PsForm form(nullptr, &ps);
+        auto* check = form.findChild<QCheckBox*>(
+            QStringLiteral("chkShow2ToneMeasurements"));
+        auto* twoTone = form.findChild<QPushButton*>(
+            QStringLiteral("btnPSTwoToneGen"));
+        QVERIFY(check);
+        QVERIFY(twoTone);
+        QVERIFY(!check->isChecked());
+        QVERIFY(!twoTone->isChecked());
+
+        QSignalSpy intent(&form, &PsForm::showTwoToneMeasurementsChanged);
+        QSignalSpy coordinator(&ps, &PureSignal::show2ToneMeasurementsChanged);
+
+        form.setShowTwoToneMeasurements(true);
+
+        QVERIFY(check->isChecked());
+        QCOMPARE(intent.count(), 0);
+        QCOMPARE(coordinator.count(), 0);
+        QVERIFY(!ps.show2ToneMeasurements());
+        QVERIFY(!twoTone->isChecked());
+        QCOMPARE(settings.value(key).toString(), QStringLiteral("False"));
+
+        check->setChecked(false);
+        QCOMPARE(intent.count(), 1);
+        QCOMPARE(intent.takeFirst().at(0).toBool(), false);
+        QCOMPARE(settings.value(key).toString(), QStringLiteral("False"));
+        QVERIFY(!ps.show2ToneMeasurements());
+
+        check->setChecked(true);
+        QCOMPARE(intent.count(), 1);
+        QCOMPARE(intent.takeFirst().at(0).toBool(), true);
+        QCOMPARE(coordinator.count(), 1);
+        QCOMPARE(coordinator.takeFirst().at(0).toBool(), true);
+        QCOMPARE(settings.value(key).toString(), QStringLiteral("True"));
+        QVERIFY(ps.show2ToneMeasurements());
+        QVERIFY(!twoTone->isChecked());
     }
 
     void remoteAssetManagerEntryDoesNotRequireTransmitPermission()

@@ -3,6 +3,11 @@
 // =================================================================
 // no-port-check: NereusSDR-original file.  See header.
 // =================================================================
+// Modification history (NereusSDR):
+//   2026-10-12 - Apply the approved workspace-only 11 px text minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
+#include "gui/styles/WorkspacePreview.h"
 #include "gui/VintageMeterFace.h"
 
 #include <QFontDatabase>
@@ -118,9 +123,10 @@ void drawCentered(QPainter& p, const QPointF& c, const QString& text)
 
 QFont fitted(QFont f, const QString& text, double maxWidth, int minPx)
 {
+    minPx = WorkspacePreview::readableTextPixelSize(minPx);
     QFontMetricsF fm(f);
     while (f.pixelSize() > minPx && fm.horizontalAdvance(text) > maxWidth) {
-        f.setPixelSize(f.pixelSize() - 1);
+        f.setPixelSize(WorkspacePreview::readableTextPixelSize(f.pixelSize() - 1));
         fm = QFontMetricsF(f);
     }
     return f;
@@ -188,7 +194,7 @@ QFont VintageMeterFace::faceFont(double pixelSize, bool bold, double letterSpaci
     if (!families.isEmpty()) {
         f.setFamilies(families);
     }
-    f.setPixelSize(std::max(6, qRound(pixelSize)));
+    f.setPixelSize(WorkspacePreview::readableTextPixelSize(std::max(6, qRound(pixelSize))));
     f.setWeight(bold ? QFont::DemiBold : QFont::Medium);
     if (letterSpacingPct != 100.0) {
         f.setLetterSpacing(QFont::PercentageSpacing, letterSpacingPct);

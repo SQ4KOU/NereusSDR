@@ -496,7 +496,7 @@ private slots:
         one.connection.cachedAddresses = {one.manualAddresses.first()};
 
         QVERIFY(store.upsert(one));
-        QVERIFY(store.rememberCoreAddresses(one.id, one.connection.identityFingerprint, QStringLiteral("[\"[2001:db8::1]:41000\"]")));
+        QVERIFY(store.rememberCoreAddresses(one.id, one.connection.identityFingerprint, QStringLiteral("[\"[2001:db8::1]:41000\"]"), {}));
         CoresSetupPage page(&store);
         page.show();
         addresses(page);
@@ -862,6 +862,35 @@ private slots:
         QVERIFY(!push(page, "addCoreAddress")->isEnabled());
         QVERIFY(!push(page, "renameCore")->isEnabled());
         capture(page, QStringLiteral("unpaired"));
+    }
+    // With no saved Cores (or no store in this window) the list holds only
+    // a notice, which reads as the page's other notices do: no frame. The
+    // frame returns around saved Cores.
+    void emptyListNoticeIsNotFramedLikeAField() {
+        const QColor frame(0x30, 0x40, 0x50);
+        auto topEdge = [](QWidget& page) {
+            QWidget* list = page.findChild<QWidget*>(QStringLiteral("coreSettingsCoreList"));
+            const QImage image = list->grab().toImage();
+            return image.pixelColor(image.width() / 2, 0);
+        };
+        {
+            CoresSetupPage page(nullptr);
+            page.resize(699, 650);
+            page.show();
+            QVERIFY(label(page, "inspectedCoreName") != nullptr);
+            QVERIFY(topEdge(page) != frame);
+        }
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("settings.xml")));
+        CoreTargetStore store(settings);
+        QVERIFY(store.load());
+        CoresSetupPage page(&store);
+        page.resize(699, 650);
+        page.show();
+        QVERIFY(topEdge(page) != frame);
+        QVERIFY(store.upsert(target(QStringLiteral("one"), QByteArray(32, 'a'))));
+        page.refreshTargets();
+        QCOMPARE(topEdge(page), frame);
     }
 };
 QTEST_MAIN(TstCoresSetupPage)

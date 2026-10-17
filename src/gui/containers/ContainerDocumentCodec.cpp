@@ -1,7 +1,34 @@
 // no-port-check: NereusSDR-original lossless presentation JSON codec.
+// Modification history (NereusSDR):
+//   2026-10-11 - Unknown keys inside screen are kept, as they are inside
+//                 home. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-11 - A free home carries geometryPane, the pane its rect was
+//                 placed in. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-11 - home, written for floating containers only: where a
+//                 popped-out container came from. An unreadable one is
+//                 dropped for that container alone; unknown keys inside it
+//                 are kept. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-11 - locked is written only when true; a document without the
+//                 key loads unlocked, as before. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - screen, written for floating and popped-out containers
+//                 only; an unreadable screen, or an unreadable geometry of
+//                 a floating container, costs that container its place and
+//                 nothing else. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-11 - geometryPane, written for free containers only and read
+//                 leniently, by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-07 - The panel-docked edge and the workspace arrangement, each
+//                 written only when not the default by J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 #include "ContainerDocumentCodec.h"
 #include "LegacyContainerImporter.h"
 #include "ContainerContentRegistry.h"
+#include "core/LogCategories.h"
 #include <QUuid>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -12,9 +39,41 @@
 
 namespace NereusSDR {
 namespace {
-const QStringList kWorkspaceFields{"schemaVersion", "revision", "mainContainerId", "containers"};
-const QStringList kContainerFields{"id", "name", "contents", "layout", "dockMode", "anchor", "header",
-                                   "geometry", "visible", "locked", "autoHeight", "popOutShell", "config"};
+const QStringList kWorkspaceFields{"schemaVersion", "revision", "mainContainerId", "containers", "arrangement"};
+const QStringList kContainerFields{"id", "name", "contents", "layout", "dockMode", "edge", "anchor", "header",
+                                   "geometry", "geometryPane", "screen", "home", "visible", "locked", "autoHeight", "popOutShell",
+                                   "config"};
+const QStringList kScreenFields{"name", "serial", "geometry"};
+const QStringList kHomeFields{"dockMode", "edge", "before", "after", "geometry", "geometryPane"};
+const QStringList kArrangementFields{"strips", "gridAlignment"};
+const QStringList kStripFields{"thickness", "extents"};
+
+// Edge names as saved. Right is the default and is never written.
+QString edgeName(DockEdge edge)
+{
+    switch (edge) {
+    case DockEdge::Left:
+        return QStringLiteral("Left");
+    case DockEdge::Right:
+        return QStringLiteral("Right");
+    case DockEdge::Top:
+        return QStringLiteral("Top");
+    case DockEdge::Bottom:
+        return QStringLiteral("Bottom");
+    }
+    return {};
+}
+
+bool edgeFromName(const QString& name, DockEdge& out)
+{
+    for (DockEdge edge : {DockEdge::Left, DockEdge::Right, DockEdge::Top, DockEdge::Bottom}) {
+        if (name == edgeName(edge)) {
+            out = edge;
+            return true;
+        }
+    }
+    return false;
+}
 const QStringList kContentFields{"id", "typeId", "name", "context", "config", "canvasRect", "paintOrder",
                                  "visible", "returnLocation"};
 const QStringList kReturnFields{"containerId", "beforeId", "afterId"};
@@ -178,6 +237,116 @@ bool geometryField(const QJsonObject& object, QRect& out)
     return true;
 }
 
+// [width, height] of the pane a free container's place was seen at.
+bool paneSize(const QJsonValue& value, QSize& out)
+{
+    if (!value.isArray() || value.toArray().size() != 2) {
+        return false;
+    }
+    const QJsonArray array = value.toArray();
+    int width = 0;
+    int height = 0;
+    if (!integer(array[0], width) || !integer(array[1], height) || width <= 0 || height <= 0) {
+        return false;
+    }
+    out = QSize(width, height);
+    return true;
+}
+
+// {"name", "serial", "geometry": [x, y, w, h]} of the monitor a window was on.
+bool savedScreen(const QJsonValue& value, SavedScreen& out)
+{
+    if (!value.isObject()) {
+        return false;
+    }
+    const QJsonObject object = value.toObject();
+    if (!object["name"].isString() || !object["serial"].isString() || !object.contains("geometry")) {
+        return false;
+    }
+    QRect geometry;
+    if (!geometryField(object, geometry) || !geometry.isValid()) {
+        return false;
+    }
+    out = {object["name"].toString(), object["serial"].toString(), geometry, extensions(object, kScreenFields)};
+    return true;
+}
+
+bool nonNegativeInteger(const QJsonValue& value, int& out)
+{
+    return integer(value, out) && out >= 0;
+}
+
+// The arrangement is strict about the fields it knows and keeps any other
+// member as an extension, like every other record.
+bool decodeArrangement(const QJsonValue& value, WorkspaceArrangement& arrangement)
+{
+    if (!value.isObject()) {
+        return false;
+    }
+    const QJsonObject object = value.toObject();
+    if (!boolField(object, "gridAlignment", arrangement.gridAlignment)) {
+        return false;
+    }
+    if (object.contains("strips")) {
+        if (!object["strips"].isObject()) {
+            return false;
+        }
+        const QJsonObject strips = object["strips"].toObject();
+        for (auto it = strips.constBegin(); it != strips.constEnd(); ++it) {
+            DockEdge edge = DockEdge::Right;
+            if (!edgeFromName(it.key(), edge) || !it.value().isObject()) {
+                return false;
+            }
+            const QJsonObject stripObject = it.value().toObject();
+            EdgeStripLayout strip;
+            if (stripObject.contains("thickness")
+                && !nonNegativeInteger(stripObject["thickness"], strip.thickness)) {
+                return false;
+            }
+            if (stripObject.contains("extents")) {
+                if (!stripObject["extents"].isObject()) {
+                    return false;
+                }
+                const QJsonObject extents = stripObject["extents"].toObject();
+                for (auto e = extents.constBegin(); e != extents.constEnd(); ++e) {
+                    int extent = 0;
+                    if (!nonNegativeInteger(e.value(), extent)) {
+                        return false;
+                    }
+                    strip.extents.insert(e.key(), extent);
+                }
+            }
+            strip.extensions = extensions(stripObject, kStripFields);
+            arrangement.strips.insert(edge, strip);
+        }
+    }
+    arrangement.extensions = extensions(object, kArrangementFields);
+    return true;
+}
+
+QJsonObject encodeArrangement(const WorkspaceArrangement& arrangement)
+{
+    QJsonObject object = arrangement.extensions;
+    if (!arrangement.strips.isEmpty()) {
+        QJsonObject strips;
+        for (auto it = arrangement.strips.constBegin(); it != arrangement.strips.constEnd(); ++it) {
+            QJsonObject strip = it.value().extensions;
+            strip["thickness"] = it.value().thickness;
+            QJsonObject extents;
+            for (auto e = it.value().extents.constBegin(); e != it.value().extents.constEnd(); ++e) {
+                extents[e.key()] = e.value();
+            }
+            strip["extents"] = extents;
+            strips[edgeName(it.key())] = strip;
+        }
+        object["strips"] = strips;
+    }
+    if (arrangement.gridAlignment) {
+        object["gridAlignment"] = true;
+    }
+    return object;
+}
+
 bool decodeEntry(const QJsonObject& object, ContentEntry& entry)
 {
     if (!stringField(object, "id", entry.id) || !stringField(object, "typeId", entry.typeId)
@@ -207,16 +376,99 @@ bool decodeEntry(const QJsonObject& object, ContentEntry& entry)
     return true;
 }
 
+// Where a popped-out container came from. A strip home names its edge; a
+// free home has a rect with a size.
+bool containerHome(const QJsonValue& value, ContainerHome& out)
+{
+    if (!value.isObject()) {
+        return false;
+    }
+    const QJsonObject object = value.toObject();
+    int mode = -1;
+    if (!integer(object["dockMode"], mode)
+        || (mode != int(DockMode::PanelDocked) && mode != int(DockMode::OverlayDocked))) {
+        return false;
+    }
+    out.dockMode = static_cast<DockMode>(mode);
+    if (object.contains("edge")
+        && (!object["edge"].isString() || !edgeFromName(object["edge"].toString(), out.edge))) {
+        return false;
+    }
+    if (!stringField(object, "before", out.beforeId) || !stringField(object, "after", out.afterId)
+        || !geometryField(object, out.geometry)) {
+        return false;
+    }
+    if (out.dockMode == DockMode::OverlayDocked && !out.geometry.isValid()) {
+        return false;
+    }
+    if (object.contains("geometryPane")) {
+        QSize pane;
+        if (!paneSize(object["geometryPane"], pane)) {
+            return false;
+        }
+        out.geometryPane = pane;
+    }
+    out.extensions = extensions(object, kHomeFields);
+    return true;
+}
+
 bool decodeContainer(const QJsonObject& object, ContainerDocument& container)
 {
     if (!stringField(object, "id", container.id) || !stringField(object, "name", container.name)
         || !enumField(object, "layout", container.layout) || !enumField(object, "dockMode", container.dockMode)
         || !enumField(object, "anchor", container.anchor) || !enumField(object, "header", container.header)
-        || !geometryField(object, container.geometry) || !boolField(object, "visible", container.visible)
+        || !boolField(object, "visible", container.visible)
         || !boolField(object, "locked", container.locked) || !boolField(object, "autoHeight", container.autoHeight)
         || !boolField(object, "popOutShell", container.popOutShell) || !objectField(object, "config", container.config)
         || !object["contents"].isArray()) {
         return false;
+    }
+    if (object.contains("edge")
+        && (!object["edge"].isString() || !edgeFromName(object["edge"].toString(), container.edge))) {
+        return false;
+    }
+    if (!geometryField(object, container.geometry)) {
+        if (container.dockMode != DockMode::Floating) {
+            return false;
+        }
+        // Lenient for a window: it loses its place, not the whole layout,
+        // and is shown at a default place until the operator moves it.
+        container.geometry = QRect();
+        qCWarning(lcContainer) << "Container" << container.id
+                               << "has an unreadable geometry; it takes a default place";
+    }
+    if (object.contains("screen")) {
+        // Lenient in the same way: without its monitor the window is placed
+        // by its geometry alone.
+        SavedScreen screen;
+        if (savedScreen(object["screen"], screen)) {
+            container.screen = screen;
+        } else {
+            qCWarning(lcContainer) << "Container" << container.id
+                                   << "has an unreadable screen; it is ignored";
+        }
+    }
+    if (object.contains("home")) {
+        // Lenient: without it Return docks the container at the default
+        // place, and nothing else is lost.
+        ContainerHome home;
+        if (containerHome(object["home"], home)) {
+            container.home = home;
+        } else {
+            qCWarning(lcContainer) << "Container" << container.id
+                                   << "has an unreadable home; it is ignored";
+        }
+    }
+    if (object.contains("geometryPane")) {
+        // Lenient: a value that does not read is dropped for this container
+        // alone, which then takes the pane's size at start as its baseline.
+        QSize pane;
+        if (paneSize(object["geometryPane"], pane)) {
+            container.geometryPane = pane;
+        } else {
+            qCWarning(lcContainer) << "Container" << container.id
+                                   << "has an unreadable geometryPane; it is ignored";
+        }
     }
     for (const QJsonValue value : object["contents"].toArray()) {
         ContentEntry entry;
@@ -264,12 +516,53 @@ QJsonObject encodeContainer(const ContainerDocument& container)
     object["contents"] = contents;
     object["layout"] = int(container.layout);
     object["dockMode"] = int(container.dockMode);
+    // Written only off the default, so existing documents keep their bytes.
+    if (container.edge != DockEdge::Right) {
+        object["edge"] = edgeName(container.edge);
+    }
     object["anchor"] = int(container.anchor);
     object["header"] = int(container.header);
     object["geometry"] = QJsonArray{container.geometry.x(), container.geometry.y(),
                                   container.geometry.width(), container.geometry.height()};
+    // Free containers only, and only once the operator has placed one, so
+    // every other document keeps its bytes.
+    if (container.geometryPane && container.dockMode == DockMode::OverlayDocked
+        && container.geometryPane->width() > 0 && container.geometryPane->height() > 0) {
+        object["geometryPane"] = QJsonArray{container.geometryPane->width(), container.geometryPane->height()};
+    }
+    // Windows only, and only once the operator has placed one.
+    if (container.screen && (container.dockMode == DockMode::Floating || container.popOutShell)) {
+        const QRect& on = container.screen->geometry;
+        QJsonObject screen = container.screen->extensions;
+        screen["name"] = container.screen->name;
+        screen["serial"] = container.screen->serial;
+        screen["geometry"] = QJsonArray{on.x(), on.y(), on.width(), on.height()};
+        object["screen"] = screen;
+    }
+    // Only while it floats: where Return puts it back.
+    if (container.home && container.dockMode == DockMode::Floating) {
+        const ContainerHome& from = *container.home;
+        QJsonObject home = from.extensions;
+        home["dockMode"] = int(from.dockMode);
+        if (from.dockMode == DockMode::PanelDocked) {
+            home["edge"] = edgeName(from.edge);
+            home["before"] = from.beforeId;
+            home["after"] = from.afterId;
+        } else {
+            home["geometry"] = QJsonArray{from.geometry.x(), from.geometry.y(),
+                                          from.geometry.width(), from.geometry.height()};
+            // The pane that rect was placed in, when one was known.
+            if (from.geometryPane && from.geometryPane->width() > 0 && from.geometryPane->height() > 0) {
+                home["geometryPane"] = QJsonArray{from.geometryPane->width(), from.geometryPane->height()};
+            }
+        }
+        object["home"] = home;
+    }
     object["visible"] = container.visible;
-    object["locked"] = container.locked;
+    // Only when set: the workspace look has no Lock setting and writes none.
+    if (container.locked) {
+        object["locked"] = true;
+    }
     object["autoHeight"] = container.autoHeight;
     object["popOutShell"] = container.popOutShell;
     object["config"] = container.config;
@@ -302,6 +595,9 @@ DocumentResult ContainerDocumentCodec::decode(const QByteArray& json)
         return {false, {}, QStringLiteral("Invalid workspace revision, mainContainerId or containers")};
     }
     document.mainContainerId = root["mainContainerId"].toString();
+    if (root.contains("arrangement") && !decodeArrangement(root["arrangement"], document.arrangement)) {
+        return {false, {}, QStringLiteral("Invalid workspace arrangement")};
+    }
     for (const QJsonValue value : root["containers"].toArray()) {
         ContainerDocument container;
         if (!value.isObject() || !decodeContainer(value.toObject(), container)) {
@@ -328,6 +624,9 @@ QByteArray ContainerDocumentCodec::encode(const WorkspaceDocument& document)
         containers.append(encodeContainer(container));
     }
     root["containers"] = containers;
+    if (!document.arrangement.isEmpty()) {
+        root["arrangement"] = encodeArrangement(document.arrangement);
+    }
     return QJsonDocument(root).toJson(QJsonDocument::Compact);
 }
 
@@ -348,7 +647,8 @@ QString ContainerDocumentCodec::validate(const WorkspaceDocument& document)
         if (int(container.layout) < 0 || int(container.layout) > int(ContentLayout::FreeCanvas)
             || int(container.dockMode) < 0 || int(container.dockMode) > int(DockMode::Floating)
             || int(container.anchor) < 0 || int(container.anchor) > int(AxisLock::BottomLeft)
-            || int(container.header) < 0 || int(container.header) > int(HeaderMode::Hidden)) {
+            || int(container.header) < 0 || int(container.header) > int(HeaderMode::Hidden)
+            || int(container.edge) < 0 || int(container.edge) > int(DockEdge::Bottom)) {
             return QStringLiteral("Invalid layout mode in container %1").arg(container.id);
         }
         if (container.geometry.width() < 0 || container.geometry.height() < 0) {
@@ -356,6 +656,12 @@ QString ContainerDocumentCodec::validate(const WorkspaceDocument& document)
         }
         if (collides(container.extensions, kContainerFields)) {
             return QStringLiteral("Container extensions collide with known fields: %1").arg(container.id);
+        }
+        if (container.screen && collides(container.screen->extensions, kScreenFields)) {
+            return QStringLiteral("Screen extensions collide with known fields: %1").arg(container.id);
+        }
+        if (container.home && collides(container.home->extensions, kHomeFields)) {
+            return QStringLiteral("Home extensions collide with known fields: %1").arg(container.id);
         }
         for (const ContentEntry& entry : container.contents) {
             if (entry.id.trimmed().isEmpty() || contentIds.contains(entry.id)) {
@@ -377,6 +683,20 @@ QString ContainerDocumentCodec::validate(const WorkspaceDocument& document)
                 return QStringLiteral("Return location extensions collide with known fields: %1").arg(entry.id);
             }
         }
+    }
+    for (auto it = document.arrangement.strips.constBegin(); it != document.arrangement.strips.constEnd(); ++it) {
+        if (int(it.key()) < 0 || int(it.key()) > int(DockEdge::Bottom) || it.value().thickness < 0
+            || collides(it.value().extensions, kStripFields)) {
+            return QStringLiteral("Invalid edge strip in the workspace arrangement");
+        }
+        for (int extent : it.value().extents) {
+            if (extent < 0) {
+                return QStringLiteral("Invalid edge strip extent in the workspace arrangement");
+            }
+        }
+    }
+    if (collides(document.arrangement.extensions, kArrangementFields)) {
+        return QStringLiteral("Workspace arrangement extensions collide with known fields");
     }
     if (!document.mainContainerId.isEmpty() && !containerIds.contains(document.mainContainerId)) {
         return QStringLiteral("mainContainerId does not name a container");

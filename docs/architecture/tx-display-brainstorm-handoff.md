@@ -104,6 +104,8 @@ Five files modified, two new files added. Full diff in `stash@{0}`.
    new dynamic range immediately, instead of letting the 5%-alpha
    follower take ~3 s to converge.
 
+   > Note 2026-10-10: re-priming the waterfall AGC on each MOX edge is superseded by section 5 of `2026-10-09-display-pill-and-levels-design.md` (key and un-key: every pan keeps its level and Clarity resumes after a hold).
+
 6. **`CMakeLists.txt`** — added `src/core/TxAnalyzer.cpp` to the
    `NereusSDRObjs` source list.
 

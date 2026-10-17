@@ -98,9 +98,9 @@ private slots:
     void pttHeldNoOverload_doesNotEmitAdcOverflow()
     {
         // Sub 0: C0 = 0x01 (type=0x00, ptt_in=1), C1 = 0x00 (no OVL)
-        // Sub 1: C0 = 0x00 (no PTT), C1 = 0x00
+        // Sub 1: C0 = 0x01 (PTT remains held), C1 = 0x00
         const quint8 sub0[5] = {0x01, 0x00, 0x00, 0x00, 0x00};
-        const quint8 sub1[5] = {0x00, 0x00, 0x00, 0x00, 0x00};
+        const quint8 sub1[5] = {0x01, 0x00, 0x00, 0x00, 0x00};
         const QByteArray pkt = makeEp6Frame(sub0, sub1);
 
         P1RadioConnection conn;
@@ -200,9 +200,9 @@ private slots:
     void pttAndOverloadTogether_fireIndependently()
     {
         // Sub 0: C0 = 0x01 (ptt_in=1, type=0x00), C1 = 0x01 (OVL bit set)
-        // Sub 1: C0 = 0x00, C1 = 0x00
+        // Sub 1: C0 = 0x01 (PTT remains held), C1 = 0x00
         const quint8 sub0[5] = {0x01, 0x01, 0x00, 0x00, 0x00};
-        const quint8 sub1[5] = {0x00, 0x00, 0x00, 0x00, 0x00};
+        const quint8 sub1[5] = {0x01, 0x00, 0x00, 0x00, 0x00};
         const QByteArray pkt = makeEp6Frame(sub0, sub1);
 
         P1RadioConnection conn;

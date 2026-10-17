@@ -1,5 +1,6 @@
 // NereusSDR for iOS: the RX panel's controls for the active slice: the Core's values in, the operator's writes out
 // SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-NereusSDR-AppStore-permission
+// 2026-10-12: J.J. Boyd (KG4VCF), V2 opt-in/authority gate; AI-assisted via OpenAI Codex.
 
 import Combine
 import Foundation
@@ -274,6 +275,8 @@ final class RxPanelModel: ObservableObject {
         guard let object = slice else {
             return
         }
+        let mode = Int(Self.whole(object[Property.dspMode]) ?? -1)
+        if (mode == 14 || mode == 15) && catalogFeed.catalog?.radeV2Enabled != true { return }
         let high = Self.whole(object[Property.filterHigh]) ?? 0
         let writes: [(String, Int64)] = preset.lowHz >= high
             ? [(Property.filterHigh, preset.highHz), (Property.filterLow, preset.lowHz)]
@@ -476,12 +479,11 @@ final class RxPanelModel: ObservableObject {
         set(\.agc, (catalog?.agc.modes ?? []).map { AgcChoice(id: $0.id, label: $0.label, lit: Int64($0.id) == agcMode) })
 
         let mode = Int(Self.whole(object?[Property.dspMode]) ?? -1)
-        let label = catalog?.modes.first(where: { $0.id == mode })?.label
         let low = Self.whole(object?[Property.filterLow])
         let high = Self.whole(object?[Property.filterHigh])
         set(\.filterLowHz, low)
         set(\.filterHighHz, high)
-        let presets = label.flatMap { catalog?.filterPresets[$0] } ?? []
+        let presets = catalog?.offeredFilterPresets(forMode: mode) ?? []
         set(\.presets, presets.map { preset in
             let presetLow = Int64(preset.lowHz.rounded())
             let presetHigh = Int64(preset.highHz.rounded())

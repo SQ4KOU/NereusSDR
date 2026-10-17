@@ -1,3 +1,54 @@
+// Ported from Thetis Project Files/Source/Console/display.cs.
+// Modification history (NereusSDR):
+//   2026-10-13: J.J. Boyd (KG4VCF), OpenAI Codex; partial product matching
+//               and cached readout formatting, preserving legacy formulas.
+//=================================================================
+// display.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley (W5WC)
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Waterfall AGC Modifications Copyright (C) 2013 Phil Harman (VK6APH)
+// Transitions to directX and continual modifications Copyright (C) 2020-2026 Richard Samphire (MW0LGE)
+//=================================================================
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+
 // no-port-check: NereusSDR-original IMD-overlay class implementing the
 // Thetis algorithm verbatim.  See header file for full provenance.
 //
@@ -172,17 +223,14 @@ int findImd(const std::vector<Maximum>& sorted,
 
 } // namespace
 
-bool ImdOverlay::labelImdProducts(
-    const std::vector<Maximum>& peaks,
-    Maximum& outF0L, Maximum& outF0U,
-    Maximum& outImd3L, Maximum& outImd3U,
-    Maximum& outImd5L, Maximum& outImd5U)
+ImdOverlay::ProductMatches ImdOverlay::matchImdProducts(const std::vector<Maximum>& peaks)
 {
+    ProductMatches matches;
     // From Thetis display.cs:5523-5526 [v2.10.3.13]:
     //   Maximums[] sorted = imd_measurements.OrderByDescending(...).ToArray();
     //   if (sorted.Length >= 2) { ...box rendering... }
     if (peaks.size() < 2) {
-        return false;
+        return matches;
     }
 
     std::vector<Maximum> sorted = peaks;
@@ -194,9 +242,11 @@ bool ImdOverlay::labelImdProducts(
     // From Thetis display.cs:5532-5537 [v2.10.3.13]:
     //   int pixel_diff = Math.Abs(sorted[0].X - sorted[1].X);
     //   if (pixel_diff > 10) { ... }
+    // From Thetis display.cs:5536-5537 [v2.10.3.15] — required separation.
+    constexpr int kMinimumSeparation = 10;
     const int pixelDiff = std::abs(sorted[0].x - sorted[1].x);
-    if (pixelDiff <= 10) {
-        return false;
+    if (pixelDiff <= kMinimumSeparation) {
+        return matches;
     }
 
     // From Thetis display.cs:5535-5537 [v2.10.3.13]:
@@ -243,20 +293,39 @@ bool ImdOverlay::labelImdProducts(
     const int imd5L = findImd(sortedLow, 5, pixelDiff, lowX, true);
     const int imd5H = findImd(sortedHigh, 5, pixelDiff, highX, false);
 
-    // From Thetis display.cs:5557 [v2.10.3.13]:
-    //   bool ok = fL != -1 && fH != -1 && imd3indexL != -1
-    //             && imd3indexH != -1 && imd5indexL != -1 && imd5indexH != -1;
-    if (fL == -1 || fH == -1 || imd3L == -1 || imd3H == -1
-            || imd5L == -1 || imd5H == -1) {
+    // From Thetis display.cs:5561 [v2.10.3.15] — NereusSDR retains each
+    // resolved match independently; the legacy aggregate still requires six.
+    matches.fundamentalsResolved = fL != -1 && fH != -1;
+    const std::array<int, 6> indices{fL, fH, imd3L, imd3H, imd5L, imd5H};
+    for (size_t i = 0; i < indices.size(); ++i) {
+        if (indices[i] >= 0) {
+            matches.peaks[i] = (i % 2 == 0 ? sortedLow : sortedHigh)[indices[i]];
+        }
+    }
+    if (matches.fundamentalsResolved) {
+        // From Thetis display.cs:5730-5740 [v2.10.3.15] — same expected
+        // positions as findImd; positions outside the view remain expected,
+        // never measured products.
+        matches.expectedSampleIndex = {lowX, highX, lowX - pixelDiff,
+            highX + pixelDiff, lowX - 2 * pixelDiff, highX + 2 * pixelDiff};
+    }
+    return matches;
+}
+
+bool ImdOverlay::labelImdProducts(
+    const std::vector<Maximum>& peaks,
+    Maximum& outF0L, Maximum& outF0U,
+    Maximum& outImd3L, Maximum& outImd3U,
+    Maximum& outImd5L, Maximum& outImd5U)
+{
+    const ProductMatches matches = matchImdProducts(peaks);
+    if (!std::all_of(matches.peaks.begin(), matches.peaks.end(),
+                     [](const auto& peak) { return peak.has_value(); })) {
         return false;
     }
-
-    outF0L  = sortedLow[fL];
-    outF0U  = sortedHigh[fH];
-    outImd3L = sortedLow[imd3L];
-    outImd3U = sortedHigh[imd3H];
-    outImd5L = sortedLow[imd5L];
-    outImd5U = sortedHigh[imd5H];
+    outF0L = *matches.peaks[0]; outF0U = *matches.peaks[1];
+    outImd3L = *matches.peaks[2]; outImd3U = *matches.peaks[3];
+    outImd5L = *matches.peaks[4]; outImd5U = *matches.peaks[5];
     return true;
 }
 
@@ -353,6 +422,11 @@ void ImdOverlay::reset()
 // inside the rounded readout box.
 ImdOverlay::ReadoutText ImdOverlay::formatReadout() const
 {
+    return formatReadout(m_readout);
+}
+
+ImdOverlay::ReadoutText ImdOverlay::formatReadout(const ImdReadout& readout)
+{
     auto f2 = [](float v) { return QString::number(v, 'f', 2); };
 
     ReadoutText t;
@@ -384,8 +458,8 @@ ImdOverlay::ReadoutText ImdOverlay::formatReadout() const
     // From Thetis display.cs:5648-5649 [v2.10.3.13]:
     //   float worst_imd3 = -_ema_imd3dBc;
     //   float worst_imd5 = -_ema_imd5dBc;
-    const float worstImd3 = -m_readout.worstImd3DBc;
-    const float worstImd5 = -m_readout.worstImd5DBc;
+    const float worstImd3 = -readout.worstImd3DBc;
+    const float worstImd5 = -readout.worstImd5DBc;
 
     // From Thetis display.cs:5662-5673 [v2.10.3.13]:
     //   string val1 =
@@ -399,16 +473,16 @@ ImdOverlay::ReadoutText ImdOverlay::formatReadout() const
     //       "    " + worst_imd5.ToString("f2") + " dBc\n" +
     //       "    " + _ema_oip3.ToString("f2") + " dB\n" +
     //       "    " + _ema_oip5.ToString("f2") + " dB";
-    t.val1 = f2(m_readout.f0L) + QStringLiteral("\n")
-           + f2(m_readout.f0U) + QStringLiteral("\n")
-           + f2(m_readout.imd3L) + QStringLiteral("\n")
-           + f2(m_readout.imd3U) + QStringLiteral("\n")
-           + f2(m_readout.imd5L) + QStringLiteral("\n")
-           + f2(m_readout.imd5U) + QStringLiteral("\n\n")
+    t.val1 = f2(readout.f0L) + QStringLiteral("\n")
+           + f2(readout.f0U) + QStringLiteral("\n")
+           + f2(readout.imd3L) + QStringLiteral("\n")
+           + f2(readout.imd3U) + QStringLiteral("\n")
+           + f2(readout.imd5L) + QStringLiteral("\n")
+           + f2(readout.imd5U) + QStringLiteral("\n\n")
            + QStringLiteral("    ") + f2(worstImd3) + QStringLiteral(" dBc\n")
            + QStringLiteral("    ") + f2(worstImd5) + QStringLiteral(" dBc\n")
-           + QStringLiteral("    ") + f2(m_readout.oip3) + QStringLiteral(" dB\n")
-           + QStringLiteral("    ") + f2(m_readout.oip5) + QStringLiteral(" dB");
+           + QStringLiteral("    ") + f2(readout.oip3) + QStringLiteral(" dB\n")
+           + QStringLiteral("    ") + f2(readout.oip5) + QStringLiteral(" dB");
 
     // From Thetis display.cs:5642-5648 [v2.10.3.13]:
     //   float f0l   = -(_ema_dbc - _ema_f0l);
@@ -417,12 +491,12 @@ ImdOverlay::ReadoutText ImdOverlay::formatReadout() const
     //   float imd3u = -(_ema_dbc - _ema_imd3u);
     //   float imd5l = -(_ema_dbc - _ema_imd5l);
     //   float imd5u = -(_ema_dbc - _ema_imd5u);
-    const float f0lRel  = -(m_readout.dbc - m_readout.f0L);
-    const float f0uRel  = -(m_readout.dbc - m_readout.f0U);
-    const float imd3lRel = -(m_readout.dbc - m_readout.imd3L);
-    const float imd3uRel = -(m_readout.dbc - m_readout.imd3U);
-    const float imd5lRel = -(m_readout.dbc - m_readout.imd5L);
-    const float imd5uRel = -(m_readout.dbc - m_readout.imd5U);
+    const float f0lRel  = -(readout.dbc - readout.f0L);
+    const float f0uRel  = -(readout.dbc - readout.f0U);
+    const float imd3lRel = -(readout.dbc - readout.imd3L);
+    const float imd3uRel = -(readout.dbc - readout.imd3U);
+    const float imd5lRel = -(readout.dbc - readout.imd5L);
+    const float imd5uRel = -(readout.dbc - readout.imd5U);
 
     // From Thetis display.cs:5675-5681 [v2.10.3.13]:
     //   string val2 =

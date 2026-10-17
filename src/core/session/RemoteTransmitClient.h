@@ -75,6 +75,15 @@
 //               this window's Tuner Genius autotune ended before its
 //               carrier keyed. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-10-13: PS two-tone shares the transmit intent and release fence.
+//               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-14: Retire a station session even when remote transmit was
+//               already unavailable. J.J. Boyd (KG4VCF), AI-assisted via
+//               OpenAI Codex.
+//   2026-10-15: programAudioKeyChanged, published with the key, so the
+//               microphone line follows a program key that arrives or ends
+//               under the screen key (the key down does not move then).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/NereusCoreExport.h"
@@ -165,6 +174,9 @@ public:
     /// told it remoteTxVersion 1 or later. Going false forgets every key
     /// (the Core unkeys a device whose link drops, and never re-keys).
     void setAvailable(bool available);
+    /// The station session ended. Forget its requests even when the Core
+    /// already reported remote transmit unavailable.
+    void retireSession();
     bool available() const { return m_available; }
     void setMicSourceCapability(bool available);
     bool requestMicSource(RemoteMicSource source);
@@ -180,6 +192,8 @@ public:
     void setScreenKey(bool down);
     void setTune(bool on);
     void setTwoTone(bool on);
+    /// PS keeps its own wire verb and action ID, with the same transmit intent.
+    quint32 requestPureSignalTwoTone(bool on);
     /// iPhone app plan Task 77: the Core's Tuner Genius autotune
     /// (tx.tunerTune {on}); the carrier it keys is this window's, watched
     /// like TUNE's.
@@ -190,7 +204,9 @@ public:
     void tunerTuneEnded();
 
     // ---- A program through this window's TCI server ("tci") ----
-    void keyForProgram(std::function<void(const Answer&)> answer);
+    /// programAudio: the program's trx carried ",tci", so its own audio
+    /// follows on the TX audio stream.
+    void keyForProgram(bool programAudio, std::function<void(const Answer&)> answer);
     void unkeyForProgram(quint32 epoch);
 
     // ---- From the link ----
@@ -214,6 +230,9 @@ public:
     bool micKeyDown() const;
     /// This window's key is on at the Core.
     bool holdsTransmit() const;
+    /// The program key (waiting or on) brings its own audio: the window's
+    /// microphone line carries that audio or silence, never the microphone.
+    bool programAudioKey() const;
     /// The operator's MOX key is on or waiting.
     bool screenKeyDown() const { return m_screen.phase != Phase::Idle; }
     /// The epoch of this window's key, or 0.
@@ -239,6 +258,11 @@ signals:
     /// The Core refused the operator's press (or a release), in its words.
     void refused(const QString& reason, const QString& code, const QString& fix);
     void micKeyDownChanged(bool down);
+    /// 2026-10-15: programAudioKey() changed. Emitted from publish(), on
+    /// this object's thread, before the call that changed it returns
+    /// (keyForProgram, unkeyForProgram, an answer, a stop, a reset), also
+    /// when the key down stays the same (the screen key holds it).
+    void programAudioKeyChanged(bool programAudio);
     void holdsTransmitChanged(bool holds);
     void micSourceChanged(RemoteMicSource accepted, bool settled, const QString& reason);
 
@@ -249,6 +273,8 @@ private:
         quint32 commandId{0};
         quint32 epoch{0};
         bool sawTransmitting{false};
+        /// A program key asked with ",tci": it brings its own audio.
+        bool programAudio{false};
     };
     enum class Kind { ScreenKey, ProgramKey, Release, Tune, TwoTone, MicSource };
     struct Pending {
@@ -258,7 +284,8 @@ private:
     };
 
     quint32 send(const QByteArray& verb, const QList<MirrorUpdate>& arguments, Kind kind,
-                 bool releaseIntent = false);
+                 bool releaseIntent = false, bool allowUnavailableRelease = false);
+    quint32 requestTwoTone(const QByteArray& verb, const char* argument, bool on);
     void release(quint32 epoch);
     void reset();
     void publish();
@@ -296,6 +323,8 @@ private:
     bool m_tuneReleasePending{false};
     // Task 37.
     bool m_twoToneAsked{false};
+    quint32 m_twoToneCommandId{0};
+    quint64 m_twoToneRequestSerial{0};
     bool m_voxArmed{false};
     KeepaliveSender m_sessionKeepalive;
     KeepaliveSender m_channelKeepalive;
@@ -312,6 +341,7 @@ private:
     quint32 m_coreStopSerial{0};   // fix wave M7
     bool m_coreTransmitting{false};
     bool m_publishedKeyDown{false};
+    bool m_publishedProgramAudio{false};
     bool m_publishedHolds{false};
 };
 

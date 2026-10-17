@@ -92,6 +92,7 @@
 #include <pthread/qos.h>
 #endif
 
+#include "core/RxChannel.h"
 #include "core/dsp/NnrLoadGovernor.h"
 #include "core/wdsp_api.h"
 #include "models/ReceiverDspLoadSampler.h"
@@ -485,7 +486,8 @@ private slots:
         SetRXABandpassFreqs(kChannel, 150.0, 2850.0);
         RXANBPSetFreqs(kChannel, 150.0, 2850.0);
         SetRXAAGCMode(kChannel, 3);  // Med
-        SetRXAAGCTop(kChannel, 80.0);
+        SetRXAAGCTop(kChannel, static_cast<double>(RxChannel::kDefaultAgcMaxGainDb));
+        SetRXAAGCFixed(kChannel, static_cast<double>(RxChannel::kDefaultAgcFixedGainDb));
         SetRXAPanelBinaural(kChannel, 0);
         SetDSPBuffsize(kChannel, kDspSize);
         SetChannelState(kChannel, 1, 0);

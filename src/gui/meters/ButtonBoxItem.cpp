@@ -68,6 +68,11 @@ mw0lge@grange-lane.co.uk
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+// Modification history (NereusSDR):
+//   2026-10-12 - Apply the approved workspace-only 11 px text minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
+#include "gui/styles/WorkspacePreview.h"
 #include "ButtonBoxItem.h"
 #include "ResponsiveText.h"
 
@@ -309,8 +314,8 @@ void ButtonBoxItem::paintButton(QPainter& p, int index, const QRectF& rect)
         if (!btn.enabled) {
             textCol.setAlpha(80);
         }
-        QFont font = p.font();
-        font.setPixelSize(qMax(8, static_cast<int>(rect.height() * 0.4)));
+        QFont font = WorkspacePreview::readableFont(p.font(), p.device());
+        font.setPixelSize(WorkspacePreview::readableTextPixelSize(qMax(8, static_cast<int>(rect.height() * 0.4))));
         font.setBold(true);
         font=fitObjectText(font,font.pixelSize(),btn.text,rect,false,Qt::TextSingleLine,p.device());
         p.setFont(font);

@@ -44,6 +44,30 @@
 //   2026-09-30: Fix round 1: asSetupToken offers a name saved with
 //               spaces as one word. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-10-09: Core journal volume: the status poll, ping and their
+//               answers log at debug; an S-frame logs at info only when
+//               its state changes. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-10-11: Link trace: the last frames each way are kept and
+//               written to the log when the amp closes the link.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
+//   2026-10-12: One `status` in flight (sendCommand, statusAnswerPending):
+//               the amplifier closed the link when the keepalive's or the
+//               poll's `status` reached it before its answer to the one
+//               before. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-12: The in-flight bookkeeping moved to GeniusStatusGate,
+//               shared with the tuner link. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-12: The status poll runs every 100 ms while the Core or the
+//               amplifier's own state says keyed, and for 2 s after
+//               (GeniusPollPacer); 200 ms otherwise, as before.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
+//   2026-10-12: The link trace comment gives its reach at both poll
+//               rates. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 #include "PgxlConnection.h"
 #include "AppSettings.h"
@@ -56,6 +80,24 @@ namespace NereusSDR {
 
 Q_LOGGING_CATEGORY(lcPgxl, "nereus.pgxl")
 
+namespace {
+
+// Link trace size: at the status poll's receive rate (5 Hz) about three
+// seconds each way, at its keyed rate (10 Hz) about 1.6 seconds.
+constexpr int kRecentWireMax = 32;
+// A status reply runs to a few hundred characters; the start names it.
+constexpr int kRecentWireLineMax = 200;
+
+// Commands a timer sends while connected: the status poll, the keepalive
+// status poke and the auto-ping. They log at debug; everything else is an
+// operator or setup command and logs at info.
+bool isPeriodicCommand(const QString& cmd)
+{
+    return cmd == QLatin1String("status") || cmd == QLatin1String("ping");
+}
+
+}  // namespace
+
 // Exponential backoff schedule for auto-reconnect, in seconds.
 // From FlexRadio wiki spec + design §6.4: amp keeps connection state;
 // NereusSDR must reconnect promptly on blip. Cap at 60 s.
@@ -65,7 +107,7 @@ PgxlConnection::PgxlConnection(QObject* parent)
     : QObject(parent)
     , m_socket(new QTcpSocket(this))
 {
-    m_pollTimer.setInterval(200);  // 5 Hz per AetherSDR
+    // m_pollPacer set the poll interval (kPollReceiveMs) and keeps it.
     connect(&m_pollTimer, &QTimer::timeout, this, &PgxlConnection::pollStatus);
 
     // Keepalive timer: issues a status poke at the configured interval.
@@ -165,6 +207,7 @@ bool PgxlConnection::admitIdentity(quint64 socketAttemptToken,
     m_retryHost.clear();
     m_retryPort = 0;
     m_connected = true;
+    m_lastLoggedSFrameState.clear();
 
     // The info reply reaches statusUpdated only now, as a local window's
     // reply always has, after the Core approved this exact socket.
@@ -561,6 +604,12 @@ quint32 PgxlConnection::sendCommand(const QString& cmd) {
     if (m_identityAdmissionRequired && !m_connected) {
         return 0;
     }
+    // One `status` in flight (PgxlConnection.h): the poll, the keepalive
+    // and any other caller wait for the amplifier's answer to the one
+    // before. Nothing is queued; the next poll asks.
+    if (cmd == QLatin1String("status") && m_statusGate.answerPending()) {
+        return 0;
+    }
     return writeProtocolCommand(cmd);
 }
 
@@ -568,10 +617,20 @@ quint32 PgxlConnection::writeProtocolCommand(const QString& cmd)
 {
     quint32 seq = ++m_seq;
     QString line = QString("C%1|%2\n").arg(seq).arg(cmd);
+    if (cmd == QLatin1String("status")) {
+        m_statusGate.sent(seq);
+    }
     m_socket->write(line.toUtf8());
+    noteWire(/*sent=*/true, line.trimmed());
     qCDebug(lcPgxl) << "sent" << line.trimmed();
     // Phase 3P-II bench-diagnostic logging (remove after pairing protocol confirmed)
-    qCInfo(lcPgxl) << "TX seq=" << seq << "cmd:" << cmd;
+    // The 5 Hz status poll and the auto-ping log at debug, not info; at
+    // info they filled the Core's journal (Rock 5C bench 2026-10-09).
+    if (isPeriodicCommand(cmd)) {
+        qCDebug(lcPgxl) << "TX seq=" << seq << "cmd:" << cmd;
+    } else {
+        qCInfo(lcPgxl) << "TX seq=" << seq << "cmd:" << cmd;
+    }
     ++m_framesOut;
     m_bytesOut += quint64(line.size());
     emit testFrameWrittenForTesting(line.trimmed());  // test seam
@@ -590,6 +649,7 @@ void PgxlConnection::onConnected(quint64 attemptGeneration) {
     m_reconnectTimer.stop();
     m_connectTimer.stop();
     m_connectedSinceMs = QDateTime::currentMSecsSinceEpoch();
+    m_recentWire.clear();
     // Bench-fix 2026-05-20: reset the version-received latch so the next
     // V-frame arrival re-arms the handshake and re-sets m_connected=true.
     // Without this, m_gotVersion stays sticky from the previous session,
@@ -599,6 +659,11 @@ void PgxlConnection::onConnected(quint64 attemptGeneration) {
     // socket. Confirmed by lsof showing TCP ESTABLISHED to 9008 while
     // m_connected=false. Same bug pattern existed in TgxlConnection.
     m_gotVersion = false;
+    // A `status` the last connection never answered holds nothing back on
+    // this one.
+    m_statusGate.reset();
+    // Nor does what the last connection's amplifier said keep the poll fast.
+    m_pollPacer.reset();
     clearIdentityAttempt();
     if (m_identityAdmissionRequired) {
         // Bound TCP, V, info and the Core's approval together: a peer that
@@ -621,6 +686,9 @@ void PgxlConnection::onDisconnected(quint64 attemptGeneration) {
         qCInfo(lcPgxl) << "PGXL disconnected cleanly";
     } else {
         qCWarning(lcPgxl) << "PGXL disconnected with error:" << err;
+        if (!m_userInitiatedDisconnect) {
+            logRecentWire();
+        }
     }
     m_pollTimer.stop();
     m_keepaliveTimer.stop();
@@ -645,6 +713,40 @@ void PgxlConnection::onDisconnected(quint64 attemptGeneration) {
         return;
     }
     scheduleReconnect();
+}
+
+void PgxlConnection::noteWire(bool sent, const QString& line)
+{
+    m_recentWire.append(WireRecord{QDateTime::currentMSecsSinceEpoch(), sent,
+                                   line.left(kRecentWireLineMax)});
+    while (m_recentWire.size() > kRecentWireMax) {
+        m_recentWire.removeFirst();
+    }
+}
+
+void PgxlConnection::logRecentWire() const
+{
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    qCWarning(lcPgxl).noquote()
+        << QStringLiteral("PGXL link closed %1 s after the TCP connect; last %2 frames, "
+                          "with ms before the close:")
+               .arg(double(nowMs - m_connectedSinceMs) / 1000.0, 0, 'f', 2)
+               .arg(m_recentWire.size());
+    for (const WireRecord& record : m_recentWire) {
+        qCInfo(lcPgxl).noquote()
+            << QStringLiteral("  PGXL link trace -%1 ms %2 %3")
+                   .arg(nowMs - record.ms)
+                   .arg(record.sent ? QStringLiteral("TX") : QStringLiteral("RX"), record.line);
+    }
+}
+
+QStringList PgxlConnection::recentWireForTesting() const
+{
+    QStringList lines;
+    for (const WireRecord& record : m_recentWire) {
+        lines.append((record.sent ? QStringLiteral("TX ") : QStringLiteral("RX ")) + record.line);
+    }
+    return lines;
 }
 
 void PgxlConnection::onError(quint64 attemptGeneration) {
@@ -701,6 +803,7 @@ void PgxlConnection::onReadyRead(quint64 attemptGeneration) {
         if (!line.isEmpty()) {
             ++m_framesIn;
             m_lastFrameMs = QDateTime::currentMSecsSinceEpoch();
+            noteWire(/*sent=*/false, line);
             QPointer<PgxlConnection> self(this);
             processLine(line, attemptGeneration);
             if (!self || !socketAttemptIsCurrent(attemptGeneration)) {
@@ -714,6 +817,18 @@ void PgxlConnection::pollStatus() {
     if (m_connected) {
         sendCommand("status");
     }
+}
+
+// The amplifier's own word on whether it is keyed, from any status that
+// carries `state`. The states are AetherSDR's applyPollRateFor,
+// src/core/PgxlConnection.cpp:531-537 [@a9a83e66].
+void PgxlConnection::noteDeviceState(const QMap<QString, QString>& kvs) {
+    const auto state = kvs.constFind(QStringLiteral("state"));
+    if (state == kvs.constEnd()) {
+        return;
+    }
+    m_pollPacer.setDeviceBusy(*state == QLatin1String("TRANSMIT_A")
+                              || *state == QLatin1String("TRANSMIT_B"));
 }
 
 // -------------------------------------------------------------------------
@@ -1052,6 +1167,7 @@ void PgxlConnection::processLine(const QString& line, quint64 attemptGeneration)
             return;
         }
         m_connected = true;
+        m_lastLoggedSFrameState.clear();
         m_pollTimer.start();
         emit connected();
         return;
@@ -1070,11 +1186,16 @@ void PgxlConnection::processLine(const QString& line, quint64 attemptGeneration)
 
             QString body = line.mid(pipe2 + 1).trimmed();
 
+            // The answer to the `status` in flight, whatever it says: the
+            // next one may go.
+            m_statusGate.answered(rseq);
+
             // Phase 3P-II bench-diagnostic logging (remove after pairing protocol confirmed)
             if (hexOk && hexCode != 0) {
                 qCWarning(lcPgxl) << "RX R-frame seq=" << rseq << "hex=" << QString::number(hexCode, 16) << "body:" << body;
             } else {
-                qCInfo(lcPgxl) << "RX R-frame seq=" << rseq << "hex=" << (hexOk ? QString::number(hexCode, 16) : "PARSE_ERROR") << "body:" << body;
+                // Debug, not info: one per poll (Core journal volume).
+                qCDebug(lcPgxl) << "RX R-frame seq=" << rseq << "hex=" << (hexOk ? QString::number(hexCode, 16) : "PARSE_ERROR") << "body:" << body;
             }
 
             // R-R3-47: the identity `info` reply on the Core. Captured from
@@ -1189,6 +1310,7 @@ void PgxlConnection::processLine(const QString& line, quint64 attemptGeneration)
                     int eq = p.indexOf('=');
                     if (eq > 0) { kvs.insert(p.left(eq), p.mid(eq + 1)); }
                 }
+                noteDeviceState(kvs);
                 if (!kvs.isEmpty()) { emit statusUpdated(kvs); }
             }
         }
@@ -1220,8 +1342,17 @@ void PgxlConnection::processLine(const QString& line, quint64 attemptGeneration)
         }
         // Phase 3P-II bench-diagnostic logging (remove after pairing protocol confirmed)
         if (!kvs.isEmpty()) {
-            qCInfo(lcPgxl) << "RX S-frame state=" << kvs.value("state", "unknown");
+            // Info only when the state changed; the amp repeats it on every
+            // poll (Core journal volume, Rock 5C bench 2026-10-09).
+            const QString state = kvs.value("state", "unknown");
+            if (state != m_lastLoggedSFrameState) {
+                m_lastLoggedSFrameState = state;
+                qCInfo(lcPgxl) << "RX S-frame state=" << state;
+            } else {
+                qCDebug(lcPgxl) << "RX S-frame state=" << state;
+            }
         }
+        noteDeviceState(kvs);
         if (!kvs.isEmpty())
             emit statusUpdated(kvs);
         return;

@@ -12,15 +12,56 @@ import Testing
 @Suite struct StationCatalogTests {
     static let fixtures = ["session-catalog-anan-g2", "session-catalog-hermes-lite-2"]
 
+    @Test("V2 choices require explicit Core opt-in even when an older Core lists their IDs")
+    func radeV2ChoicesFailClosed() throws {
+        var raw = try Self.object(try Self.catalogueJson(Self.fixtures[0]))
+        var modes = try #require(raw["modes"] as? [[String: Any]])
+        modes.removeAll { ($0["id"] as? Int ?? 0) >= 14 }
+        modes.append(["id": 14, "label": "RADE2-U", "sideband": "upper"])
+        modes.append(["id": 15, "label": "RADE2-L", "sideband": "lower"])
+        raw["modes"] = modes
+        var presets = try #require(raw["filterPresets"] as? [String: Any])
+        presets["RADE2-U"] = try #require(presets["USB"] as? [[String: Any]])
+        presets["RADE2-L"] = try #require(presets["LSB"] as? [[String: Any]])
+        raw["filterPresets"] = presets
+        let cases: [(Any?, Bool)] = [(nil, false), (false, false), ("true", false), (1, false), (true, true)]
+        for (flag, enabled) in cases {
+            raw["radeV2Enabled"] = flag
+            let json = String(decoding: try JSONSerialization.data(withJSONObject: raw), as: UTF8.self)
+            let catalog = try #require(StationCatalog.parse(json: json))
+            #expect(catalog.offeredModes.contains { $0.id == 14 } == enabled)
+            #expect(catalog.offeredModes.contains { $0.id == 15 } == enabled)
+            #expect(catalog.modes.contains { $0.id == 12 })
+            #expect(catalog.modes.contains { $0.id == 13 })
+            #expect(catalog.modeDescription(14)?.label == "RADE2-U")
+            #expect(catalog.modeDescription(15)?.label == "RADE2-L")
+            #expect(catalog.offeredFilterPresets(forMode: 14).isEmpty == !enabled)
+            #expect(catalog.filterPresets["RADE2-U"]?.isEmpty == false)
+        }
+    }
+
+
+    @Test("a preserved current V2 has a label without becoming an offered choice")
+    func inactiveCurrentRadeV2Label() throws {
+        var raw = try Self.object(try Self.catalogueJson(Self.fixtures[0]))
+        raw["radeV2Enabled"] = false
+        raw["modes"] = (raw["modes"] as? [[String: Any]])?.filter { ($0["id"] as? Int ?? 0) < 14 }
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: raw), as: UTF8.self)
+        let catalog = try #require(StationCatalog.parse(json: json))
+        #expect(catalog.modeDescription(14)?.label == "RADE2-U")
+        #expect(catalog.modeDescription(15)?.label == "RADE2-L")
+        #expect(!catalog.offeredModes.contains { $0.id == 14 || $0.id == 15 })
+    }
+
     @Test(arguments: fixtures)
     func eachCatalogueFixtureParsesToExactlyWhatItHolds(_ fixture: String) throws {
         let json = try Self.catalogueJson(fixture)
         let catalog = try #require(StationCatalog.parse(json: json))
         var raw = try Self.object(json)
         // The thirteen sections every catalogue carries, the band grid a
-        // Core with bandSelectVersion 1 adds, and the Setup > Display and
-        // noise-reduction descriptions a newer Core adds (link 7.4).
-        #expect(Set(raw.keys).count == 16)
+        // Core with bandSelectVersion 1 adds, and the Setup > Display,
+        // noise-reduction and RADE V2 gate a newer Core adds (link 7.4).
+        #expect(Set(raw.keys).count == 17)
         #expect(raw["bands"] != nil)
         #expect(raw["noiseReduction"] != nil)
         let board = try #require(raw["board"] as? [String: Any])
@@ -248,7 +289,7 @@ import Testing
     }
 
     /// Every section a newer Core adds: none is required.
-    static let laterSections = ["display", "noiseReduction"]
+    static let laterSections = ["display", "noiseReduction", "radeV2Enabled"]
     /// The same for the board: the transmit ranges, the RX1 preamp, the
     /// relays, RX2's own input control (Level Cal 2) and the radio's mic
     /// input (the radio codec lane).
@@ -408,6 +449,7 @@ import Testing
         }
         let board = c.board
         return [
+            "radeV2Enabled": c.radeV2Enabled,
             "modes": c.modes.map { ["id": $0.id, "label": $0.label, "sideband": $0.sideband.rawValue] },
             "filterPresets": c.filterPresets.mapValues { presets in
                 presets.map { ["slot": $0.slot, "label": $0.label, "lowHz": $0.lowHz, "highHz": $0.highHz] }
@@ -532,9 +574,14 @@ import Testing
                     "subscribe": control.subscribe, "page": control.page, "group": control.group,
                     "label": control.label, "kind": control.kind.name,
                 ]
-                if let value = control.defaultValue { out["default"] = value }
+                if let value = control.defaultValue {
+                    // A choice of words sends its default as the word.
+                    out["default"] = control.options.first { $0.value == value }?.token.map { $0 as Any } ?? value
+                }
                 if !control.options.isEmpty {
-                    out["options"] = control.options.map { ["value": $0.value, "label": $0.label] as [String: Any] }
+                    out["options"] = control.options.map {
+                        ["value": $0.token.map { $0 as Any } ?? $0.value, "label": $0.label] as [String: Any]
+                    }
                 }
                 if let value = control.min { out["min"] = value }
                 if let value = control.max { out["max"] = value }
@@ -543,6 +590,7 @@ import Testing
                 if let value = control.decimals { out["decimals"] = value }
                 if let value = control.offValue { out["offValue"] = value }
                 if let value = control.offLabel { out["offLabel"] = value }
+                if let value = control.rememberedKey { out["rememberedKey"] = value }
                 return out
             },
             "binWidth": ["label": d.binWidth.label, "decimals": d.binWidth.decimals],

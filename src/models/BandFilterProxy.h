@@ -49,8 +49,19 @@
 //                                    QPushButtons (DX / RBN / JT / COL
 //                                    / POT / FDR / PSK). AI tooling:
 //                                    Anthropic Claude Code.
+//   2026-10-15  J.J. Boyd (KG4VCF)  Derives from OrderKeepingProxyModel,
+//                                    so the Spot List's accessibility-safe
+//                                    refresh can reset it in the order it
+//                                    shows. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-10-15  J.J. Boyd (KG4VCF)  invalidateFilterCompat flushes the
+//                                    view's pending accessibility reset
+//                                    first. AI-assisted via Anthropic
+//                                    Claude Code.
 
 #pragma once
+
+#include "models/OrderKeepingProxyModel.h"
 
 #include <QSortFilterProxyModel>
 #include <QSet>
@@ -60,10 +71,10 @@
 namespace NereusSDR {
 
 // From AetherSDR src/gui/DxClusterDialog.h:62-75 [@0cd4559]
-class BandFilterProxy : public QSortFilterProxyModel {
+class BandFilterProxy : public OrderKeepingProxyModel {
     Q_OBJECT
 public:
-    explicit BandFilterProxy(QObject* parent = nullptr) : QSortFilterProxyModel(parent) {}
+    explicit BandFilterProxy(QObject* parent = nullptr) : OrderKeepingProxyModel(parent) {}
 
     void setBandVisible(const QString& band, bool visible);
     bool isBandVisible(const QString& band) const { return !m_hiddenBands.contains(band); }
@@ -82,7 +93,10 @@ protected:
     // exist in Qt 6.10+. NereusSDR has no explicit Qt minimum in
     // CMakeLists.txt, so we keep a fallback to invalidateFilter on
     // older Qt builds. NereusSDR-only compat shim; not an upstream port.
+    // The view's accessibility flush runs first (a no-op once the setters
+    // flushed before changing the filter).
     void invalidateFilterCompat() {
+        prepareForRowChange();
 #if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
         beginFilterChange();
         endFilterChange(QSortFilterProxyModel::Direction::Rows);

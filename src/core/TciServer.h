@@ -1,4 +1,67 @@
-// no-port-check: AetherSDR-derived NereusSDR file.  Transport lifecycle
+// =================================================================
+// src/core/TciServer.h  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis source:
+//   Project Files/Source/Console/TCIServer.cs, original licence included below
+//
+// Modification history (NereusSDR):
+//   2026-10-14 - Live TX dial visibility by J.J. Boyd (KG4VCF),
+//                AI-assisted via Claude Code: sliceDrivesTx names receiver
+//                0's slice while TX is on a slice the client cannot see.
+//   2026-10-12 - Dynamic receiver availability correction by J.J. Boyd
+//                (KG4VCF), AI-assisted via OpenAI Codex: exact mapped slice
+//                existence gates initial/query and live RX/TX availability.
+//   2026-10-12 — Transmit receiver state adaptation by J.J. Boyd
+//                (KG4VCF), with AI-assisted transformation via Anthropic
+//                Claude Code; attribution remediation via OpenAI Codex.
+//   2026-10-16 - Include QTimer for the inline timer accessors by J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+// =================================================================
+
+// --- From TCIServer.cs ---
+/*  TCIServer.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2020-2026 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+//
+
+// Historical attribution context: AetherSDR-derived NereusSDR file.  Transport lifecycle
 // (start/stop/onNewConnection/onClientDisconnected) is adapted from
 // AetherSDR src/core/TciServer.{h,cpp} [@0cd4559]; NereusSDR diverges in
 // bind address, double-start contract, signal set, and client table type.
@@ -76,6 +139,15 @@
 //                that app leaving releases the key on the Core, or the
 //                Core's answer when it comes. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - TCI program keys that send silence: the forwarded key
+//                says whether the app's trx carried ",tci"
+//                (RemoteTransmit::key's programAudio), so the window's
+//                microphone line carries the app's audio or silence, never
+//                the microphone. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-12 - enqueueTrxState: a key going on names the receiver that
+//                transmits and says nothing of the other. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #pragma once
 #ifdef HAVE_WEBSOCKETS
@@ -88,6 +160,7 @@
 #include <QPointer>
 #include <QMutex>
 #include <QSet>
+#include <QTimer>
 #include <QVector>
 #include <array>
 #include <atomic>
@@ -200,9 +273,11 @@ public:
         QString reason;
     };
     struct RemoteTransmit {
-        /// Sends tx.key {trigger:"tci"}; `answer` runs once, on this
-        /// object's thread, with the Core's verdict.
-        std::function<void(std::function<void(const RemoteKeyAnswer&)> answer)> key;
+        /// Sends tx.key {trigger:"tci"}. programAudio: the app's trx carried
+        /// ",tci", so its own audio follows on the TX audio stream. `answer`
+        /// runs once, on this object's thread, with the Core's verdict.
+        std::function<void(bool programAudio,
+                           std::function<void(const RemoteKeyAnswer&)> answer)> key;
         /// Sends tx.unkey {epoch}.
         std::function<void(quint32 epoch)> unkey;
         /// iPhone app plan Task 36 (R-IOS-13): the app's transmit audio,
@@ -394,6 +469,10 @@ public:
     // unguarded test-hook convention as injectAudioFrameForTest above.
     TciProtocol* protocolForTest() const { return m_protocol.get(); }
 
+    // Test-only: the shared RX and TX sensor timers' current intervals (ms).
+    int rxSensorTimerIntervalForTest() const { return m_rxSensorTimer->interval(); }
+    int txSensorTimerIntervalForTest() const { return m_txSensorTimer->interval(); }
+
 signals:
     // Emitted after the server begins listening.  port is the actual bound port
     // (useful when start() was called with port=0).
@@ -496,6 +575,12 @@ private slots:
                              const QVector<float>& interleavedIQ);
     int publishedIqRate() const;
 
+    // Sets the shared RX and TX sensor timers to the shortest interval among
+    // the apps still connected with sensors on (200 ms when none). Called
+    // from onClientDisconnected after the app's session is removed, and from
+    // stop() after every session is.
+    void updateSensorTimerIntervals();
+
     // Destroys all RESAMPLEF instances for the given session and clears the map.
     // Called from onClientDisconnected and stop().
     void cleanupResamplers(std::shared_ptr<TciClientSession>& session);
@@ -545,6 +630,10 @@ private slots:
     /// Codex review round 6, PR #293. tx_frequency must come from the slice
     /// TxSliceArbiter has bound TX to, not from slice 0. Before 3F they were
     /// always the same slice and the distinction did not exist.
+    ///
+    /// Desktop hosting: while TX is bound to a slice the client has no
+    /// receiver for (TciProtocol::announcesTxSlice), the slice whose dial
+    /// tx_frequency follows is receiver 0's, as the init burst reports.
     bool sliceDrivesTx(int sliceId) const;
 
     // hookGlobalBroadcasts wires the radio-global signals that aren't tied to
@@ -604,11 +693,10 @@ private:
     std::function<bool(int)> m_externalSliceWriteGate;
     void refreshSliceWriteGate();
     int desktopSliceForReceiver(int receiver) const;
-    // Sends rx_enable:1 and tx_enable:1 when TciProtocol::rx2EnabledNow()
-    // flips (Thetis OnRX2EnabledChanged -> RX2EnabledChange,
+    // Sends rx_enable and tx_enable when either mapped receiver
+    // becomes available or unavailable (Thetis OnRX2EnabledChanged -> RX2EnabledChange,
     // TCIServer.cs:7451-7462 and 842-847 [v2.10.3.15]).
     void refreshRx2Enabled();
-    bool m_rx2EnabledSent{false};
     QMetaObject::Connection m_rx2OwnershipConnection;
     int desktopReceiverForSlice(int sliceId) const;
     void releaseDesktopProgramKey();
@@ -659,6 +747,7 @@ private:
     //
     // kMaxTciRxSlices: we support slice 0 and slice 1 (RX1 + RX2).
     static constexpr int kMaxTciRxSlices = 2;
+    std::array<bool, kMaxTciRxSlices> m_receiverAvailableSent{};
     // WdspEngine::kMaxSliceChannels is five. The DSP callback reads this
     // atomic map without touching main-thread SliceOwnership state.
     static constexpr int kMaxPhysicalSlices = 5;
@@ -933,6 +1022,9 @@ private:
     // the TX audio lock and TX_CHRONO stop, and every app hears it.
     void endRemoteKey();
     void broadcastRemoteKeyState(bool on);
+    // The trx lines every app hears when the transmitter keys (the receiver
+    // that transmits, alone) or unkeys (both receivers).
+    void enqueueTrxState(bool on);
 
     QString m_noticeReason;
     bool m_noticeFromReceiverStop{false};

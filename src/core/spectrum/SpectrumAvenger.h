@@ -94,6 +94,11 @@ public:
     /// Maximum frames retained in the window-averaging ring.  From
     /// WDSP comm.h:120 [v2.10.3.13]: dMAX_AVERAGE = 60.
     static constexpr int kMaxAverage = 60;
+    /// Existing WDSP av_mode for window averaging (analyzer.c:512
+    /// [v2.10.3.13]); no transport enum change.
+    static constexpr int kTimeWindowMode = 2;
+    /// Accepted Display call 51 / live HTML:1406 minimum window depth.
+    static constexpr int kMinWindowFrames = 2;
 
     /// (Re-)allocate state arrays for a given pixel count.  Called
     /// when display width / FFT size change.  Resets all running
@@ -103,7 +108,13 @@ public:
     /// Set the window-averaging frame depth (av_mode == 2).
     /// Clamped to [1, kMaxAverage].  Reduces dMAX_AVERAGE per
     /// analyzer.c:535-537 ring-wrap logic.  Resets indices.
+    /// Equal clamped depths retain history; a changed depth clears its sum.
     void setNumAverage(int numFrames);
+
+    /// Accepted Display call 51 / live HTML:1383–1406: Time Window
+    /// frame depth derived from the plane's time and display cadence.
+    /// Rounds to nearest frame, unlike the studied Thetis truncating cast.
+    static int windowFramesForTimeMs(int timeMs, int fps);
 
     /// Wipe all accumulators.  Use when av_mode changes, FFT size
     /// changes, or sample rate changes — anything that invalidates

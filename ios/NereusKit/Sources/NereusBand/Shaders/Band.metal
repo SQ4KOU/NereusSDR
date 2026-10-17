@@ -145,6 +145,27 @@ struct StackedOut {
     float across;         // the ridge's steepness: vertical distance to distance across the ridge line
 };
 
+// NereusSDR modification history: 2026-10-12 J.J. Boyd (KG4VCF),
+// AI-assisted via OpenAI Codex. Accepted call56: retained measured quiet
+// only outside viewport/captured coverage; no simulated texture or DSP.
+// Host rows RG=(measured dBm,captured coverage), window RGBA=(low,span,quiet,known).
+float2 stackedSample(float unit, float4 window, uint row, constant StackedUniforms &u,
+                     texture2d<float, access::read> rows) {
+    float hz = u.view.x + unit * u.view.y;
+    float position = window.y > 0.0 ? (hz - window.x) / window.y : -1.0;
+    if (position >= 0.0 && position < 1.0) {
+        uint column = min(uint(position * float(u.columns)), u.columns - 1);
+        float2 measured = rows.read(uint2(column, row)).rg;
+        if (measured.y > 0.5) {
+            return float2(measured.x, isfinite(measured.x) ? 1.0 : 0.0);
+        }
+    }
+    if ((unit < 0.0 || unit > 1.0) && window.w > 0.5 && isfinite(window.z)) {
+        return float2(window.z, 1.0);
+    }
+    return float2(u.levels.x, 0.0);
+}
+
 vertex StackedOut bandStackedVertex(uint vertexId [[vertex_id]], uint instance [[instance_id]],
                                     constant StackedUniforms &u [[buffer(0)]],
                                     texture2d<float, access::read> rows [[texture(0)]],
@@ -157,13 +178,15 @@ vertex StackedOut bandStackedVertex(uint vertexId [[vertex_id]], uint instance [
     bool top = (vertexId & 1) == 0;
     float glide = u.view.z;
     float depth = (float(age) + glide) / u.view.w;
-    float2 window = windows.read(uint2(0, row)).rg;
-    float dbm = rows.read(uint2(column, row)).r;
-    float hz = window.x + (float(column) + 0.5) / float(u.columns) * window.y;
-    float unit = (hz - u.view.x) / u.view.y;
+    float4 window = windows.read(uint2(0, row));
+    // Emit the current view's mesh and sample the retained frequency window,
+    // so a source/view change keeps real channels and known overhang aligned.
+    float unit = 0.5 + ((float(column) + 0.5) / float(u.columns) - 0.5) * u.look.w;
+    float2 sampled = stackedSample(unit, window, row, u, rows);
+    float dbm = sampled.x;
     float d = clamp(depth, 0.0, 1.0);
     float widthScale = 1.0 - d * (1.0 - u.shape.x);
-    bool ok = isfinite(dbm) && window.y > 0.0 && depth <= 1.0;
+    bool ok = sampled.y > 0.5 && isfinite(dbm) && window.y > 0.0 && depth <= 1.0;
     float share = ok ? pow(clamp((dbm - u.levels.x) / u.levels.y, 0.0, 1.0), u.shape.w) : 0.0;
     float baseY = u.plot.y + u.plot.w * (1.0 - d * u.shape.y);
     float ridgeY = baseY - share * u.shape.z * widthScale * u.plot.w;
@@ -171,14 +194,16 @@ vertex StackedOut bandStackedVertex(uint vertexId [[vertex_id]], uint instance [
     // a steep flank as along a flat top (the row drawn as a stroked line).
     uint left = column > 0 ? column - 1 : column;
     uint right = min(column + 1, u.columns - 1);
-    float leftDbm = rows.read(uint2(left, row)).r;
-    float rightDbm = rows.read(uint2(right, row)).r;
+    float leftUnit = 0.5 + ((float(left) + 0.5) / float(u.columns) - 0.5) * u.look.w;
+    float rightUnit = 0.5 + ((float(right) + 0.5) / float(u.columns) - 0.5) * u.look.w;
+    float leftDbm = stackedSample(leftUnit, window, row, u, rows).x;
+    float rightDbm = stackedSample(rightUnit, window, row, u, rows).x;
     leftDbm = isfinite(leftDbm) ? leftDbm : dbm;
     rightDbm = isfinite(rightDbm) ? rightDbm : dbm;
     float rise = (pow(clamp((rightDbm - u.levels.x) / u.levels.y, 0.0, 1.0), u.shape.w)
                   - pow(clamp((leftDbm - u.levels.x) / u.levels.y, 0.0, 1.0), u.shape.w))
                  * u.shape.z * widthScale * u.plot.w;
-    float run = max(float(right - left), 1.0) / float(u.columns) * window.y / u.view.y * u.plot.z * widthScale;
+    float run = max(float(right - left), 1.0) / float(u.columns) * u.look.w * u.plot.z * widthScale;
     float slope = ok ? rise / max(run, 0.001) : 0.0;
     float footY = u.plot.y + u.plot.w;
     if (age > 0) {

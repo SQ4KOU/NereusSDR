@@ -206,6 +206,38 @@ struct RadeRowMirrorTests {
         store.apply(.capabilities(LinkMessage.Capabilities(properties: entries)))
     }
 
+    @Test("experimental sidebands show live reception without a text callsign", arguments: ["RADE2-U", "RADE2-L"])
+    func experimentalReception(label: String) async throws {
+        // The suite fixture is the Core's default-off table; a Core with V2
+        // opted in publishes the RADE2 modes this row reads.
+        let raw = try #require(ModesTabBindingTests.catalogueObject(ModesTabBindingTests.anan))
+        let enabled = try #require(ModesTabBindingTests.radeV2Enabled(raw))
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: enabled), as: UTF8.self)
+        let catalog = try #require(StationCatalog.parse(json: json))
+        #expect(catalog.radeV2Enabled)
+        let mode = try #require(Self.mode(label, in: catalog))
+        let store = MirrorStore(send: { _ in })
+        Self.core(store, radeStatus: 1)
+        store.apply(Self.slice(0, mode: mode, snr: 12.9, callsign: "", synced: true, offsetHz: -12.4))
+        let model = BandSlicesModel(store: store, commands: nil, catalog: catalog)
+        #expect(await settle { model.entries.first?.rade != nil })
+        #expect(model.entries.first?.modeLabel == label)
+        #expect(model.entries.first?.rade?.text == "RADE ● 12dB -12Hz")
+        store.apply(Self.delta(0, [.init(ordinal: 151, name: "radeSynced", value: .bool(false))]))
+        #expect(await settle { model.entries.first?.rade?.text == "RADE ○ ---" })
+    }
+
+    @Test("experimental choices keep the Core label and describe the experiment")
+    func experimentalModeLabels() {
+        #expect(ModePicker.displayLabel("RADE2-U") == "RADE2-U*")
+        #expect(ModePicker.displayLabel("RADE2-L") == "RADE2-L*")
+        #expect(ModePicker.displayLabel("RADE-U") == "RADE-U")
+        #expect(ModePicker.displayLabel("USB") == "USB")
+        #expect(ModePicker.spokenLabel("RADE2-U") == "RADE2-U (Experimental)")
+        #expect(ModePicker.spokenLabel("RADE2-L") == "RADE2-L (Experimental)")
+        #expect(ModePicker.spokenLabel("RADE-U") == "RADE-U")
+    }
+
     @Test("a Core that sends radeStatusVersion 1 at minor 11 lights the dot, SNR and offset")
     func gatedCore() async throws {
         let catalog = try #require(BandFlagShotTests.catalogue())

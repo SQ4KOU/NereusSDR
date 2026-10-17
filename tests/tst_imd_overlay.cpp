@@ -186,6 +186,36 @@ private slots:
             peaks, f0L, f0U, imd3L, imd3U, imd5L, imd5U));
     }
 
+    void partialMatchingDoesNotFabricateMissingOutputs()
+    {
+        std::vector<float> bins(800, -120.0f);
+        bins[100] = -88; bins[220] = -68; bins[340] = -20;
+        bins[460] = -22; bins[580] = -70;
+        const auto peaks = ImdOverlay::detectPeaks(bins, 10.0f);
+        const auto partial = ImdOverlay::matchImdProducts(peaks);
+        QVERIFY(partial.fundamentalsResolved);
+        QVERIFY(!partial.peaks[5]);
+        QCOMPARE(*partial.expectedSampleIndex[5], 700);
+        for (size_t i = 0; i < 5; ++i) { QVERIFY(partial.peaks[i]); }
+        Maximum f0L{123}, f0U{123}, imd3L{123}, imd3U{123}, imd5L{123}, imd5U{123};
+        QVERIFY(!ImdOverlay::labelImdProducts(peaks, f0L, f0U, imd3L, imd3U, imd5L, imd5U));
+        QCOMPARE(imd5U.dBm, 123.0f);
+    }
+    void unequalFundamentalsPinWorstAndInterceptFormulas()
+    {
+        ImdOverlay overlay;
+        overlay.updateReadout(Maximum{-20, 340}, Maximum{-22, 460},
+            Maximum{-68, 220}, Maximum{-70, 580}, Maximum{-88, 100}, Maximum{-90, 700});
+        const auto& readout = overlay.readout();
+        QCOMPARE(readout.dbc, -20.0f); QCOMPARE(readout.dbcMin, -22.0f);
+        QCOMPARE(readout.worstImd3DBc, 46.0f); QCOMPARE(readout.worstImd5DBc, 66.0f);
+        QCOMPARE(readout.oip3, 1.0f); QCOMPARE(readout.oip5, 11.0f);
+        const auto text = overlay.formatReadout();
+        QVERIFY(text.val1.contains(QStringLiteral("-46.00 dBc")));
+        QVERIFY(text.val2.contains(QStringLiteral("-48.00")));
+        QCOMPARE(ImdOverlay::formatReadout(readout).val1, text.val1);
+    }
+
     // ── EMA smoothing ───────────────────────────────────────────────────────
 
     // From Thetis display.cs:5589-5641 [v2.10.3.13]:

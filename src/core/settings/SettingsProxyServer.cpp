@@ -79,6 +79,8 @@
 #include "core/settings/SettingsProxyServer.h"
 
 #include "core/AppSettings.h"
+#include "core/ControlRanges.h"
+#include "core/DisplayFftSizing.h"
 #include "core/settings/SettingsScope.h"
 
 #include <QScopeGuard>
@@ -344,6 +346,25 @@ SettingsApplyResult SettingsProxyServer::applyInboundWrite(const QString& key, c
     // different JSON shapes -- 192000 versus "192000" -- depending on
     // which of the two paths happened to produce it.
     emit outboundValueChanged(key, m_appSettings.value(key), originTag);
+
+    // FFT sizing mode (design D41; R-DSP-65). A window or phone from before
+    // the mode knows only DisplayHzPerBinTarget: above 0 is "the target is
+    // in charge", 0 is "off". So that its Hz/bin control keeps working, a
+    // write of that key moves the mode: above 0 sets HzPerBin, 0 sets Auto
+    // when the mode was HzPerBin, and Fixed and Auto are left alone on 0.
+    //
+    // A settings write arrives one key to a message and carries nothing
+    // that says whether its writer knows the mode, so the rule runs on
+    // every write of the key. A client that knows the mode writes the mode
+    // first and the target after (writeDisplayFftSizingMode), so the rule
+    // finds the mode already in place and changes nothing.
+    //
+    // Outside the echo guard above, on purpose: the mode is this Core's
+    // own change, not the writer's, so the generic change hook sends it to
+    // every client, the writer included, with no origin tag.
+    if (key == QLatin1String(ControlRanges::kDisplayHzPerBinTargetKey)) {
+        followHzPerBinTargetWrite(m_appSettings);
+    }
 
     SettingsApplyResult result;
     result.accepted = true;

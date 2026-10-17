@@ -144,12 +144,22 @@ bool PanClarityRegistry::canOutput(const QString& id, const QSharedPointer<Entry
     return current(id, entry) && m_enabled && !keyedNow() && (entry->available || entry->hintOutput)
         && (!entry->executing || entry->operationToken == entry->token);
 }
+std::optional<PanClarityRegistry::PanStatus> PanClarityRegistry::statusForPan(const QString& id) const
+{
+    const auto entry = m_entries.value(id);
+    if (!entry || !entry->widget || !entry->controller) { return std::nullopt; }
+    return PanStatus{entry->widget->clarityEnabled(), entry->widget->clarityActive(),
+                     keyedNow() || entry->controller->isPaused(), entry->available};
+}
 void PanClarityRegistry::refreshStatus(const QSharedPointer<Entry>& entry)
 {
-    if (entry->panel && entry->controller) {
-        entry->panel->setClarityStatus(m_enabled && entry->hasOutput,
-            m_enabled && (keyedNow() || entry->controller->isPaused()));
+    if (!entry || !entry->widget || !entry->controller) { return; }
+    if (entry->panel) {
+        entry->panel->setClarityState(entry->widget->clarityEnabled(),
+            entry->widget->clarityActive(), keyedNow() || entry->controller->isPaused());
     }
+    const QString id = m_entries.key(entry);
+    if (!id.isEmpty()) { emit panStatusChanged(id); }
 }
 void PanClarityRegistry::registerPan(const QString& id, SpectrumWidget* widget,
                                     SpectrumOverlayPanel* panel, PanadapterModel* saved)

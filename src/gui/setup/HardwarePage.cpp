@@ -48,6 +48,15 @@
 //   2026-09-30 - HL2 Options' Swap audio channels follows
 //                radioHardwareVersion 13 in a remote window. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - With no radio connected the tab set follows the saved board
+//                identity (applySavedBoardTabs); the board's tab rules moved
+//                into applyBoardTabs, which also shows the N2ADR caption on
+//                an HL2 only. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-10-09 - D25: the tab pane fills the page and each tab scrolls down
+//                on its own (SetupFit::scrollingTab), so the tab strip stays
+//                at the top and one wide tab no longer widens the others.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -96,6 +105,7 @@
 //============================================================================================//
 
 #include "HardwarePage.h"
+#include "SetupFit.h"
 #include "gui/UnbuiltFeatures.h"
 
 #include "hardware/RadioInfoTab.h"
@@ -120,6 +130,8 @@
 #include <QTabWidget>
 #include <QVBoxLayout>
 
+#include <memory>
+
 namespace NereusSDR {
 
 // ── Construction ──────────────────────────────────────────────────────────────
@@ -141,8 +153,18 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
     m_remoteNotice->setWordWrap(true);
     m_remoteNotice->setMargin(8);
     m_remoteNotice->hide();
-    contentLayout()->addWidget(m_remoteNotice);
-    contentLayout()->addWidget(m_tabs);
+    addContent(m_remoteNotice);
+    addContent(m_tabs);
+    // D25: the tab pane takes the page's height in place of the trailing
+    // stretch, and each tab scrolls down inside it (below), so the tab
+    // strip never scrolls away and the page never scrolls sideways.
+    {
+        const int last = contentLayout()->count() - 1;
+        if (QLayoutItem* s = contentLayout()->itemAt(last); s != nullptr && s->spacerItem() != nullptr) {
+            std::unique_ptr<QLayoutItem> stretch(contentLayout()->takeAt(last));
+        }
+        contentLayout()->setStretchFactor(m_tabs, 1);
+    }
 
     // ── Create stub tab widgets ───────────────────────────────────────────────
     m_radioInfoTab    = new RadioInfoTab(model, this);
@@ -158,14 +180,18 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
     // Note: Setup → Hardware → PureSignal tab retired in Phase 3M-4 Task 14
     // (no Thetis equivalent; PsForm at Tools > PureSignal is the entire PS
     // control surface — design §4.2).
-    m_radioInfoIdx   = m_tabs->addTab(m_radioInfoTab,   tr("Radio Info"));
+    // D25: Antenna / ALEX and OC Outputs hold sub-tabs that scroll on their
+    // own and Calibration has its own scroll area; every other tab scrolls
+    // inside one of its own.
+    using SetupFit::scrollingTab;
+    m_radioInfoIdx   = m_tabs->addTab(scrollingTab(m_radioInfoTab),   tr("Radio Info"));
     m_antennaAlexIdx = m_tabs->addTab(m_antennaAlexTab, tr("Antenna / ALEX"));
     m_ocOutputsIdx   = m_tabs->addTab(m_ocOutputsTab,   tr("OC Outputs"));
-    m_xvtrIdx        = m_tabs->addTab(m_xvtrTab,        tr("XVTR"));
+    m_xvtrIdx        = m_tabs->addTab(scrollingTab(m_xvtrTab),        tr("XVTR"));
     m_paCalIdx       = m_tabs->addTab(m_paCalTab,       tr("Calibration"));
-    m_hl2OptionsIdx  = m_tabs->addTab(m_hl2OptionsTab,  tr("HL2 Options"));
-    m_hl2IoIdx       = m_tabs->addTab(m_hl2IoTab,       tr("HL2 I/O"));
-    m_bwMonitorIdx   = m_tabs->addTab(m_bwMonitorTab,   tr("Bandwidth Monitor"));
+    m_hl2OptionsIdx  = m_tabs->addTab(scrollingTab(m_hl2OptionsTab),  tr("HL2 Options"));
+    m_hl2IoIdx       = m_tabs->addTab(scrollingTab(m_hl2IoTab),       tr("HL2 I/O"));
+    m_bwMonitorIdx   = m_tabs->addTab(scrollingTab(m_bwMonitorTab),   tr("Bandwidth Monitor"));
     // R-R3-49: tabs whose feature is not built yet stay hidden, before and
     // after a radio is known (onCurrentRadioChanged ANDs the same check).
     m_tabs->setTabVisible(m_xvtrIdx, UnbuiltFeatures::isBuilt(UnbuiltFeature::Transverters));
@@ -234,6 +260,9 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
             // R-R3-46: a remote window has no connection of its own; the
             // Core's radio is the model's stored radio info.
             onCurrentRadioChanged(m_model->currentRadioInfo());
+        } else if (m_model->ownsLocalDsp()) {
+            // No radio yet: the saved radio's tabs, not another board's.
+            applySavedBoardTabs();
         }
     }
 }
@@ -302,6 +331,36 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
     // Use HardwareProfile for capability lookup (Phase 3I-RP).
     const BoardCapabilities& caps = *m_model->hardwareProfile().caps;
 
+    applyBoardTabs(caps);
+
+    // Populate each tab with the new board info.
+    m_radioInfoTab->populate(info, caps);
+    m_antennaAlexTab->populate(info, caps);
+    m_ocOutputsTab->populate(info, caps);
+    m_xvtrTab->populate(info, caps);
+    m_paCalTab->populate(info, caps);
+    m_hl2OptionsTab->populate(info, caps);
+    m_hl2IoTab->populate(info, caps);
+    m_bwMonitorTab->populate(info, caps);
+
+    // Restore persisted settings for this radio's MAC (Task 21).
+    if (!m_currentMac.isEmpty()) {
+        const auto all = AppSettings::instance().hardwareValues(m_currentMac);
+        m_radioInfoTab->restoreSettings(   filterPrefix(all, QStringLiteral("radioInfo/")));
+        m_antennaAlexTab->restoreSettings( filterPrefix(all, QStringLiteral("antennaAlex/")));
+        m_ocOutputsTab->restoreSettings(   filterPrefix(all, QStringLiteral("ocOutputs/")));
+        m_xvtrTab->restoreSettings(        filterPrefix(all, QStringLiteral("xvtr/")));
+        m_paCalTab->restoreSettings(       filterPrefix(all, QStringLiteral("paCalibration/")));
+        m_hl2OptionsTab->restoreSettings(  filterPrefix(all, QStringLiteral("hl2Options/")));
+        m_hl2IoTab->restoreSettings(       filterPrefix(all, QStringLiteral("hl2IoBoard/")));
+        m_bwMonitorTab->restoreSettings(   filterPrefix(all, QStringLiteral("bandwidthMonitor/")));
+    }
+}
+
+// ── applyBoardTabs ───────────────────────────────────────────────────────────
+
+void HardwarePage::applyBoardTabs(const BoardCapabilities& caps)
+{
     // Radio Info is always visible.
     // Remaining tabs are shown only when the connected board supports them.
     m_tabs->setTabVisible(m_antennaAlexIdx, caps.hasAlexFilters);
@@ -328,27 +387,30 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
     m_tabs->setTabVisible(m_bwMonitorIdx,   caps.hasBandwidthMonitor
                                             && UnbuiltFeatures::isBuilt(UnbuiltFeature::BandwidthMonitor));
 
-    // Populate each tab with the new board info.
-    m_radioInfoTab->populate(info, caps);
-    m_antennaAlexTab->populate(info, caps);
-    m_ocOutputsTab->populate(info, caps);
-    m_xvtrTab->populate(info, caps);
-    m_paCalTab->populate(info, caps);
-    m_hl2OptionsTab->populate(info, caps);
-    m_hl2IoTab->populate(info, caps);
-    m_bwMonitorTab->populate(info, caps);
+    // The OC tab's N2ADR pointer names an HL2 tab, so an HL2 alone shows it.
+    m_ocOutputsTab->setN2adrHintVisible(caps.hasIoBoardHl2);
+}
 
-    // Restore persisted settings for this radio's MAC (Task 21).
-    if (!m_currentMac.isEmpty()) {
-        const auto all = AppSettings::instance().hardwareValues(m_currentMac);
-        m_radioInfoTab->restoreSettings(   filterPrefix(all, QStringLiteral("radioInfo/")));
-        m_antennaAlexTab->restoreSettings( filterPrefix(all, QStringLiteral("antennaAlex/")));
-        m_ocOutputsTab->restoreSettings(   filterPrefix(all, QStringLiteral("ocOutputs/")));
-        m_xvtrTab->restoreSettings(        filterPrefix(all, QStringLiteral("xvtr/")));
-        m_paCalTab->restoreSettings(       filterPrefix(all, QStringLiteral("paCalibration/")));
-        m_hl2OptionsTab->restoreSettings(  filterPrefix(all, QStringLiteral("hl2Options/")));
-        m_hl2IoTab->restoreSettings(       filterPrefix(all, QStringLiteral("hl2IoBoard/")));
-        m_bwMonitorTab->restoreSettings(   filterPrefix(all, QStringLiteral("bandwidthMonitor/")));
+// ── applySavedBoardTabs ──────────────────────────────────────────────────────
+
+void HardwarePage::applySavedBoardTabs()
+{
+    // NereusSDR-original: with no connection yet, the page shows the tab set
+    // of the radio last connected (its saved board and model, the profile a
+    // connect would build: RadioModel::connectToRadio takes the saved model
+    // override, else defaultModelForBoard), not every tab. Nothing is
+    // populated or written until a radio connects (m_currentMac stays empty).
+    AppSettings& settings = AppSettings::instance();
+    const std::optional<SavedRadio> saved = settings.savedRadio(settings.lastConnected());
+    if (!saved || saved->info.boardType == HPSDRHW::Unknown) {
+        return;
+    }
+    const HPSDRModel model = saved->info.modelOverride != HPSDRModel::FIRST
+        ? saved->info.modelOverride
+        : defaultModelForBoard(saved->info.boardType);
+    const HardwareProfile profile = profileForRadio(saved->info.boardType, model);
+    if (profile.caps != nullptr) {
+        applyBoardTabs(*profile.caps);
     }
 }
 

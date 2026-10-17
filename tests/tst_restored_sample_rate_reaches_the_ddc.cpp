@@ -27,10 +27,17 @@
 //
 // Another instance of the branch's recurring shape, this one inverted:
 // here the SETTER was the thing that looked authoritative and was not.
+//
+// Modification history (NereusSDR):
+//   2026-10-15 - The band-restore case flushes the setup's held per-band
+//                save before seeding its 20m fixture. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
+#include <QStandardPaths>
 
+#include "core/AppSettings.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -49,10 +56,9 @@ private:
         model.configureStreamPool(/*userDdcCount*/ 4, /*maxSlices*/ 4, 192000);
     }
 
-    // No settings isolation needed: these cases drive setSampleRateHz
-    // directly, which is exactly the restore step under test, rather than
-    // round-tripping through a settings file. What is being asserted is what
-    // happens AFTER the value is restored.
+    // The direct-setter cases drive the property change performed by restore.
+    // The band-button integration case also uses AppSettings in the normal
+    // TestSandboxInit/test-home sandbox, checked before its first write.
 
 private slots:
 
@@ -80,6 +86,234 @@ private slots:
 
         QVERIFY2(model.streamSampleRateHzForTest(stream) == 384000,
             "the restored rate must reach the DDC, not only the menu");
+    }
+
+    void band_restore_rejects_narrowing_after_frequency_placement()
+    {
+        // Exercise the real settings/restore/helper ordering with a full pool.
+        // The 20m window hosts two slices 200 kHz apart, so 192 kHz cannot fit.
+#ifdef Q_OS_WIN
+        // Windows tests get no NEREUS_TEST_HOME (its known folders ignore a
+        // changed home), so check Qt's test-mode location instead.
+        QVERIFY(QStandardPaths::isTestModeEnabled());
+        QVERIFY(AppSettings::instance().filePath().startsWith(
+            QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+            + QLatin1Char('/')));
+#else
+        QVERIFY(!qEnvironmentVariableIsEmpty("NEREUS_TEST_HOME"));
+        QVERIFY(AppSettings::instance().filePath().startsWith(
+            qEnvironmentVariable("NEREUS_TEST_HOME") + QLatin1Char('/')));
+#endif
+        auto& settings = AppSettings::instance();
+        const QString prefix = QStringLiteral("Slice0/Band20m/");
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        model.configureStreamPool(/*userDdcCount*/ 2, /*maxSlices*/ 3, 192000);
+        const int a = model.addSlice();
+        SliceModel* slice = model.sliceById(a);
+        QVERIFY(slice);
+        slice->setFrequency(14200000.0);
+        QVERIFY(model.setStreamSampleRate(0, 768000));
+        QVERIFY(model.waitForReceiveLaneForTest());
+        const int b = model.addSlice();
+        model.sliceById(b)->setFrequency(14400000.0);
+        const int c = model.addSlice();
+        model.sliceById(c)->setFrequency(7100000.0);
+        slice->setFrequency(7150000.0);
+        QCOMPARE(slice->streamIndex(), 1);
+        model.setActiveSlice(a);
+        // Setup tuned slice a through 20m at 768 kHz. RadioModel holds that
+        // band's values until its coalesced save and writes them at the next
+        // band click, so flush the setup save before seeding: otherwise the
+        // held 20m capture replaces the fixture below.
+        model.flushPendingSettingsSave();
+        // DspMode is hasSettingsFor's visited-band sentinel. Seed after
+        // setup so any rate-change persistence cannot replace this fixture.
+        settings.setValue(prefix + QStringLiteral("DspMode"), static_cast<int>(DSPMode::USB));
+        settings.setValue(prefix + QStringLiteral("Frequency"), 14200000.0);
+        settings.setValue(prefix + QStringLiteral("SampleRate"), 192000);
+        QVERIFY(slice->hasSettingsFor(Band::Band20m));
+
+        QList<int> restoredStreams;
+        connect(slice, &SliceModel::sampleRateHzChanged, &model, [&](int rate) {
+            if (rate == 192000) {
+                restoredStreams.append(slice->streamIndex());
+            }
+        });
+        QSignalSpy rejected(&model, &RadioModel::sliceRetuneRejected);
+        model.onBandButtonClicked(Band::Band20m);
+        QVERIFY(model.waitForReceiveLaneForTest());
+
+        QCOMPARE(rejected.count(), 1);
+        QCOMPARE(rejected.first().at(0).toInt(), a);
+        QCOMPARE(restoredStreams, QList<int>{0});
+        QCOMPARE(slice->frequency(), 14200000.0);
+        QCOMPARE(slice->streamIndex(), 0);
+        QCOMPARE(slice->sampleRateHz(), 768000);
+        QCOMPARE(model.sliceById(b)->frequency(), 14400000.0);
+        QCOMPARE(model.sliceById(b)->streamIndex(), 0);
+        QCOMPARE(model.sliceById(b)->sampleRateHz(), 768000);
+        QCOMPARE(model.sliceById(c)->frequency(), 7100000.0);
+        QCOMPARE(model.sliceById(c)->streamIndex(), 1);
+        QCOMPARE(model.sliceById(c)->sampleRateHz(), 192000);
+        QCOMPARE(model.streamSampleRateHzForTest(0), 768000);
+        QCOMPARE(model.streamSampleRateHzForTest(1), 192000);
+        QCOMPARE(model.activeStreamCount(), 2);
+    }
+
+    void a_reset_observer_cannot_apply_the_preference_to_a_replacement_slice()
+    {
+        RadioModel model;
+        seed(model);
+        const int id = model.addSlice();
+        QVERIFY(model.addSlice() >= 0); // Keep a survivor so the original can close.
+        SliceModel* slice = model.sliceById(id);
+        QVERIFY(slice);
+        slice->setSampleRateHz(384000);
+        bool replaced = false;
+        connect(slice, &SliceModel::sampleRateHzChanged, &model, [&](int rate) {
+            if (rate == 192000 && !replaced) {
+                replaced = true;
+                model.removeSlice(id);
+                QCOMPARE(model.addSlice(), id);
+            }
+        });
+
+        model.applyRestoredSampleRate(slice);
+        QVERIFY(model.waitForReceiveLaneForTest());
+
+        QVERIFY(replaced);
+        SliceModel* replacement = model.sliceById(id);
+        QVERIFY(replacement);
+        QVERIFY(replacement != slice);
+        QCOMPARE(replacement->sampleRateHz(), 192000);
+        QCOMPARE(model.streamSampleRateHzForTest(replacement->streamIndex()), 192000);
+    }
+
+    void a_reset_observer_cannot_apply_the_preference_to_a_new_binding()
+    {
+        RadioModel model;
+        seed(model);
+        const int id = model.addSlice();
+        SliceModel* slice = model.sliceById(id);
+        QVERIFY(slice);
+        slice->setFrequency(14200000.0);
+        const int cohost = model.addSlice();
+        model.sliceById(cohost)->setFrequency(14250000.0);
+        const int other = model.addSlice();
+        model.sliceById(other)->setFrequency(7100000.0);
+        const int originalStream = slice->streamIndex();
+        const int destinationStream = model.sliceById(other)->streamIndex();
+        QVERIFY(originalStream != destinationStream);
+        QCOMPARE(model.sliceById(cohost)->streamIndex(), originalStream);
+        slice->setSampleRateHz(384000);
+        bool rebound = false;
+        connect(slice, &SliceModel::sampleRateHzChanged, &model, [&](int rate) {
+            if (rate == 192000 && !rebound) {
+                rebound = true;
+                slice->setFrequency(7150000.0);
+            }
+        });
+
+        model.applyRestoredSampleRate(slice);
+        QVERIFY(model.waitForReceiveLaneForTest());
+
+        QVERIFY(rebound);
+        QCOMPARE(slice->frequency(), 7150000.0);
+        QCOMPARE(slice->streamIndex(), destinationStream);
+        QCOMPARE(slice->sampleRateHz(), 192000);
+        QCOMPARE(model.streamSampleRateHzForTest(destinationStream), 192000);
+        QCOMPARE(model.sliceById(other)->sampleRateHz(), 192000);
+        QCOMPARE(model.sliceById(cohost)->sampleRateHz(), 192000);
+    }
+
+    void a_reset_observers_same_stream_tune_supersedes_the_restored_preference_data()
+    {
+        QTest::addColumn<double>("fromHz");
+        QTest::addColumn<double>("toHz");
+        QTest::addColumn<Band>("destinationBand");
+        QTest::newRow("within-band") << 14200000.0 << 14201000.0 << Band::Band20m;
+        QTest::newRow("20m-to-GEN") << 14349000.0 << 14351000.0 << Band::GEN;
+    }
+
+    void a_reset_observers_same_stream_tune_supersedes_the_restored_preference()
+    {
+        QFETCH(double, fromHz);
+        QFETCH(double, toHz);
+        QFETCH(Band, destinationBand);
+        RadioModel model;
+        seed(model);
+        const int id = model.addSlice();
+        SliceModel* slice = model.sliceById(id);
+        QVERIFY(slice);
+        slice->setFrequency(fromHz);
+        const int stream = slice->streamIndex();
+        slice->setSampleRateHz(384000);
+        bool retuned = false;
+        connect(slice, &SliceModel::sampleRateHzChanged, &model, [&](int rate) {
+            if (rate == 192000 && !retuned) {
+                retuned = true;
+                slice->setFrequency(toHz);
+            }
+        });
+        QSignalSpy rejected(&model, &RadioModel::sliceRetuneRejected);
+
+        model.applyRestoredSampleRate(slice);
+        QVERIFY(model.waitForReceiveLaneForTest());
+
+        QVERIFY(retuned);
+        QCOMPARE(slice->frequency(), toHz);
+        QCOMPARE(slice->band(), destinationBand);
+        QCOMPARE(slice->streamIndex(), stream);
+        QCOMPARE(model.streamSampleRateHzForTest(stream), 192000);
+        QCOMPARE(slice->sampleRateHz(), 192000);
+        QCOMPARE(rejected.count(), 0);
+    }
+
+    void a_reset_observers_new_rate_request_supersedes_the_restored_preference()
+    {
+        RadioModel model;
+        seed(model);
+        const int id = model.addSlice();
+        SliceModel* slice = model.sliceById(id);
+        QVERIFY(slice);
+        slice->setSampleRateHz(384000);
+        bool superseded = false;
+        connect(slice, &SliceModel::sampleRateHzChanged, &model, [&](int rate) {
+            if (rate == 192000 && !superseded) {
+                superseded = true;
+                model.requestSliceSampleRate(id, 768000);
+            }
+        });
+
+        model.applyRestoredSampleRate(slice);
+        QVERIFY(model.waitForReceiveLaneForTest());
+
+        QVERIFY(superseded);
+        QCOMPARE(slice->sampleRateHz(), 768000);
+        QCOMPARE(model.streamSampleRateHzForTest(slice->streamIndex()), 768000);
+    }
+
+    void a_remote_restore_uses_the_station_request_with_no_local_allocator()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        const int id = model.addSliceWithStationId(7);
+        QCOMPARE(id, 7);
+        SliceModel* slice = model.sliceById(id);
+        QVERIFY(slice);
+        slice->setStreamIndex(0); // Mirrored station binding; local pool stays empty.
+        slice->setSampleRateHz(384000);
+        QVERIFY(model.streamSampleRateHzForTest(0) <= 0);
+        QSignalSpy rejected(&model, &RadioModel::sliceRetuneRejected);
+
+        model.applyRestoredSampleRate(slice);
+
+        // No station is attached, so the normal remote forwarding path
+        // reports its refusal instead of treating the empty pool as a rate.
+        QCOMPARE(rejected.count(), 1);
+        QCOMPARE(rejected.first().at(0).toInt(), id);
+        QCOMPARE(slice->sampleRateHz(), 384000);
+        QVERIFY(model.streamSampleRateHzForTest(0) <= 0);
     }
 
     // ── 2. A no-op restore stays a no-op ─────────────────────────────────

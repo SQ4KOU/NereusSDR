@@ -32,9 +32,15 @@ public struct SetupDescription: Equatable, Sendable {
         public let coverage: String?
         public let sections: [Section]
     }
+    /// V29 display scope, separate from the category's ownership summary.
+    public enum DisplayOwner: String, Sendable { case station, phone, pan }
+    public enum GradientEditor: String, Sendable { case receiveGradient, transmitGradient }
+    public enum EffectiveReadout: String, Sendable { case waterfallLow, waterfallHigh, spectrumMax, spectrumMin }
     public struct Section: Equatable, Sendable {
         public let title: String
         public let controls: [Control]
+        public internal(set) var owner: DisplayOwner? = nil
+        public internal(set) var note: String? = nil
     }
     public struct Range: Equatable, Sendable {
         public let minimum: Double
@@ -235,6 +241,18 @@ public struct SetupDescription: Equatable, Sendable {
         public let unavailableReason: String?
         /// V13 to V16 additions; nil for an older row.
         public internal(set) var modern: Modern? = nil
+        /// V26: the `allOf` form of `enabledWhen`, each term in the Core's
+        /// order; the row is live only while every one holds. Nil for a row
+        /// without the form.
+        public internal(set) var phoneAllOf: [PhoneDependency]? = nil
+        /// Every phone key this row follows: the `allOf` terms, or the
+        /// single V12 dependency, or none. All of them must hold.
+        public internal(set) var owner: DisplayOwner? = nil
+        public internal(set) var editor: GradientEditor? = nil
+        public internal(set) var readout: EffectiveReadout? = nil
+        public var phoneDependencies: [PhoneDependency] {
+            phoneAllOf ?? phoneDependency.map { [$0] } ?? []
+        }
         public var isEditable: Bool {
             if kind == .readout || kind == .settingsHygiene { return false }
             if case .antennaRows? = binding { return false }
@@ -248,7 +266,7 @@ public struct SetupDescription: Equatable, Sendable {
 
     /// The highest description version this parser reads. What the phone
     /// asks the Core for is separate: `LinkFeatures`' `setupDescription`.
-    public static let highestVersion = 24
+    public static let highestVersion = 29
 
     /// The desktop's band names, by the Core's band number, as a per-band
     /// row's label names them (`src/models/Band.h`).
@@ -282,7 +300,8 @@ public struct SetupDescription: Equatable, Sendable {
             guard !ids.contains(page.id) else { return nil }
             let sections: [Section] = page.sections.compactMap { section in
                 let controls = section.controls.filter { !ids.contains($0.id) }
-                return controls.isEmpty ? nil : Section(title: section.title, controls: controls)
+                return controls.isEmpty && section.note == nil ? nil
+                    : Section(title: section.title, controls: controls, owner: section.owner, note: section.note)
             }
             return sections.isEmpty ? nil : Page(id: page.id, title: page.title, whereOwned: page.whereOwned,
                                                  coverage: page.coverage, sections: sections)
@@ -316,6 +335,10 @@ public struct SetupDescription: Equatable, Sendable {
               (root["coverage"] == nil || root["coverage"] is String) else {
             throw ParseError("Unknown Setup category metadata.")
         }
+        if version == 29 && (categoryId == "display" || categoryId == "appearance"),
+           !validV29Envelope(root, category: categoryId) {
+            throw ParseError("Invalid closed V29 Setup envelope.")
+        }
         let category = Category(id: categoryId, title: categoryTitle, whereOwned: owner,
                                 coverage: rawCategory["coverage"] as? String ?? root["coverage"] as? String)
         var ids = Set<String>()
@@ -333,11 +356,21 @@ public struct SetupDescription: Equatable, Sendable {
             }
             var sections: [Section] = []
             for rawSection in rawSections {
-                guard let sectionTitle = nonempty(rawSection["title"]),
-                      let rawControls = rawSection["controls"] as? [[String: Any]], !rawControls.isEmpty else {
+                let closed29 = version == 29 && (categoryId == "display" || categoryId == "appearance")
+                guard let sectionTitle = rawSection["title"] as? String,
+                      let rawControls = rawSection["controls"] as? [[String: Any]],
+                      (!sectionTitle.isEmpty && !rawControls.isEmpty
+                       || closed29 && categoryId == "display" && specialV29Section(rawSection, page: pageId)) else {
                     throw ParseError("Setup section metadata is incomplete.")
                 }
-                guard Set(rawSection.keys).subtracting(["boardFamily"]) == ["title", "controls"] else {
+                let sectionOwner = (rawSection["owner"] as? String).flatMap(DisplayOwner.init(rawValue:))
+                if closed29 {
+                    guard Set(rawSection.keys).isSubset(of: ["title", "controls", "owner", "note"]),
+                          rawSection["owner"] == nil || sectionOwner != nil,
+                          rawSection["note"] == nil || rawSection["note"] is String else {
+                        throw ParseError("Unknown Setup section metadata.")
+                    }
+                } else if Set(rawSection.keys).subtracting(["boardFamily"]) != ["title", "controls"] {
                     throw ParseError("Unknown Setup section metadata.")
                 }
                 var controls: [Control] = []
@@ -348,7 +381,7 @@ public struct SetupDescription: Equatable, Sendable {
                     }
                     controls.append(parseControl(raw, id: id, label: label, version: Int(version), category: categoryId))
                 }
-                sections.append(Section(title: sectionTitle, controls: controls))
+                sections.append(Section(title: sectionTitle, controls: controls, owner: sectionOwner, note: rawSection["note"] as? String))
             }
             pages.append(Page(id: pageId, title: title, whereOwned: pageOwner,
                               coverage: rawPage["coverage"] as? String, sections: sections))
@@ -357,7 +390,28 @@ public struct SetupDescription: Equatable, Sendable {
     }
 
     private static func parseControl(_ raw: [String: Any], id: String, label: String, version: Int, category: String) -> Control {
-        if let required = raw["requiresDescriptionVersion"].flatMap(integer).map(Int.init), required >= 13 {
+        // Dispatch the whole closed V29 contract before any older ID lookup.
+        // Unknown V29 rows are unavailable rather than entering the open parser.
+        if (category == "display" || category == "appearance")
+            && (version == 29 || integer(raw["requiresDescriptionVersion"]) == 29
+                || raw["owner"] != nil || raw["editor"] != nil || raw["readout"] != nil) {
+            return parseV29Control(raw, id: id, label: label, category: category, version: version)
+        }
+        // V26's Display rows are closed rows like V12's, so they are read
+        // here and checked against `v26Specs`, not as a V13 to V25 row. The
+        // id alone sends a row here, so one of these claiming any other
+        // version is refused by the closed check, never read as an open row.
+        // Colors & Theme's rows are closed too: V27's Trace Color is read
+        // here with the ten swatches, and a swatch claiming a version of
+        // its own is refused, never read as an open row.
+        let closedColours = category == "appearance" && id.hasPrefix(coloursThemePrefix)
+        let closedV27 = closedColours && id == v27TraceColourId
+        let closedV26 = category == "display" && v26Specs[id] != nil
+        // V28's five Display rows (Sizing, the Size and Hz/bin Target it
+        // gates, and the two averaging times from 1 ms) are closed rows
+        // too, checked against `checkV28`.
+        let closedV28 = category == "display" && v28Ids.contains(id)
+        if !closedV26, !closedV28, !closedColours, let required = raw["requiresDescriptionVersion"].flatMap(integer).map(Int.init), required >= 13 {
             return parseModernControl(raw, id: id, label: label, category: category, version: version, required: required)
         }
         let rawKind = raw["kind"] as? String ?? ""
@@ -372,7 +426,9 @@ public struct SetupDescription: Equatable, Sendable {
         let applies = (raw["applies"] as? String).flatMap(Applies.init(rawValue:))
         if applies == nil { reject("Unknown Setup apply mode.") }
         let required = raw["requiresDescriptionVersion"].flatMap(integer).map(Int.init)
-        if let required, !(2...12).contains(required) || required > version {
+        if let required, !((2...12).contains(required) || (closedV26 && required == v26Version)
+                             || (closedV27 && required == v27Version)
+                             || (closedV28 && required == v28Version)) || required > version {
             reject("Unsupported Setup control version.")
         }
         if raw["requiresDescriptionVersion"] != nil && required == nil { reject("Unsupported Setup control version.") }
@@ -506,14 +562,24 @@ public struct SetupDescription: Equatable, Sendable {
                        phoneDependency: extensionMetadata.phoneDependency, perBand: extensionMetadata.perBand,
                        confirm: extensionMetadata.confirm, metadataIssue: issue,
                        unavailableReason: issue ?? (availability?.enabled == false ? availability?.reason : nil),
-                       modern: propertyDependency.map { dependency in
-                           var modern = Modern()
-                           modern.propertyDependency = dependency
-                           return modern
-                       })
+                       modern: closedModern(propertyDependency: propertyDependency,
+                                            optionLiterals: extensionMetadata.optionLiterals),
+                       phoneAllOf: extensionMetadata.phoneAllOf)
     }
 
-    private static func parseBinding(_ value: Any?, id: String, kind: Kind?, version: Int,
+    /// What a closed row keeps of the later rows' metadata: V21's Core
+    /// property dependency, and V28's words for a choice whose setting
+    /// holds one (Sizing). Nil for a row with neither.
+    private static func closedModern(propertyDependency: PropertyDependency?,
+                                     optionLiterals: [Int64: Literal]?) -> Modern? {
+        guard propertyDependency != nil || optionLiterals != nil else { return nil }
+        var modern = Modern()
+        modern.propertyDependency = propertyDependency
+        modern.optionLiterals = optionLiterals ?? [:]
+        return modern
+    }
+
+    static func parseBinding(_ value: Any?, id: String, kind: Kind?, version: Int,
                                      columns: Any?, rowActions: Any?) -> Binding? {
         guard let raw = value as? [String: Any], raw.count == 1,
               let (key, data) = raw.first else { return nil }

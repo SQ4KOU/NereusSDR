@@ -29,6 +29,10 @@
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - HL2 port part 2: setPollingPause / isPollingPaused. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15 - Load-failure findings: the "given up" line is kept and
+//                printed after the frame lock (takeGivenUpReads). J.J.
+//                Boyd (KG4VCF), with AI-assisted implementation via
+//                Anthropic Claude Code.
 // =================================================================
 //
 // --- From Console/HPSDR/IoBoardHl2.cs ---
@@ -261,9 +265,18 @@ bool IoBoardHl2::pushPendingRead(const PendingRead& r)
     // netInterface.c:1623 [@c26a8a4], under "// MI0BOT: HL2 I2C variables").
     const qint64 now = nowMs();
     while (m_pendingCount > 0 && now - m_pendingSentMs[m_pendingHead] >= kReadAnswerMs) {
-        qDebug("HL2 I2C: read of %02X/%02X unanswered, given up",
-               m_pendingReads[m_pendingHead].deviceAddress,
-               m_pendingReads[m_pendingHead].subAddress);
+        // Kept for the log, printed once the frame lock is released
+        // (takeGivenUpReads, printGivenUpRead).
+        if (m_givenUpCount < kGivenUpLogLines) {
+            m_givenUpLog[size_t(m_givenUpCount++)] = m_pendingReads[m_pendingHead];
+        } else {
+            // Nobody took the kept reads: print them and this one now, in order.
+            for (int i = 0; i < m_givenUpCount; ++i) {
+                printGivenUpRead(m_givenUpLog[size_t(i)]);
+            }
+            m_givenUpCount = 0;
+            printGivenUpRead(m_pendingReads[m_pendingHead]);
+        }
         m_pendingHead = (m_pendingHead + 1) % kMaxI2cQueue;
         --m_pendingCount;
     }
@@ -273,6 +286,22 @@ bool IoBoardHl2::pushPendingRead(const PendingRead& r)
     m_pendingTail = (m_pendingTail + 1) % kMaxI2cQueue;
     ++m_pendingCount;
     return true;
+}
+
+int IoBoardHl2::takeGivenUpReads(GivenUpLog& out)
+{
+    const int n = m_givenUpCount;
+    for (int i = 0; i < n; ++i) {
+        out[size_t(i)] = m_givenUpLog[size_t(i)];
+    }
+    m_givenUpCount = 0;
+    return n;
+}
+
+void IoBoardHl2::printGivenUpRead(const PendingRead& r)
+{
+    qDebug("HL2 I2C: read of %02X/%02X unanswered, given up",
+           r.deviceAddress, r.subAddress);
 }
 
 bool IoBoardHl2::popPendingRead(PendingRead& out)

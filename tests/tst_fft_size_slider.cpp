@@ -87,6 +87,33 @@ private slots:
         QCOMPARE(fe.fftSizeOffsetDb(), 12.0);
     }
 
+    // Rulings wave R2: the baseline carries the offset, so every FFT size
+    // change sets it. Slider step x 2 dB, where the step is
+    // log2(size / 4096) (Thetis setup.cs:16148, 16154 [v2.10.3.13]). One
+    // change is announced once; a refused size changes nothing.
+    void baseline_sets_the_offset_and_announces_each_change_once()
+    {
+        FFTEngine fe(0);
+        QSignalSpy spy(&fe, &FFTEngine::fftSizeBaselineChanged);
+        fe.setFftSizeBaseline(4096);
+        QCOMPARE(spy.count(), 0);
+        QCOMPARE(fe.fftSizeOffsetDb(), 0.0);
+        for (int v = 1; v <= 6; ++v) {
+            const int size = 4096 << v;
+            fe.setFftSizeBaseline(size);
+            QCOMPARE(fe.fftSizeBaseline(), size);
+            QCOMPARE(fe.fftSizeOffsetDb(), static_cast<double>(v) * 2.0);
+            QCOMPARE(spy.count(), v);
+            QCOMPARE(spy.at(v - 1).at(0).toInt(), size);
+            fe.setFftSizeBaseline(size);
+            QCOMPARE(spy.count(), v);
+        }
+        fe.setFftSizeBaseline(5000);
+        QCOMPARE(fe.fftSizeBaseline(), 262144);
+        QCOMPARE(fe.fftSizeOffsetDb(), 12.0);
+        QCOMPARE(spy.count(), 6);
+    }
+
     // Thetis emits SpectrumSettingsChangedHandlers only when size actually
     // changes.  Same FFT size set twice -> 1 emission.  Size change ->
     // additional emission.

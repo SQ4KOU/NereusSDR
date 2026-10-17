@@ -29,7 +29,9 @@
 //  10. Control logging lane: an unkey logs one line with the key's
 //      leveler, leveler gain, ALC, ALC gain and compression peaks from the
 //      readings the pump took, "none" for a reading it did not have; a
-//      second key's peaks start fresh.
+//      second key's peaks start fresh. The leveler gain WDSP has not yet
+//      measured (its -400, which Thetis's leveler gain reading turns into
+//      +400) is no reading: the line shows the real gain, or none.
 //
 // Through the Core (StationServer, over the loopback):
 //  10. Only a device whose hello declared remoteTx gets txStateVersion and
@@ -76,6 +78,10 @@
 //   2026-10-01: Control logging lane: the unkey's stage peaks line, and a
 //               second key's peaks start fresh. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-10-15: The stage peaks line leaves out a leveler gain WDSP has
+//               not yet measured (it logged 400.0 dB on every key of the
+//               HL2 retest). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -525,6 +531,63 @@ private slots:
                  QStringLiteral("TX stage peaks for key 2 (%1 readings): leveler -30.0 dB, "
                                 "leveler gain 2.0 dB, ALC -3.0 dB, ALC gain 1.0 dB, compression "
                                 "0.5 dB")
+                     .arg(reads));
+    }
+
+    // Control logging lane: until the leveler's meter first runs, WDSP
+    // holds -400 in its gain slot (meter.c:65-72, flush_meter), and
+    // Thetis's leveler gain reading does not negate it, so the pump reads
+    // +400 for it. That is no reading: the line shows the real gain the
+    // key read, or none when it read no other.
+    void theStagePeaksLeaveOutAnUnmeasuredLevelerGain()
+    {
+        Rig rig;
+        int reads = 0;
+        double gainRaw = -400.0;
+        rig.state.meterPump()->setSource([&rig, &reads, &gainRaw]() {
+            ++reads;
+            // As TxChannel::txMeter reads WDSP: the leveler gain slot, and
+            // -400 (a meter not yet run) for every other.
+            return TxMeterPump::readFrom(rig.model.radioStatus(), [&reads, &gainRaw](TxMeterType meter) {
+                if (meter != TxMeterType::LevelerGain) {
+                    return -400.0;
+                }
+                // The first read of the key is before the leveler's meter
+                // ran; then it reads 20 log10 of WDSP's gain, the inverse
+                // of the gain the leveler applies (wcpAGC.c:338-339).
+                return reads == 1 ? -400.0 : gainRaw;
+            });
+        });
+        QCOMPARE(rig.state.meterPump()->readNow().levelerGainDb, 400.0);
+        reads = 0;
+        gainRaw = -6.0;
+        StagePeakLog log;
+        rig.key();
+        for (int i = 0; i < 3; ++i) {
+            tickMeters(rig.state);
+        }
+        rig.unkey();
+        const int taken = reads;
+        QVERIFY(taken >= 4);
+        QCOMPARE(log.lines(),
+                 QStringList{QStringLiteral(
+                     "TX stage peaks for key 1 (%1 readings): leveler -30.0 dB, leveler gain "
+                     "6.0 dB, ALC -30.0 dB, ALC gain -195.0 dB, compression -30.0 dB")
+                                 .arg(taken)});
+
+        // A key whose leveler gain WDSP never measured: none.
+        reads = 0;
+        gainRaw = -400.0;
+        rig.key();
+        for (int i = 0; i < 3; ++i) {
+            tickMeters(rig.state);
+        }
+        rig.unkey();
+        QCOMPARE(log.lines().size(), 2);
+        QCOMPARE(log.lines().last(),
+                 QStringLiteral("TX stage peaks for key 2 (%1 readings): leveler -30.0 dB, "
+                                "leveler gain none, ALC -30.0 dB, ALC gain -195.0 dB, "
+                                "compression -30.0 dB")
                      .arg(reads));
     }
 

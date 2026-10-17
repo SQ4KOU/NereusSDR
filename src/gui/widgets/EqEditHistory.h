@@ -5,11 +5,12 @@
 #include <QSet>
 #include <optional>
 #include <vector>
+#include "gui/NereusGuiExport.h"
 
 namespace NereusSDR {
 // Callers capture exact audio state and restore returned snapshots. Selection
 // and measured samples are excluded by callers, not interpreted here.
-class EqEditHistory : public QObject {
+class NEREUS_GUI_EXPORT EqEditHistory : public QObject {
     Q_OBJECT
 public:
     explicit EqEditHistory(QObject* parent = nullptr);

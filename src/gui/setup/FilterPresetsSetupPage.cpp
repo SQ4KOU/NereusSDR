@@ -12,9 +12,19 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18: Setup description version 15 ids,
 //                 and the reset wording says "defaults" in plain words.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08  J.J. Boyd (KG4VCF): Qt 6.11.0 Cocoa accessibility cache
+//               repair on a live item view (QtCocoaAccessibleTableCache).
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - The slot column widens to its numbers, so slot 10 shows
+//                 "10", not an ellipsis. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-15  J.J. Boyd (KG4VCF): rows change after a real model reset
+//               (resetItemsBeforeRowChange), so accessibility cannot read a
+//               deleted cell. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "FilterPresetsSetupPage.h"
+#include "gui/QtCocoaAccessibleTableCache.h"
 #include "models/FilterPresetStore.h"
 #include "models/SliceModel.h"
 
@@ -222,6 +232,8 @@ void FilterPresetsSetupPage::populateTable()
     const QList<FilterPreset> presets = m_store->presetsForMode(mode);
     const int count = presets.size();
 
+    // The reset releases the cell widgets too; each row gets new ones below.
+    resetItemsBeforeRowChange(m_table);
     m_table->setRowCount(count);
 
     for (int i = 0; i < count; ++i) {
@@ -318,6 +330,15 @@ void FilterPresetsSetupPage::populateTable()
         m_table->setCellWidget(i, 5, reorderWidget);
 
         m_table->setRowHeight(i, 26);
+    }
+
+    // The slot column is at least as wide as its widest number needs
+    // (with the item padding above, "10" does not fit 30 px).
+    // (QAbstractItemView makes sizeHintForColumn public; QTableView's
+    // override is protected.)
+    const int slotWidth = static_cast<const QAbstractItemView*>(m_table)->sizeHintForColumn(0);
+    if (slotWidth > m_table->columnWidth(0)) {
+        m_table->setColumnWidth(0, slotWidth);
     }
 
     m_updatingTable = false;

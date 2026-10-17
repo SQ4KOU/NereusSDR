@@ -27,6 +27,13 @@
 //                 clsRadioDiscovery.cs:1166 [v2.10.3.15]). J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-10-12 - The second firmware number a reply carries is read and
+//                 logged: byte 23 of a Protocol 2 reply (Thetis
+//                 clsRadioDiscovery.cs:1184 [v2.10.3.15]) and byte 21 of
+//                 an HL2's Protocol 1 reply (mi0bot
+//                 clsRadioDiscovery.cs:1175 [v2.10.3.13-beta2]).
+//                 RadioInfo::firmwareText words the two numbers. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  clsRadioDiscovery.cs
@@ -96,6 +103,27 @@ QString RadioInfo::displayName() const
     }
     return QString::fromLatin1(BoardCapsTable::forBoard(boardType).displayName)
            + " (" + macAddress + ")";
+}
+
+QString RadioInfo::firmwareText() const
+{
+    QString text = QString::number(firmwareVersion);
+    // On the ANAN-G2 the second number is the version of the radio's p2app
+    // program, not a part of the gateware's number, and Thetis words it
+    // apart for that radio:
+    //   From Thetis setup.cs:14039-14043 [v2.10.3.15]
+    //     case HPSDRModel.ANAN_G2:
+    //     case HPSDRModel.ANAN_G2_1K:
+    //         if (NetworkIO.BetaVersion >= 39) // added for p2app v39
+    //         {
+    //             sRet = "fpga(v" + NetworkIO.FWCodeVersion.ToString() + ") p2app(v" + NetworkIO.BetaVersion.ToString() + ")";
+    // So a Saturn board's text stays the gateware number alone.
+    const bool secondNumberIsAProgramVersion =
+        boardType == HPSDRHW::Saturn || boardType == HPSDRHW::SaturnMKII;
+    if (firmwareBetaVersion > 0 && !secondNumberIsAProgramVersion) {
+        text += QLatin1Char('.') + QString::number(firmwareBetaVersion);
+    }
+    return text;
 }
 
 int RadioInfo::adcCountForBoard(HPSDRHW type)
@@ -351,6 +379,16 @@ bool RadioDiscovery::parseP1Reply(const QByteArray& bytes, const QHostAddress& s
             : RadioInfo::maxReceiversForBoard(out.boardType);
     }
 
+    // The HL2 also carries its gateware's patch number, in byte 21 (the
+    // mi0bot HL2 case quoted above: r.BetaVersion = data[21]). The bench
+    // capture's HL2 reply has byte 9 = 0x4a and byte 21 = 0x02, gateware
+    // 74.2. No other Protocol 1 board has a second number:
+    //   From Thetis clsRadioDiscovery.cs:1156 [v2.10.3.15]
+    //     r.BetaVersion = 0;
+    if (out.boardType == HPSDRHW::HermesLite && bytes.size() > 21) {
+        out.firmwareBetaVersion = static_cast<quint8>(bytes[21]);
+    }
+
     // Populate derived capabilities
     out.adcCount = RadioInfo::adcCountForBoard(out.boardType);
     if (out.maxReceivers <= 0) {
@@ -388,6 +426,7 @@ bool RadioDiscovery::parseP1Reply(const QByteArray& bytes, const QHostAddress& s
 //   [18]   Penny version
 //   [19]   Metis version
 //   [20]   number of hardware receivers
+//   [23]   beta version (the firmware's second number; 0 = none)
 // ---------------------------------------------------------------------------
 bool RadioDiscovery::parseP2Reply(const QByteArray& bytes, const QHostAddress& source, RadioInfo& out)
 {
@@ -435,6 +474,18 @@ bool RadioDiscovery::parseP2Reply(const QByteArray& bytes, const QHostAddress& s
         out.maxReceivers = (hwRx > 0) ? hwRx : RadioInfo::maxReceiversForBoard(out.boardType);
     }
 
+    // The firmware's second number, byte 23 ("Beta version, 0 = false" in
+    // the Discovery Reply table of the OpenHPSDR Ethernet Protocol v4.4
+    // document; reserved until its v3.8).
+    // From Thetis clsRadioDiscovery.cs:1184 [v2.10.3.15]:
+    //   r.BetaVersion = len > 23 ? data[23] : (byte)0;
+    // The Anvelina Pro 3 fills it with the last number of its release, 14
+    // for 2.2.14 beside a code version of 22:
+    //   From n1gp-Anvelina_PROIII Orion.v:634, 965-966 [@8e86a61]
+    //   From n1gp-Anvelina_PROIII Ethernet/sdr_send.v:171-172 [@8e86a61]
+    // A reply that ends before the byte, or holds zero there, reports none.
+    out.firmwareBetaVersion = bytes.size() > 23 ? static_cast<quint8>(bytes[23]) : 0;
+
     // Populate derived capabilities
     out.adcCount = RadioInfo::adcCountForBoard(out.boardType);
     if (out.maxReceivers <= 0) {
@@ -447,7 +498,8 @@ bool RadioDiscovery::parseP2Reply(const QByteArray& bytes, const QHostAddress& s
 
     qCDebug(lcDiscovery) << "P2 response from" << out.address.toString()
                          << "board:" << BoardCapsTable::forBoard(out.boardType).displayName
-                         << "fw:" << out.firmwareVersion;
+                         << "fw:" << out.firmwareVersion
+                         << "beta:" << out.firmwareBetaVersion;
 
     return true;
 }
@@ -675,6 +727,7 @@ void RadioDiscovery::scanAllNics()
                         m_radios.insert(info.macAddress, info);
                         qCDebug(lcDiscovery) << "Discovered:" << info.displayName()
                                              << "P" << static_cast<int>(info.protocol)
+                                             << "fw" << info.firmwareText()
                                              << "at" << info.address.toString();
                         emit radioDiscovered(info);
                     } else {

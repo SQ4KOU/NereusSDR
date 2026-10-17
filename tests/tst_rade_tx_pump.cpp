@@ -55,7 +55,10 @@
 #include "core/TxChannel.h"
 #include "core/TxWorkerThread.h"
 #include "core/audio/TxMicSource.h"
+#include "core/session/media/RemoteMicReceiver.h"
 #include "models/RadioModel.h"
+#include "models/RadeWaveformModel.h"
+#include "fakes/FakeAudioBus.h"
 #include "models/SliceModel.h"
 
 using namespace NereusSDR;
@@ -131,6 +134,229 @@ class TstRadeTxPump : public QObject {
 
 private slots:
 
+    void decodedIdentityRetiresSameChannelReceiverRoundTripsAndEpochChanges()
+    {
+        RadioModel model;
+        const int id = model.addSlice();
+        SliceModel* const slice = model.sliceById(id);
+        QVERIFY(slice);
+        slice->setStreamIndex(0);
+        slice->setStreamEpoch(4);
+        RadeChannel channel;
+        model.wireRadeChannel(id, &channel, slice);
+        RadeWaveformModel* const waveforms = model.radeWaveformModel();
+        const auto generation = [&] {
+            return waveforms->endpointState(id, WaveformKind::DecodedSpeech).sourceGeneration;
+        };
+        const quint64 first = generation();
+        QVERIFY(first != 0);
+        slice->setStreamIndex(1);
+        slice->setStreamIndex(0);
+        model.synchronizeWaveformEndpoints();
+        QVERIFY(generation() != first);
+        const quint64 returned = generation();
+        slice->setStreamEpoch(5);
+        model.synchronizeWaveformEndpoints();
+        QVERIFY(generation() != returned);
+    }
+    void waveformIdentityRemembersSourceRoundTripsBetweenGuiTicks()
+    {
+        RadioModel model;
+        const int slice = model.addSlice();
+        TxChannel channel(kChannelId, kBlockFrames, kBlockFrames);
+        TxMicSource source;
+        source.start();
+        AudioEngine* const engine = model.audioEngine();
+        auto vax = std::make_unique<FakeAudioBus>();
+        FakeAudioBus* const fakeVax = vax.get();
+        QVERIFY(vax->open(AudioFormat{}));
+        engine->setVaxTxBusForTest(std::move(vax));
+        engine->onMicSourceChangedVax(true);
+        auto owned = std::make_unique<TxWorkerThread>();
+        TxWorkerThread* const worker = owned.get();
+        worker->setTxChannel(&channel);
+        worker->setMicSource(&source);
+        worker->setAudioEngine(engine);
+        model.installTxWorkerForTest(std::move(owned));
+        std::array<float, kBlockFrames> pcm{};
+        const auto tick = [&] {
+            source.inbound(pcm.data(), kBlockFrames);
+            worker->tickForTest();
+        };
+        fakeVax->setForceOpen(false);
+        tick();
+        model.synchronizeWaveformEndpoints();
+        RadeWaveformModel* const waveforms = model.radeWaveformModel();
+        const quint64 before = waveforms->endpointState(slice, WaveformKind::RawMicrophone).sourceGeneration;
+        fakeVax->setForceOpen(true);
+        tick();
+        fakeVax->setForceOpen(false);
+        tick();
+        QCOMPARE(worker->microphoneWaveformSource(), 1);
+        model.synchronizeWaveformEndpoints();
+        QVERIFY(waveforms->endpointState(slice, WaveformKind::RawMicrophone).sourceGeneration != before);
+    }
+    void pcCaptureAndConfigurationReplacementRetireTheSameCategory()
+    {
+        RadioModel model;
+        const int slice = model.addSlice();
+        model.installTxWorkerForTest(std::make_unique<TxWorkerThread>());
+        model.transmitModel().setMicSource(MicSource::Pc);
+        RadeWaveformModel* const waveforms = model.radeWaveformModel();
+        const auto generation = [&] {
+            return waveforms->endpointState(slice, WaveformKind::RawMicrophone).sourceGeneration;
+        };
+        const quint64 before = generation();
+        CaptureSupervisor::Status status;
+        status.generation = 7;
+        status.configuredDevice = "configured";
+        status.actualDevice = "first";
+        emit model.audioEngine()->captureStatusChanged(status);
+        QVERIFY(generation() != before);
+        const quint64 first = generation();
+        emit model.audioEngine()->captureStatusChanged(status);
+        QCOMPARE(generation(), first);
+        status.actualDevice = "replacement";
+        emit model.audioEngine()->captureStatusChanged(status);
+        QVERIFY(generation() != first);
+        const quint64 replaced = generation();
+        AudioDeviceConfig config = model.audioEngine()->txInputConfig();
+        config.deviceName = "another configured device";
+        model.audioEngine()->setTxInputConfig(config);
+        QVERIFY(generation() != replaced);
+    }
+    void remoteMicrophonePhysicalIdentityTracksLiveLines()
+    {
+        RadioModel model;
+        const int sliceId = model.addSlice();
+        QVERIFY(model.txBoundSlice());
+        model.installTxWorkerForTest(std::make_unique<TxWorkerThread>());
+        RadeWaveformModel* const waveforms = model.radeWaveformModel();
+        const QByteArray first("device-first");
+        const QByteArray second("device-second");
+        model.openRemoteMicLine(first);
+        model.setRemoteMicPriming(first, true);
+        QCOMPARE(model.remoteMicWriter(), first);
+        const quint64 firstGeneration =
+            waveforms->endpointState(sliceId, WaveformKind::RawMicrophone).sourceGeneration;
+        QVERIFY(firstGeneration != 0);
+        model.openRemoteMicLine(first);
+        model.closeRemoteMicLine(first);
+        QCOMPARE(waveforms->endpointState(sliceId, WaveformKind::RawMicrophone).sourceGeneration,
+                 firstGeneration);
+        model.openRemoteMicLine(second);
+        model.setRemoteMicPriming(second, true);
+        QCOMPARE(model.remoteMicWriter(), second);
+        const quint64 secondGeneration =
+            waveforms->endpointState(sliceId, WaveformKind::RawMicrophone).sourceGeneration;
+        QVERIFY(secondGeneration != firstGeneration);
+        model.setRemoteMicPriming(second, false);
+        model.closeRemoteMicLine(second);
+        model.setRemoteMicPriming(first, true);
+        const quint64 returnedGeneration =
+            waveforms->endpointState(sliceId, WaveformKind::RawMicrophone).sourceGeneration;
+        QVERIFY(returnedGeneration != firstGeneration);
+        model.closeRemoteMicLine(first);
+        model.openRemoteMicLine(first);
+        model.setRemoteMicPriming(first, true);
+        QVERIFY(waveforms->endpointState(sliceId, WaveformKind::RawMicrophone).sourceGeneration !=
+                returnedGeneration);
+        model.setRemoteMicPriming(first, false);
+        model.closeRemoteMicLine(first);
+        QVERIFY(!waveforms->endpointState(sliceId, WaveformKind::RawMicrophone).available);
+    }
+
+    void remoteMicObservationRequiresRealFrames()
+    {
+        TxChannel channel(kChannelId, kBlockFrames, kBlockFrames);
+        TxMicSource source;
+        source.start();
+        RemoteMicFeed feed;
+        feed.setInUse(true);
+        TxWorkerThread worker;
+        worker.setTxChannel(&channel);
+        worker.setMicSource(&source);
+        worker.setRemoteMicFeed(&feed);
+        worker.setCurrentTxPath(TxWorkerThread::TxPath::Rade);
+        worker.rawWaveformPublisher()->setBindingToken(7);
+        worker.conditionedWaveformPublisher()->setBindingToken(8);
+        QSignalSpy raw(worker.rawWaveformPublisher(), &WaveformPublisher::batchReady),
+            conditioned(worker.conditionedWaveformPublisher(), &WaveformPublisher::batchReady);
+        std::array<float, kBlockFrames> radio;
+        radio.fill(.6f);
+        source.inbound(radio.data(), kBlockFrames);
+        worker.tickForTest();
+        QCOMPARE(raw.size(), 0);
+        std::vector<float> realSilence(RemoteMicConfig::kOpusFrameSamples, 0.f);
+        for (int i = 0; i < 4; ++i) {
+            QVERIFY(feed.write(realSilence.data(), int(realSilence.size())));
+        }
+        // Keep genuine received PCM flowing through the same 500-dispatch
+        // resampler warmup used by the encoder byte-invariance fixture.
+        for (int i = 0; i < 500; ++i) {
+            if (i % 15 == 0) {
+                QVERIFY(feed.write(realSilence.data(), int(realSilence.size())));
+            }
+            source.inbound(radio.data(), kBlockFrames);
+            worker.tickForTest();
+        }
+        QVERIFY(!raw.isEmpty());
+        const auto batch = qvariant_cast<WaveformBatchPtr>(raw.first()[0]);
+        QCOMPARE(batch->sampleRate, 48000);
+        QVERIFY(
+            std::all_of(batch->samples.begin(), batch->samples.end(), [](float value) { return value == 0.f; }));
+        QVERIFY(!conditioned.isEmpty());
+    }
+    void observationPreservesEncoderBytesAndReportsRawSetup()
+    {
+        auto run = [](bool observe, bool rade, QVector<QByteArray>& codec) {
+            TxChannel ch(kChannelId, kBlockFrames, kBlockFrames);
+            TxMicSource source;
+            source.start();
+            TxWorkerThread worker;
+            worker.setTxChannel(&ch);
+            worker.setMicSource(&source);
+            worker.setCurrentTxPath(rade ? TxWorkerThread::TxPath::Rade : TxWorkerThread::TxPath::Wdsp);
+            worker.setRadeMicKeyed(true);
+            QVector<WaveformBatchPtr> raw, conditioned;
+            connect(&worker, &TxWorkerThread::radeMicBlockReady, &worker,
+                    [&](const QByteArray& b) { codec.append(b); });
+            if (observe) {
+                worker.rawWaveformPublisher()->setBindingToken(7);
+                worker.conditionedWaveformPublisher()->setBindingToken(8);
+                connect(worker.rawWaveformPublisher(), &WaveformPublisher::batchReady, &worker,
+                        [&](WaveformBatchPtr b) { raw.append(b); });
+                connect(worker.conditionedWaveformPublisher(), &WaveformPublisher::batchReady, &worker,
+                        [&](WaveformBatchPtr b) { conditioned.append(b); });
+            }
+            std::array<float, kBlockFrames> pcm;
+            for (int block = 0; block < 500; ++block) {
+                for (int i = 0; i < kBlockFrames; ++i) {
+                    pcm[i] = 0.2f * std::sin(float(block * kBlockFrames + i) * 0.13f);
+                }
+                source.inbound(pcm.data(), kBlockFrames);
+                worker.tickForTest();
+            }
+            if (observe) {
+                if (raw.isEmpty()) {
+                    QTest::qFail("No raw observation samples", __FILE__, __LINE__);
+                    return;
+                }
+                QCOMPARE(raw[0]->sampleRate, 48000);
+                QCOMPARE(raw[0]->samples[1], pcm[0] * 0.f + 0.2f * std::sin(0.13f));
+                QCOMPARE(conditioned.isEmpty(), !rade);
+                if (rade) {
+                    QCOMPARE(conditioned[0]->sampleRate, 16000);
+                }
+            }
+        };
+        // A full, never-acknowledged observer cannot change encoder output.
+        QVector<QByteArray> enabled, disabled, setup;
+        run(true, true, enabled);
+        run(false, true, disabled);
+        QCOMPARE(enabled, disabled);
+        run(true, false, setup); // raw setup before the conditioned RADE path is selected
+    }
     // ── 1. setRadeChannel stores the pointer; null clears ────────────────
     void setRadeChannelStoresPointer()
     {

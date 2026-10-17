@@ -173,8 +173,14 @@ find_package(Qt6 REQUIRED COMPONENTS
 
 # Optional Qt components
 find_package(Qt6 QUIET COMPONENTS SerialPort)
+# Release builds ship serial CAT, PTT and CW on every platform, so they set
+# NEREUS_REQUIRE_SERIALPORT and refuse to configure without the module, as
+# WebSockets does above. Developer builds may leave it out.
+option(NEREUS_REQUIRE_SERIALPORT "Fail configure when Qt6::SerialPort is missing" OFF)
 if(Qt6SerialPort_FOUND)
     message(STATUS "Qt6::SerialPort found — serial PTT/CW support enabled")
+elseif(NEREUS_REQUIRE_SERIALPORT)
+    message(FATAL_ERROR "Qt6::SerialPort not found and NEREUS_REQUIRE_SERIALPORT is ON")
 else()
     message(STATUS "Qt6::SerialPort not found — serial PTT/CW support disabled")
 endif()
@@ -521,18 +527,22 @@ FetchContent_Declare(
     portaudio
     GIT_REPOSITORY https://github.com/PortAudio/portaudio.git
     GIT_TAG        v19.7.0  # verified cmake-clean release
+    SOURCE_SUBDIR __nereus_no_add_subdirectory
 )
 
-# PortAudio build options — turn off ASIO. Direct ASIO support was
-# dropped during the 2026-04-19 GPL compliance review (see plan §"GPL
-# Compliance Review"); PortAudio's built-in ASIO host API is gated off
-# for the same reason (the Steinberg ASIO SDK license is
-# GPL-incompatible). All other PortAudio host APIs remain enabled:
+# PortAudio build options: PortAudio's own ASIO host API stays off,
+# because NereusSDR hosts ASIO itself (its own ASIO engine, built on the
+# vendored SDK below). History: the 2026-04-19 GPL compliance review
+# dropped ASIO because the Steinberg ASIO SDK licence was then
+# GPL-incompatible. Since SDK 2.3.4 (October 2025) the SDK is dual
+# licensed, the Steinberg ASIO License or GPL version 3, and NereusSDR,
+# distributed under GPL-3.0 (LICENSE-NOTICE), takes it under GPL-3.0.
+# All other PortAudio host APIs remain enabled:
 # MME / DS / WDM-KS / WASAPI on Windows, CoreAudio on macOS,
 # ALSA / Pulse / PipeWire / JACK on Linux.
 set(PA_BUILD_SHARED OFF CACHE BOOL "PortAudio static" FORCE)
 set(PA_BUILD_STATIC ON  CACHE BOOL "PortAudio static" FORCE)
-set(PA_USE_ASIO    OFF CACHE BOOL "PortAudio ASIO host API — forced OFF for GPL compliance (Steinberg SDK incompatible)" FORCE)
+set(PA_USE_ASIO    OFF CACHE BOOL "PortAudio ASIO host API, forced OFF: NereusSDR hosts ASIO itself" FORCE)
 
 # Linux audio backends — force ON so the static PortAudio actually contains
 # the host-API modules. PortAudio's CMake nominally auto-detects ALSA/JACK
@@ -552,6 +562,20 @@ endif()
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum CMake policy version for vendored subprojects" FORCE)
 
 FetchContent_MakeAvailable(portaudio)
+include(cmake/NereusPortAudio.cmake)
+# Reject unrepresentable setup sizes in a build-owned copy of the same pin;
+# source overrides/offline caches remain pristine. Runtime targets are unchanged.
+nereus_stage_portaudio("${portaudio_SOURCE_DIR}" _nereus_portaudio_source)
+add_subdirectory("${_nereus_portaudio_source}" "${portaudio_BINARY_DIR}")
+
+# Steinberg ASIO SDK 2.3.4 (third_party/asiosdk, vendored unchanged;
+# GPL-3.0 as NereusSDR takes it, see third_party/asiosdk/VERSION.txt and
+# docs/attribution/ASIO-SDK-PROVENANCE.md). Defines the static library
+# asiosdk_host, which only the mic helper nereus-audio-capture links.
+# ASIO exists only on Windows, so macOS and Linux never see the target.
+if(WIN32)
+    add_subdirectory(third_party/asiosdk)
+endif()
 
 # PortAudio's Windows host APIs (pa_win_ds.c, pa_win_wasapi.c, pa_win_wdmks.c)
 # call windows.h's min / max macros directly. The global NOMINMAX above
@@ -815,6 +839,24 @@ if(UNIX AND NOT APPLE)
     else()
         message(STATUS "libpipewire-0.3 >= 0.3.50 not found — Linux audio limited to pactl path")
     endif()
+    # libpulse: the PulseAudio engine (native audio plan Task 11, R-AUD-31):
+    # one Linux build carries both engines and the sound server that answers
+    # at run time picks which one runs.  Without it the engine is not built.
+    pkg_check_modules(PULSE IMPORTED_TARGET libpulse)
+    if(PULSE_FOUND)
+        message(STATUS "libpulse ${PULSE_VERSION}: PulseAudio engine enabled")
+    else()
+        message(STATUS "libpulse not found: PulseAudio engine not built")
+    endif()
+    # libasound: the ALSA direct engine, the Linux Core's only engine
+    # (native audio plan Task 12, R-AUD-25, D18).  PortAudio's ALSA host API
+    # needs it as well.  Without it the Core keeps the older drivers.
+    find_package(ALSA)
+    if(ALSA_FOUND)
+        message(STATUS "ALSA ${ALSA_VERSION_STRING}: ALSA direct engine enabled")
+    else()
+        message(STATUS "ALSA not found: ALSA direct engine not built")
+    endif()
 endif()
 
 # --------------------------------------------------------------------------
@@ -954,8 +996,32 @@ endif()
 # Source files
 # --------------------------------------------------------------------------
 set(CORE_SOURCES
+    src/core/antenna/AmateurBands.cpp
+    src/core/antenna/AmateurBands.h
+    src/core/cat/CatModelAdapter.cpp
+    src/core/cat/CatSettings.cpp
+    src/core/cat/CatSession.cpp
+    src/core/cat/RigctlProtocol.cpp
+    src/core/cat/RigctlTarget.cpp
+    src/core/cat/CatTxCoordinator.cpp
+    src/core/cat/CatRxCommands.cpp
+    src/core/cat/CatDspCommands.cpp
+    src/core/cat/CatTxCommands.cpp
+    src/core/cat/CatGlobalCommands.cpp
+    src/core/cat/CatService.cpp
+    src/core/cat/StationCatController.cpp
+    src/core/cat/CatControl.cpp
+    src/core/cat/CatStreamFramer.cpp
+    src/core/cat/CatTcpTransport.cpp
+    src/core/cat/CatSerialTransport.cpp
+    src/core/cat/CatPtyTransport.cpp
+    src/core/cat/CatReporter.cpp
+    src/core/cat/CatParser.cpp
+    src/core/cat/CatCommandRouter.cpp
+    src/core/cat/CatCommandCatalog.cpp
     src/core/AntennaLabels.cpp
     src/core/AppSettings.cpp
+    src/core/SettingsFileWriter.cpp
     src/core/settings/SettingsBackup.cpp
     src/core/settings/SettingsBackupTransfer.cpp
     src/core/BoardCapabilities.cpp
@@ -1017,7 +1083,12 @@ set(CORE_SOURCES
     src/core/DspControlThread.cpp
     src/core/RxChannel.cpp
     src/core/TxChannel.cpp
+    src/models/RadeWaveformModel.cpp
+    src/core/session/media/WaveformCodec.cpp
+    src/core/audio/WaveformPublisher.cpp
+    src/core/audio/WaveformHistory.cpp
     src/core/RadeChannel.cpp
+    src/core/RadeV2Feature.cpp
     src/core/RadeRxWorker.cpp
     src/core/RadeText.cpp
     # RADE end-of-over callsigns: FreeDV's callsign format (freedv-backend
@@ -1102,11 +1173,44 @@ set(CORE_SOURCES
     src/core/audio/RadeTxFilters.h
     src/core/audio/RadioMicSource.cpp
     src/core/audio/VaxTxMicSource.cpp
+    src/core/audio/AudioDelayProbe.cpp
+    src/core/audio/NativeAudioFirstCall.cpp
+    src/core/audio/DeviceRateMatcher.cpp
+    src/core/audio/AudioDeviceTypes.cpp
+    src/core/audio/AudioTestBarrier.cpp
+    src/core/audio/DeviceSampleFormat.cpp
+    src/core/audio/AudioDeviceCatalog.cpp
+    src/core/audio/AudioDeviceMatching.cpp
+    src/core/audio/AudioStreamSupervisor.cpp
+    # Native audio plan Task 21: the Core speaker's link text forms.
+    src/core/audio/CoreSpeakerJson.cpp
+    src/core/audio/AudioBackendRegistry.cpp
+    # Native audio plan Task 11: which Linux engine runs (pure, every platform).
+    src/core/audio/LinuxEngineSelection.cpp
+    src/core/audio/PortAudioBackend.cpp
+    src/core/audio/PortAudioLibrary.cpp
+    src/core/audio/WasapiPolicy.cpp
+    src/core/audio/IAudioStreamHost.h
+    src/core/audio/IAudioDeviceCatalog.h
+    src/core/audio/IAudioEngineBackend.h
     src/core/audio/CaptureProtocol.cpp
+    src/core/audio/CaptureShm.cpp
     src/core/audio/CaptureHelper.cpp
     src/core/audio/CaptureAudioBus.cpp
+    # 2026-10-10: the real-time thread that collects the microphone for a
+    # remote window's uplink.
+    src/core/audio/MicUplinkCollector.cpp
     src/core/audio/CaptureSupervisor.cpp
+    src/core/audio/CaptureStandby.cpp
+    # Native audio plan Task 15: the ASIO session rules (portable; the
+    # driver itself loads only in nereus-audio-capture on Windows) and the
+    # window's ASIO backend over the helper.
+    src/core/audio/IAsioDriver.h
+    src/core/audio/AsioSessionNotifier.h
+    src/core/audio/AsioSession.cpp
+    src/core/audio/AsioBackend.cpp
     src/core/audio/CaptureHelperLocator.cpp
+    src/core/audio/MicModeKeeper.cpp
     src/core/StationBinaryLocator.cpp
     src/core/audio/CompositeTxMicRouter.cpp
     src/core/audio/CmAsioBus.cpp
@@ -1125,6 +1229,8 @@ set(CORE_SOURCES
     src/core/safety/TxTimeOutTimer.cpp
     src/core/safety/TransmitHolder.cpp
     src/core/safety/RemoteTxWatchdog.cpp
+    src/core/safety/RemoteTxCutGuard.cpp
+    src/core/safety/TransmitCutLine.cpp
     src/core/safety/StarvationPolicy.cpp
     src/core/safety/safety_constants.cpp
     src/core/SpotCollectorClient.cpp
@@ -1138,6 +1244,13 @@ set(CORE_SOURCES
     # and on the Core, and is the mirrored `spotSources` object.
     src/core/SpotSourceHost.cpp
     src/core/CtyDatParser.cpp
+    src/core/GreatCircle.cpp
+    src/core/RotorRoute.cpp
+    # Rotor control plan Task 3b: the Core's rotor link and rotctld starter
+    src/core/RotorConnection.cpp
+    src/core/RotctldProcess.cpp
+    # Rotor control plan Task 3c: the Core's rotor (settings, presets, hold)
+    src/core/StationRotorController.cpp
     src/core/AdifParser.cpp
     src/core/DxccWorkedStatus.cpp
     src/core/DxccColorProvider.cpp
@@ -1161,9 +1274,13 @@ set(CORE_SOURCES
     # Phase 3P-II TGXL tuner model
     src/models/TunerModel.cpp
     # R-R3-47: the Core's Power Genius and RF-Kit status objects
+    src/models/MainPowerMeter.cpp
     src/models/AmplifierModel.cpp
     src/models/RfKitModel.cpp
     src/models/StationTciModel.cpp
+    src/models/RotorModel.cpp
+    src/models/SpotBeamTurner.cpp
+    src/models/StationCatModel.cpp
     # Phase 3P-II Phase 4 (Advanced UI + helpers)
     src/core/FaultLog.cpp
     src/core/TuneMemoryStore.cpp
@@ -1228,6 +1345,8 @@ set(CORE_SOURCES
     # R3 bounded bridge from the AudioEngine master mix to daemon media.
     src/core/session/media/DaemonAudioSource.cpp
     src/core/session/media/DaemonAudioSender.cpp
+    src/core/session/media/DaemonAudioSendThread.cpp
+    src/core/session/media/DaemonDisplaySendThread.cpp
     # R-R3-23: the audio-context wire codec Core and GUI share (minor 7 and 8).
     src/core/session/media/RemoteAudioContext.cpp
     src/core/session/media/RemoteIqCodec.cpp
@@ -1256,6 +1375,10 @@ set(CORE_SOURCES
     # server_main.cpp (R1 Task 9) run the identical sequence instead of a
     # daemon-first install running against an unmigrated settings store.
     src/core/CoreInit.cpp
+    # Where a process keeps its saved FFT plans. The app names its folder
+    # to the background Core it starts, so that Core reuses the plans the
+    # app already built instead of building them again while the radio waits.
+    src/core/DspCacheLocation.cpp
     # R1 Task 9: nereusd's own "key = value" config file parser (default
     # /etc/nereusd.conf). Widget-free by construction (QString/QFile/
     # QTextStream only) so it links into nereusd alongside NereusCore with
@@ -1371,6 +1494,10 @@ set(CORE_SOURCES
     # extracts every key literal this tree passes to an AppSettings
     # accessor and cross-checks this table against it.
     src/core/settings/SettingsScope.cpp
+    # Display pill plan Task 1: where a per-pan display setting is stored.
+    # The bare key is the Setup default, base_N is pan N's own override,
+    # and overrides are written only when they differ from the default.
+    src/core/settings/PanDisplayKeys.cpp
     # R2 Task 15: the AppSettings delegation seam's two live components.
     # SettingsProxy.cpp is the client-side cache installed via
     # AppSettings::setRemoteBackend() on a remote-mode GUI. SettingsProxyServer.cpp
@@ -1547,6 +1674,15 @@ list(APPEND CORE_SOURCES
 if(APPLE)
     list(APPEND CORE_SOURCES src/core/audio/CoreAudioHalBus.cpp)
     list(APPEND CORE_SOURCES src/core/MacMicPermission.mm)
+    # 2026-10-16: the window's Mic Mode kept at Standard (MicModeKeeper.h).
+    list(APPEND CORE_SOURCES src/core/audio/MacMicMode.mm)
+    # Native audio plan Task 8 (R-AUD-01): the Core Audio engine, its
+    # system seam, the AUHAL output on the clock matcher and the input.
+    list(APPEND CORE_SOURCES
+        src/core/audio/CoreAudioSystem.cpp
+        src/core/audio/CoreAudioBackend.cpp
+        src/core/audio/CoreAudioOutputBus.cpp
+        src/core/audio/CoreAudioInputStream.cpp)
 endif()
 
 # LinuxPipeBus — Linux-only IAudioBus implementation bridging to PulseAudio /
@@ -1560,8 +1696,26 @@ endif()
 # PIPEWIRE_FOUND. Linux-only because the whole decision tree is dead code
 # on macOS / Windows (which have their own IAudioBus impls).
 if(UNIX AND NOT APPLE)
-    list(APPEND CORE_SOURCES src/core/audio/LinuxPipeBus.cpp)
+    list(APPEND CORE_SOURCES src/core/audio/LinuxPipeBus.cpp
+        src/core/audio/LinuxPipeOwnership.cpp
+        src/core/audio/LinuxPipeControl.cpp)
     list(APPEND CORE_SOURCES src/core/audio/LinuxAudioBackend.cpp)
+endif()
+
+# Windows audio, shared and exclusive (native audio plan Task 9, R-AUD-02,
+# R-AUD-11, R-AUD-16).  Every decision lives in the portable WasapiPolicy
+# (CORE_SOURCES above, tested on every platform by tst_wasapi_policy); these
+# files hold only the COM calls.  They set _WIN32_WINNT before windows.h, so
+# they skip the precompiled header, as DnsSdAdvertiserWindows.cpp does.
+if(WIN32)
+    set(NEREUS_WASAPI_SOURCES
+        src/core/audio/WasapiSystemWin.cpp
+        src/core/audio/WasapiBackendWin.cpp
+        src/core/audio/WasapiOutputBusWin.cpp
+        src/core/audio/WasapiInputStreamWin.cpp
+    )
+    list(APPEND CORE_SOURCES ${NEREUS_WASAPI_SOURCES})
+    set_source_files_properties(${NEREUS_WASAPI_SOURCES} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 endif()
 
 set(MODEL_SOURCES
@@ -1592,6 +1746,8 @@ set(GUI_SOURCES
     src/gui/GuiApplication.cpp
     src/gui/GuiApplication.h
     src/gui/MainWindow.cpp
+    src/gui/SessionEndSave.cpp
+    src/gui/SessionEndSave.h
     src/gui/DesktopStationController.cpp
     src/gui/DesktopStationController.h
     src/gui/HostingSliceActions.cpp
@@ -1609,6 +1765,8 @@ set(GUI_SOURCES
     # iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): the
     # remote window's TCI transmit forwarder.
     src/gui/RemoteTransmitForwarder.cpp
+    # A remote window's rigctld, acting as the window (WSJT-X CAT and VAX).
+    src/gui/RemoteRigctlServer.cpp
     # R-R3-44: a remote window's VAX channels, fed by receiver streams.
     src/gui/RemoteVaxRouter.cpp
     # iPhone app plan Task 78 (R-IOS-02, R-IOS-07, R-IOS-30): the remote
@@ -1651,6 +1809,49 @@ set(GUI_SOURCES
     src/gui/PsaIndicatorWidget.h
     src/gui/PsForm.cpp
     src/gui/TitleBar.cpp
+    src/gui/styles/QssTranslator.cpp
+    src/gui/styles/QssTranslator.h
+    src/gui/styles/StylesheetColourTable.cpp
+    src/gui/styles/StylesheetColourTable.h
+    src/gui/styles/WorkspaceComponents.cpp
+    src/gui/styles/WorkspaceComponents.h
+    src/gui/styles/WorkspaceLookStyle.cpp
+    src/gui/styles/WorkspaceLookStyle.h
+    src/gui/styles/WorkspacePalette.cpp
+    src/gui/styles/WorkspacePalette.h
+    src/gui/styles/WorkspacePreview.cpp
+    src/gui/styles/WorkspacePreview.h
+    src/gui/styles/WorkspaceStyle.cpp
+    src/gui/styles/WorkspaceStyle.h
+    src/gui/instruments/BarInstrument.cpp
+    src/gui/instruments/PowerReadingDescriptor.cpp
+    src/gui/instruments/BarInstrument.h
+    src/gui/instruments/FrequencyInstrument.cpp
+    src/gui/instruments/FrequencyInstrument.h
+    src/gui/instruments/InstrumentFooter.cpp
+    src/gui/instruments/InstrumentFooter.h
+    src/gui/instruments/InstrumentPainter.cpp
+    src/gui/instruments/InstrumentPainter.h
+    src/gui/instruments/InstrumentSpine.cpp
+    src/gui/instruments/InstrumentSpine.h
+    src/gui/instruments/InstrumentStyle.h
+    src/gui/instruments/LongpathContent.cpp
+    src/gui/instruments/LongpathContent.h
+    src/gui/instruments/SMeterDialContent.cpp
+    src/gui/instruments/SMeterDialContent.h
+    src/gui/instruments/NeedleInstrument.cpp
+    src/gui/instruments/NeedleInstrument.h
+    src/gui/instruments/PeakHold.h
+    src/gui/instruments/ReadingSource.cpp
+    src/gui/instruments/ReadingSource.h
+    src/gui/widgets/BandwidthFilterPane.cpp
+    src/gui/widgets/BandwidthFilterPane.h
+    src/gui/widgets/PillStyle.cpp
+    src/gui/widgets/PillStyle.h
+    src/gui/widgets/ProfileRail.cpp
+    src/gui/widgets/ProfileRail.h
+    src/gui/widgets/ProfileRailDock.cpp
+    src/gui/widgets/ProfileRailDock.h
     src/gui/RelayBar.cpp
     src/gui/SMeterWidget.cpp
     src/gui/VintageMeterFace.cpp
@@ -1659,6 +1860,7 @@ set(GUI_SOURCES
     src/gui/SupportDialog.cpp
     src/gui/AboutDialog.cpp
     src/gui/VaxFirstRunDialog.cpp
+    src/gui/VaxFirstRunCheck.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/PanadapterApplet.cpp
     src/gui/PanadapterStack.cpp
@@ -1666,6 +1868,12 @@ set(GUI_SOURCES
     src/gui/PanLayoutDialog.cpp
     src/gui/ImdOverlay.h
     src/gui/ImdOverlay.cpp
+    src/gui/ImdMeasurementFrame.h
+    src/gui/ImdMeasurementPresenter.h
+    src/gui/ImdMeasurementPanel.cpp
+    src/gui/ImdMeasurementPresenter.cpp
+    src/gui/ImdWaterfallAnnotations.h
+    src/gui/ImdWaterfallAnnotations.cpp
     src/gui/dbm_strip_math.cpp
     src/gui/popup_placement.cpp
     src/gui/SpectrumOverlayMenu.cpp
@@ -1699,6 +1907,8 @@ set(GUI_SOURCES
     src/gui/widgets/VfoModeContainers.h
     src/gui/widgets/VaxChannelSelector.cpp
     src/gui/widgets/MasterOutputWidget.cpp
+    src/gui/widgets/RadioSpeakerWidget.cpp
+    src/gui/widgets/RadioSpeakerWidget.h
     src/gui/widgets/VfoStyles.h
     src/gui/widgets/VfoWidget.cpp
     src/gui/widgets/MetricLabel.cpp
@@ -1710,10 +1920,14 @@ set(GUI_SOURCES
     src/gui/chrome/ChromeBarItems.cpp
     src/gui/widgets/StatusBadge.cpp
     src/gui/widgets/StatusBadge.h
+    src/gui/widgets/RotorDialWidget.cpp
+    src/gui/widgets/RotorDialWidget.h
     src/gui/widgets/AdcOverloadBadge.cpp
     src/gui/widgets/AdcOverloadBadge.h
     src/gui/widgets/OverflowChip.cpp
     src/gui/widgets/OverflowChip.h
+    src/gui/widgets/AppIcon.cpp
+    src/gui/widgets/AppIcon.h
     src/gui/widgets/RxDashboard.cpp
     src/gui/widgets/RxDashboard.h
     src/gui/SliceChooser.cpp
@@ -1749,6 +1963,8 @@ set(GUI_SOURCES
     src/gui/DssRenderer.cpp
     src/gui/SpotHubDialog.cpp
     src/gui/SpotHubDialog.h
+    src/gui/QtCocoaAccessibleTableCache.cpp
+    src/gui/QtCocoaAccessibleTableCache.h
     src/gui/FreeDVReporterDialog.cpp
     src/gui/FreeDVReporterDialog.h
     src/gui/LanScanDialog.cpp
@@ -1764,8 +1980,11 @@ set(GUI_SOURCES
     src/gui/containers/ContainerContentRegistry.cpp
     src/gui/containers/ContainerArrangeController.h
     src/gui/containers/ContainerArrangeController.cpp
+    src/gui/containers/ArrangeHoldFilter.h
+    src/gui/containers/ArrangeHoldFilter.cpp
     src/gui/containers/ContainerEditSession.h
     src/gui/containers/ContainerEditSession.cpp
+    src/gui/containers/OwnedMenu.h
     src/gui/containers/ContainerPreviewWidget.h
     src/gui/containers/FreeCanvasSurface.cpp
     src/gui/containers/ContainerPreviewWidget.cpp
@@ -1778,6 +1997,16 @@ set(GUI_SOURCES
     src/gui/containers/ContainerWorkspaceStore.h
     src/gui/containers/ContainerWorkspaceStore.cpp
     src/gui/containers/ContainerWidget.cpp
+    src/gui/containers/WorkspaceHeader.h
+    src/gui/containers/WorkspaceHeader.cpp
+    src/gui/containers/EdgeDockStrip.h
+    src/gui/containers/EdgeDockStrip.cpp
+    src/gui/containers/WorkspaceProfiles.h
+    src/gui/containers/WorkspaceProfiles.cpp
+    src/gui/containers/WorkspaceProfilesDialog.h
+    src/gui/containers/WorkspaceProfilesDialog.cpp
+    src/gui/containers/ScreenSource.h
+    src/gui/containers/ScreenSource.cpp
     src/gui/containers/FloatingContainer.cpp
     src/gui/containers/ContainerManager.cpp
     src/gui/containers/ContainerButtonDispatcher.cpp
@@ -1854,6 +2083,7 @@ set(GUI_SOURCES
     src/gui/meters/MeterDynamics.h
     src/gui/meters/MeterItem.cpp
     src/gui/meters/ItemGroup.cpp
+    src/gui/meters/WaveformMeterItem.cpp
     src/gui/meters/MeterPoller.cpp
     src/gui/meters/SpacerItem.cpp
     src/gui/meters/FadeCoverItem.cpp
@@ -1911,11 +2141,15 @@ set(GUI_SOURCES
     src/gui/setup/AudioCmAsioPage.cpp
     src/gui/setup/AudioDevicesPage.cpp
     src/gui/setup/AudioTxInputPage.cpp
+    src/gui/setup/SoundSystemLine.cpp
     src/gui/setup/CaptureStatusText.cpp
     src/gui/setup/TestTwoTonePage.cpp
     src/gui/setup/TxProfileSetupPage.cpp
     src/gui/setup/AudioTciPage.cpp
+    src/gui/setup/AudioDigitalModesPage.cpp
     src/gui/setup/AudioVaxPage.cpp
+    src/gui/setup/AudioDriverList.cpp
+    src/gui/setup/AsioSwitchAllDialog.cpp
     src/gui/setup/DeviceCard.cpp
     src/gui/setup/DspSetupPages.cpp
     src/gui/setup/DspOptionsPage.cpp
@@ -1924,10 +2158,14 @@ set(GUI_SOURCES
     src/gui/setup/SpectrumPeaksPage.cpp
     src/gui/setup/MultimeterPage.cpp
     src/gui/setup/SetupHelpers.cpp
+    src/gui/setup/SetupFit.cpp
     src/gui/setup/TransmitSetupPages.cpp
     src/gui/setup/AppearanceSetupPages.cpp
     src/gui/setup/CatNetworkSetupPages.cpp
+    src/gui/setup/CatLiveSetupPages.cpp
+    src/gui/setup/CatLogWindow.cpp
     src/gui/setup/RemoteStationPage.cpp
+    src/gui/setup/RemoteRigctldPage.cpp
     src/gui/setup/PgxlAdvancedPage.cpp
     src/gui/setup/TgxlAdvancedPage.cpp
     src/gui/setup/PgxlInterlockPage.cpp
@@ -1936,6 +2174,7 @@ set(GUI_SOURCES
     src/gui/setup/ThisCorePage.cpp
     src/gui/setup/CoresSetupPage.cpp
     src/gui/setup/RfKitPage.cpp
+    src/gui/setup/RotorSetupPage.cpp
     src/gui/setup/TciLogWindow.cpp
     src/gui/setup/KeyboardSetupPages.cpp
     src/gui/setup/DiagnosticsSetupPages.cpp
@@ -1964,7 +2203,9 @@ set(GUI_SOURCES
     src/gui/applets/CwxApplet.cpp
     src/gui/applets/DvkApplet.cpp
     src/gui/applets/CatApplet.cpp
+    src/gui/applets/AccessoryReadouts.cpp
     src/gui/applets/TunerApplet.cpp
+    src/gui/applets/RotorApplet.cpp
     src/gui/applets/AmpApplet.cpp
     src/gui/applets/Rf2ksApplet.cpp
     src/gui/applets/TciApplet.cpp
@@ -1993,7 +2234,14 @@ qt_add_resources(RESOURCES resources.qrc)
 # iPhone app Task 14 (R-IOS-08): the pairing code's word list belongs to the
 # Core too (PairingCode, which calls Q_INIT_RESOURCE(pairing) likewise). The
 # iPhone app carries a byte-for-byte copy of the same file.
-qt_add_resources(CORE_RESOURCES resources/bandplans.qrc resources/pairing.qrc resources/setup.qrc)
+# Rotor control plan Task 4a: the DXCC country table (:/cty.dat) belongs to
+# the Core as well. The Core places callsigns with it (the rotor's turn to a
+# call, each spot's bearing), and nereusd links NereusCore alone, so while it
+# sat in resources.qrc the headless Core placed no callsign at all.
+# DxccColorProvider::ensureCtyDatLoaded calls Q_INIT_RESOURCE(cty); the app
+# reads the same one copy through NereusCore.
+qt_add_resources(CORE_RESOURCES resources/bandplans.qrc resources/pairing.qrc resources/setup.qrc
+    resources/cat.qrc resources/cty.qrc)
 
 # --------------------------------------------------------------------------
 # App icon (per-platform) — from main (PR #11)
@@ -2072,6 +2320,7 @@ if(NEREUSSDR_LTO_AVAILABLE)
         ${GUI_SOURCES}
         ${RESOURCES}
     )
+    target_compile_definitions(NereusGui_LTO PUBLIC NEREUS_GUI_STATIC)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_sources(NereusGui_LTO PRIVATE src/gui/VaxLinuxFirstRunDialog.cpp)
     endif()
@@ -2155,31 +2404,33 @@ set_target_properties(NereusSDR PROPERTIES
     MACOSX_BUNDLE_COPYRIGHT "© 2026 J.J. Boyd (KG4VCF); GPL port of Thetis (ramdor/Thetis) and mi0bot/OpenHPSDR-Thetis; descends from FlexRadio PowerSDR lineage. GPLv3."
 )
 
-# macOS strict mode requires NSMicrophoneUsageDescription in Info.plist
-# for any app that opens an audio capture stream — without it the stream
-# opens but macOS silently delivers zero-filled buffers (no permission
-# dialog, no error). CMake's MACOSX_BUNDLE template doesn't include the
-# key; inject it post-build. The bundle is signed once, after every file
-# the build puts in it, by the last POST_BUILD at the end of this file
-# (R-R3-50).
+# macOS: packaging/macos/Info.plist.in is the bundle's Info.plist template.
+# CMake fills its MACOSX_BUNDLE_* placeholders from the properties above;
+# every other key the app needs, including the privacy usage strings, lives
+# in that file. NSMicrophoneUsageDescription must be present for any app
+# that opens an audio capture stream: without it macOS refuses the
+# microphone with no permission dialog and no error. R-R3-17 / R-R3-38:
+# without NSLocalNetworkUsageDescription macOS Local Network privacy can
+# block connections to radios and Cores on the LAN with no prompt,
+# surfacing only as "Host unreachable". Both keys used to be injected after
+# the build, but CMake rewrites the bundle's Info.plist from its template
+# whenever it re-runs, so a re-configure with no relink dropped them and
+# left the signature not matching the plist.
 #
-# Uses Set-then-Add pattern via /bin/sh so the operation is idempotent:
-# Set succeeds when the key already exists from a prior build; falls
-# through to Add on the first build (when the key is absent).
+# The POST_BUILD below stages the private libraries, the capture helper and
+# the bundled NereusStation.app. The bundle is signed once, after every
+# file the build puts in it, by the last POST_BUILD at the end of this file
+# (R-R3-50).
 if(APPLE)
-    set(_nereus_mic_desc "NereusSDR uses the microphone for SSB voice transmission and live mic level monitoring.")
-    # R-R3-17 / R-R3-38: without NSLocalNetworkUsageDescription macOS Local
-    # Network privacy can block connections to radios and Cores on the LAN
-    # with no prompt, surfacing only as "Host unreachable".
-    set(_nereus_lan_desc "NereusSDR connects to your radios and NereusSDR Core stations on your local network.")
+    set_target_properties(NereusSDR PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/packaging/macos/Info.plist.in"
+    )
     configure_file(packaging/macos/NereusStation-Info.plist.in
                    "${CMAKE_CURRENT_BINARY_DIR}/generated/NereusStation-Info.plist" @ONLY)
     add_custom_command(TARGET NereusSDR POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:NereusCore>" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks/"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:NereusSDRLib>" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks/"
-        COMMAND /bin/sh -c "/usr/libexec/PlistBuddy -c \"Set :NSMicrophoneUsageDescription '${_nereus_mic_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\" 2>/dev/null || /usr/libexec/PlistBuddy -c \"Add :NSMicrophoneUsageDescription string '${_nereus_mic_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\""
-        COMMAND /bin/sh -c "/usr/libexec/PlistBuddy -c \"Set :NSLocalNetworkUsageDescription '${_nereus_lan_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\" 2>/dev/null || /usr/libexec/PlistBuddy -c \"Add :NSLocalNetworkUsageDescription string '${_nereus_lan_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\""
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:nereus-audio-capture>" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/"
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/NereusStation.app/Contents/MacOS"
@@ -2188,7 +2439,7 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/NereusStation.app/Contents/Resources/models/rnnoise"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/third_party/rnnoise/models/Default_large.bin" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/NereusStation.app/Contents/Resources/models/rnnoise/"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/third_party/rnnoise/models/Default_small.bin" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/NereusStation.app/Contents/Resources/models/rnnoise/"
-        COMMENT "Stage private libraries and the capture helper, inject NSMicrophoneUsageDescription and NSLocalNetworkUsageDescription"
+        COMMENT "Stage private libraries, the capture helper and NereusStation.app"
         VERBATIM
     )
 endif()
@@ -2231,6 +2482,16 @@ endif()
 # --------------------------------------------------------------------------
 add_executable(nereus-audio-capture src/capture_main.cpp)
 target_link_libraries(nereus-audio-capture PRIVATE NereusCore)
+# Native audio plan Task 15 (R-AUD-01, R-AUD-22): on Windows the helper
+# hosts the ASIO driver: the Steinberg SDK adapter and the cmASIO set-up
+# of the mic live in this target alone, never in NereusCore or a test.
+if(WIN32)
+    target_sources(nereus-audio-capture PRIVATE
+        src/core/audio/AsioDriverWin.cpp
+        src/core/audio/cmasio.cpp)
+    target_link_libraries(nereus-audio-capture PRIVATE asiosdk_host)
+    target_compile_definitions(nereus-audio-capture PRIVATE NEREUS_CAPTURE_HELPER_ASIO)
+endif()
 # The desktop app always carries the helper built from the same revision.
 add_dependencies(NereusSDR nereus-audio-capture)
 if(APPLE)
@@ -2330,13 +2591,22 @@ function(nereus_apply_core_deps target)
         # APIs themselves come from libSystem (already linked) but the
         # property-query helpers and AudioDeviceID type live in CoreAudio.
         target_link_libraries(${target} PUBLIC "-framework CoreAudio")
+
+        # AudioToolbox and AudioUnit for the Core Audio engine's AUHAL
+        # output and input units (src/core/audio/CoreAudioOutputBus.cpp,
+        # CoreAudioInputStream.cpp; native audio plan Task 8).
+        target_link_libraries(${target} PUBLIC "-framework AudioToolbox" "-framework AudioUnit")
     endif()
 
     if(WIN32)
         # avrt provides AvSetMmThreadCharacteristicsW + AvRevertMmThreadCharacteristics
         # used by src/core/audio/RealtimeAudioPriority.cpp to join the
-        # "Pro Audio" MMCSS task class.
-        target_link_libraries(${target} PUBLIC avrt)
+        # "Pro Audio" MMCSS task class.  ole32 (CoInitializeEx,
+        # CoCreateInstance, CoTaskMemFree, PropVariantClear) and uuid
+        # (IID_IUnknown) serve the Windows audio engine in
+        # src/core/audio/Wasapi*Win.cpp; ksuser carries the kernel-streaming
+        # format GUIDs, which that engine also defines itself with cites.
+        target_link_libraries(${target} PUBLIC avrt ole32 uuid ksuser)
     endif()
 
     if(Qt6SerialPort_FOUND)
@@ -2406,13 +2676,41 @@ function(nereus_apply_core_deps target)
     # PipeWire sources compile conditionally.
     if(PIPEWIRE_FOUND)
         target_link_libraries(${target} PUBLIC ${PIPEWIRE_LIBRARIES})
-        target_include_directories(${target} PUBLIC ${PIPEWIRE_INCLUDE_DIRS})
+        # SYSTEM: the spa headers' own warnings stay out of ours.
+        target_include_directories(${target} SYSTEM PUBLIC ${PIPEWIRE_INCLUDE_DIRS})
         target_compile_options(${target} PUBLIC ${PIPEWIRE_CFLAGS_OTHER})
         target_compile_definitions(${target} PUBLIC NEREUS_HAVE_PIPEWIRE)
         target_sources(${target} PRIVATE
             src/core/audio/PipeWireThreadLoop.cpp
             src/core/audio/PipeWireStream.cpp
             src/core/audio/PipeWireBus.cpp
+            # Native audio plan Task 10: the PipeWire engine (R-AUD-01).
+            src/core/audio/PipeWireDeviceSystem.cpp
+            src/core/audio/PipeWireDeviceBackend.cpp
+        )
+    endif()
+
+    # libpulse, gated by the pkg_check_modules block above (native audio
+    # plan Task 11, R-AUD-01, R-AUD-31): the PulseAudio engine.
+    if(PULSE_FOUND)
+        target_link_libraries(${target} PUBLIC PkgConfig::PULSE)
+        target_compile_definitions(${target} PUBLIC NEREUS_HAVE_PULSEAUDIO)
+        target_sources(${target} PRIVATE
+            src/core/audio/PulseAudioSystem.cpp
+            src/core/audio/PulseAudioBus.cpp
+            src/core/audio/PulseAudioBackend.cpp
+        )
+    endif()
+
+    # libasound, found above (native audio plan Task 12, R-AUD-01,
+    # R-AUD-25): the ALSA direct engine the Linux Core plays through.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ALSA_FOUND)
+        target_link_libraries(${target} PUBLIC ALSA::ALSA)
+        target_compile_definitions(${target} PUBLIC NEREUS_HAVE_ALSA_DIRECT)
+        target_sources(${target} PRIVATE
+            src/core/audio/AlsaDirectSystem.cpp
+            src/core/audio/AlsaDirectBus.cpp
+            src/core/audio/AlsaDirectBackend.cpp
         )
     endif()
 
@@ -2508,7 +2806,7 @@ endif()
 
 # --------------------------------------------------------------------------
 # RADE neural codec for FreeDV digital voice (Phase 3R)
-# License: BSD 2-Clause (radae_nopy at b2891023f3aecdf8b1793618000b1be6bcb2c4d1)
+# License: BSD 2-Clause (rade_c at c8a3dc156045cae2cd251e1a4be0c304c9ddf2f9)
 # See docs/architecture/phase3j2-3r-spots-and-rade-design.md Section 5
 #
 # radae_nopy's CMakeLists.txt fetches and builds Opus from xiph at first
@@ -2930,7 +3228,7 @@ option(NEREUS_USE_PCH "Use precompiled headers to speed up builds" ON)
 # SKIP_PRECOMPILE_HEADERS bypasses the include for that single file
 # without disabling PCH for the whole target.
 if(APPLE)
-    set_source_files_properties(src/core/MacMicPermission.mm
+    set_source_files_properties(src/core/MacMicPermission.mm src/core/audio/MacMicMode.mm
         PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 endif()
 if(NEREUS_USE_PCH)
@@ -3242,6 +3540,46 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             DESTINATION "${CMAKE_INSTALL_DATADIR}/nereusd"
             COMPONENT nereusd
             EXCLUDE_FROM_ALL)
+    # Sound cards: the unit runs as a DynamicUser account with no groups, and
+    # /dev/snd/* is root:audio 0660, so the Core opens a sound card only with
+    # SupplementaryGroups=audio. Ship that grant as a vendor drop-in beside
+    # the unit, from the one file the station images also install, so no
+    # install of a package can miss it: both .deb packages are made from this
+    # component. (The Pi 4 and Rock stage installers copy named files only
+    # and write the same grant under /etc themselves.) It is a drop-in, not a line in
+    # nereusd.service.in, because a group that does not exist stops the unit
+    # from starting; `audio` always exists on Debian and Ubuntu (base-passwd),
+    # and a source install on a distro without it removes or overrides this
+    # one file. A drop-in of the same name under /etc (the station images and
+    # the Pi 4 and Rock installers write one) takes precedence over it and
+    # has the same content. The serial (dialout) grant is not shipped here:
+    # that group's name does differ between distros (see nereusd.service.in).
+    install(FILES packaging/station-image/common/nereusd-audio.conf
+            DESTINATION "${NEREUSD_SYSTEMD_UNIT_DIR}/nereusd.service.d"
+            RENAME audio.conf
+            COMPONENT nereusd
+            EXCLUDE_FROM_ALL)
+    # Network receive buffer limit (the maintainer's ruling, 2026-10-11: the
+    # Core's installer raises it). The radio socket asks for
+    # RadioConnection::kRadioSocketReceiveBufferBytes (4 MB) and Linux grants
+    # at most net.core.rmem_max, 212992 bytes on the Rock 5C as found. One
+    # sysctl.d file, in the vendor directory so a package owns it and removing
+    # the package takes it away, sets that one limit to what the Core asks
+    # for; its name sorts ahead of an administrator's files so theirs win.
+    # /usr/lib/sysctl.d is where systemd-sysctl reads vendor files on every
+    # layout, so it is not taken from the install prefix. The helper beside
+    # it applies the limit at install, only ever upward: the .deb postinst
+    # and the Rock and Pi stage installers run it.
+    install(FILES packaging/nereusd-receive-buffer.conf
+            DESTINATION "/usr/lib/sysctl.d"
+            RENAME 10-nereusd.conf
+            COMPONENT nereusd
+            EXCLUDE_FROM_ALL)
+    install(PROGRAMS packaging/nereusd-raise-receive-buffer-limit.sh
+            DESTINATION "${CMAKE_INSTALL_LIBEXECDIR}/nereusd"
+            RENAME raise-receive-buffer-limit
+            COMPONENT nereusd
+            EXCLUDE_FROM_ALL)
     # Source-stage installers for both ARM stations use the same bounded
     # artifact cleanup. Ship the helper with every daemon stage so a fresh
     # install does not depend on a separately provisioned maintenance file.
@@ -3309,8 +3647,8 @@ endif()
 #
 # POST_BUILD commands on a target run in the order they are added, so this
 # block stays the LAST add_custom_command(TARGET NereusSDR POST_BUILD) in
-# the configure: the private libraries, the capture helper and the
-# Info.plist strings (staged above, after set_target_properties) and the
+# the configure: the private libraries, the capture helper and
+# NereusStation.app (staged above, after set_target_properties) and the
 # DeepFilterNet3 model (the ENABLE_DFNR block) are all in the bundle by
 # the time it runs. Signing earlier left the model outside the seal, and
 # `codesign --verify --deep --strict` failed with "a sealed resource is

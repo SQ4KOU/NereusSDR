@@ -1,5 +1,8 @@
 // Ported from Thetis MeterManager.cs [v2.10.3.15].
 // Modification history (NereusSDR):
+//   2026-10-12 - Shared accessory display readings and independent legal
+//                 marker / display scale by J.J. Boyd (KG4VCF),
+//                 AI-assisted via OpenAI Codex.
 //   2026-10-04 — Selected RX source identity and RX-only presentation reset by
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-03 — Independent history sampling cadence by J.J. Boyd (KG4VCF),
@@ -80,6 +83,9 @@ public:
     int historySampleCountForTest() const { return m_samples.size(); }
 #endif
     void setPowerScale(int) override;
+    // Temporary display top and legal marker, independent of radio rating.
+    void setPowerScale(int visualLimitWatts, double topWatts) override;
+    double legalMarkerW() const { return m_legalMarkerW; }
     void setAboveS9Frequency(bool above) { if(m_aboveS9!=above) { m_aboveS9=above; markPresentationDirty(true); } }
     void markPresentationDirty(bool staticLayers=false) { m_presentationDirty=true; m_staticPresentationDirty=m_staticPresentationDirty || staticLayers; }
     bool takeStaticPresentationChange() override { const bool dirty=m_staticPresentationDirty; m_staticPresentationDirty=false; return dirty; }
@@ -123,6 +129,8 @@ protected:
     QVector<Channel> m_channels;
 private:
     void initialise();
+    double powerBasisForChannel(int) const;
+    bool hasLegalMarker(int) const;
     void configureDynamics();
     void layoutChildren(int,int);
     void paintBar(QPainter&,const QRectF&,int);
@@ -138,6 +146,9 @@ private:
     QJsonObject m_config;
     bool m_tx=false,m_aboveS9=false,m_inert=false,m_presentationDirty=true,m_staticPresentationDirty=true;
     int m_powerScale=100;
+    // Runtime display values only; never serialized or sent to hardware.
+    double m_displayPowerTop=0.0;
+    double m_legalMarkerW=0.0;
     qint64 m_lastFrame=-1, m_lastHistorySample=-1;
     QString m_stateMode,m_stateBand,m_stateUnavailable;
     struct Sample { qint64 time; double value; };

@@ -21,6 +21,7 @@
 #include <QSignalBlocker>
 
 #include <functional>
+#include <memory>
 
 namespace NereusSDR {
 
@@ -34,23 +35,54 @@ ColorsThemePage::ColorsThemePage(RadioModel* model, QWidget* parent)
     buildUI();
 }
 
+QWidget* ColorsThemePage::takePictureColourRows(QWidget* parent)
+{
+    auto* rows = new QWidget(parent);
+    rows->setObjectName(QStringLiteral("displayPictureColourRows"));
+    auto* form = new QFormLayout(rows);
+    form->setContentsMargins(0, 0, 0, 0);
+    for (ColorSwatchButton* control : {m_traceColorBtn, m_traceFillColorBtn}) {
+        auto* original = qobject_cast<QFormLayout*>(control->parentWidget()->layout());
+        if (!original) { continue; }
+        const QFormLayout::TakeRowResult taken = original->takeRow(control);
+        const std::unique_ptr<QLayoutItem> labelItem(taken.labelItem);
+        const std::unique_ptr<QLayoutItem> fieldItem(taken.fieldItem);
+        if (!fieldItem || !fieldItem->widget()) { continue; }
+        if (labelItem && labelItem->widget()) {
+            form->addRow(labelItem->widget(), fieldItem->widget());
+        } else {
+            form->addRow(fieldItem->widget());
+        }
+    }
+    m_traceColorBtn->setProperty("nereusSetupId", "display.spectrum.traceColor");
+    m_traceFillColorBtn->setProperty("nereusSetupId", "display.spectrum.fillColor");
+    return rows;
+}
+
 void ColorsThemePage::buildUI()
 {
     NereusSDR::Style::applyDarkPageStyle(this);
 
-    SpectrumWidget* sw = model() ? model()->spectrumWidget() : nullptr;
-
-    // Helper: build a functional ColorSwatchButton wired to a SpectrumWidget setter.
-    auto makeBtn = [this, sw](QWidget* parent, const QColor& defaultColor,
-                              std::function<QColor(SpectrumWidget*)> getter,
-                              void (SpectrumWidget::*setter)(const QColor&)) {
-        const QColor initial = (sw && getter) ? getter(sw) : defaultColor;
-        auto* btn = new ColorSwatchButton(initial, parent);
+    // Helper: build a ColorSwatchButton for one colour default.
+    // Display pill plan Task 21 (D26): a colour chosen here is the Setup
+    // default for every pan. applyDisplayDefault stores it and moves each
+    // pan that has no colour of its own; the button opens on the default,
+    // not on the active pan's colour, and follows the default while the
+    // page is open.
+    auto makeBtn = [this](QWidget* parent, const QColor& defaultColor,
+                          const QString& keyBase,
+                          void (SpectrumWidget::*setter)(const QColor&)) {
+        auto* btn = new ColorSwatchButton(defaultColor, parent);
         connect(btn, &ColorSwatchButton::colorChanged, this,
-                [this, setter](const QColor& c) {
-            if (auto* w = model() ? model()->spectrumWidget() : nullptr) {
-                (w->*setter)(c);
-            }
+                [this, keyBase, setter](const QColor& c) {
+            applyDisplayDefault(keyBase, c.name(QColor::HexArgb),
+                                [setter, c](SpectrumWidget* pan) { (pan->*setter)(c); });
+        });
+        followDisplayDefault(keyBase, [this, btn, keyBase]() {
+            const QColor c = QColor::fromString(displayDefaultText(keyBase));
+            if (!c.isValid()) { return; }
+            QSignalBlocker block(btn);
+            btn->setColor(c);
         });
         return btn;
     };
@@ -60,23 +92,63 @@ void ColorsThemePage::buildUI()
     auto* specForm  = new QFormLayout(specGroup);
     specForm->setSpacing(6);
 
-    // Trace & Fill Color — moved from Display → Spectrum Defaults "Trace Colors" group.
+    // Trace Color and Fill Color — moved from Display → Spectrum Defaults
+    // "Trace Colors" group.
+    // Thetis: setup.designer.cs:3234 (clrbtnDataLine) / :3217 (clrbtnDataFill).
+    // Display pill plan Task 21 (S13): two pickers, as Thetis has them. They
+    // were one while SpectrumWidget shared one colour for line and fill.
+    //
+    // The trace has no colour of its own until one is chosen: it follows the
+    // fill (SpectrumWidget::traceColor()). So the Trace button shows the
+    // fill default until then, and moves with it.
+    m_traceColorBtn = new ColorSwatchButton(QColor(0x00, 0xe5, 0xff), specGroup);
+    m_traceColorBtn->setObjectName(QStringLiteral("appearanceTraceColorBtn"));
+    m_traceColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.traceColor");
+    m_traceColorBtn->setToolTip(QStringLiteral(
+        "Click to choose the spectrum trace line color. "
+        "Until you choose one, the trace uses the fill color."));
+    connect(m_traceColorBtn, &ColorSwatchButton::colorChanged, this, [this](const QColor& c) {
+        applyDisplayDefault(QStringLiteral("DisplayTraceColor"), c.name(QColor::HexArgb),
+                            [c](SpectrumWidget* pan) { pan->setTraceColor(c); });
+    });
+    const auto showTraceDefault = [this]() {
+        QColor c = QColor::fromString(displayDefaultText(QStringLiteral("DisplayTraceColor")));
+        if (!c.isValid()) {
+            c = QColor::fromString(displayDefaultText(QStringLiteral("DisplayFillColor")));
+        }
+        if (!c.isValid()) { return; }
+        QSignalBlocker block(m_traceColorBtn);
+        m_traceColorBtn->setColor(c);
+    };
+    followDisplayDefault(QStringLiteral("DisplayTraceColor"), showTraceDefault);
+    specForm->addRow(QStringLiteral("Trace Color:"), m_traceColorBtn);
+
     m_traceFillColorBtn = makeBtn(specGroup,
         QColor(0x00, 0xe5, 0xff),
-        [](SpectrumWidget* w){ return w->fillColor(); },
+        QStringLiteral("DisplayFillColor"),
         &SpectrumWidget::setFillColor);
+    m_traceFillColorBtn->setObjectName(QStringLiteral("appearanceFillColorBtn"));
     m_traceFillColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.traceFillColor");
-    // Thetis: setup.designer.cs:3234 (clrbtnDataLine) / :3217 (clrbtnDataFill) — collapsed into
-    // one picker because SpectrumWidget currently shares one colour for line and fill.
     m_traceFillColorBtn->setToolTip(QStringLiteral(
-        "Click to choose the spectrum trace line and fill color. "
+        "Click to choose the spectrum fill color. "
         "The color picker lets you adjust alpha for the fill opacity."));  // a QColorDialog
-    specForm->addRow(QStringLiteral("Trace & Fill Color:"), m_traceFillColorBtn);
+    // The fill default also moves a Trace button that is following it.
+    followDisplayDefault(QStringLiteral("DisplayFillColor"), [this, showTraceDefault]() {
+        const QColor c = QColor::fromString(displayDefaultText(QStringLiteral("DisplayFillColor")));
+        if (c.isValid()) {
+            QSignalBlocker block(m_traceFillColorBtn);
+            m_traceFillColorBtn->setColor(c);
+        }
+        showTraceDefault();
+    });
+    connect(m_traceFillColorBtn, &ColorSwatchButton::colorChanged, this,
+            [showTraceDefault](const QColor&) { showTraceDefault(); });
+    specForm->addRow(QStringLiteral("Fill Color:"), m_traceFillColorBtn);
 
     // Grid Color — moved from Display → Grid & Scales "Colors" group (G9).
     m_gridColorBtn = makeBtn(specGroup,
         QColor(255, 255, 255, 40),
-        [](SpectrumWidget* w){ return w->gridColor(); },
+        QStringLiteral("DisplayGridColor"),
         &SpectrumWidget::setGridColor);
     m_gridColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.gridColor");
     // Thetis: setup.designer.cs:3202 (clrbtnGrid) — rewritten
@@ -87,7 +159,7 @@ void ColorsThemePage::buildUI()
     // Grid Fine Color — moved from Display → Grid & Scales "Colors" group (G10).
     m_gridFineColorBtn = makeBtn(specGroup,
         QColor(255, 255, 255, 20),
-        [](SpectrumWidget* w){ return w->gridFineColor(); },
+        QStringLiteral("DisplayGridFineColor"),
         &SpectrumWidget::setGridFineColor);
     m_gridFineColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.gridFineColor");
     // Thetis: setup.designer.cs:3198 (clrbtnGridFine) — rewritten
@@ -98,7 +170,7 @@ void ColorsThemePage::buildUI()
     // H-Grid Color — moved from Display → Grid & Scales "Colors" group (G11).
     m_hGridColorBtn = makeBtn(specGroup,
         QColor(255, 255, 255, 40),
-        [](SpectrumWidget* w){ return w->hGridColor(); },
+        QStringLiteral("DisplayHGridColor"),
         &SpectrumWidget::setHGridColor);
     m_hGridColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.hGridColor");
     // Thetis: setup.designer.cs:3193 (clrbtnHGridColor) — rewritten
@@ -109,7 +181,7 @@ void ColorsThemePage::buildUI()
     // Grid Text Color — moved from Display → Grid & Scales "Colors" group (G12).
     m_gridTextColorBtn = makeBtn(specGroup,
         QColor(255, 255, 0),
-        [](SpectrumWidget* w){ return w->gridTextColor(); },
+        QStringLiteral("DisplayGridTextColor"),
         &SpectrumWidget::setGridTextColor);
     m_gridTextColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.gridTextColor");
     // Thetis: setup.designer.cs:3206 (clrbtnText) — rewritten
@@ -120,7 +192,7 @@ void ColorsThemePage::buildUI()
     // Band Edge Color — moved from Display → Grid & Scales "Colors" group (G6).
     m_bandEdgeColorBtn = makeBtn(specGroup,
         QColor(255, 0, 0),
-        [](SpectrumWidget* w){ return w->bandEdgeColor(); },
+        QStringLiteral("DisplayBandEdgeColor"),
         &SpectrumWidget::setBandEdgeColor);
     m_bandEdgeColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.bandEdgeColor");
     // Thetis: setup.designer.cs:3232 (clrbtnBandEdge) — rewritten
@@ -131,7 +203,7 @@ void ColorsThemePage::buildUI()
     // RX Zero Line Color — moved from Display → Grid & Scales "Colors" group (G13).
     m_rxZeroLineColorBtn = makeBtn(specGroup,
         QColor(255, 0, 0),
-        [](SpectrumWidget* w){ return w->rxZeroLineColor(); },
+        QStringLiteral("DisplayRxZeroLineColor"),
         &SpectrumWidget::setRxZeroLineColor);
     m_rxZeroLineColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.rxZeroLineColor");
     // Thetis: setup.designer.cs:3204 (clrbtnZeroLine) — rewritten; split per Plan 4 D9c-1
@@ -144,7 +216,7 @@ void ColorsThemePage::buildUI()
     // TX Zero Line Color — moved from Display → Grid & Scales "Colors" group (G13 TX).
     m_txZeroLineColorBtn = makeBtn(specGroup,
         QColor(255, 184, 0),
-        [](SpectrumWidget* w){ return w->txZeroLineColor(); },
+        QStringLiteral("DisplayTxZeroLineColor"),
         &SpectrumWidget::setTxZeroLineColor);
     m_txZeroLineColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.txZeroLineColor");
     // NereusSDR Plan 4 D9c-1 — no Thetis equivalent (NereusSDR-original).
@@ -156,7 +228,7 @@ void ColorsThemePage::buildUI()
     // RX Passband Color — Plan 4 D9b, already lived here.
     m_rxFilterColorBtn = makeBtn(specGroup,
         QColor(0x00, 0xb4, 0xd8, 80),
-        [](SpectrumWidget* w){ return w->rxFilterColor(); },
+        QStringLiteral("DisplayRxFilterColor"),
         &SpectrumWidget::setRxFilterColor);
     m_rxFilterColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.rxFilterColor");
     m_rxFilterColorBtn->setToolTip(QStringLiteral(
@@ -167,7 +239,7 @@ void ColorsThemePage::buildUI()
     // TX Passband Color — Plan 4 D9b, already lived here.
     m_txFilterColorBtn = makeBtn(specGroup,
         QColor(255, 120, 60, 46),
-        [](SpectrumWidget* w){ return w->txFilterColor(); },
+        QStringLiteral("DisplayTxFilterColor"),
         &SpectrumWidget::setTxFilterColor);
     m_txFilterColorBtn->setProperty("nereusSetupId", "appearance.colorsTheme.txFilterColor");
     m_txFilterColorBtn->setToolTip(QStringLiteral(
@@ -175,7 +247,7 @@ void ColorsThemePage::buildUI()
         "Shown on the panadapter and waterfall during MOX/TUNE."));
     specForm->addRow(QStringLiteral("TX Passband Color:"), m_txFilterColorBtn);
 
-    contentLayout()->addWidget(specGroup);
+    addContent(specGroup);
 
     // --- Section: Waterfall ---
     auto* wfGroup = new QGroupBox(QStringLiteral("Waterfall"), this);
@@ -194,7 +266,7 @@ void ColorsThemePage::buildUI()
     UnbuiltFeatures::hideRowUnlessBuilt(m_wfLowColorBtn,
                                        UnbuiltFeature::WaterfallLowColor, wfForm);
 
-    contentLayout()->addWidget(wfGroup);
+    addContent(wfGroup);
 
     // Reset all colors to defaults — broadened from the Plan 4 D9c-3 button
     // that lived on Spectrum Defaults to cover all Colors & Theme entries.
@@ -203,40 +275,53 @@ void ColorsThemePage::buildUI()
     auto* resetBtn = new QPushButton(QStringLiteral("Reset all colors to defaults"), this);
     resetBtn->setProperty("nereusSetupId", "appearance.colorsTheme.resetColors");
     resetBtn->setToolTip(QStringLiteral(
-        "Reset all spectrum and waterfall colors to factory defaults. "
+        "Reset the nine Appearance colors above to factory defaults. "
         "Other display settings (FPS, averaging, thresholds, etc.) are not affected."));
     connect(resetBtn, &QPushButton::clicked, this, [this]() {
         const auto res = QMessageBox::question(
             this,
             QStringLiteral("Reset all colors to defaults"),
             QStringLiteral(
-                "Reset all spectrum and waterfall colors to factory defaults?\n\n"
+                "Reset the nine Appearance colors above to factory defaults?\n\n"
                 "Custom colors set here will be discarded. "
                 "Other display settings are not affected."),
             QMessageBox::Yes | QMessageBox::Cancel,
             QMessageBox::Cancel);
         if (res != QMessageBox::Yes) { return; }
-        auto* w = model() ? model()->spectrumWidget() : nullptr;
-        if (!w) { return; }
-        w->resetDisplayColorsToDefaults();
-        // Reload all swatches from the model so the buttons reflect the reset values.
-        m_traceFillColorBtn->setColor(w->fillColor());
-        m_gridColorBtn->setColor(w->gridColor());
-        m_gridFineColorBtn->setColor(w->gridFineColor());
-        m_hGridColorBtn->setColor(w->hGridColor());
-        m_gridTextColorBtn->setColor(w->gridTextColor());
-        m_bandEdgeColorBtn->setColor(w->bandEdgeColor());
-        m_rxZeroLineColorBtn->setColor(w->rxZeroLineColor());
-        m_txZeroLineColorBtn->setColor(w->txZeroLineColor());
-        m_rxFilterColorBtn->setColor(w->rxFilterColor());
-        m_txFilterColorBtn->setColor(w->txFilterColor());
-        m_wfLowColorBtn->setColor(QColor(Qt::black));   // waterfall low default
+        resetColorsToDefaultsForTest();
     });
     resetRow->addWidget(resetBtn);
     resetRow->addStretch(1);
-    contentLayout()->addLayout(resetRow);
+    addContent(resetRow);
 
-    contentLayout()->addStretch();
+    showDisplayDefaults();
+}
+
+void ColorsThemePage::resetColorsToDefaultsForTest()
+{
+    // Display pill plan Task 21 (D26): each factory colour is stored as the
+    // Setup default and reaches every pan that has no colour of its own,
+    // whether or not the button already showed it. The values are the ones
+    // SpectrumWidget::resetDisplayColorsToDefaults() sets. The trace colour
+    // is left as chosen: a chosen trace colour cannot be un-chosen.
+    // Approved Display rebuild: trace, fill and background are picture
+    // choices on Display's pages; Appearance resets only its nine colours.
+    const auto reset = [this](const char* keyBase, const QColor& c,
+                              void (SpectrumWidget::*setter)(const QColor&)) {
+        applyDisplayDefault(QString::fromLatin1(keyBase), c.name(QColor::HexArgb),
+                            [setter, c](SpectrumWidget* pan) { (pan->*setter)(c); });
+    };
+    reset("DisplayGridColor", QColor(255, 255, 255, 40), &SpectrumWidget::setGridColor);
+    reset("DisplayGridFineColor", QColor(255, 255, 255, 20), &SpectrumWidget::setGridFineColor);
+    reset("DisplayHGridColor", QColor(255, 255, 255, 40), &SpectrumWidget::setHGridColor);
+    reset("DisplayGridTextColor", QColor(255, 255, 0), &SpectrumWidget::setGridTextColor);
+    reset("DisplayBandEdgeColor", QColor(255, 0, 0), &SpectrumWidget::setBandEdgeColor);
+    reset("DisplayRxZeroLineColor", QColor(255, 0, 0), &SpectrumWidget::setRxZeroLineColor);
+    reset("DisplayTxZeroLineColor", QColor(255, 184, 0), &SpectrumWidget::setTxZeroLineColor);
+    reset("DisplayRxFilterColor", QColor(0x00, 0xb4, 0xd8, 80), &SpectrumWidget::setRxFilterColor);
+    reset("DisplayTxFilterColor", QColor(255, 120, 60, 46), &SpectrumWidget::setTxFilterColor);
+    showDisplayDefaults();
+    // waterfall low default (the hidden legacy control is outside these nine).
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +418,8 @@ void MeterStylesPage::buildUI()
         const int face = m_faceCombo->itemData(index).toInt();
         AppSettings::instance().setValue(QStringLiteral("SMeter_FaceStyle"),
                                          SMeterWidget::faceStyleKey(static_cast<Face>(face)));
+        // Added dials with no face of their own follow this face.
+        SMeterSetupFace::instance().notify(face);
         emit sMeterFaceChanged(face);
     });
     connect(m_peakHoldToggle, &QCheckBox::toggled, this, [this](bool on) {
@@ -347,7 +434,7 @@ void MeterStylesPage::buildUI()
         emit sMeterPeakDecayChanged(rate);
     });
 
-    contentLayout()->addWidget(smGroup);
+    addContent(smGroup);
 
     // --- Section: VFO Flag ---
     auto* vfoGroup = new QGroupBox(QStringLiteral("VFO Flag"), this);
@@ -375,11 +462,10 @@ void MeterStylesPage::buildUI()
             // once VfoWidget has a clean accessor path from MainWindow or SetupDialog
         });
 
-    contentLayout()->addWidget(vfoGroup);
+    addContent(vfoGroup);
     // R-R3-49: the flag stores this setting but draws nothing with it yet,
     // so the group (its only control) is hidden until that is built.
     UnbuiltFeatures::hideUnlessBuilt(vfoGroup, UnbuiltFeature::SmallFilter);
-    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -434,8 +520,7 @@ void SkinsPage::buildUI()
     btnRow->addStretch();
     skinLayout->addLayout(btnRow);
 
-    contentLayout()->addWidget(skinGroup);
-    contentLayout()->addStretch();
+    addContent(skinGroup);
 }
 
 // ---------------------------------------------------------------------------
@@ -478,8 +563,7 @@ void CollapsibleDisplayPage::buildUI()
     m_enableToggle->setToolTip(QStringLiteral("Let the spectrum section collapse"));
     colForm->addRow(QString(), m_enableToggle);
 
-    contentLayout()->addWidget(colGroup);
-    contentLayout()->addStretch();
+    addContent(colGroup);
 }
 
 } // namespace NereusSDR

@@ -27,10 +27,24 @@
 //                 UpdateNoiseGate Task.Delay(100), console.cs:25347
 //                 [v2.10.3.13]).
 //
+// Modification history (NereusSDR):
+//   2026-10-12 - Check whole inset readout text at the approved workspace minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 
 #include <QtTest/QtTest>
 #include <QApplication>
+#include <QDir>
+#include <QFontInfo>
+#include <QFontMetrics>
+#include <QImage>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QLabel>
+#include <QPainter>
+#include <QFile>
+#include <QStyleFactory>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSlider>
@@ -38,11 +52,168 @@
 
 #include "core/AppSettings.h"
 #include "gui/applets/TxApplet.h"
+#include "gui/applets/PhoneCwApplet.h"
+#include "gui/styles/AppTheme.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "gui/widgets/DexpPeakMeter.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
 using namespace NereusSDR;
+
+namespace {
+class ReadoutThemeScope {
+public:
+    explicit ReadoutThemeScope(bool workspace)
+        : m_sheet(qApp->styleSheet()), m_palette(qApp->palette())
+    {
+        WorkspacePreview::setEnabledForTest(workspace);
+        applyDarkPalette(*qApp);
+        applyAppBaselineQss(*qApp);
+        if (workspace) {
+            applyWorkspacePalette(*qApp);
+            WorkspacePreview::installLiveTheming(*qApp);
+        }
+    }
+    ~ReadoutThemeScope()
+    {
+        WorkspacePreview::setEnabledForTest(false);
+        qApp->setStyleSheet(m_sheet);
+        qApp->setPalette(m_palette);
+    }
+private:
+    QString m_sheet;
+    QPalette m_palette;
+};
+
+QLabel* labelWithText(QWidget* root, const QString& text)
+{
+    for (QLabel* label : root->findChildren<QLabel*>()) {
+        if (label->text() == text) {
+            return label;
+        }
+    }
+    return nullptr;
+}
+
+void settleReadout(QWidget* panel)
+{
+    panel->setFixedWidth(260);
+    panel->adjustSize();
+    panel->show();
+    WorkspacePreview::themeSubtree(panel);
+    for (int pass = 0; pass < 4; ++pass) {
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+        QCoreApplication::processEvents();
+        panel->adjustSize();
+    }
+}
+
+QImage readoutImage(QLabel* actual, const QString& text, int width, int dpr)
+{
+    QLabel copy;
+    copy.setFont(actual->font());
+    copy.setPalette(actual->palette());
+    copy.setStyleSheet(actual->styleSheet());
+    copy.setAlignment(actual->alignment());
+    copy.setMargin(actual->margin());
+    copy.setIndent(actual->indent());
+    copy.setText(text);
+    copy.setFixedSize(width, actual->height());
+    copy.ensurePolished();
+    QImage image(copy.size() * dpr, QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(dpr);
+    image.fill(Qt::transparent);
+    copy.render(&image);
+    return image;
+}
+
+int readoutInkPixels(QLabel* actual, const QString& text, int width, int dpr)
+{
+    const QImage words = readoutImage(actual, text, width, dpr);
+    const QImage empty = readoutImage(actual, QString(), width, dpr);
+    int count = 0;
+    for (int y = 0; y < words.height(); ++y) {
+        for (int x = 0; x < words.width(); ++x) {
+            if (words.pixel(x, y) != empty.pixel(x, y)) {
+                ++count;
+            }
+        }
+    }
+    return count;
+}
+
+QStringList readoutRangeFailures(QLabel* label, QSlider* slider, const QString& suffix)
+{
+    const QFontMetrics metrics(label->font(), label);
+    int widest = 0;
+    QString widestText;
+    for (int value = slider->minimum(); value <= slider->maximum(); ++value) {
+        const QString text = QString::number(value) + suffix;
+        if (metrics.horizontalAdvance(text) > widest) {
+            widest = metrics.horizontalAdvance(text);
+            widestText = text;
+        }
+    }
+    QStringList failures;
+    // Style::insetValueStyle: 2px horizontal padding and 1px border
+    // on each side. The independent raster comparison below checks
+    // whole ink rather than relying solely on advance metrics.
+    if (widest + 6 > label->width()) {
+        failures << QStringLiteral("%1 needs %2px, field is %3px")
+            .arg(widestText).arg(widest + 6).arg(label->width());
+    }
+    for (int dpr : {1, 2}) {
+        // Centered text can land on half pixels. Keep the reference box's
+        // parity so its antialias phase matches the actual box at DPR 1.
+        const int referenceWidth = 200 + label->width() % 2;
+        const int fullInk = readoutInkPixels(label, widestText, referenceWidth, dpr);
+        const int actualInk = readoutInkPixels(label, widestText, label->width(), dpr);
+        if (actualInk != fullInk) {
+            failures << QStringLiteral("%1 @%2x ink %3, uncut %4")
+                .arg(widestText).arg(dpr).arg(actualInk).arg(fullInk);
+        }
+    }
+    return failures;
+}
+
+void captureReadoutPanel(QWidget* panel, const QString& name,
+                         const QList<QLabel*>& labels)
+{
+    const QString destination = qEnvironmentVariable("NEREUS_READOUT_CAPTURE_DIR");
+    if (destination.isEmpty()) {
+        return;
+    }
+    QDir().mkpath(destination);
+    for (int dpr : {1, 2}) {
+        QImage image(panel->size() * dpr, QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(dpr);
+        image.fill(Qt::transparent);
+        panel->render(&image);
+        const QString stem = destination + QLatin1Char('/') + name
+            + QStringLiteral("-%1x").arg(dpr);
+        QVERIFY(image.save(stem + QStringLiteral(".png")));
+        QJsonArray fields;
+        for (QLabel* label : labels) {
+            fields.append(QJsonObject{
+                {QStringLiteral("text"), label->text()},
+                {QStringLiteral("width"), label->width()},
+                {QStringLiteral("height"), label->height()},
+                {QStringLiteral("resolved_px"), QFontInfo(label->font()).pixelSize()},
+                {QStringLiteral("font"), label->font().toString()},
+                {QStringLiteral("sheet"), label->styleSheet()},
+            });
+        }
+        QFile sidecar(stem + QStringLiteral(".json"));
+        QVERIFY(sidecar.open(QIODevice::WriteOnly));
+        sidecar.write(QJsonDocument(QJsonObject{
+            {QStringLiteral("dpr"), dpr}, {QStringLiteral("panel_width"), panel->width()},
+            {QStringLiteral("fields"), fields},
+            {QStringLiteral("display_only"), true},
+        }).toJson());
+    }
+}
+} // namespace
 
 class TestTxAppletVoxRelocated : public QObject {
     Q_OBJECT
@@ -234,6 +405,84 @@ private slots:
         QVERIFY2(applet.findChild<DexpPeakMeter*>(QStringLiteral("PhoneCwVoxPeakMeter")) == nullptr,
                  "PhoneCw VOX peak meter should not be on TxApplet");
     }
+    // The full formatted ranges must fit the final 11px font and inset
+    // border/padding, without clipping the minus sign or unit glyphs.
+    void workspaceVoxAndDexpReadoutsFitTheirRanges()
+    {
+        ReadoutThemeScope theme(true);
+        TxApplet tx(nullptr);
+        PhoneCwApplet phone(nullptr);
+        QLabel* threshold = labelWithText(&tx, QStringLiteral("-20 dB"));
+        QLabel* hold = labelWithText(&tx, QStringLiteral("500 ms"));
+        QLabel* dexp = labelWithText(&phone, QStringLiteral("-50 dB"));
+        QVERIFY(threshold != nullptr);
+        QVERIFY(hold != nullptr);
+        QVERIFY(dexp != nullptr);
+        settleReadout(&tx);
+        settleReadout(&phone);
+        threshold->setText(QStringLiteral("-40 dB"));
+        dexp->setText(QStringLiteral("-160 dB"));
+        captureReadoutPanel(&tx, QStringLiteral("workspace-vox"), {threshold, hold});
+        captureReadoutPanel(&phone, QStringLiteral("workspace-dexp"), {dexp});
+        hold->setText(QStringLiteral("2000 ms"));
+        threshold->setText(QStringLiteral("-80 dB"));
+        captureReadoutPanel(&tx, QStringLiteral("workspace-vox-range"), {threshold, hold});
+
+        struct Field { QLabel* label; QSlider* slider; QString suffix; };
+        const QList<Field> fields{
+            {threshold, tx.findChild<QSlider*>(QStringLiteral("TxVoxThresholdSlider")), QStringLiteral(" dB")},
+            {hold, tx.findChild<QSlider*>(QStringLiteral("TxVoxHoldSlider")), QStringLiteral(" ms")},
+            {dexp, phone.findChild<QSlider*>(QStringLiteral("PhoneCwDexpThresholdSlider")), QStringLiteral(" dB")},
+        };
+        QStringList failures;
+        for (const Field& field : fields) {
+            QVERIFY(field.slider != nullptr);
+            QVERIFY(QFontInfo(field.label->font()).pixelSize() >= 11);
+            failures += readoutRangeFailures(field.label, field.slider, field.suffix);
+        }
+        qInfo().noquote() << failures.join(QLatin1Char('\n'));
+        QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
+
+        // A larger explicit font remains larger, and repeat presentation
+        // events cannot feed the previous fixed width back into sizing.
+        for (const Field& field : fields) {
+            field.label->setStyleSheet(field.label->styleSheet()
+                + QStringLiteral("QLabel { font-size: 14px; }"));
+            WorkspacePreview::themeSubtree(field.label);
+            QCOMPARE(QFontInfo(field.label->font()).pixelSize(), 14);
+            const int fittedWidth = field.label->width();
+            for (int repeat = 0; repeat < 4; ++repeat) {
+                QEvent change(QEvent::FontChange);
+                QCoreApplication::sendEvent(field.label, &change);
+                QCOMPARE(field.label->width(), fittedWidth);
+            }
+            const QStringList largerFailures = readoutRangeFailures(field.label, field.slider, field.suffix);
+            QVERIFY2(largerFailures.isEmpty(), qPrintable(largerFailures.join(QLatin1Char('\n'))));
+        }
+    }
+
+    void classicVoxAndDexpReadoutsKeepTheirWidths()
+    {
+        ReadoutThemeScope theme(false);
+        TxApplet tx(nullptr);
+        PhoneCwApplet phone(nullptr);
+        QLabel* threshold = labelWithText(&tx, QStringLiteral("-20 dB"));
+        QLabel* hold = labelWithText(&tx, QStringLiteral("500 ms"));
+        QLabel* dexp = labelWithText(&phone, QStringLiteral("-50 dB"));
+        QVERIFY(threshold != nullptr);
+        QVERIFY(hold != nullptr);
+        QVERIFY(dexp != nullptr);
+        settleReadout(&tx);
+        settleReadout(&phone);
+        QCOMPARE(threshold->width(), 38);
+        QCOMPARE(hold->width(), 42);
+        QCOMPARE(dexp->width(), 38);
+        threshold->setText(QStringLiteral("-40 dB"));
+        dexp->setText(QStringLiteral("-160 dB"));
+        captureReadoutPanel(&tx, QStringLiteral("classic-vox"), {threshold, hold});
+        captureReadoutPanel(&phone, QStringLiteral("classic-dexp"), {dexp});
+    }
+
 };
 
 QTEST_MAIN(TestTxAppletVoxRelocated)

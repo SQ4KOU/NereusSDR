@@ -12,6 +12,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-13 — Bench instruments, Calibration/IMD workarea and diagnostics;
+//                 J.J. Boyd (KG4VCF), assisted by OpenAI Codex.
 //   2026-05-06 — Phase 3M-4 Task 8: created by J.J. Boyd (KG4VCF),
 //                 with AI-assisted transformation via Anthropic Claude
 //                 Code.
@@ -22,6 +24,13 @@
 //                 air); Two-tone stays on canActuate; while the Core's
 //                 radio is on the air the arming buttons and the settings
 //                 grey with the reason. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-11 - A status update restyles the correction light only when
+//                 its color changes. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-15 - The SetPk warning sign asks for text presentation
+//                 (U+FE0E), so Windows draws it in the label's color instead
+//                 of as a color emoji. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
 // =================================================================
 
@@ -67,6 +76,9 @@ mw0lge@grange-lane.co.uk
 //============================================================================================//
 
 #include "PsForm.h"
+#include "gui/styles/WorkspacePreview.h"
+#include "gui/PureSignalInstruments.h"
+#include "gui/ImdMeasurementPanel.h"
 
 #include <QCheckBox>
 #include <QCloseEvent>
@@ -82,8 +94,12 @@ mw0lge@grange-lane.co.uk
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QScreen>
+#include <QScrollArea>
 #include <QSpinBox>
 #include <QTimer>
+#include <QTabWidget>
+#include <QResizeEvent>
+#include <memory>
 #include <QVBoxLayout>
 
 #include "AmpViewWindow.h"
@@ -176,7 +192,7 @@ PsForm::PsForm(RadioModel* radioModel, PureSignal* pureSignal, QWidget* parent)
 {
     // From Thetis PSForm.designer.cs:898 [v2.10.3.13]:
     // PS3-native diagnostics and correction lifecycle.
-    setWindowTitle(QStringLiteral("PureSignal 3.0"));
+    setWindowTitle(QStringLiteral("PureSignal Bench"));
     setObjectName(QStringLiteral("PsForm"));
     Style::applyDarkPageStyle(this);
     // Modeless — don't block other interaction.
@@ -241,6 +257,10 @@ PsForm::PsForm(RadioModel* radioModel, PureSignal* pureSignal, QWidget* parent)
         m_chkOnTop->setChecked(stayOnTop);
     }
     setWindowFlag(Qt::WindowStaysOnTopHint, stayOnTop);
+
+    // Workspace preview: the scoped stylesheet pass runs each time the
+    // dialog is shown (preview scaffolding; nothing with the switch off).
+    WorkspacePreview::themeOnShow(this);
 }
 
 PsForm::~PsForm() = default;
@@ -253,7 +273,60 @@ void PsForm::buildUi()
 {
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(8, 8, 8, 8);
-    outer->setSpacing(6);
+    outer->setSpacing(12);
+    setMinimumWidth(520);
+    QFont readable = PureSignalViewStyle::font(font());
+    readable.setPixelSize(12);
+    setFont(readable);
+    m_benchBody = new QWidget(this);
+    m_benchBody->setObjectName(QStringLiteral("PureSignalBenchBody"));
+    m_benchLayout = new QGridLayout(m_benchBody);
+    m_benchLayout->setContentsMargins(0, 0, 0, 0);
+    m_benchLayout->setSpacing(18);
+    m_instruments = new PureSignalInstruments(QStringLiteral("PsBench"), false, m_benchBody);
+    m_instruments->setMinimumWidth(240);
+    auto* tabs = new QTabWidget(m_benchBody);
+    tabs->setObjectName(QStringLiteral("PureSignalBenchTabs"));
+    auto* calibration = new QWidget(tabs);
+    auto* calibrationLayout = new QVBoxLayout(calibration);
+    calibrationLayout->setContentsMargins(14, 16, 14, 14);
+    calibrationLayout->setSpacing(16);
+    auto section = [calibration](const QString& title) {
+        auto* label = new QLabel(title, calibration);
+        QFont sectionFont = PureSignalViewStyle::font(label->font());
+        sectionFont.setPixelSize(12);
+        sectionFont.setWeight(QFont::Medium);
+        label->setFont(sectionFont);
+        return label;
+    };
+    calibrationLayout->addWidget(section(tr("Feedback control")));
+    auto* feedbackOptions = new QVBoxLayout;
+    feedbackOptions->setSpacing(10);
+    calibrationLayout->addLayout(feedbackOptions);
+    calibrationLayout->addWidget(section(tr("Timing")));
+    auto* processing = new QVBoxLayout;
+    processing->setSpacing(10);
+    auto* imd = new QWidget(tabs);
+    auto* imdLayout = new QVBoxLayout(imd);
+    imdLayout->setContentsMargins(0, 12, 0, 0);
+    m_imdPanel = new ImdMeasurementPanel(imd);
+    m_imdPanel->setObjectName(QStringLiteral("PureSignalBenchImd"));
+    m_imdPanel->setPresentation(ImdMeasurementPanel::Presentation::Window);
+    tabs->addTab(calibration, tr("Calibration"));
+    tabs->addTab(imd, tr("IMD measurements"));
+    m_benchLayout->addWidget(m_instruments, 0, 0);
+    m_benchLayout->addWidget(tabs, 0, 1);
+    m_benchLayout->setColumnStretch(1, 1);
+    auto* diagnostics = new QWidget(this);
+    diagnostics->setObjectName(QStringLiteral("PureSignalBenchDiagnostics"));
+    auto* diagnosticsLayout = new QVBoxLayout(diagnostics);
+    diagnosticsLayout->setContentsMargins(0, 0, 0, 0);
+    diagnosticsLayout->setSpacing(8);
+    auto* footer = new QWidget(this);
+    footer->setObjectName(QStringLiteral("PureSignalBenchFooter"));
+    auto* footerLayout = new QHBoxLayout(footer);
+    footerLayout->setContentsMargins(0, 0, 0, 0);
+    footerLayout->setSpacing(8);
 
     // ── Top action row (always visible, even in collapsed Advanced mode) ──
     //
@@ -265,54 +338,58 @@ void PsForm::buildUi()
     //   btnPSSave        X=322 W=71
     //   btnPSRestore     X=399 W=71
     //   btnPSReset       X=476 W=71
-    auto* topRow = new QHBoxLayout();
+    auto* topRow = new QGridLayout();
     topRow->setContentsMargins(0, 0, 0, 0);
     topRow->setSpacing(6);
+    // Workspace button styling can report a 24px sizeHint even when the
+    // button minimum is 30px. Reserve the full control height in each row.
+    topRow->setRowMinimumHeight(0, 36);
+    topRow->setRowMinimumHeight(1, 36);
 
     m_btnTwoTone = new QPushButton(tr("Two-tone"), this);
     m_btnTwoTone->setObjectName(QStringLiteral("btnPSTwoToneGen"));
     m_btnTwoTone->setCheckable(true);
     m_btnTwoTone->setToolTip(tr("Generate and TX a Two Tone Signal"));
-    topRow->addWidget(m_btnTwoTone);
+    topRow->addWidget(m_btnTwoTone, 0, 0);
 
     m_btnSingleCal = new QPushButton(tr("Single Cal"), this);
     m_btnSingleCal->setObjectName(QStringLiteral("btnPSCalibrate"));
     m_btnSingleCal->setToolTip(
         tr("Perform a singal calibration. This will happen up to 5 times in a row"));
-    topRow->addWidget(m_btnSingleCal);
+    topRow->addWidget(m_btnSingleCal, 0, 1);
 
     m_btnAutomatic = new QPushButton(tr("Start Auto"), this);
     m_btnAutomatic->setObjectName(QStringLiteral("btnPSAutomatic"));
     m_btnAutomatic->setToolTip(tr("Start automatic PureSignal calibration."));
-    topRow->addWidget(m_btnAutomatic);
+    topRow->addWidget(m_btnAutomatic, 0, 2);
 
     m_btnApplyCurrent = new QPushButton(tr("Apply Current"), this);
     m_btnApplyCurrent->setObjectName(QStringLiteral("btnPSApplyCurrent"));
     m_btnApplyCurrent->setToolTip(tr("Apply the correction currently held by PureSignal."));
-    topRow->addWidget(m_btnApplyCurrent);
+    topRow->addWidget(m_btnApplyCurrent, 1, 0);
 
     m_btnAmpView = new QPushButton(tr("AmpView"), this);
     m_btnAmpView->setObjectName(QStringLiteral("btnPSAmpView"));
-    topRow->addWidget(m_btnAmpView);
+    topRow->addWidget(m_btnAmpView, 1, 1);
 
     m_btnAdvanced = new QPushButton(tr("Advanced"), this);
     m_btnAdvanced->setObjectName(QStringLiteral("btnPSAdvanced"));
-    topRow->addWidget(m_btnAdvanced);
+    topRow->addWidget(m_btnAdvanced, 1, 2);
 
     m_btnSave = new QPushButton(tr("Save"), this);
     m_btnSave->setObjectName(QStringLiteral("btnPSSave"));
     // From Thetis PSForm.cs:574-590 [v2.10.3.13] — Save is gated on
     // CorrectionsBeingApplied; starts disabled until corrections land.
     m_btnSave->setEnabled(false);
-    topRow->addWidget(m_btnSave);
+    footerLayout->addWidget(m_btnSave);
 
     m_btnRestore = new QPushButton(tr("Restore"), this);
     m_btnRestore->setObjectName(QStringLiteral("btnPSRestore"));
-    topRow->addWidget(m_btnRestore);
+    footerLayout->addWidget(m_btnRestore);
 
     m_btnReset = new QPushButton(tr("OFF"), this);
     m_btnReset->setObjectName(QStringLiteral("btnPSReset"));
-    topRow->addWidget(m_btnReset);
+    topRow->addWidget(m_btnReset, 0, 3);
 
     outer->addLayout(topRow);
 
@@ -349,13 +426,13 @@ void PsForm::buildUi()
     m_lblCo->setFixedSize(12, 12);
     m_lblCo->setStyleSheet(blackBadgeStyle());
     m_lblCo->setToolTip(tr(
-        "If green, a correction solution is in place and PureSignal is correcting"));
+        "Green: correction applied and calibration feedback >90; yellow: applied with feedback ≤90"));
     statusRow->addWidget(m_lblCo);
 
-    auto* lblCoText = new QLabel(tr("Correcting"), this);
+    auto* lblCoText = new QLabel(tr("Correction applied / feedback >90"), this);
     lblCoText->setObjectName(QStringLiteral("labelTS9"));
     lblCoText->setToolTip(tr(
-        "If green, a correction solution is in place and PureSignal is correcting"));
+        "Green: correction applied and calibration feedback >90; yellow: applied with feedback ≤90"));
     statusRow->addWidget(lblCoText);
 
     statusRow->addStretch();
@@ -364,7 +441,9 @@ void PsForm::buildUi()
     // by default, shown when current SetPk drifts from psDefaultPeak.
     // NereusSDR uses a QLabel with a "!" glyph stand-in until artwork
     // import lands.
-    m_lblWarningSetPk = new QLabel(QStringLiteral("⚠"), this);
+    // U+FE0E asks for the text form of the sign: without it Windows draws
+    // U+26A0 from Segoe UI Emoji as a color picture.
+    m_lblWarningSetPk = new QLabel(QStringLiteral("\u26A0\uFE0E"), this);
     m_lblWarningSetPk->setObjectName(QStringLiteral("pbWarningSetPk"));
     m_lblWarningSetPk->setToolTip(
         tr("SetPk has drifted from the per-board default."));
@@ -376,24 +455,26 @@ void PsForm::buildUi()
         new QCheckBox(tr("Show 2Tone measurements"), this);
     m_chkShow2ToneMeasurements->setObjectName(
         QStringLiteral("chkShow2ToneMeasurements"));
-    statusRow->addWidget(m_chkShow2ToneMeasurements);
+    imdLayout->addWidget(m_chkShow2ToneMeasurements);
+    imdLayout->addWidget(m_imdPanel);
+    imdLayout->addStretch();
 
-    outer->addLayout(statusRow);
+    diagnosticsLayout->addLayout(statusRow);
 
     m_lblActionStatus = new QLabel(tr("No PureSignal action pending."), this);
     m_lblActionStatus->setObjectName(QStringLiteral("lblPSActionStatus"));
     m_lblActionStatus->setWordWrap(true);
-    outer->addWidget(m_lblActionStatus);
+    diagnosticsLayout->addWidget(m_lblActionStatus);
 
     m_lblNativeStatus = new QLabel(this);
     m_lblNativeStatus->setObjectName(QStringLiteral("lblPSNativeStatus"));
     m_lblNativeStatus->setWordWrap(true);
-    outer->addWidget(m_lblNativeStatus);
+    diagnosticsLayout->addWidget(m_lblNativeStatus);
 
     m_lblRoutingStatus = new QLabel(this);
     m_lblRoutingStatus->setObjectName(QStringLiteral("lblPSRoutingStatus"));
     m_lblRoutingStatus->setWordWrap(true);
-    outer->addWidget(m_lblRoutingStatus);
+    diagnosticsLayout->addWidget(m_lblRoutingStatus);
 
     // ── Body: 3-column grid ───────────────────────────────────────────────
     //
@@ -431,13 +512,13 @@ void PsForm::buildUi()
     m_chkAutoAttenuate->setChecked(true);  // Designer default Checked
     m_chkAutoAttenuate->setToolTip(
         tr("Automatically adjust attenuator for optimum feedback level. (Recommended)"));
-    body->addWidget(m_chkAutoAttenuate, 0, 2);
+    feedbackOptions->addWidget(m_chkAutoAttenuate);
 
     m_chkAutoCalEnabled = new QCheckBox(tr("Automatic desired"), this);
     m_chkAutoCalEnabled->setObjectName(QStringLiteral("chkPSAutoCalEnabled"));
     m_chkAutoCalEnabled->setToolTip(
         tr("Remember whether automatic calibration should resume when the station is ready."));
-    body->addWidget(m_chkAutoCalEnabled, 0, 3);
+    processing->addWidget(m_chkAutoCalEnabled);
 
     // Row 1: CAL Wait
     auto* lblCal = new QLabel(tr("CAL Wait (sec)"), this);
@@ -461,7 +542,7 @@ void PsForm::buildUi()
     m_chkRunCalibrationProcessing = new QCheckBox(tr("Run calibration processing"), this);
     m_chkRunCalibrationProcessing->setObjectName(
         QStringLiteral("chkPSRunCalibrationProcessing"));
-    body->addWidget(m_chkRunCalibrationProcessing, 1, 2, 1, 2);
+    processing->addWidget(m_chkRunCalibrationProcessing);
 
     // Row 2: AMP Delay + Quick Attenuate Response
     auto* lblAmp = new QLabel(tr("AMP Delay (ns)"), this);
@@ -483,14 +564,16 @@ void PsForm::buildUi()
     m_chkQuickAttenuate->setObjectName(QStringLiteral("chkQuickAttenuate"));
     m_chkQuickAttenuate->setToolTip(
         tr("Apply auto attenuation changes at a faster interval"));
-    body->addWidget(m_chkQuickAttenuate, 2, 2);
+    feedbackOptions->addWidget(m_chkQuickAttenuate);
 
     m_chkHardwarePeakOverride = new QCheckBox(tr("Override hardware peak"), this);
     m_chkHardwarePeakOverride->setObjectName(
         QStringLiteral("chkPSHardwarePeakOverride"));
-    body->addWidget(m_chkHardwarePeakOverride, 2, 3);
+    processing->addWidget(m_chkHardwarePeakOverride);
 
-    outer->addLayout(body);
+    calibrationLayout->addLayout(body);
+    calibrationLayout->addWidget(section(tr("Calibration processing")));
+    calibrationLayout->addLayout(processing);
 
     // ── Bottom row: Loopback (left) + Always On Top (right) ───────────────
     auto* bottomRow = new QHBoxLayout();
@@ -510,13 +593,30 @@ void PsForm::buildUi()
 
     m_chkOnTop = new QCheckBox(tr("Always On Top"), this);
     m_chkOnTop->setObjectName(QStringLiteral("chkPSOnTop"));
-    bottomRow->addWidget(m_chkOnTop);
+    footerLayout->addStretch();
+    footerLayout->addWidget(m_chkOnTop);
 
-    outer->addLayout(bottomRow);
+    diagnosticsLayout->addLayout(bottomRow);
 
     // ── Calibration Information group (advanced section) ──────────────────
     m_grpCalInfo = buildCalibrationInfoGroup(this);
-    outer->addWidget(m_grpCalInfo);
+    diagnosticsLayout->insertWidget(0, m_grpCalInfo);
+    calibrationLayout->addWidget(m_peakReference);
+    calibrationLayout->addStretch();
+    auto* scrollContents = new QWidget(this);
+    auto* scrollLayout = new QVBoxLayout(scrollContents);
+    scrollLayout->setContentsMargins(0, 0, 0, 0);
+    scrollLayout->setSpacing(12);
+    scrollLayout->addWidget(m_benchBody);
+    scrollLayout->addWidget(diagnostics);
+    auto* scroll = new QScrollArea(this);
+    scroll->setObjectName(QStringLiteral("PureSignalBenchScroll"));
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidgetResizable(true);
+    scroll->setWidget(scrollContents);
+    scroll->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    outer->addWidget(scroll, 1);
+    outer->addWidget(footer);
 
     outer->addStretch();
 
@@ -526,29 +626,13 @@ void PsForm::buildUi()
     // collapses the form.  Mirrors PSForm.cs:894-902 [v2.10.3.13]:
     //   if (_advancedON) ClientSize = (560,60);  // top row only
     //   else             ClientSize = (560,300); // full form
-    m_advancedSectionWidgets.append(m_lblFb);
-    m_advancedSectionWidgets.append(lblFbText);
-    m_advancedSectionWidgets.append(m_lblCo);
-    m_advancedSectionWidgets.append(lblCoText);
-    m_advancedSectionWidgets.append(m_lblWarningSetPk);
-    m_advancedSectionWidgets.append(m_lblActionStatus);
-    m_advancedSectionWidgets.append(m_lblNativeStatus);
-    m_advancedSectionWidgets.append(m_lblRoutingStatus);
-    m_advancedSectionWidgets.append(m_chkShow2ToneMeasurements);
-    m_advancedSectionWidgets.append(lblMox);
-    m_advancedSectionWidgets.append(m_spinMoxDelay);
-    m_advancedSectionWidgets.append(m_chkAutoAttenuate);
-    m_advancedSectionWidgets.append(m_chkAutoCalEnabled);
-    m_advancedSectionWidgets.append(lblCal);
-    m_advancedSectionWidgets.append(m_spinCalDelay);
-    m_advancedSectionWidgets.append(m_chkRunCalibrationProcessing);
-    m_advancedSectionWidgets.append(lblAmp);
-    m_advancedSectionWidgets.append(m_spinAmpDelay);
-    m_advancedSectionWidgets.append(m_chkQuickAttenuate);
-    m_advancedSectionWidgets.append(m_chkHardwarePeakOverride);
-    m_advancedSectionWidgets.append(m_chkLoopback);
-    m_advancedSectionWidgets.append(m_chkOnTop);
-    m_advancedSectionWidgets.append(m_grpCalInfo);
+    m_advancedSectionWidgets.append(scroll);
+    m_advancedSectionWidgets.append(footer);
+    for (QPushButton* button : findChildren<QPushButton*>()) {
+        button->setAutoDefault(false);
+        button->setMinimumHeight(30);
+    }
+    resize(920, 830);
 
     // ── Wire button signals to slots ──────────────────────────────────────
     connect(m_btnSingleCal,    &QPushButton::clicked,
@@ -625,7 +709,7 @@ void PsForm::buildUi()
 
 QGroupBox* PsForm::buildCalibrationInfoGroup(QWidget* parent)
 {
-    auto* grp = new QGroupBox(tr("Calibration Information"), parent);
+    auto* grp = new QGroupBox(tr("Calibration details"), parent);
     grp->setObjectName(QStringLiteral("grpPSInfo"));
 
     auto* g = new QGridLayout(grp);
@@ -684,7 +768,7 @@ QGroupBox* PsForm::buildCalibrationInfoGroup(QWidget* parent)
 
     auto* lblFeedbk = new QLabel(tr("feedbk"), grp);
     lblFeedbk->setToolTip(tr(
-        "Indicator:  RF feedback level; drives red/yellow/green indicator."));
+        "Latest calibration feedback level; may be retained between collections."));
     g->addWidget(lblFeedbk, 1, 2);
     m_lblFb2 = makeIndicatorLabel(QStringLiteral("lblPSfb2"));
     m_lblFb2->setToolTip(lblFeedbk->toolTip());
@@ -707,9 +791,9 @@ QGroupBox* PsForm::buildCalibrationInfoGroup(QWidget* parent)
     m_lblInfo13->setToolTip(lblDgCnt->toolTip());
     g->addWidget(m_lblInfo13, 3, 3);
 
-    auto* lblCorCnt = new QLabel(tr("cor.cnt"), grp);
+    auto* lblCorCnt = new QLabel(tr("Successful calibrations"), grp);
     lblCorCnt->setToolTip(tr(
-        "Indicator:  cumulative number of new correction solutions."));
+        "Indicator: cumulative successful calibrations (native info[5])."));
     g->addWidget(lblCorCnt, 4, 2);
     m_lblInfo5 = makeIndicatorLabel(QStringLiteral("lblPSInfo5"));
     m_lblInfo5->setToolTip(lblCorCnt->toolTip());
@@ -720,7 +804,7 @@ QGroupBox* PsForm::buildCalibrationInfoGroup(QWidget* parent)
     g->addWidget(lblGetPk, 1, 4);
     m_lblGetPSpeak = new QLabel(grp);
     m_lblGetPSpeak->setObjectName(QStringLiteral("GetPSpeak"));
-    m_lblGetPSpeak->setStyleSheet(bisqueLabelStyle());
+    m_lblGetPSpeak->setStyleSheet(QStringLiteral("padding: 4px;"));
     m_lblGetPSpeak->setToolTip(
         tr("Indicator:  Peak level of measured digital TX feedback."));
     g->addWidget(m_lblGetPSpeak, 1, 5);
@@ -745,7 +829,7 @@ QGroupBox* PsForm::buildCalibrationInfoGroup(QWidget* parent)
     //   }
     m_txtPSpeak = new QLineEdit(grp);
     m_txtPSpeak->setObjectName(QStringLiteral("txtPSpeak"));
-    m_txtPSpeak->setStyleSheet(bisqueLabelStyle());
+    m_txtPSpeak->setStyleSheet(QStringLiteral("padding: 4px;"));
     m_txtPSpeak->setToolTip(tr(
         "PS hardware peak (editable).  Peak level of expected digital TX "
         "feedback for the current hardware.  Should be close to GetPk; can "
@@ -787,6 +871,45 @@ QGroupBox* PsForm::buildCalibrationInfoGroup(QWidget* parent)
         g->addWidget(m_rawInfoLabels[static_cast<std::size_t>(i)], row, column + 1);
     }
 
+    // Preserve the source-era controls, reorganizing their presentation only.
+    // In PS3, info[5]/info[7] are successes/attempts; curve points are not solutions.
+    m_peakReference = new QGroupBox(tr("Hardware peak reference"), parent);
+    m_peakReference->setObjectName(QStringLiteral("PureSignalPeakReference"));
+    auto* peaks = new QGridLayout(m_peakReference);
+    peaks->setHorizontalSpacing(12);
+    peaks->setVerticalSpacing(10);
+    auto* explanation = new QLabel(tr("Digital feedback reference, not distortion improvement. "
+        "GetPk: native HWPeak readback · SetPk: expected peak override."), m_peakReference);
+    explanation->setWordWrap(true);
+    peaks->addWidget(explanation, 0, 0, 1, 3);
+    peaks->addWidget(lblGetPk, 1, 0);
+    peaks->addWidget(m_lblGetPSpeak, 1, 1);
+    peaks->addWidget(lblSetPk, 2, 0);
+    peaks->addWidget(m_txtPSpeak, 2, 1);
+    peaks->addWidget(m_btnDefaultPeaks, 2, 2);
+    while (g->count() > 0) {
+        std::unique_ptr<QLayoutItem> item(g->takeAt(0));
+        if (item->widget()) { item->widget()->hide(); }
+    }
+    const QStringList names{tr("Feedback curve"), tr("Magnitude curve"), tr("Cosine curve"),
+        tr("Sine curve"), tr("Calibration feedback"), tr("Successful calibrations"),
+        tr("Solution check"), tr("Calibration attempts"), tr("Raw 8"), tr("Raw 9"),
+        tr("Raw 10"), tr("Raw 11"), tr("File status"), tr("Raw 13"),
+        tr("Applied code"), tr("Engine code")};
+    for (int i = 0; i < 16; ++i) {
+        auto* name = new QLabel(tr("%1 · [%2]").arg(names[i]).arg(i), grp);
+        const int column = (i % 4) * 2;
+        const int row = i / 4;
+        g->addWidget(name, row, column);
+        QLabel* value = m_rawInfoLabels[static_cast<std::size_t>(i)];
+        value->setMinimumWidth(28);
+        value->setStyleSheet(QStringLiteral("QLabel { background: %1; color: %2; padding: 3px 4px; border-radius: 3px; }")
+            .arg(PureSignalViewStyle::background(value).name(), PureSignalViewStyle::text().name()));
+        g->addWidget(value, row, column + 1);
+        value->show();
+    }
+    m_lblFb2->setObjectName(QStringLiteral("lblPSfb2"));
+    m_lblFb2->hide(); // Complete raw[4] above is the exposed calibration level.
     return grp;
 }
 
@@ -917,6 +1040,7 @@ void PsForm::onActionResult(quint32 operationId, Ps3ActionPhase phase,
 void PsForm::onSessionInvalidated()
 {
     m_pendingActions.clear();
+    setImdMeasurementFrame({});
     if (m_lblActionStatus) {
         m_lblActionStatus->setText(tr("The connection to the Core changed; actions still waiting were canceled."));
     }
@@ -940,7 +1064,7 @@ void PsForm::refreshFacadeStatus()
     }
     if (m_lblNativeStatus) {
         m_lblNativeStatus->setText(tr(
-            "PS %1, MOX %2; RunCal %3; correction run/busy %4/%5; "
+            "PS %1, MOX %2; RunCal %3; IQ correction run/busy %4/%5; "
             "delay requested/applied %6/%7 ns; peak/maxTX %8/%9; feedback %10 Hz; "
             "save gen %11 pending %12 result %13; restore gen %14 pending %15 result %16")
             .arg(status.psEnabled ? tr("on") : tr("off"))
@@ -969,6 +1093,7 @@ void PsForm::refreshFacadeStatus()
     }
 
     const bool available = m_facade && m_facade->available();
+    m_instruments->setStatus(status, available);
     const bool canActuate = m_facade && m_facade->canActuate();
     // R-R3-49 (parity Task 7): arming keys nothing, so it follows canArm;
     // the two-tone test below keys the radio and stays on canActuate.
@@ -1018,11 +1143,16 @@ void PsForm::refreshFacadeStatus()
     const bool correcting = status.feedbackLevel > 90;
     if (m_lblCo) {
         const QString colour = status.correctionsApplied
-            ? correcting ? QStringLiteral("#00FF00") : QStringLiteral("#FFFF00")
+            ? correcting ? psFeedbackColour(150).name() : psFeedbackColour(100).name()
             : QStringLiteral("black");
-        m_lblCo->setStyleSheet(QStringLiteral(
+        const QString style = QStringLiteral(
             "QLabel { background-color: %1; border: 1px inset; "
-            "min-width: 12px; min-height: 12px; }").arg(colour));
+            "min-width: 12px; min-height: 12px; }").arg(colour);
+        // Qt polishes and repaints a widget on every setStyleSheet(), the
+        // same text or not, and this runs on every status update.
+        if (m_lblCo->styleSheet() != style) {
+            m_lblCo->setStyleSheet(style);
+        }
     }
     refreshSaveRestoreButtons();
 }
@@ -1275,7 +1405,8 @@ void PsForm::onLoopbackToggled(bool on)
 void PsForm::onShow2ToneMeasurementsToggled(bool on)
 {
     if (m_updatingFromModel) { return; }
-    AppSettings::instance().setValue(QLatin1String(kShowTwoToneSettingsKey), on);
+    AppSettings::instance().setValue(QLatin1String(kShowTwoToneSettingsKey),
+                                     on ? QStringLiteral("True") : QStringLiteral("False"));
     emit showTwoToneMeasurementsChanged(on);
     if (m_pureSignal && !m_radioModel) {
         m_pureSignal->setShow2ToneMeasurements(on);
@@ -1440,6 +1571,41 @@ void PsForm::restoreAdvancedMode()
 // ─────────────────────────────────────────────────────────────────────────
 // Close handling
 // ─────────────────────────────────────────────────────────────────────────
+
+void PsForm::setImdMeasurementFrame(const ImdMeasurementFrame& frame)
+{
+    m_imdMeasurementFrame = frame;
+    if (m_imdPanel) { m_imdPanel->setFrame(frame); }
+}
+
+void PsForm::setShowTwoToneMeasurements(bool on)
+{
+    if (!m_chkShow2ToneMeasurements) { return; }
+    const QSignalBlocker blocker(m_chkShow2ToneMeasurements);
+    m_chkShow2ToneMeasurements->setChecked(on);
+}
+
+void PsForm::resizeEvent(QResizeEvent* event)
+{
+    QDialog::resizeEvent(event);
+    if (!m_benchLayout || !m_instruments) { return; }
+    const bool narrow = width() < 760;
+    QWidget* tabs = findChild<QWidget*>(QStringLiteral("PureSignalBenchTabs"));
+    m_benchLayout->addWidget(tabs, narrow ? 1 : 0, narrow ? 0 : 1);
+    m_benchLayout->setColumnStretch(0, narrow ? 1 : 0);
+    m_benchLayout->setColumnStretch(1, narrow ? 0 : 1);
+    // Reflow the exposed raw words independently from the control workarea.
+    auto* grid = qobject_cast<QGridLayout*>(m_grpCalInfo->layout());
+    const int pairs = narrow ? 2 : 4;
+    QList<QWidget*> words;
+    while (grid->count() > 0) {
+        std::unique_ptr<QLayoutItem> item(grid->takeAt(0));
+        if (item->widget()) { words.append(item->widget()); }
+    }
+    for (int i = 0; i < words.size(); ++i) {
+        grid->addWidget(words[i], (i / 2) / pairs, ((i / 2) % pairs) * 2 + i % 2);
+    }
+}
 
 void PsForm::closeEvent(QCloseEvent* event)
 {

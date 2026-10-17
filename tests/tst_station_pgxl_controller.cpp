@@ -15,6 +15,9 @@
 // 2026-09-24: Lane B takes integration (R-IOS-01, R-R3-21): another amp off
 // the network leaves this one's plain not-found reason. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-10-11: a desktop window that runs its own radio shares its Power
+// Genius at the typed address, for its own Connect and a client's. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include "OperatorWording.h"
 #include <QPointer>
@@ -285,6 +288,76 @@ private slots:
         QVERIFY(model.disconnectPgxlForStation(&reason));
         QCOMPARE(ampModel->connectionPhase(), Phase::Disconnected);
         QVERIFY(!pgxl->isConnected());
+    }
+
+    // 2026-10-11: a desktop window running its own radio shares its Power
+    // Genius with the windows and phones signed in to it. Its link is
+    // dialed and used as that window always used it: what answers at the
+    // typed address is the amp, nothing is asked of it first and no
+    // announcement is waited for. The window's own Connect and a client's
+    // work the one connection, through the one controller.
+    void desktopSharesThePowerGeniusAtTheTypedAddress()
+    {
+        QTcpServer amp;
+        QVERIFY(amp.listen(QHostAddress::LocalHost, 0));
+        RadioModel model;
+        model.enableStationAccessoryIdentity(StationAccessoryAdmission::TypedAddress);
+        RadioInfo radio;
+        radio.macAddress = QStringLiteral("aa:bb:cc:dd:ee:72");
+        model.setLastRadioInfoForTest(radio);
+        model.setConnectionStateForTest(ConnectionState::Connected);
+        model.smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
+        model.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
+        // What a client is offered follows this
+        // (StationServer::accessoryStatusVersion).
+        QVERIFY(model.stationAccessoryIdentityEnabled());
+        auto* pgxl = model.pgxlConnection();
+        auto* ampModel = model.amplifierModel();
+        QVERIFY(!pgxl->identityAdmissionRequired());
+        QSignalSpy frames(pgxl, &PgxlConnection::testFrameWrittenForTesting);
+        const auto answer = [&]() -> QTcpSocket* {
+            if (!QTest::qWaitFor([&] { return amp.hasPendingConnections(); }, 2000)) {
+                return nullptr;
+            }
+            QTcpSocket* peer = amp.nextPendingConnection();
+            peer->write("V3.8.9\n");
+            peer->flush();
+            return peer;
+        };
+
+        // The window's own Connect.
+        model.connectPgxlFromWindow(QStringLiteral("127.0.0.1"), amp.serverPort());
+        QCOMPARE(ampModel->connectionPhase(), Phase::Connecting);
+        QVERIFY(answer());
+        QTRY_VERIFY(pgxl->isConnected());
+        QCOMPARE(ampModel->connectionPhase(), Phase::Connected);
+        QCOMPARE(ampModel->deviceVersion(), QStringLiteral("3.8.9"));
+        QCOMPARE(ampModel->configuredHost(), QStringLiteral("127.0.0.1"));
+        QCOMPARE(ampModel->configuredPort(), int(amp.serverPort()));
+        // The link's plain handshake: the amp answered nothing but its
+        // banner, and it is in use (a Core that identifies sends only
+        // "info" until that is answered). Nothing listened for an
+        // announcement.
+        QVERIFY2(commandsOf(frames).contains(QStringLiteral("status")),
+                 qPrintable(commandsOf(frames).join('\n')));
+        QVERIFY(discoveryOf(model) == nullptr);
+
+        // A client's Disconnect and Connect reach the same connection.
+        QString reason;
+        QVERIFY(model.disconnectPgxlForStation(&reason));
+        QVERIFY(!pgxl->isConnected());
+        QCOMPARE(ampModel->connectionPhase(), Phase::Disconnected);
+        QVERIFY2(model.configurePgxlForStation(QStringLiteral("127.0.0.1"), amp.serverPort(),
+                                               &reason), qPrintable(reason));
+        QVERIFY(answer());
+        QTRY_VERIFY(pgxl->isConnected());
+        QCOMPARE(ampModel->connectionPhase(), Phase::Connected);
+        QVERIFY(discoveryOf(model) == nullptr);
+
+        // And the window's Disconnect ends it for the client too.
+        model.disconnectPgxlFromWindow();
+        QVERIFY(!pgxl->isConnected());
+        QCOMPARE(ampModel->connectionPhase(), Phase::Disconnected);
     }
 
     // R-R3-47 / R-R3-22: a window's requests for the amp's own settings. The

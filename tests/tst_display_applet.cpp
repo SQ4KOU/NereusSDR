@@ -24,6 +24,12 @@
 //     rebinding to a second widget, driving a control changes the NEW
 //     widget's model and leaves the old one untouched.
 //   - Reset 3D writes the seven ship defaults onto the model.
+//   - Display pill plan Task 3 (2026-10-10): Black Level is 0 to 100 with
+//     a tooltip that says up is blacker (new case
+//     blackLevel_is0To100_andSaysUpIsBlacker), and the scheme list is the
+//     eight wfSchemeName() entries. modelChange_reflectsEveryValidColorScheme
+//     pinned the applet's own "Black & White" label and was rewritten to
+//     the shared name "BlackWhite".
 //
 // Design: docs/architecture/2026-08-08-3d-stacked-trace-spectrum-design.md
 // Plan:   docs/architecture/2026-08-08-3d-stacked-trace-spectrum-plan.md
@@ -38,6 +44,7 @@
 #include <QSlider>
 
 #include "core/AppSettings.h"
+#include "core/spectrum/WaterfallPalettes.h"
 #include "gui/applets/DisplayApplet.h"
 #include "gui/SpectrumWidget.h"
 #include "models/DisplaySettingsModel.h"
@@ -61,6 +68,7 @@ private slots:
     void structureHasThreeSectionsInOrderWithDividers();
 
     void modelChange_reflectsOnControl_waterfall();
+    void blackLevel_is0To100_andSaysUpIsBlacker();
     void modelChange_reflectsEveryValidColorScheme();
     void modelChange_reflectsOnControl_spectrum();
     void modelChange_reflectsOnControl_threeDView();
@@ -70,6 +78,8 @@ private slots:
     void rebind_followsNewWidgetAndLeavesOldOneAlone();
 
     void resetButton_writesSevenDefaultsOntoModel();
+
+    void panReset_showsTheReloadedValues();
 };
 
 // ---------------------------------------------------------------------
@@ -205,6 +215,31 @@ void TestDisplayApplet::modelChange_reflectsOnControl_waterfall()
     }
 }
 
+// Display pill plan Task 3: Black Level runs 0 to 100 (50 = black at the
+// noise floor), its tooltip says which way is blacker, and the slider's top
+// reaches the model unclamped.
+void TestDisplayApplet::blackLevel_is0To100_andSaysUpIsBlacker()
+{
+    RadioModel m;
+    SpectrumWidget w;
+    m.setSpectrumWidget(&w);
+    DisplayApplet applet(&m);
+    QSlider* black = applet.blackLevelSliderForTest();
+    QCOMPARE(black->minimum(), 0);
+    QCOMPARE(black->maximum(), 100);
+    QVERIFY2(black->toolTip().contains(QStringLiteral("Up is blacker")),
+             qPrintable(black->toolTip()));
+    // Plain operator words: no em dash in the tooltip.
+    QVERIFY(!black->toolTip().contains(QChar(0x2014)));
+    // The bound pan's ship default shows on the slider.
+    QCOMPARE(black->value(), 57);
+    QCOMPARE(applet.colorGainSliderForTest()->value(), 60);
+    black->setValue(100);
+    QCOMPARE(w.displaySettings()->wfBlackLevel(), 100);
+    black->setValue(0);
+    QCOMPARE(w.displaySettings()->wfBlackLevel(), 0);
+}
+
 // The primary Display applet must reflect every scheme accepted by Setup
 // and the model without writing a different selection back to the model.
 void TestDisplayApplet::modelChange_reflectsEveryValidColorScheme()
@@ -214,11 +249,21 @@ void TestDisplayApplet::modelChange_reflectsEveryValidColorScheme()
     m.setSpectrumWidget(&w);
     DisplayApplet applet(&m);
     DisplaySettingsModel* settings = w.displaySettings();
+    // Display pill plan Task 3: the list is the eight wfSchemeName()
+    // entries, the names Setup shows ("BlackWhite", where the applet had
+    // its own "Black & White").
     const QStringList labels{
         QStringLiteral("Default"), QStringLiteral("Enhanced"),
-        QStringLiteral("Spectran"), QStringLiteral("Black & White"),
+        QStringLiteral("Spectran"), QStringLiteral("BlackWhite"),
         QStringLiteral("LinLog"), QStringLiteral("LinRad"),
         QStringLiteral("Custom"), QStringLiteral("Clarity Blue")};
+    QCOMPARE(applet.colorSchemeComboForTest()->count(), 8);
+    QCOMPARE(labels.size(), static_cast<int>(WfColorScheme::Count));
+    for (int scheme = 0; scheme < labels.size(); ++scheme) {
+        QCOMPARE(applet.colorSchemeComboForTest()->itemText(scheme), labels[scheme]);
+        QCOMPARE(applet.colorSchemeComboForTest()->itemText(scheme),
+                 QString::fromLatin1(wfSchemeName(static_cast<WfColorScheme>(scheme))));
+    }
     for (int scheme = 0; scheme < labels.size(); ++scheme) {
         settings->setWfColorScheme(scheme);
         QCOMPARE(applet.colorSchemeComboForTest()->currentText(), labels[scheme]);
@@ -456,6 +501,44 @@ void TestDisplayApplet::resetButton_writesSevenDefaultsOntoModel()
     QCOMPARE(settings->dssAngle(), 50);
     QCOMPARE(settings->dssRowDivider(), 0);
     QCOMPARE(settings->threeDSliceDepth(), false);
+}
+
+// ---------------------------------------------------------------------
+// Fix wave I5: "Reset this pan" (SpectrumWidget::resetPanDisplayOverrides)
+// reloads the pan's values with the model's signals blocked and announces
+// once, with panDisplayReset(). The applet shows the reloaded values, and
+// after a rebind it no longer follows the pan it left.
+// ---------------------------------------------------------------------
+void TestDisplayApplet::panReset_showsTheReloadedValues()
+{
+    RadioModel m;
+    SpectrumWidget w1;
+    SpectrumWidget w2;
+    m.setSpectrumWidget(&w1);
+    DisplayApplet applet(&m);
+
+    const int shipGain = applet.colorGainSliderForTest()->value();
+    const int shipBlack = applet.blackLevelSliderForTest()->value();
+    const int shipFill = applet.fillAlphaSliderForTest()->value();
+    applet.colorGainSliderForTest()->setValue(shipGain + 21);
+    applet.blackLevelSliderForTest()->setValue(shipBlack - 20);
+    applet.fillAlphaSliderForTest()->setValue(shipFill + 10);
+    QCOMPARE(w1.displaySettings()->wfColorGain(), shipGain + 21);
+
+    w1.resetPanDisplayOverrides();
+    QCOMPARE(w1.displaySettings()->wfColorGain(), shipGain);
+    QCOMPARE(applet.colorGainSliderForTest()->value(), shipGain);
+    QCOMPARE(applet.blackLevelSliderForTest()->value(), shipBlack);
+    QCOMPARE(applet.fillAlphaSliderForTest()->value(), shipFill);
+
+    // Bound to w2 now: a reset of w1 is not the applet's business.
+    m.setSpectrumWidget(&w2);
+    applet.colorGainSliderForTest()->setValue(shipGain + 7);
+    QCOMPARE(w2.displaySettings()->wfColorGain(), shipGain + 7);
+    w1.resetPanDisplayOverrides();
+    QCOMPARE(applet.colorGainSliderForTest()->value(), shipGain + 7);
+    w2.resetPanDisplayOverrides();
+    QCOMPARE(applet.colorGainSliderForTest()->value(), shipGain);
 }
 
 QTEST_MAIN(TestDisplayApplet)

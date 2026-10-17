@@ -32,6 +32,47 @@ using namespace NereusSDR;
 class TstClaritySmoothDefaults : public QObject {
     Q_OBJECT
 private slots:
+    void resetChangesOnlyManualWaterfallToAuto_data()
+    {
+        QTest::addColumn<bool>("clarity");
+        QTest::addColumn<bool>("agc");
+        QTest::addColumn<bool>("floor");
+        QTest::addColumn<bool>("scale");
+        QTest::newRow("Clarity retains inactive flags") << true << false << true << true;
+        QTest::newRow("Floor stays Floor") << false << true << true << false;
+        QTest::newRow("Scale stays Scale") << false << false << false << true;
+        QTest::newRow("Scale retains inactive AGC and Floor") << false << true << true << true;
+        QTest::newRow("Auto stays Auto") << false << true << false << false;
+        QTest::newRow("Manual becomes Auto") << false << false << false << false;
+        QTest::newRow("Manual with inactive Floor becomes coherent Auto") << false << false << true << false;
+    }
+
+    void resetChangesOnlyManualWaterfallToAuto()
+    {
+        QFETCH(bool, clarity);
+        QFETCH(bool, agc);
+        QFETCH(bool, floor);
+        QFETCH(bool, scale);
+        AppSettings::instance().clear();
+        RadioModel model;
+        SpectrumWidget widget;
+        widget.loadSettings();
+        widget.setClarityEnabled(clarity);
+        widget.setWfAgcEnabled(agc);
+        widget.setWaterfallNFAGCEnabled(floor);
+        widget.setWfUseSpectrumMinMax(scale);
+        widget.setWfLowThreshold(-133.0f);
+        widget.setWfHighThreshold(-43.0f);
+        model.setSpectrumSink(&widget);
+        model.applyClaritySmoothDefaults();
+        QCOMPARE(widget.clarityEnabled(), clarity);
+        const bool manual = !clarity && !agc && !scale;
+        QCOMPARE(widget.waterfallNFAGCEnabled(), manual ? false : floor);
+        QCOMPARE(widget.wfUseSpectrumMinMax(), scale);
+        QCOMPARE(widget.wfAgcEnabled(), agc || manual);
+        QCOMPARE(widget.wfLowThreshold(), -133.0f);
+        QCOMPARE(widget.wfHighThreshold(), -43.0f);
+    }
     void sixHundredFiftyMsReproducesTheMarchWeight()
     {
         // The number the button uses, checked against the same function
@@ -64,6 +105,34 @@ private slots:
         reloaded.setSpectrumAverageTimeMs(30);
         reloaded.loadSettingsForTest();
         QCOMPARE(reloaded.spectrumAverageTimeMs(), 650);
+    }
+
+    // Final pass T1: the profile's trace is white whatever trace color was
+    // chosen before, and white as before when none was.
+    void resetSetsTheTraceColorToTheFillsWhite_data()
+    {
+        QTest::addColumn<QColor>("chosen");
+        QTest::newRow("a chosen trace color") << QColor(QStringLiteral("#FF0000"));
+        QTest::newRow("no trace color chosen") << QColor();
+    }
+
+    void resetSetsTheTraceColorToTheFillsWhite()
+    {
+        QFETCH(QColor, chosen);
+        AppSettings::instance().clear();
+        const QColor white(0xff, 0xff, 0xff, 230);
+        RadioModel model;
+        SpectrumWidget widget;
+        if (chosen.isValid()) {
+            widget.setTraceColor(chosen);
+            QCOMPARE(widget.traceColor(), chosen);
+        }
+        model.setSpectrumSink(&widget);
+
+        model.applyClaritySmoothDefaults();
+
+        QCOMPARE(widget.fillColor(), white);
+        QCOMPARE(widget.traceColor(), white);
     }
 };
 

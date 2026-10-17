@@ -25,6 +25,9 @@
 //   2026-09-30 The shared-input reason is labeled "Shared input", since on
 //              the HL2 it can be only the high-pass sentence. J.J. Boyd
 //              (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-11 The Auto choice says what it does on a radio whose band
+//              filters combine (the Anvelina Pro 3). J.J. Boyd (KG4VCF),
+//              AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // no-port-check: NereusSDR-original
@@ -32,6 +35,7 @@
 #include "gui/widgets/FilterPolicyDialog.h"
 
 #include "core/accessories/AlexController.h"
+#include "core/codec/AlexFilterMap.h"
 #include "core/session/IStationLink.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/StyleConstants.h"
@@ -56,13 +60,15 @@ FilterPolicyDialog::FilterPolicyDialog(int chainIndex, RadioModel* model, QWidge
                              ? &model->filterChainState(chainIndex) : nullptr,
                          model->filterChainStateAvailable(chainIndex),
                          model->role() == RadioModel::Role::Remote
-                             ? model->stationLink() : nullptr)
+                             ? model->stationLink() : nullptr,
+                         codec::alex::combinesRxBandFilters(model->hardwareProfile().model))
 {
 }
 
 FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWidget* parent,
                                        const AlexController::AlexAdcState* stationState,
-                                       bool stationStateAvailable, IStationLink* station)
+                                       bool stationStateAvailable, IStationLink* station,
+                                       bool bandFiltersCombine)
     : QDialog(parent)
 {
     // R-R3-46 / R-R3-21: a remote window changes the Core's policy only when
@@ -115,7 +121,10 @@ FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWi
     auto* btnGroup = new QButtonGroup(this);
 
     auto* autoBtn = new QRadioButton(
-        QStringLiteral("Auto - Filter when single-band, bypass when multi-band"), modeGroup);
+        bandFiltersCombine
+            ? QStringLiteral("Auto - Filter every band in use")
+            : QStringLiteral("Auto - Filter when single-band, bypass when multi-band"),
+        modeGroup);
     auto* forceBandBtn = new QRadioButton(
         QStringLiteral("Force filter (TX-bound band)"), modeGroup);
     auto* forceByBtn = new QRadioButton(

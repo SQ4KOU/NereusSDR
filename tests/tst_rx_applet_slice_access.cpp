@@ -13,6 +13,10 @@
 // "Your volume" is that surface).
 //
 // Modification history (NereusSDR):
+//   2026-10-14 - PR #262 RX-only applet echo regression. J.J. Boyd
+//                 (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-14 - PR #96 actual TX popup blocked-choice regression.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-29 - Written for slice control plan Task 15. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
@@ -33,15 +37,21 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QLabel>
+#include <QFontMetrics>
+#include <QStyleOptionComboBox>
+#include "gui/styles/WorkspacePreview.h"
 #include <QMenu>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QScopeGuard>
 #include <QSlider>
 #include <QSpinBox>
 #include <QTimer>
 #include <QToolButton>
 
 #include "core/AppSettings.h"
+#include "core/RadioConnection.h"
+#include "core/accessories/AlexAntennaFacade.h"
 #include "core/StepAttenuatorController.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexController.h"
@@ -56,6 +66,37 @@
 using namespace NereusSDR;
 
 namespace {
+
+// No-I/O connection: makes RadioModel's real slice antenna handlers
+// eligible without a radio, sockets, audio, or a connection lifecycle.
+class AntennaConnectionFake : public RadioConnection {
+public:
+    AntennaConnectionFake() { setState(ConnectionState::Connected); }
+    void init() override {}
+    void connectToRadio(const RadioInfo&) override {}
+    void disconnect() override {}
+    void setReceiverFrequency(int, quint64) override {}
+    void setTxFrequency(quint64) override {}
+    void setActiveReceiverCount(int) override {}
+    void setSampleRate(int) override {}
+    void setAttenuator(int) override {}
+    void setPreamp(bool) override {}
+    void setTxDrive(int) override {}
+    void setMox(bool) override {}
+    void setAntennaRouting(AntennaRouting) override {}
+    void setWatchdogEnabled(bool) override {}
+    void sendTxIq(const float*, int) override {}
+    void setTrxRelay(bool) override {}
+    void setMicBoost(bool) override {}
+    void setLineIn(bool) override {}
+    void setMicTipRing(bool) override {}
+    void setMicBias(bool) override {}
+    void setLineInGain(int) override {}
+    void setUserDigOut(quint8) override {}
+    void setPuresignalRun(bool) override {}
+    void setMicPTTDisabled(bool) override {}
+    void setMicXlr(bool) override {}
+};
 
 const QString kReason = QStringLiteral("Shack iPad controls this slice");
 
@@ -168,6 +209,75 @@ class TestRxAppletSliceAccess : public QObject {
 private slots:
     void initTestCase() { AppSettings::instance().clear(); }
     void cleanup()      { AppSettings::instance().clear(); }
+
+    void workspaceAgcLabelsAndLateAutoUpdatesFit()
+    {
+        WorkspacePreview::setEnabledForTest(true);
+        SliceModel slice(0);
+        RxApplet applet(&slice, nullptr);
+        applet.resize(260, 750);
+        applet.show();
+        WorkspacePreview::themeSubtree(&applet);
+        QCoreApplication::processEvents();
+        QComboBox* agc = nullptr;
+        QPushButton* badge = nullptr;
+        for (QComboBox* combo : applet.findChildren<QComboBox*>()) {
+            if (combo->findText(QStringLiteral("Long")) >= 0
+                && combo->findText(QStringLiteral("Fast")) >= 0) { agc = combo; }
+        }
+        for (QPushButton* button : applet.findChildren<QPushButton*>()) {
+            if (button->text() == QStringLiteral("AUTO")) { badge = button; }
+        }
+        QVERIFY(agc);
+        QVERIFY(badge);
+        for (int index = 0; index < agc->count(); ++index) {
+            agc->setCurrentIndex(index);
+            QStyleOptionComboBox option;
+            option.initFrom(agc);
+            option.currentText = agc->currentText();
+            const QRect field = agc->style()->subControlRect(QStyle::CC_ComboBox, &option,
+                                                            QStyle::SC_ComboBoxEditField, agc);
+            QVERIFY2(field.width() >= QFontMetrics(agc->font(), agc).horizontalAdvance(option.currentText),
+                     qPrintable(option.currentText));
+        }
+        for (bool active : {true, false, true}) {
+            applet.updateAgcAutoVisuals(active, -98.0f, 20.0, true);
+            WorkspacePreview::themeSubtree(&applet);
+            QCoreApplication::processEvents();
+            const QFontMetrics metrics(badge->font(), badge);
+            QVERIFY(badge->width() >= metrics.horizontalAdvance(badge->text()) + 8);
+            QVERIFY(badge->height() >= metrics.height() + 4);
+        }
+        WorkspacePreview::setEnabledForTest(false);
+        // The look is a startup choice. Flipping its test switch does not
+        // send an event; themeSubtree deliberately does nothing when off.
+        // Verify the observer's classic Show path, then a fresh classic RX.
+        agc->hide();
+        agc->show();
+        applet.updateAgcAutoVisuals(false, -98.0f, 20.0, true);
+        QCoreApplication::processEvents();
+        QCOMPARE(agc->width(), 52);
+        QCOMPARE(badge->font().pixelSize(), 7);
+        QCOMPARE(badge->size(), QSize(30, 14));
+        RxApplet classic(&slice, nullptr);
+        classic.show();
+        QCoreApplication::processEvents();
+        QComboBox* classicAgc = nullptr;
+        QPushButton* classicBadge = nullptr;
+        for (QComboBox* combo : classic.findChildren<QComboBox*>()) {
+            if (combo->findText(QStringLiteral("Long")) >= 0
+                && combo->findText(QStringLiteral("Fast")) >= 0) { classicAgc = combo; }
+        }
+        for (QPushButton* button : classic.findChildren<QPushButton*>()) {
+            if (button->text() == QStringLiteral("AUTO")) { classicBadge = button; }
+        }
+        QVERIFY(classicAgc);
+        QVERIFY(classicBadge);
+        QCOMPARE(classicAgc->width(), 52);
+        QCOMPARE(classicAgc->font().pixelSize(), 10);
+        QCOMPARE(classicBadge->font().pixelSize(), 7);
+        QCOMPARE(classicBadge->size(), QSize(30, 14));
+    }
 
     void unshared_applet_is_not_listening()
     {
@@ -360,6 +470,228 @@ private slots:
         QCOMPARE(slice->rxAntenna(), before);
         // The button shows the slice's antenna, which the controller sets.
         QCOMPARE(applet.findChild<QPushButton*>(QStringLiteral("m_rxAntBtn"))->text(), before);
+    }
+
+    // PR #262: an applet's controller echo must preserve the RX-only mux.
+    // Literal slot labels come from SkuUiProfile.cpp's existing ANAN7000D
+    // and ANAN100D rows; the regression catches ANT-only read-back.
+    void controlling_applet_preserves_rx_only_selection_data()
+    {
+        QTest::addColumn<int>("sku");
+        QTest::addColumn<int>("slot");
+        QTest::addColumn<QString>("label");
+        QTest::addColumn<bool>("initialPopulate");
+        for (bool initial : {false, true}) {
+            const QByteArray phase = initial ? "initial" : "echo";
+            QTest::newRow((phase + "-7000-byps").constData())
+                << static_cast<int>(HPSDRModel::ANAN7000D) << 1 << QStringLiteral("BYPS") << initial;
+            QTest::newRow((phase + "-7000-ext1").constData())
+                << static_cast<int>(HPSDRModel::ANAN7000D) << 2 << QStringLiteral("EXT1") << initial;
+            QTest::newRow((phase + "-7000-xvtr").constData())
+                << static_cast<int>(HPSDRModel::ANAN7000D) << 3 << QStringLiteral("XVTR") << initial;
+            QTest::newRow((phase + "-100d-ext2").constData())
+                << static_cast<int>(HPSDRModel::ANAN100D) << 1 << QStringLiteral("EXT2") << initial;
+        }
+    }
+
+    void controlling_applet_preserves_rx_only_selection()
+    {
+        QFETCH(int, sku);
+        QFETCH(int, slot);
+        QFETCH(QString, label);
+        QFETCH(bool, initialPopulate);
+        // Add the slice while disconnected, then explicitly wire its real
+        // antenna handlers against a no-I/O fake; no DSP channel is started.
+        AntennaConnectionFake connection;
+        RadioModel model;
+        model.setHpsdrModelForTest(static_cast<HPSDRModel>(sku));
+        model.addPanadapter();
+        model.panadapters().first()->setBand(Band::Band20m);
+        model.addSlice();
+        SliceModel* slice = model.sliceById(0);
+        QVERIFY(slice);
+        QCOMPARE(model.activeSlice(), slice);
+        QCOMPARE(bandFromFrequency(slice->frequency()), Band::Band20m);
+        QCOMPARE(model.lastBand(), Band::Band20m);
+        QCOMPARE(model.panadapters().first()->band(), Band::Band20m);
+        model.injectConnectionForTest(&connection);
+        const auto uninject = qScopeGuard([&model] { model.injectConnectionForTest(nullptr); });
+        model.wireSliceSignalsForTest();
+        // Normalize restored per-band labels before testing a fresh choice.
+        // Keep Alex's TX read-back coherent with the slice's TX intent so
+        // RadioModel's existing reverse sync does not change it independently.
+        slice->setRxAntenna(QStringLiteral("ANT1"));
+        model.alexControllerMutable().setRxOnlyAnt(Band::Band20m, 0);
+        model.alexControllerMutable().setTxAnt(Band::Band20m, 3);
+        slice->setTxAntenna(QStringLiteral("ANT3"));
+        QCOMPARE(slice->rxAntenna(), QStringLiteral("ANT1"));
+        QCOMPARE(model.alexController().rxOnlyAnt(Band::Band20m), 0);
+        QCOMPARE(model.alexController().txAnt(Band::Band20m), 3);
+        QSignalSpy txSpy(slice, &SliceModel::txAntennaChanged);
+        if (initialPopulate) {
+            model.alexControllerMutable().setRxOnlyAnt(Band::Band20m, slot);
+            QCOMPARE(slice->rxAntenna(), label);
+        }
+
+        RxApplet applet(slice, &model);
+        applet.setSliceAccess(controlled());
+        QPushButton* button = applet.findChild<QPushButton*>(QStringLiteral("m_rxAntBtn"));
+        QVERIFY(button);
+        if (!initialPopulate) {
+            slice->setRxAntenna(label);
+        }
+        QCOMPARE(model.alexController().rxOnlyAnt(Band::Band20m), slot);
+        QCOMPARE(slice->rxAntenna(), label);
+        QCOMPARE(button->text(), label);
+        QCOMPARE(slice->txAntenna(), QStringLiteral("ANT3"));
+        QCOMPARE(txSpy.count(), 0);
+
+        // A real main-ANT selection must still release the RX-only mux.
+        slice->setRxAntenna(QStringLiteral("ANT1"));
+        QCOMPARE(model.alexController().rxOnlyAnt(Band::Band20m), 0);
+        QCOMPARE(slice->rxAntenna(), QStringLiteral("ANT1"));
+        QCOMPARE(button->text(), QStringLiteral("ANT1"));
+    }
+
+    void listened_applet_does_not_echo_rx_only_controller_changes()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANAN7000D);
+        model.addPanadapter();
+        model.panadapters().first()->setBand(Band::Band20m);
+        model.addSlice();
+        model.addSlice();
+        SliceModel* slice = model.sliceById(0) == model.activeSlice()
+            ? model.sliceById(1) : model.sliceById(0);
+        QVERIFY(slice);
+        RxApplet applet(slice, &model);
+        applet.setSliceAccess(listened());
+        const QString before = slice->rxAntenna();
+        QSignalSpy rxSpy(slice, &SliceModel::rxAntennaChanged);
+        model.alexControllerMutable().setRxOnlyAnt(Band::Band20m, 1);
+        QCOMPARE(model.alexController().rxOnlyAnt(Band::Band20m), 1);
+        QCOMPARE(rxSpy.count(), 0);
+        QCOMPARE(slice->rxAntenna(), before);
+        QCOMPARE(applet.findChild<QPushButton*>(QStringLiteral("m_rxAntBtn"))->text(), before);
+    }
+
+    void tx_popup_refuses_blocked_ports_data()
+    {
+        QTest::addColumn<bool>("remote");
+        QTest::addColumn<int>("port");
+        QTest::addColumn<bool>("lateBlock");
+        QTest::addColumn<bool>("allowed");
+        QTest::addColumn<bool>("nonBound");
+        for (bool remote : {false, true}) {
+            for (int port : {2, 3}) {
+                for (bool late : {false, true}) {
+                    const QByteArray name = QByteArray(remote ? "remote" : "local")
+                        + QByteArray::number(port) + (late ? "-race" : "-blocked");
+                    QTest::newRow(name.constData()) << remote << port << late << false << false;
+                }
+            }
+        }
+        QTest::newRow("local-valid-bound") << false << 2 << false << true << false;
+        QTest::newRow("local-valid-nonbound") << false << 2 << false << true << true;
+        QTest::newRow("remote-valid") << true << 2 << false << true << false;
+    }
+
+    void tx_popup_refuses_blocked_ports()
+    {
+        QFETCH(bool, remote);
+        QFETCH(int, port);
+        QFETCH(bool, lateBlock);
+        QFETCH(bool, allowed);
+        QFETCH(bool, nonBound);
+        AntennaConnectionFake connection;
+        RadioModel model(remote ? RadioModel::Role::Remote : RadioModel::Role::Local);
+        model.setBoardForTest(HPSDRHW::Hermes);
+        SliceModel remoteSlice(0);
+        SliceModel* slice = &remoteSlice;
+        if (!remote) {
+            model.addPanadapter();
+            model.panadapters().first()->setBand(Band::Band20m);
+            model.addSlice();
+            if (nonBound) {
+                model.addSlice();
+                model.setActiveSlice(1);
+            }
+            slice = model.activeSlice();
+            QVERIFY(slice);
+            QCOMPARE(bandFromFrequency(slice->frequency()), Band::Band20m);
+            QCOMPARE(model.lastBand(), Band::Band20m);
+            QCOMPARE(model.txBoundSlice(), model.sliceById(0));
+            QCOMPARE(slice == model.txBoundSlice(), !nonBound);
+            model.injectConnectionForTest(&connection);
+            model.wireSliceSignalsForTest();
+        }
+        const auto uninject = qScopeGuard([&model] { model.injectConnectionForTest(nullptr); });
+        slice->setTxAntenna(QStringLiteral("ANT1"));
+        AlexAntennaFacade* const facade = model.alexAntennaFacade();
+        QVERIFY(facade);
+        auto block = [&]() {
+            if (remote) {
+                return facade->applyRemoteProperty(port == 2 ? QByteArray("blockTxAnt2")
+                                                            : QByteArray("blockTxAnt3"), true);
+            }
+            if (port == 2) { model.alexControllerMutable().setBlockTxAnt2(true); }
+            else { model.alexControllerMutable().setBlockTxAnt3(true); }
+            return true;
+        };
+        if (!allowed && !lateBlock) { QVERIFY(block()); }
+        // Install subscriptions as the host does; constructing with this
+        // slice then setting the same pointer would skip connectSlice().
+        RxApplet applet(nullptr, &model);
+        applet.setSlice(slice);
+        applet.setSliceAccess(controlled());
+        applet.setBoardCapabilities(model.boardCapabilities());
+        applet.setHpsdrSku(model.hardwareProfile().model);
+        QPushButton* const button = applet.findChild<QPushButton*>(QStringLiteral("m_txAntBtn"));
+        QVERIFY(button);
+        const QString choice = QStringLiteral("ANT%1").arg(port);
+        bool menuFound = false;
+        bool actionFound = false;
+        bool actionEnabled = false;
+        bool blockApplied = true;
+        bool timedOut = false;
+        QTimer guard;
+        guard.setSingleShot(true);
+        connect(&guard, &QTimer::timeout, &applet, [&] {
+            timedOut = true;
+            if (QWidget* popup = QApplication::activePopupWidget()) { popup->close(); }
+        });
+        QTimer::singleShot(0, &applet, [&] {
+            QMenu* const menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            if (!menu) { return; }
+            menuFound = true;
+            QAction* const action = findAction(*menu, choice);
+            if (!action) { menu->close(); return; }
+            actionFound = true;
+            actionEnabled = action->isEnabled();
+            if (lateBlock) { blockApplied = block(); }
+            if (actionEnabled) {
+                menu->setActiveAction(action);
+                QTest::keyClick(menu, Qt::Key_Return);
+            } else {
+                menu->close();
+            }
+        });
+        QSignalSpy changed(slice, &SliceModel::txAntennaChanged);
+        guard.start(1000);
+        button->click();
+        guard.stop();
+        QVERIFY(!timedOut);
+        QVERIFY(menuFound);
+        QVERIFY(actionFound);
+        QVERIFY(blockApplied);
+        QCOMPARE(actionEnabled, allowed || lateBlock);
+        const QString expected = allowed ? choice : QStringLiteral("ANT1");
+        QCOMPARE(slice->txAntenna(), expected);
+        QCOMPARE(button->text(), expected);
+        QCOMPARE(changed.count(), allowed ? 1 : 0);
+        if (!remote) {
+            QCOMPARE(model.alexController().txAnt(Band::Band20m), allowed && !nonBound ? port : 1);
+        }
     }
 
     void controlling_again_restores_every_control()

@@ -43,9 +43,20 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18: Setup description version 15 ids on
 //                the readouts. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-10-08 - Import All Settings saves the chosen file through
+//                AppSettings::importFileForNextLaunch(), which refuses a
+//                file that is not settings and holds the window's later
+//                saves, so the restart finds the import instead of the old
+//                settings. Its picker, question and result are overridable
+//                for tests. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-10-09 - D25: the settings path wraps instead of widening the page
+//                past the Settings window. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 #include "DiagnosticsPhaseHPages.h"
+#include "gui/setup/SetupFit.h"
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
@@ -128,8 +139,6 @@ void ConnectionQualityPage::buildUI()
     histLayout->addWidget(m_historyPlaceholder);
     histGroup->setObjectName(QStringLiteral("connectionHistoryGroup"));
     UnbuiltFeatures::hideUnlessBuilt(histGroup, UnbuiltFeature::ConnectionHistory);
-
-    contentLayout()->addStretch();
 }
 
 void ConnectionQualityPage::onTick()
@@ -203,8 +212,6 @@ void SettingsValidationPage::buildUI()
     connect(m_refreshBtn, &QPushButton::clicked, this, &SettingsValidationPage::onRevalidateClicked);
     connect(m_repairBtn,  &QPushButton::clicked, this, &SettingsValidationPage::onRepairClicked);
     connect(m_forgetBtn,  &QPushButton::clicked, this, &SettingsValidationPage::onForgetClicked);
-
-    contentLayout()->addStretch();
 }
 
 void SettingsValidationPage::refresh()
@@ -373,6 +380,9 @@ void ExportImportConfigPage::buildUI()
         QStringLiteral("Path: %1").arg(AppSettings::instance().filePath()));
     m_settingsPathLabel->setStyleSheet(QStringLiteral("color: #c8d8e8;"));
     m_settingsPathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    // D25: a long path goes to a line of its own rather than widening the
+    // page.
+    m_settingsPathLabel->setWordWrap(true);
     fileLayout->addWidget(m_settingsPathLabel);
 
     auto* allGroup = addSection(QStringLiteral("Full Configuration"));
@@ -415,8 +425,6 @@ void ExportImportConfigPage::buildUI()
             &ExportImportConfigPage::onImportAllClicked);
     connect(m_exportRadioBtn, &QPushButton::clicked, this,
             &ExportImportConfigPage::onExportRadioClicked);
-
-    contentLayout()->addStretch();
 }
 
 void ExportImportConfigPage::onExportAllClicked()
@@ -754,26 +762,45 @@ void ExportImportConfigPage::onImportAllClicked()
             tr("Importing a combined window and Core backup is not available."));
         return;
     }
-    const QString src = QFileDialog::getOpenFileName(
-        this, QStringLiteral("Import Settings"), {},
-        QStringLiteral("XML (*.xml *.settings)"));
-    if (src.isEmpty()) { return; }
-    const auto reply = QMessageBox::question(
-        this, QStringLiteral("Replace Settings"),
-        QStringLiteral("Replace current settings with the contents of\n%1?\n\n"
-                       "A restart is required for changes to take effect.").arg(src),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (reply != QMessageBox::Yes) { return; }
-    const QString dst = AppSettings::instance().filePath();
-    QFile::remove(dst);
-    if (!QFile::copy(src, dst)) {
-        QMessageBox::warning(this, QStringLiteral("Import Failed"),
-                             QStringLiteral("Could not write to %1").arg(dst));
+    const QPointer<ExportImportConfigPage> guard(this);
+    const QString src = chooseImportSource();
+    if (!guard || src.isEmpty()) { return; }
+    if (!confirmImport(src) || !guard) { return; }
+    // Copying the file over the settings file was undone at quit, when this
+    // window saved its own values. The import becomes the next launch's
+    // settings and this window's later saves leave it in place.
+    QString error;
+    if (!AppSettings::instance().importFileForNextLaunch(src, &error)) {
+        showImportResult(false, QStringLiteral("Could not import %1:\n%2").arg(src, error));
         return;
     }
-    QMessageBox::information(
-        this, QStringLiteral("Import Complete"),
-        QStringLiteral("Settings imported. Please restart NereusSDR."));
+    showImportResult(true, QStringLiteral("Settings imported. Please restart NereusSDR."));
+}
+
+QString ExportImportConfigPage::chooseImportSource()
+{
+    return QFileDialog::getOpenFileName(
+        this, QStringLiteral("Import Settings"), {},
+        QStringLiteral("XML (*.xml *.settings)"));
+}
+
+bool ExportImportConfigPage::confirmImport(const QString& source)
+{
+    return QMessageBox::question(
+               this, QStringLiteral("Replace Settings"),
+               QStringLiteral("Replace current settings with the contents of\n%1?\n\n"
+                              "A restart is required for changes to take effect.").arg(source),
+               QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+        == QMessageBox::Yes;
+}
+
+void ExportImportConfigPage::showImportResult(bool success, const QString& text)
+{
+    if (success) {
+        QMessageBox::information(this, QStringLiteral("Import Complete"), text);
+    } else {
+        QMessageBox::warning(this, QStringLiteral("Import Failed"), text);
+    }
 }
 
 void ExportImportConfigPage::onExportRadioClicked()
@@ -889,8 +916,6 @@ void LogsPage::buildUI()
         m_clearBtn->setToolTip(QStringLiteral("Clear these views (the logs are kept)"));
         connect(m_clearBtn, &QPushButton::clicked, m_coreLogView, &QPlainTextEdit::clear);
     }
-
-    contentLayout()->addStretch();
     refresh();
 }
 

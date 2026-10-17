@@ -41,6 +41,10 @@ public struct MediaFeatureGates: Sendable, Equatable {
     /// block, last in it (the media control document, "Per-device audio
     /// quality").
     public static let audioQualityMinor: UInt16 = 11
+    /// The picture a context continues (`spectrumPictureVersion`) rides the
+    /// minor-11 block (the media control document, "The picture a context
+    /// continues").
+    public static let spectrumPictureMinor: UInt16 = 11
 
     /// Media control at all: `remoteMediaVersion`.
     public var media: Bool
@@ -101,6 +105,11 @@ public struct MediaFeatureGates: Sendable, Equatable {
     /// in the answering context: `audioQualityVersion` 1, which the Core
     /// tells only a device whose hello declared `audioQuality` 1.
     public var audioQuality: Bool
+    /// `spectrumPictureVersion` 1 in `start`, and with it `pictureGeneration`
+    /// in each spectrum context: `spectrumPictureVersion` 1, which the Core
+    /// tells only a device whose hello declared `spectrumPicture` 1. It
+    /// rides on the context's grant shape.
+    public var spectrumPicture: Bool
 
     public init(agreedMinor: UInt16, capabilityVersion: (String) -> Int64) {
         media = agreedMinor >= Self.mediaMinor && capabilityVersion("remoteMediaVersion") >= 1
@@ -137,6 +146,8 @@ public struct MediaFeatureGates: Sendable, Equatable {
         // opusBitrate goes only beside profile, so the profile gate too.
         audioQuality = audioProfile && agreedMinor >= Self.audioQualityMinor
             && capabilityVersion("audioQualityVersion") >= 1
+        spectrumPicture = spectrumGrant && agreedMinor >= Self.spectrumPictureMinor
+            && capabilityVersion("spectrumPictureVersion") >= 1
     }
 
     /// The `txDisplayVersion` a `start` declares to this Core: 3 where it

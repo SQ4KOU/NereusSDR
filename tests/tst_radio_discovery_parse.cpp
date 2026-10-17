@@ -18,6 +18,9 @@
 //   2026-09-25 - Receiver and transmit gaps plan, Task 5: the top rate a
 //                 Protocol 1 reply carries. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-10-12 - The second firmware number a reply carries: Protocol 2
+//                 byte 23, and byte 21 of an HL2's Protocol 1 reply.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  clsRadioDiscovery.cs
@@ -97,6 +100,22 @@ private:
         }
         cleaned.replace(' ', "");
         return QByteArray::fromHex(cleaned);
+    }
+
+    // A 60-byte Protocol 2 reply: four zero bytes, status, MAC, board,
+    // protocol supported, code version, then zeros up to the beta version
+    // in byte 23 (OpenHPSDR Ethernet Protocol v4.4, Discovery Reply Packet).
+    static QByteArray p2Reply(int boardByte, int codeVersion, int betaVersion)
+    {
+        QByteArray bytes(60, '\0');
+        bytes[4] = char(0x02);
+        for (int i = 5; i < 11; ++i) { bytes[i] = char(0x20 + i); }
+        bytes[11] = char(boardByte);
+        bytes[12] = char(44);
+        bytes[13] = char(codeVersion);
+        bytes[20] = char(8);
+        bytes[23] = char(betaVersion);
+        return bytes;
     }
 
 private slots:
@@ -313,6 +332,136 @@ private slots:
         QCOMPARE(info.protocol,        ProtocolVersion::Protocol1);
         QCOMPARE(info.macAddress,      QStringLiteral("AA:BB:CC:77:88:99"));
         QCOMPARE(info.inUse,           false);
+    }
+
+    // --- The second firmware number a reply carries ---
+    // Protocol 2 has it in byte 23, "Beta version" in the OpenHPSDR Ethernet
+    // Protocol document (v4.4, Discovery Reply Packet; reserved until
+    // document v3.8). Thetis reads it there:
+    //   From Thetis clsRadioDiscovery.cs:1184 [v2.10.3.15]
+    //     r.BetaVersion = len > 23 ? data[23] : (byte)0;
+    // The Anvelina Pro 3 gateware fills it with the third number of its
+    // release, so release 2.2.14 answers 22 in byte 13 and 14 in byte 23:
+    //   From n1gp-Anvelina_PROIII Orion.v:965-966 [@8e86a61]
+    //   From n1gp-Anvelina_PROIII Ethernet/sdr_send.v:171-172 [@8e86a61]
+    // It was dropped, so the app showed 22 for every 2.2 release.
+    void p2ReplyCarriesTheBetaVersion()
+    {
+        RadioInfo info;
+        QVERIFY(RadioDiscovery::parseP2Reply(
+            p2Reply(5, 22, 14), QHostAddress(QStringLiteral("192.168.1.60")), info));
+        QCOMPARE(info.boardType,           HPSDRHW::OrionMKII);
+        QCOMPARE(info.firmwareVersion,     22);
+        QCOMPARE(info.firmwareBetaVersion, 14);
+        QCOMPARE(info.firmwareText(),      QStringLiteral("22.14"));
+    }
+
+    // A board whose gateware leaves the byte zero reads as it always has.
+    void p2ReplyWithAZeroBetaByteReadsAsBefore()
+    {
+        RadioInfo info;
+        QVERIFY(RadioDiscovery::parseP2Reply(
+            p2Reply(5, 22, 0), QHostAddress(QStringLiteral("192.168.1.60")), info));
+        QCOMPARE(info.firmwareVersion,     22);
+        QCOMPARE(info.firmwareBetaVersion, 0);
+        QCOMPARE(info.firmwareText(),      QStringLiteral("22"));
+    }
+
+    // A reply that ends before byte 23 reports none, as in Thetis (len > 23).
+    void p2ReplyEndingBeforeTheBetaByteReportsNone()
+    {
+        QByteArray bytes = p2Reply(5, 22, 14);
+        bytes.truncate(23);
+        RadioInfo info;
+        QVERIFY(RadioDiscovery::parseP2Reply(
+            bytes, QHostAddress(QStringLiteral("192.168.1.60")), info));
+        QCOMPARE(info.firmwareVersion,     22);
+        QCOMPARE(info.firmwareBetaVersion, 0);
+        QCOMPARE(info.firmwareText(),      QStringLiteral("22"));
+    }
+
+    // On the ANAN-G2 the byte holds the version of the radio's own p2app
+    // program, not a third number of the FPGA version:
+    //   From Thetis setup.cs:14041-14043 [v2.10.3.15]
+    //     if (NetworkIO.BetaVersion >= 39) // added for p2app v39
+    //     {
+    //         sRet = "fpga(v" + NetworkIO.FWCodeVersion.ToString() + ") p2app(v" + NetworkIO.BetaVersion.ToString() + ")";
+    // It is kept, and the firmware reads as the FPGA number alone, as before.
+    void p2SaturnBetaByteIsNotAThirdNumber_data()
+    {
+        QTest::addColumn<int>("boardByte");
+        QTest::newRow("Saturn")     << 10;
+        QTest::newRow("SaturnMKII") << 11;
+    }
+
+    void p2SaturnBetaByteIsNotAThirdNumber()
+    {
+        QFETCH(int, boardByte);
+        RadioInfo info;
+        QVERIFY(RadioDiscovery::parseP2Reply(
+            p2Reply(boardByte, 27, 39), QHostAddress(QStringLiteral("192.168.1.61")), info));
+        QCOMPARE(info.firmwareVersion,     27);
+        QCOMPARE(info.firmwareBetaVersion, 39);
+        QCOMPARE(info.firmwareText(),      QStringLiteral("27"));
+    }
+
+    // The HL2 carries its gateware's patch number in byte 21 of a Protocol 1
+    // reply, and mi0bot reads it into the same field:
+    //   From mi0bot clsRadioDiscovery.cs:1168-1175 [v2.10.3.13-beta2]
+    //     case HPSDRHW.HermesLite:
+    //         byte[] fixedIp = new byte[4];                   // MI0BOT: Extra info from discovery for HL2
+    //         ...
+    //         r.BetaVersion = data[21];
+    // The bytes are the bench capture's reply
+    // (docs/protocols/openhpsdr-protocol1-capture-reference.md section 2.2)
+    // with the fixture MAC in place of the radio's: byte 9 = 0x4A (74) and
+    // byte 21 = 0x02.
+    void p1HermesLiteReplyCarriesThePatchNumber()
+    {
+        const QByteArray bytes = QByteArray::fromHex(
+            "effe02aabbcc1122334a060000000000"
+            "00000004450200000000000303ef0000"
+            "00000000801646365e83000000000000"
+            "000000000000000000000000");
+        QCOMPARE(bytes.size(), 60);
+
+        RadioInfo info;
+        QVERIFY(RadioDiscovery::parseP1Reply(
+            bytes, QHostAddress(QStringLiteral("192.168.1.42")), info));
+        QCOMPARE(info.boardType,           HPSDRHW::HermesLite);
+        QCOMPARE(info.firmwareVersion,     74);
+        QCOMPARE(info.firmwareBetaVersion, 2);
+        QCOMPARE(info.firmwareText(),      QStringLiteral("74.2"));
+    }
+
+    // Every other Protocol 1 board has no second number:
+    //   From Thetis clsRadioDiscovery.cs:1156 [v2.10.3.15]
+    //     r.BetaVersion = 0;
+    void p1OtherBoardsCarryNoBetaVersion()
+    {
+        QByteArray bytes = loadFixture("p1_angelia_reply.hex");
+        QVERIFY(bytes.size() > 21);
+        bytes[21] = char(9);
+
+        RadioInfo info;
+        QVERIFY(RadioDiscovery::parseP1Reply(
+            bytes, QHostAddress(QStringLiteral("192.168.1.20")), info));
+        QCOMPARE(info.firmwareVersion,     21);
+        QCOMPARE(info.firmwareBetaVersion, 0);
+        QCOMPARE(info.firmwareText(),      QStringLiteral("21"));
+    }
+
+    // An HL2 reply that ends before byte 21 reports none.
+    void p1HermesLiteReplyEndingBeforeThePatchByteReportsNone()
+    {
+        QByteArray bytes = loadFixture("p1_hermeslite_reply.hex");
+        bytes.truncate(21);
+        RadioInfo info;
+        QVERIFY(RadioDiscovery::parseP1Reply(
+            bytes, QHostAddress(QStringLiteral("192.168.1.42")), info));
+        QCOMPARE(info.firmwareVersion,     72);
+        QCOMPARE(info.firmwareBetaVersion, 0);
+        QCOMPARE(info.firmwareText(),      QStringLiteral("72"));
     }
 };
 

@@ -214,8 +214,16 @@ private slots:
         QVERIFY(!profile.hasRxBypassUi);
     }
 
+    void anvelina_ext2Label_isRxBypass() {
+        const auto profile = skuUiProfileFor(HPSDRModel::ANVELINAPRO3);
+        QCOMPARE(profile.ext2OutOnTxLabel, QStringLiteral("RX BYPASS on TX"));
+        QCOMPARE(profile.ext2OutOnTxTooltip, QStringLiteral("Enable RX Bypass during transmit."));
+        QCOMPARE(skuUiProfileFor(HPSDRModel::ANAN7000D).ext2OutOnTxLabel,
+                 QStringLiteral("Ext 2 on Tx"));
+    }
+
     void defaultExt2Label_isExt2OnTx() {
-        // Every non-G2E SKU keeps the struct default "Ext 2 on Tx".
+        // G2 keeps the struct default "Ext 2 on Tx".
         const auto profile = skuUiProfileFor(HPSDRModel::ANAN_G2);
         QCOMPARE(profile.ext1OutOnTxLabel, QStringLiteral("Ext 1 on Tx"));
         QCOMPARE(profile.ext2OutOnTxLabel, QStringLiteral("Ext 2 on Tx"));

@@ -25,9 +25,16 @@
 //                                    models); disabled with a reason on a
 //                                    Core that does not send it. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-10-08  J.J. Boyd (KG4VCF): Qt 6.11.0 Cocoa accessibility cache
+//               repair on a live item view (QtCocoaAccessibleTableCache).
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-15  J.J. Boyd (KG4VCF): rows change after a real model reset
+//               (resetItemsBeforeRowChange), so accessibility cannot read a
+//               deleted cell. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/setup/ThisCorePage.h"
+#include "gui/QtCocoaAccessibleTableCache.h"
 #include "gui/multidevice/ConnectedDevicesList.h"
 
 #include "core/HardwareProfile.h"

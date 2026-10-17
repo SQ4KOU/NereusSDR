@@ -9,6 +9,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-13 — Bench presentation with shared cached IMD; J.J. Boyd
+//                 (KG4VCF), assisted by OpenAI Codex.
 //   2026-05-06 — Phase 3M-4 Task 8: created by J.J. Boyd (KG4VCF),
 //                 with AI-assisted transformation via Anthropic Claude
 //                 Code.  Source-first 1:1 port of the Thetis modeless
@@ -68,20 +70,25 @@ mw0lge@grange-lane.co.uk
 //============================================================================================//
 
 #pragma once
+#include "gui/NereusGuiExport.h"
 
 #include <QDialog>
+#include "gui/ImdMeasurementFrame.h"
 #include <QPointer>
 #include <QSet>
 #include <QVariantMap>
 #include <QVector>
 
 #include <array>
+#include "gui/NereusGuiExport.h"
 
 class QCheckBox;
 class QCloseEvent;
 class QLineEdit;
 class QDoubleSpinBox;
 class QGroupBox;
+class QGridLayout;
+class QResizeEvent;
 class QLabel;
 class QPushButton;
 class QSpinBox;
@@ -138,7 +145,7 @@ enum class Ps3ActionPhase;
 // Test seam: constructor accepts RadioModel + PureSignal pointers
 // independently so tests can pass a real PureSignal coordinator with
 // nullptr RadioModel (avoids needing a full MainWindow stand-up).
-class PsForm : public QDialog {
+class NEREUS_GUI_EXPORT PsForm : public QDialog {
     Q_OBJECT
 
 public:
@@ -149,6 +156,12 @@ public:
                     PureSignal* pureSignal,
                     QWidget* parent = nullptr);
     ~PsForm() override;
+    void setImdMeasurementFrame(const ImdMeasurementFrame& frame);
+    const ImdMeasurementFrame& imdMeasurementFrame() const { return m_imdMeasurementFrame; }
+    /// Mirror an externally-owned display preference into the checkbox.
+    /// This is presentation-only: it neither persists nor emits the user's
+    /// showTwoToneMeasurementsChanged intent.
+    void setShowTwoToneMeasurements(bool on);
 
     // Returns true when the dialog is currently in collapsed (Advanced)
     // mode (560x60 strip).  False when expanded (560x300 full form).
@@ -165,6 +178,7 @@ protected:
     // PSForm_Closing [v2.10.3.13] also intercepts FormClosing and calls
     // e.Cancel = true plus Common.SaveForm; we save geometry on close.
     void closeEvent(QCloseEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private slots:
     // Action buttons (top row + Calibration Information group)
@@ -216,6 +230,12 @@ private slots:
     void onSessionInvalidated();
 
 private:
+    ImdMeasurementFrame m_imdMeasurementFrame;
+    class PureSignalInstruments* m_instruments{nullptr};
+    class ImdMeasurementPanel* m_imdPanel{nullptr};
+    QWidget* m_peakReference{nullptr};
+    QWidget* m_benchBody{nullptr};
+    QGridLayout* m_benchLayout{nullptr};
     void buildUi();
     QGroupBox* buildCalibrationInfoGroup(QWidget* parent);
     void wireToPureSignal();

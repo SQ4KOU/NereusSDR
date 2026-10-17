@@ -41,6 +41,8 @@
 #include <QTemporaryDir>
 
 #include "core/AppSettings.h"
+#include "core/ControlRanges.h"
+#include "core/DisplayFftSizing.h"
 #include "core/session/SessionMessages.h"
 #include "core/settings/ISettingsBackend.h"
 #include "core/settings/SettingsProxy.h"
@@ -1223,6 +1225,198 @@ private slots:
         QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("hardware/aa:bb/radioInfo/sampleRate"));
         QCOMPARE(spy.at(0).at(1).toInt(), 192000);
         QCOMPARE(spy.at(0).at(2).toString(), QStringLiteral("client-42"));
+    }
+
+    // ── FFT sizing mode: the rule for a client that does not know it ──────
+    //
+    // Design D41 (R-DSP-65). An older window or phone writes only
+    // DisplayHzPerBinTarget. The Core moves DisplayFftSizingMode with it and
+    // tells every client, the writer too.
+    void olderClientsHzPerBinTargetWriteMovesTheSizingMode()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxyServer server(daemon);
+        const QString targetKey = QLatin1String(ControlRanges::kDisplayHzPerBinTargetKey);
+        const QString modeKey = QLatin1String(ControlRanges::kDisplayFftSizingModeKey);
+        const QString lastKey = QLatin1String(ControlRanges::kDisplayHzPerBinLastTargetKey);
+        const QString sizeKey = QLatin1String(ControlRanges::kDisplayFftSizeKey);
+        QSignalSpy spy(&server, &SettingsProxyServer::outboundValueChanged);
+        // The broadcasts of one write, as "key=value@origin".
+        const auto sent = [&spy] {
+            QStringList out;
+            for (const auto& call : spy) {
+                out.append(QStringLiteral("%1=%2@%3").arg(call.at(0).toString(),
+                                                          call.at(1).toString(),
+                                                          call.at(2).toString()));
+            }
+            spy.clear();
+            return out;
+        };
+        const auto mode = [&daemon] { return readDisplayFftSizing(daemon).mode; };
+        using ControlRanges::DisplayFftSizingMode;
+
+        // A station that never chose a mode: Auto.
+        QCOMPARE(mode(), DisplayFftSizingMode::Auto);
+        QVERIFY(!daemon.contains(modeKey));
+
+        // A target above 0: the mode is HzPerBin. The write goes out with
+        // its writer's tag; the mode and the remembered target are the
+        // Core's own and go to everyone untagged.
+        QVERIFY(server.applyInboundWrite(targetKey, 2.5, QStringLiteral("old-phone")).accepted);
+        QCOMPARE(daemon.value(modeKey).toString(), QStringLiteral("HzPerBin"));
+        QCOMPARE(mode(), DisplayFftSizingMode::HzPerBin);
+        QCOMPARE(readDisplayFftSizing(daemon).hzPerBinTarget, 2.5);
+        QCOMPARE(sent(), (QStringList{QStringLiteral("DisplayHzPerBinTarget=2.5@old-phone"),
+                                      QStringLiteral("DisplayHzPerBinLastTarget=2.5@"),
+                                      QStringLiteral("DisplayFftSizingMode=HzPerBin@")}));
+
+        // Another target: the mode is in place and is not written again.
+        QVERIFY(server.applyInboundWrite(targetKey, 5, QStringLiteral("old-phone")).accepted);
+        QCOMPARE(sent(), (QStringList{QStringLiteral("DisplayHzPerBinTarget=5@old-phone"),
+                                      QStringLiteral("DisplayHzPerBinLastTarget=5@")}));
+        QCOMPARE(mode(), DisplayFftSizingMode::HzPerBin);
+
+        // 0 while the mode is HzPerBin: Auto. The last target is kept.
+        QVERIFY(server.applyInboundWrite(targetKey, 0, QStringLiteral("old-phone")).accepted);
+        QCOMPARE(daemon.value(modeKey).toString(), QStringLiteral("Auto"));
+        QCOMPARE(daemon.value(lastKey).toString(), QStringLiteral("5"));
+        QCOMPARE(sent(), (QStringList{QStringLiteral("DisplayHzPerBinTarget=0@old-phone"),
+                                      QStringLiteral("DisplayFftSizingMode=Auto@")}));
+        // 0 again in Auto: nothing but the write.
+        QVERIFY(server.applyInboundWrite(targetKey, 0, QStringLiteral("old-phone")).accepted);
+        QCOMPARE(sent(), (QStringList{QStringLiteral("DisplayHzPerBinTarget=0@old-phone")}));
+        QCOMPARE(mode(), DisplayFftSizingMode::Auto);
+
+        // Fixed is left alone on 0, and gives way to a target above 0.
+        daemon.setValue(sizeKey, QStringLiteral("65536"));
+        daemon.setValue(modeKey, QStringLiteral("Fixed"));
+        spy.clear();
+        QVERIFY(server.applyInboundWrite(targetKey, 0, QStringLiteral("old-phone")).accepted);
+        QCOMPARE(sent(), (QStringList{QStringLiteral("DisplayHzPerBinTarget=0@old-phone")}));
+        QCOMPARE(mode(), DisplayFftSizingMode::Fixed);
+        QVERIFY(server.applyInboundWrite(targetKey, 1, QStringLiteral("old-phone")).accepted);
+        QCOMPARE(mode(), DisplayFftSizingMode::HzPerBin);
+        QCOMPARE(sent(), (QStringList{QStringLiteral("DisplayHzPerBinTarget=1@old-phone"),
+                                      QStringLiteral("DisplayHzPerBinLastTarget=1@"),
+                                      QStringLiteral("DisplayFftSizingMode=HzPerBin@")}));
+        // The size an older client's slider writes is stored and moves no
+        // mode.
+        QVERIFY(server.applyInboundWrite(sizeKey, 16384, QStringLiteral("old-phone")).accepted);
+        QCOMPARE(sent(), (QStringList{QStringLiteral("DisplayFftSize=16384@old-phone")}));
+        QCOMPARE(mode(), DisplayFftSizingMode::HzPerBin);
+    }
+
+    // A client that knows the mode writes the mode first and the target
+    // after (writeDisplayFftSizingMode's order): the Core's rule finds the
+    // mode in place and writes no mode of its own, in any of the three.
+    void modeAwareClientsWritesAreLeftAsTheyAre()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxyServer server(daemon);
+        const QString targetKey = QLatin1String(ControlRanges::kDisplayHzPerBinTargetKey);
+        const QString modeKey = QLatin1String(ControlRanges::kDisplayFftSizingModeKey);
+        const QString lastKey = QLatin1String(ControlRanges::kDisplayHzPerBinLastTargetKey);
+        QSignalSpy spy(&server, &SettingsProxyServer::outboundValueChanged);
+        // The Core's own (untagged) writes of the mode key.
+        const auto coreModeWrites = [&spy, &modeKey] {
+            int count = 0;
+            for (const auto& call : spy) {
+                if (call.at(0).toString() == modeKey && call.at(2).toString().isEmpty()) {
+                    ++count;
+                }
+            }
+            spy.clear();
+            return count;
+        };
+        using ControlRanges::DisplayFftSizingMode;
+        const QString tag = QStringLiteral("new-window");
+
+        // Into Hz/bin at 2.5: mode, target, last target.
+        server.applyInboundWrite(modeKey, QStringLiteral("HzPerBin"), tag);
+        server.applyInboundWrite(targetKey, QStringLiteral("2.5"), tag);
+        server.applyInboundWrite(lastKey, QStringLiteral("2.5"), tag);
+        QCOMPARE(coreModeWrites(), 0);
+        QCOMPARE(readDisplayFftSizing(daemon).mode, DisplayFftSizingMode::HzPerBin);
+        QCOMPARE(readDisplayFftSizing(daemon).hzPerBinTarget, 2.5);
+
+        // Into Fixed: mode, then the target key back to 0. Between the two
+        // the stored mode already says Fixed, whatever the target reads.
+        server.applyInboundWrite(modeKey, QStringLiteral("Fixed"), tag);
+        QCOMPARE(readDisplayFftSizing(daemon).mode, DisplayFftSizingMode::Fixed);
+        QCOMPARE(readDisplayFftSizing(daemon).hzPerBinTarget, 0.0);
+        server.applyInboundWrite(targetKey, QStringLiteral("0"), tag);
+        QCOMPARE(coreModeWrites(), 0);
+        QCOMPARE(readDisplayFftSizing(daemon).mode, DisplayFftSizingMode::Fixed);
+        QCOMPARE(readDisplayFftSizing(daemon).lastHzPerBinTarget, 2.5);
+
+        // Into Auto: the target key already reads 0, so the mode alone.
+        server.applyInboundWrite(modeKey, QStringLiteral("Auto"), tag);
+        QCOMPARE(coreModeWrites(), 0);
+        QCOMPARE(readDisplayFftSizing(daemon).mode, DisplayFftSizingMode::Auto);
+
+        // Back into Hz/bin.
+        server.applyInboundWrite(modeKey, QStringLiteral("HzPerBin"), tag);
+        server.applyInboundWrite(targetKey, QStringLiteral("2.5"), tag);
+        QCOMPARE(coreModeWrites(), 0);
+        QCOMPARE(readDisplayFftSizing(daemon).mode, DisplayFftSizingMode::HzPerBin);
+        // And out to Auto: the mode, then 0.
+        server.applyInboundWrite(modeKey, QStringLiteral("Auto"), tag);
+        server.applyInboundWrite(targetKey, QStringLiteral("0"), tag);
+        QCOMPARE(coreModeWrites(), 0);
+        QCOMPARE(readDisplayFftSizing(daemon).mode, DisplayFftSizingMode::Auto);
+        QCOMPARE(daemon.value(modeKey).toString(), QStringLiteral("Auto"));
+    }
+
+    // A phone that knows the mode (station catalog `display`, the Sizing
+    // control) writes the mode and the target and nothing else: the Core
+    // keeps the remembered target (the catalog's `rememberedKey`) for it
+    // and tells every client, and leaves the mode as the phone wrote it.
+    void rememberedTargetFollowsAModeAwareClientsTargetWrite()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxyServer server(daemon);
+        const QString targetKey = QLatin1String(ControlRanges::kDisplayHzPerBinTargetKey);
+        const QString modeKey = QLatin1String(ControlRanges::kDisplayFftSizingModeKey);
+        const QString lastKey = QLatin1String(ControlRanges::kDisplayHzPerBinLastTargetKey);
+        QSignalSpy spy(&server, &SettingsProxyServer::outboundValueChanged);
+        const auto sent = [&spy] {
+            QStringList out;
+            for (const auto& call : spy) {
+                out.append(QStringLiteral("%1=%2@%3").arg(call.at(0).toString(),
+                                                          call.at(1).toString(),
+                                                          call.at(2).toString()));
+            }
+            spy.clear();
+            return out;
+        };
+        const QString tag = QStringLiteral("new-phone");
+
+        // Into Hz/bin at 7.5.
+        QVERIFY(server.applyInboundWrite(modeKey, QStringLiteral("HzPerBin"), tag).accepted);
+        QVERIFY(server.applyInboundWrite(targetKey, 7.5, tag).accepted);
+        QCOMPARE(sent(), (QStringList{QStringLiteral("DisplayFftSizingMode=HzPerBin@new-phone"),
+                                      QStringLiteral("DisplayHzPerBinTarget=7.5@new-phone"),
+                                      QStringLiteral("DisplayHzPerBinLastTarget=7.5@")}));
+        // A new target while there.
+        QVERIFY(server.applyInboundWrite(targetKey, 3, tag).accepted);
+        QCOMPARE(sent(), (QStringList{QStringLiteral("DisplayHzPerBinTarget=3@new-phone"),
+                                      QStringLiteral("DisplayHzPerBinLastTarget=3@")}));
+        // Out to Fixed: the mode, then the target's off value. The
+        // remembered target stays, for the grayed control and the next
+        // time Hz/bin is chosen.
+        QVERIFY(server.applyInboundWrite(modeKey, QStringLiteral("Fixed"), tag).accepted);
+        QVERIFY(server.applyInboundWrite(targetKey, 0, tag).accepted);
+        QCOMPARE(sent(), (QStringList{QStringLiteral("DisplayFftSizingMode=Fixed@new-phone"),
+                                      QStringLiteral("DisplayHzPerBinTarget=0@new-phone")}));
+        QCOMPARE(daemon.value(lastKey).toDouble(), 3.0);
+        QCOMPARE(readDisplayFftSizing(daemon).lastHzPerBinTarget, 3.0);
+        QCOMPARE(readDisplayFftSizing(daemon).mode, ControlRanges::DisplayFftSizingMode::Fixed);
     }
 
     void bothBroadcastPathsEmitTheSameQVariantType()

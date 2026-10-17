@@ -3,44 +3,38 @@
 // =================================================================
 // no-port-check: NereusSDR-original test infrastructure.
 //
-// 3D stacked-trace spectrum plan, Task 13: the 3D VIEW control section.
-// Design: docs/architecture/2026-08-08-3d-stacked-trace-spectrum-design.md
-// Plan:   docs/architecture/2026-08-08-3d-stacked-trace-spectrum-plan.md
+// Display pill plan Task 19 (D3, D33, S9; R-DSP-07, R-DSP-45; design
+// docs/architecture/2026-10-09-display-pill-and-levels-design.md section
+// 7): the right-click pan menu, trimmed.
 //
-// Pins SpectrumOverlayMenu's "3D VIEW" section: the Spectrum render-mode
-// combo plus 3D Floor / 3D Gain / 3D Span / 3D Angle / 3D Slice Shadow,
-// with upstream's exact labels, ranges, defaults and tooltip wording for
-// the five ported controls (AetherSDR SpectrumOverlayMenu.cpp:1874-1943,
-// :2250-2273 [@1872028c]) and the NereusSDR-original 3D Angle slider /
-// 3D Slice Shadow checkbox (the latter's placement here rather than its
-// own QMenu is a coordinator ruling -- see Task 12's row in
-// docs/attribution/aethersdr-reconciliation.md).
+// This file was the 3D stacked-trace plan's Task 13 test of the menu's
+// "3D VIEW" section. The design moves that section, and the waterfall and
+// fill rows, into the pan's Display pill, so every case that pinned them
+// is rewritten here to the trimmed menu: it holds exactly Ref Level, Dyn
+// Range, CTUN, "Add notch here" and "Display settings...", and nothing of
+// the removed rows is left, neither a control nor a signal.
 //
-// Six controls in total, so every test in this file predating Task 24
-// enumerates six: mode combo, floor/gain/span/angle sliders, shadow check.
-// Task 24 (3D Stacked-Trace Spectrum Plan) adds a seventh, NereusSDR-
-// original 3D Speed row divider slider after 3D Angle; its own tests
-// (setDssValues_doesNotEcho's extended 7-arg call, speedRow_labelAndEmission)
-// are scoped separately below rather than folded into the six-control
-// enumerations, which stay pinned to their original six.
+// The cases at the bottom reuse the right-click idiom of
+// tst_notch_hit_test.cpp's
+// overlay_menu_add_notch_forwards_the_cursor_frequency: a real
+// QMouseEvent, SpectrumWidget's own mousePressEvent building and wiring
+// the menu, then the menu found as a child and driven. That is the only
+// way to prove the connects in SpectrumWidget.cpp are the real wiring.
 //
-// The end-to-end wiring test at the bottom (sixControls_...) reuses the
-// exact right-click idiom tst_notch_hit_test.cpp's
-// overlay_menu_add_notch_forwards_the_cursor_frequency established for
-// this same popup: synthesize a real QMouseEvent, let SpectrumWidget's own
-// mousePressEvent construct and wire m_overlayMenu, then find it as a
-// child and drive its widgets directly. That is the only way to prove the
-// six connect() calls in SpectrumWidget.cpp are the REAL wiring rather
-// than a parallel set of connects duplicated inside the test.
+// 2026-10-10 - Rewritten for the trimmed menu. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QLabel>
+#include <QMetaMethod>
+#include <QMouseEvent>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QSlider>
-#include <QComboBox>
-#include <QCheckBox>
-#include <QLabel>
-#include <QMouseEvent>
+#include <QStringList>
 
 #include "core/ConnectionState.h"
 #include "gui/SpectrumOverlayMenu.h"
@@ -50,11 +44,9 @@ using namespace NereusSDR;
 
 namespace {
 
-// Mirrors tst_notch_hit_test.cpp's sendMouse(): QTest::mouseClick works for
-// plain clicks, but this project's established idiom for driving
-// SpectrumWidget's mousePressEvent in headless tests is a directly
-// synthesized QMouseEvent via QApplication::sendEvent, so this file matches
-// rather than introduces a second way to do the same thing.
+// Mirrors tst_notch_hit_test.cpp's sendMouse(): this project's idiom for
+// driving SpectrumWidget's mousePressEvent in headless tests is a directly
+// synthesized QMouseEvent via QApplication::sendEvent.
 void sendMouse(QWidget* w, QEvent::Type type, QPoint pos,
                Qt::MouseButton button, Qt::MouseButtons buttons,
                Qt::KeyboardModifiers mods = Qt::NoModifier)
@@ -64,260 +56,263 @@ void sendMouse(QWidget* w, QEvent::Type type, QPoint pos,
     QApplication::sendEvent(w, &me);
 }
 
+// A pan as the right-click needs it: shown, connected, with a span.
+void setUpWidget(SpectrumWidget& w)
+{
+    w.resize(1000, 400);
+    w.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.setConnectionState(ConnectionState::Connected);
+    w.setFrequencyRange(14'200'000.0, 128'000.0);
+}
+
+// No notches or spots are pushed, so a right-click on the empty pan falls
+// through to the overlay menu.
+SpectrumOverlayMenu* openMenu(SpectrumWidget& w)
+{
+    sendMouse(&w, QEvent::MouseButtonPress, QPoint(600, 50),
+              Qt::RightButton, Qt::RightButton);
+    return w.findChild<SpectrumOverlayMenu*>();
+}
+
+bool hasSignal(const char* normalizedSignature)
+{
+    return SpectrumOverlayMenu::staticMetaObject.indexOfSignal(normalizedSignature) >= 0;
+}
+
 } // namespace
 
 class TestDssOverlayMenu : public QObject {
     Q_OBJECT
 
 private slots:
-    void controlsExistWithUpstreamRangesAndDefaults() {
+    // Acceptance: the menu holds exactly CTUN, Add notch here, Ref Level,
+    // Dyn Range and "Display settings..."; no scheme, gain, black, fill or
+    // 3D control exists in it (findChildren by type and name).
+    void holdsExactlyTheFiveControls() {
         SpectrumOverlayMenu m;
-        m.resize(320, 640);
+
+        const auto sliders = m.findChildren<QSlider*>();
+        const auto checks  = m.findChildren<QCheckBox*>();
+        const auto buttons = m.findChildren<QPushButton*>();
+        QCOMPARE(sliders.size(), 2);
+        QCOMPARE(checks.size(), 1);
+        QCOMPARE(buttons.size(), 2);
+        QCOMPARE(m.findChildren<QComboBox*>().size(), 0);
+
+        auto* ref = m.findChild<QSlider*>(QStringLiteral("refLevelSlider"));
+        auto* dyn = m.findChild<QSlider*>(QStringLiteral("dynRangeSlider"));
+        QVERIFY(ref);
+        QVERIFY(dyn);
+        // The ranges the two rows had before the trim.
+        QCOMPARE(ref->minimum(), -160);
+        QCOMPARE(ref->maximum(), 20);
+        QCOMPARE(dyn->minimum(), 20);
+        QCOMPARE(dyn->maximum(), 160);
+
+        auto* ctun = m.findChild<QCheckBox*>(QStringLiteral("ctunCheck"));
+        QVERIFY(ctun);
+        QCOMPARE(ctun->text(), QStringLiteral("CTUN (independent pan)"));
+
+        auto* notch = m.findChild<QPushButton*>(QStringLiteral("notchAddButton"));
+        QVERIFY(notch);
+        QCOMPARE(notch->text(), QStringLiteral("Add notch here"));
+
+        auto* display = m.findChild<QPushButton*>(QStringLiteral("displaySettingsButton"));
+        QVERIFY(display);
+        QCOMPARE(display->text(), QStringLiteral("Display settings..."));
+        QVERIFY(display->isEnabled());
+
+        // By name: the seven 3D controls the menu used to carry.
+        for (const char* gone : {"spectrumRenderModeCombo", "dssFloorDepthSlider",
+                                 "dssGainSlider", "dssRowSpanSlider", "dssAngleSlider",
+                                 "dssSpeedSlider", "dssSliceShadowCheck", "dssSpeedLabel"}) {
+            QVERIFY2(m.findChild<QWidget*>(QString::fromLatin1(gone)) == nullptr, gone);
+        }
+
+        // By label: no row or section title of the removed rows is left,
+        // and the kept ones are there.
+        QStringList labels;
+        for (const QLabel* label : m.findChildren<QLabel*>()) {
+            labels.append(label->text());
+        }
+        for (const char* gone : {"Waterfall", "Color Scheme", "Color Gain", "Black Level",
+                                 "Spectrum", "Fill Alpha", "3D VIEW", "Spectrum:",
+                                 "3D Floor:", "3D Gain:", "3D Span:", "3D Angle:",
+                                 "3D Speed:"}) {
+            QVERIFY2(!labels.contains(QString::fromLatin1(gone)), gone);
+        }
+        for (const char* kept : {"Display Range", "Ref Level", "Dyn Range", "Tuning", "Notch"}) {
+            QVERIFY2(labels.contains(QString::fromLatin1(kept)), kept);
+        }
+        for (const QCheckBox* check : checks) {
+            QVERIFY(check->text() != QStringLiteral("Fill spectrum trace"));
+            QVERIFY(check->text() != QStringLiteral("3D Slice Shadow"));
+        }
+    }
+
+    // The scheme, gain, black, fill and seven 3D signals are removed; the
+    // four that stay and the new one are declared.
+    void removedSignalsAreGone_keptOnesStay() {
+        for (const char* gone : {"wfColorGainChanged(int)", "wfBlackLevelChanged(int)",
+                                 "wfColorSchemeChanged(int)", "fillAlphaChanged(float)",
+                                 "panFillChanged(bool)", "spectrumRenderModeChanged(int)",
+                                 "dssFloorDepthChanged(int)", "dssGainChanged(int)",
+                                 "dssRowSpanChanged(int)", "dssAngleChanged(int)",
+                                 "dssRowDividerChanged(int)", "dssSliceShadowChanged(bool)"}) {
+            QVERIFY2(!hasSignal(gone), gone);
+        }
+        for (const char* kept : {"refLevelChanged(float)", "dynRangeChanged(float)",
+                                 "ctunChanged(bool)", "notchAddRequested(double)",
+                                 "displaySettingsRequested()"}) {
+            QVERIFY2(hasSignal(kept), kept);
+        }
+    }
+
+    // setValues seeds the three values before showing without echoing
+    // back out, or opening the menu would move the operator's range.
+    void setValues_seedsWithoutEmitting() {
+        SpectrumOverlayMenu m;
+        QSignalSpy refSpy(&m, &SpectrumOverlayMenu::refLevelChanged);
+        QSignalSpy dynSpy(&m, &SpectrumOverlayMenu::dynRangeChanged);
+        QSignalSpy ctunSpy(&m, &SpectrumOverlayMenu::ctunChanged);
+
+        m.setValues(-30.0f, 90.0f, false);
+
+        QCOMPARE(refSpy.count(), 0);
+        QCOMPARE(dynSpy.count(), 0);
+        QCOMPARE(ctunSpy.count(), 0);
+        QCOMPARE(m.findChild<QSlider*>(QStringLiteral("refLevelSlider"))->value(), -30);
+        QCOMPARE(m.findChild<QSlider*>(QStringLiteral("dynRangeSlider"))->value(), 90);
+        QCOMPARE(m.findChild<QCheckBox*>(QStringLiteral("ctunCheck"))->isChecked(), false);
+
+        // The third argument defaults to CTUN on.
+        m.setValues(-48.0f, 68.0f);
+        QCOMPARE(m.findChild<QCheckBox*>(QStringLiteral("ctunCheck"))->isChecked(), true);
+        QCOMPARE(ctunSpy.count(), 0);
+    }
+
+    void movingAKeptControl_emitsItsSignalOnce() {
+        SpectrumOverlayMenu m;
+        m.setValues(-48.0f, 68.0f, true);
+        QSignalSpy refSpy(&m, &SpectrumOverlayMenu::refLevelChanged);
+        QSignalSpy dynSpy(&m, &SpectrumOverlayMenu::dynRangeChanged);
+        QSignalSpy ctunSpy(&m, &SpectrumOverlayMenu::ctunChanged);
+
+        m.findChild<QSlider*>(QStringLiteral("refLevelSlider"))->setValue(-60);
+        m.findChild<QSlider*>(QStringLiteral("dynRangeSlider"))->setValue(80);
+        m.findChild<QCheckBox*>(QStringLiteral("ctunCheck"))->setChecked(false);
+
+        QCOMPARE(refSpy.count(), 1);
+        QCOMPARE(refSpy.at(0).at(0).toFloat(), -60.0f);
+        QCOMPARE(dynSpy.count(), 1);
+        QCOMPARE(dynSpy.at(0).at(0).toFloat(), 80.0f);
+        QCOMPARE(ctunSpy.count(), 1);
+        QCOMPARE(ctunSpy.at(0).at(0).toBool(), false);
+    }
+
+    // Acceptance: choosing "Display settings..." emits
+    // displaySettingsRequested(). The popup closes itself first, so it is
+    // not left over the pill it opened.
+    void displaySettingsLine_emitsOnceAndClosesTheMenu() {
+        SpectrumOverlayMenu m;
         m.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&m));
+        QVERIFY(m.isVisible());
+        QSignalSpy spy(&m, &SpectrumOverlayMenu::displaySettingsRequested);
+        bool visibleWhenEmitted = true;
+        connect(&m, &SpectrumOverlayMenu::displaySettingsRequested, &m,
+                [&m, &visibleWhenEmitted]() { visibleWhenEmitted = m.isVisible(); });
 
-        auto* mode   = m.findChild<QComboBox*>(QStringLiteral("spectrumRenderModeCombo"));
-        auto* floor  = m.findChild<QSlider*>(QStringLiteral("dssFloorDepthSlider"));
-        auto* gain   = m.findChild<QSlider*>(QStringLiteral("dssGainSlider"));
-        auto* span   = m.findChild<QSlider*>(QStringLiteral("dssRowSpanSlider"));
-        auto* angle  = m.findChild<QSlider*>(QStringLiteral("dssAngleSlider"));
-        auto* shadow = m.findChild<QCheckBox*>(QStringLiteral("dssSliceShadowCheck"));
+        m.findChild<QPushButton*>(QStringLiteral("displaySettingsButton"))->click();
 
-        QVERIFY(mode);
-        QCOMPARE(mode->count(), 2);
-        QCOMPARE(mode->currentIndex(), 0);  // DEFAULTS: mode 2D
-
-        QVERIFY(floor);
-        QCOMPARE(floor->minimum(), 0);
-        QCOMPARE(floor->maximum(), 24);
-        QCOMPARE(floor->value(), 6);        // DEFAULTS: 3D Floor 6
-
-        QVERIFY(gain);
-        QCOMPARE(gain->minimum(), 0);
-        QCOMPARE(gain->maximum(), 100);
-        QCOMPARE(gain->value(), 70);        // DEFAULTS: 3D Gain 70
-
-        QVERIFY(span);
-        QCOMPARE(span->minimum(), 0);
-        QCOMPARE(span->maximum(), 100);
-        QCOMPARE(span->value(), 100);       // DEFAULTS: 3D Span 100
-
-        QVERIFY(angle);
-        QCOMPARE(angle->minimum(), 0);
-        QCOMPARE(angle->maximum(), 100);
-        QCOMPARE(angle->value(), 50);       // DEFAULTS: 3D Angle 50 (load-bearing)
-
-        QVERIFY(shadow);
-        QCOMPARE(shadow->isChecked(), false); // DEFAULTS: Slice Shadow off
+        QCOMPARE(spy.count(), 1);
+        QVERIFY(!visibleWhenEmitted);
+        QVERIFY(!m.isVisible());
     }
 
-    void movingASlider_emitsItsSignal() {
-        SpectrumOverlayMenu m;
-
-        QSignalSpy modeSpy(&m, &SpectrumOverlayMenu::spectrumRenderModeChanged);
-        QSignalSpy floorSpy(&m, &SpectrumOverlayMenu::dssFloorDepthChanged);
-        QSignalSpy gainSpy(&m, &SpectrumOverlayMenu::dssGainChanged);
-        QSignalSpy spanSpy(&m, &SpectrumOverlayMenu::dssRowSpanChanged);
-        QSignalSpy angleSpy(&m, &SpectrumOverlayMenu::dssAngleChanged);
-        QSignalSpy shadowSpy(&m, &SpectrumOverlayMenu::dssSliceShadowChanged);
-
-        m.findChild<QComboBox*>(QStringLiteral("spectrumRenderModeCombo"))->setCurrentIndex(1);
-        m.findChild<QSlider*>(QStringLiteral("dssFloorDepthSlider"))->setValue(12);
-        m.findChild<QSlider*>(QStringLiteral("dssGainSlider"))->setValue(33);
-        m.findChild<QSlider*>(QStringLiteral("dssRowSpanSlider"))->setValue(44);
-        m.findChild<QSlider*>(QStringLiteral("dssAngleSlider"))->setValue(80);
-        m.findChild<QCheckBox*>(QStringLiteral("dssSliceShadowCheck"))->setChecked(true);
-
-        QCOMPARE(modeSpy.count(), 1);
-        QCOMPARE(modeSpy.at(0).at(0).toInt(), 1);
-        QCOMPARE(floorSpy.count(), 1);
-        QCOMPARE(floorSpy.at(0).at(0).toInt(), 12);
-        QCOMPARE(gainSpy.count(), 1);
-        QCOMPARE(gainSpy.at(0).at(0).toInt(), 33);
-        QCOMPARE(spanSpy.count(), 1);
-        QCOMPARE(spanSpy.at(0).at(0).toInt(), 44);
-        QCOMPARE(angleSpy.count(), 1);
-        QCOMPARE(angleSpy.at(0).at(0).toInt(), 80);
-        QCOMPARE(shadowSpy.count(), 1);
-        QCOMPARE(shadowSpy.at(0).at(0).toBool(), true);
-    }
-
-    // setDssValues seeds the widgets before showing without echoing back
-    // out, or opening the menu would rewrite the operator's settings.
-    // Extended from the brief's 5-arg skeleton to 6: Step 3 of the brief is
-    // explicit that setDssValues "takes the shadow state too, and must not
-    // echo", so the checkbox needs the same seed-without-echo proof as the
-    // five sliders/combo -- otherwise every popup would silently reset
-    // Slice Shadow to unchecked regardless of the operator's real setting.
-    //
-    // Task 24 extends the 6-arg signature to 7 (trailing rowDivider): the
-    // speed spy proves the seed does not echo either, and the "1:3" label
-    // check is this test's coverage of the acceptance clause "setDssValues
-    // (...) with rowDivider 3 shows 1:3" (speedRow_labelAndEmission below
-    // covers the rest of that same acceptance sentence independently).
-    void setDssValues_doesNotEcho() {
-        SpectrumOverlayMenu m;
-        // Seeding happens before the popup is shown. No window exposure or
-        // focus is needed to verify the values and absence of signal echoes.
-
-        QSignalSpy modeSpy(&m, &SpectrumOverlayMenu::spectrumRenderModeChanged);
-        QSignalSpy floorSpy(&m, &SpectrumOverlayMenu::dssFloorDepthChanged);
-        QSignalSpy gainSpy(&m, &SpectrumOverlayMenu::dssGainChanged);
-        QSignalSpy spanSpy(&m, &SpectrumOverlayMenu::dssRowSpanChanged);
-        QSignalSpy angleSpy(&m, &SpectrumOverlayMenu::dssAngleChanged);
-        QSignalSpy shadowSpy(&m, &SpectrumOverlayMenu::dssSliceShadowChanged);
-        QSignalSpy speedSpy(&m, &SpectrumOverlayMenu::dssRowDividerChanged);
-
-        m.setDssValues(1, 10, 40, 60, 25, true, 3);
-
-        QCOMPARE(modeSpy.count(), 0);
-        QCOMPARE(floorSpy.count(), 0);
-        QCOMPARE(gainSpy.count(), 0);
-        QCOMPARE(spanSpy.count(), 0);
-        QCOMPARE(angleSpy.count(), 0);
-        QCOMPARE(shadowSpy.count(), 0);
-        QCOMPARE(speedSpy.count(), 0);
-
-        QCOMPARE(m.findChild<QComboBox*>(QStringLiteral("spectrumRenderModeCombo"))->currentIndex(), 1);
-        QCOMPARE(m.findChild<QSlider*>(QStringLiteral("dssFloorDepthSlider"))->value(), 10);
-        QCOMPARE(m.findChild<QSlider*>(QStringLiteral("dssGainSlider"))->value(), 40);
-        QCOMPARE(m.findChild<QSlider*>(QStringLiteral("dssRowSpanSlider"))->value(), 60);
-        QCOMPARE(m.findChild<QSlider*>(QStringLiteral("dssAngleSlider"))->value(), 25);
-        QCOMPARE(m.findChild<QCheckBox*>(QStringLiteral("dssSliceShadowCheck"))->isChecked(), true);
-        QCOMPARE(m.findChild<QSlider*>(QStringLiteral("dssSpeedSlider"))->value(), 3);
-        QCOMPARE(m.findChild<QLabel*>(QStringLiteral("dssSpeedLabel"))->text(), QStringLiteral("1:3"));
-    }
-
-    // 3D Stacked-Trace Spectrum Plan Task 24: the 3D Speed row. Acceptance:
-    // range 0..10, value text "Match" at 0 and "1:7" at 7, the tooltip
-    // verbatim, and moving it emits dssRowDividerChanged(7) once.
-    void speedRow_labelAndEmission() {
-        SpectrumOverlayMenu m;
-        m.resize(320, 640);
-        m.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&m));
-
-        auto* slider = m.findChild<QSlider*>(QStringLiteral("dssSpeedSlider"));
-        auto* label  = m.findChild<QLabel*>(QStringLiteral("dssSpeedLabel"));
-        QVERIFY(slider);
-        QVERIFY(label);
-        QCOMPARE(slider->minimum(), 0);
-        QCOMPARE(slider->maximum(), 10);
-        QCOMPARE(slider->value(), 0);            // DEFAULTS: Match
-        QCOMPARE(label->text(), QStringLiteral("Match"));
-
-        const QString tip = QStringLiteral(
-            "How many waterfall rows each 3D row covers. Match keeps the 3D "
-            "history the same length in time as the waterfall. 1:1 pushes "
-            "every row, the fastest look. Higher values fold more rows into "
-            "each 3D row, keeping peaks, so the surface recedes more slowly.");
-        QCOMPARE(slider->toolTip(), tip);
-
-        QSignalSpy speedSpy(&m, &SpectrumOverlayMenu::dssRowDividerChanged);
-        slider->setValue(7);
-        QCOMPARE(label->text(), QStringLiteral("1:7"));
-        QCOMPARE(speedSpy.count(), 1);
-        QCOMPARE(speedSpy.at(0).at(0).toInt(), 7);
-    }
-
-    void spanUnsupported_disablesTheSliderNotTheRest() {
-        SpectrumOverlayMenu m;
-        // Enabled state is synchronous and independent of popup exposure.
-        // Keep this test independent of native popup focus/visibility;
-        // the real shown-widget interaction is exercised below.
-
-        m.setDssRowSpanSupported(false);
-        QVERIFY(!m.findChild<QSlider*>(QStringLiteral("dssRowSpanSlider"))->isEnabled());
-        QVERIFY(m.findChild<QSlider*>(QStringLiteral("dssAngleSlider"))->isEnabled());
-        QVERIFY(m.findChild<QCheckBox*>(QStringLiteral("dssSliceShadowCheck"))->isEnabled());
-    }
-
-    // setDssRowSpanSupported's own upstream body keeps two distinct tooltip
-    // strings so "the enabled and unavailable wordings cannot drift apart"
-    // (upstream's own comment, AetherSDR SpectrumOverlayMenu.cpp:1931-1932
-    // [@1872028c]) -- this proves the switch actually happens rather than
-    // one wording silently winning both states.
-    void spanUnsupported_tooltipDiffersFromSupported() {
-        SpectrumOverlayMenu m;
-        // Tooltip text changes synchronously; native popup exposure is not
-        // part of this assertion. Shown-widget wiring is exercised below.
-
-        auto* span = m.findChild<QSlider*>(QStringLiteral("dssRowSpanSlider"));
-        QVERIFY(span);
-        const QString supportedTip = span->toolTip();
-        QVERIFY(!supportedTip.isEmpty());
-
-        m.setDssRowSpanSupported(false);
-        const QString unsupportedTip = span->toolTip();
-        QVERIFY(!unsupportedTip.isEmpty());
-        QVERIFY(unsupportedTip != supportedTip);
-        QVERIFY2(unsupportedTip.contains(QStringLiteral("CPU fallback")),
-                 "unsupported tooltip should explain the CPU-fallback reason");
-    }
-
-    // -- end-to-end wiring (required verification #2: six controls, six
-    // assertions) --------------------------------------------------------
-    // A real right-click on SpectrumWidget, exactly like
-    // tst_notch_hit_test.cpp's overlay_menu_add_notch_forwards_the_cursor_
-    // frequency, so this exercises the SIX connect() calls actually
-    // committed in SpectrumWidget.cpp rather than a parallel set of
-    // connects re-declared inside the test (which would pass even if the
-    // real wiring were missing or pointed at the wrong setter).
-    void sixControls_wireThroughToSpectrumWidgetGetters() {
+    // Acceptance: from a real SpectrumWidget the line emits
+    // displayPillRequested().
+    void fromTheWidget_theLineAsksForThePill() {
         SpectrumWidget w;
-        w.resize(1000, 400);
-        w.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&w));
-        w.setConnectionState(ConnectionState::Connected);
-        w.setFrequencyRange(14'200'000.0, 128'000.0);
-
-        // No notches/spots pushed, so a right-click on empty pan falls
-        // through to the overlay menu (mirrors the notch test's own setup).
-        sendMouse(&w, QEvent::MouseButtonPress, QPoint(600, 50),
-                  Qt::RightButton, Qt::RightButton);
-
-        auto* menu = w.findChild<SpectrumOverlayMenu*>();
+        setUpWidget(w);
+        SpectrumOverlayMenu* menu = openMenu(w);
         QVERIFY2(menu != nullptr, "right-click did not open the overlay menu");
-        menu->hide();
+        QVERIFY(menu->isVisible());
+        QSignalSpy spy(&w, &SpectrumWidget::displayPillRequested);
 
-        auto* mode   = menu->findChild<QComboBox*>(QStringLiteral("spectrumRenderModeCombo"));
-        auto* floor  = menu->findChild<QSlider*>(QStringLiteral("dssFloorDepthSlider"));
-        auto* gain   = menu->findChild<QSlider*>(QStringLiteral("dssGainSlider"));
-        auto* span   = menu->findChild<QSlider*>(QStringLiteral("dssRowSpanSlider"));
-        auto* angle  = menu->findChild<QSlider*>(QStringLiteral("dssAngleSlider"));
-        auto* shadow = menu->findChild<QCheckBox*>(QStringLiteral("dssSliceShadowCheck"));
-        QVERIFY(mode);
-        QVERIFY(floor);
-        QVERIFY(gain);
-        QVERIFY(span);
-        QVERIFY(angle);
-        QVERIFY(shadow);
+        menu->findChild<QPushButton*>(QStringLiteral("displaySettingsButton"))->click();
 
-        // 1. Spectrum render mode.
-        QCOMPARE(w.spectrumRenderMode(), 0);
-        mode->setCurrentIndex(1);
-        QCOMPARE(w.spectrumRenderMode(), 1);
+        QCOMPARE(spy.count(), 1);
+        QVERIFY(!menu->isVisible());
+    }
 
-        // 2. 3D Floor.
-        floor->setValue(15);
-        QCOMPARE(w.dssFloorDepth(), 15);
+    // Acceptance: changing Ref Level in the menu emits bandRangeRequested
+    // with the new ceiling and the unchanged span. Dyn Range keeps the
+    // ceiling and moves the floor. The widget does not store the range
+    // itself: with nobody answering, its range stays and the menu goes
+    // back to it.
+    void fromTheWidget_theRangeRowsAskAndTheWidgetStoresNothing() {
+        SpectrumWidget w;
+        setUpWidget(w);
+        w.setReceiveDbmRange(-116.0f, -48.0f);
+        SpectrumOverlayMenu* menu = openMenu(w);
+        QVERIFY2(menu != nullptr, "right-click did not open the overlay menu");
+        auto* ref = menu->findChild<QSlider*>(QStringLiteral("refLevelSlider"));
+        auto* dyn = menu->findChild<QSlider*>(QStringLiteral("dynRangeSlider"));
+        QVERIFY(ref);
+        QVERIFY(dyn);
+        QCOMPARE(ref->value(), -48);
+        QCOMPARE(dyn->value(), 68);
 
-        // 3. 3D Gain.
-        gain->setValue(22);
-        QCOMPARE(w.dssGain(), 22);
+        QSignalSpy asked(&w, &SpectrumWidget::bandRangeRequested);
+        QSignalSpy strip(&w, &SpectrumWidget::dbmRangeChangeRequested);
 
-        // 4. 3D Span.
-        span->setValue(33);
-        QCOMPARE(w.dssRowSpan(), 33);
+        ref->setValue(-60);
+        QCOMPARE(asked.count(), 1);
+        QCOMPARE(asked.at(0).at(0).toFloat(), -128.0f);   // floor: ceiling less the 68 dB span
+        QCOMPARE(asked.at(0).at(1).toFloat(), -60.0f);    // the new ceiling
+        QCOMPARE(w.refLevel(), -48.0f);
+        QCOMPARE(w.dynamicRange(), 68.0f);
+        QCOMPARE(ref->value(), -48);                      // not taken: back to the pan
 
-        // 5. 3D Angle.
-        angle->setValue(77);
-        QCOMPARE(w.dssAngle(), 77);
+        dyn->setValue(80);
+        QCOMPARE(asked.count(), 2);
+        QCOMPARE(asked.at(1).at(0).toFloat(), -128.0f);   // floor: the ceiling less 80
+        QCOMPARE(asked.at(1).at(1).toFloat(), -48.0f);    // the ceiling stays
+        QCOMPARE(w.refLevel(), -48.0f);
+        QCOMPARE(w.dynamicRange(), 68.0f);
+        QCOMPARE(dyn->value(), 68);
 
-        // 6. 3D Slice Shadow.
-        QCOMPARE(w.threeDSliceDepth(), false);
-        shadow->setChecked(true);
-        QCOMPARE(w.threeDSliceDepth(), true);
+        // The menu is not the dB strip: it does not use the strip's signal.
+        QCOMPARE(strip.count(), 0);
+    }
+
+    // A receiver that takes the range (as the window's band store does,
+    // through setReceiveDbmRange) leaves the menu on the value asked for.
+    void fromTheWidget_aTakenRangeStaysInTheMenu() {
+        SpectrumWidget w;
+        setUpWidget(w);
+        w.setReceiveDbmRange(-116.0f, -48.0f);
+        connect(&w, &SpectrumWidget::bandRangeRequested, &w,
+                [&w](float minDbm, float maxDbm) { w.setReceiveDbmRange(minDbm, maxDbm); });
+        SpectrumOverlayMenu* menu = openMenu(w);
+        QVERIFY2(menu != nullptr, "right-click did not open the overlay menu");
+        auto* ref = menu->findChild<QSlider*>(QStringLiteral("refLevelSlider"));
+        auto* dyn = menu->findChild<QSlider*>(QStringLiteral("dynRangeSlider"));
+        QSignalSpy asked(&w, &SpectrumWidget::bandRangeRequested);
+
+        ref->setValue(-60);
+        QCOMPARE(asked.count(), 1);                       // one request, no echo
+        QCOMPARE(w.refLevel(), -60.0f);
+        QCOMPARE(w.dynamicRange(), 68.0f);
+        QCOMPARE(ref->value(), -60);
+        QCOMPARE(dyn->value(), 68);
+
+        dyn->setValue(80);
+        QCOMPARE(asked.count(), 2);
+        QCOMPARE(w.refLevel(), -60.0f);
+        QCOMPARE(w.dynamicRange(), 80.0f);
+        QCOMPARE(dyn->value(), 80);
     }
 };
 

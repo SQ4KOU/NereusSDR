@@ -20,6 +20,7 @@
 
 #include "gui/PanadapterApplet.h"
 #include "gui/SpectrumWidget.h"
+#include "gui/ImdMeasurementPanel.h"
 #include "gui/StyleConstants.h"
 #include "gui/widgets/SpectrumStatusOverlay.h"
 #include "models/SliceModel.h"
@@ -42,12 +43,35 @@ PanadapterApplet::PanadapterApplet(const QString& panId, QWidget* parent)
     , m_panId(panId)
     , m_spectrum(new SpectrumWidget(this))
 {
+    // The approved narrow pan reflows ordinary measurement widgets at 320 logical px.
+    m_spectrum->setMinimumWidth(320);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     buildFloatTitleBar();          // hidden until setFloatingState(true)
     layout->addWidget(m_floatTitleBar);
-    layout->addWidget(m_spectrum, 1);
+    m_imdRail = new ImdMeasurementPanel(this);
+    m_imdInspector = new ImdMeasurementPanel(this);
+    m_imdInspector->setPresentation(ImdMeasurementPanel::Presentation::Inspector);
+    layout->addWidget(m_imdRail);
+    m_imdBodyLayout = new QBoxLayout(QBoxLayout::LeftToRight);
+    m_imdBodyLayout->setContentsMargins(0, 0, 0, 0);
+    m_imdBodyLayout->setSpacing(0);
+    m_imdBodyLayout->addWidget(m_spectrum, 1);
+    m_imdBodyLayout->addWidget(m_imdInspector);
+    layout->addLayout(m_imdBodyLayout, 1);
+    connect(m_spectrum, &SpectrumWidget::imdMeasurementChanged, this, [this](const ImdMeasurementFrame& frame) {
+        m_imdRail->setFrame(frame);
+        m_imdInspector->setFrame(frame);
+        refreshImdPresentation();
+    });
+    connect(m_spectrum, &SpectrumWidget::imdPresentationChanged, this, &PanadapterApplet::refreshImdPresentation);
+    for (ImdMeasurementPanel* panel : {m_imdRail, m_imdInspector}) {
+        connect(panel, &ImdMeasurementPanel::productSelected, m_spectrum, &SpectrumWidget::setImdSelectedProduct);
+    }
+    connect(m_imdRail, &ImdMeasurementPanel::guidesVisibleChanged, m_spectrum, &SpectrumWidget::setImdGuidesVisible);
+    connect(m_imdRail, &ImdMeasurementPanel::inspectorVisibleChanged, m_spectrum, &SpectrumWidget::setImdInspectorVisible);
+    refreshImdPresentation();
 
     // Phase 3F Sub-Epic E Task 2: per-pan status overlay in top-right.
     // Positioned manually in resizeEvent so the spectrum host owns the full
@@ -104,6 +128,9 @@ PanadapterApplet::PanadapterApplet(const QString& panId, QWidget* parent)
             [this]() { emit wideBadgeClicked(m_panId); });
     connect(m_statusOverlay, &SpectrumStatusOverlay::chainTagClicked, this,
             [this](int chainIdx) { emit chainTagClicked(m_panId, chainIdx); });
+    // Task 26: the receiver flags stay on top of the corner badges.
+    connect(m_spectrum, &SpectrumWidget::receiverFlagRegionChanged, this,
+            &PanadapterApplet::applyStatusOverlayMask);
 
     // Phase 3F Sub-Epic F Task 13: restore persisted extended-view
     // toggle (default true) and apply it to the embedded spectrum immediately.
@@ -111,6 +138,21 @@ PanadapterApplet::PanadapterApplet(const QString& panId, QWidget* parent)
     const QString stored = s.value(QStringLiteral("Pan_%1_ExtendedView").arg(m_panId),
                                    QStringLiteral("True")).toString();
     setExtendedViewEnabled(stored == QStringLiteral("True"));
+}
+
+void PanadapterApplet::refreshImdPresentation()
+{
+    const bool enabled = m_spectrum->imdMeasurementFrame().status != ImdStatus::Disabled;
+    m_imdRail->setVisible(enabled);
+    m_imdInspector->setVisible(enabled && m_spectrum->imdInspectorVisible());
+    const bool narrow = width() < 680;
+    m_imdBodyLayout->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_imdInspector->setMinimumWidth(narrow ? 0 : 296);
+    m_imdInspector->setMaximumWidth(narrow ? QWIDGETSIZE_MAX : 312);
+    m_imdRail->setGuidesVisible(m_spectrum->imdGuidesVisible());
+    m_imdRail->setInspectorVisible(m_spectrum->imdInspectorVisible());
+    m_imdRail->setSelectedProduct(m_spectrum->imdSelectedProduct());
+    m_imdInspector->setSelectedProduct(m_spectrum->imdSelectedProduct());
 }
 
 PanadapterApplet::~PanadapterApplet() = default;
@@ -180,15 +222,16 @@ void PanadapterApplet::refreshNoSliceHint()
     m_noSliceHint->setText(offerTake ? takeReceiverHintText() : noSliceHintText());
     m_noSliceHint->setVisible(show);
     if (show) {
-        m_noSliceHint->setGeometry(rect().adjusted(16, 0, -16, offerTake ? -40 : 0));
+        const QRect spectrumRect(m_spectrum->mapTo(this, QPoint()), m_spectrum->size());
+        m_noSliceHint->setGeometry(spectrumRect.adjusted(16, 0, -16, offerTake ? -40 : 0));
         m_noSliceHint->raise();
     }
     if (m_takeReceiverButton) {
         m_takeReceiverButton->setVisible(offerTake);
         if (offerTake) {
             const QSize hint = m_takeReceiverButton->sizeHint();
-            m_takeReceiverButton->setGeometry((width() - hint.width()) / 2,
-                                              height() / 2 + 16, hint.width(), hint.height());
+            m_takeReceiverButton->setGeometry(m_spectrum->x() + (m_spectrum->width() - hint.width()) / 2,
+                                              m_spectrum->y() + m_spectrum->height() / 2 + 16, hint.width(), hint.height());
             m_takeReceiverButton->raise();
         }
     }
@@ -231,12 +274,20 @@ bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
     if (ev->type() == QEvent::MouseButtonPress) {
         emit activated(m_panId);
     }
+    // Task 26: the badge strip or the spectrum moved or resized, so the
+    // flags' area falls elsewhere on the strip.
+    if ((obj == m_statusOverlay || obj == m_spectrum)
+        && (ev->type() == QEvent::Move || ev->type() == QEvent::Resize)) {
+        if (obj == m_spectrum) { repositionStatusOverlay(); refreshNoSliceHint(); }
+        applyStatusOverlayMask();
+    }
     return QWidget::eventFilter(obj, ev);
 }
 
 void PanadapterApplet::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
+    refreshImdPresentation();
     repositionStatusOverlay();
     refreshNoSliceHint();
 }
@@ -358,22 +409,36 @@ void PanadapterApplet::repositionStatusOverlay()
     // badges, so any overlap makes the arrows both hard to read and hard to
     // hit.
     const int reserved = m_spectrum ? m_spectrum->reservedRightEdgeWidth() : 0;
-    // Start below the floating title strip when there is one. The overlay is
-    // positioned in APPLET coordinates, so without this it lands on top of
-    // the strip -- the CH / WIDE / TX badges printed over the pan name and
-    // the Dock button's row.
-    //
-    // Keyed on m_isFloating rather than the strip's isVisible(): the float
-    // sequence hides the applet while it reparents, and a hidden ancestor
-    // makes isVisible() false for a child that is not itself hidden, which
-    // would put the overlay back over the strip for the frame that matters.
-    const int stripH = (m_isFloating && m_floatTitleBar)
-                           ? m_floatTitleBar->height() : 0;
+    const QRect spectrumRect(m_spectrum->mapTo(this, QPoint()), m_spectrum->size());
     const int overlayWidth = m_statusOverlay->remoteDisplayStatus().isEmpty()
-        ? hint.width() : std::min(hint.width(), std::max(44, width() - reserved - 16));
-    m_statusOverlay->setGeometry(width() - overlayWidth - 8 - reserved,
-                                 stripH + 8,
+        ? hint.width() : std::min(hint.width(), std::max(44, spectrumRect.width() - reserved - 16));
+    const int floatingTitleBottom = m_isFloating && m_floatTitleBar ? m_floatTitleBar->height() : 0;
+    const int overlayTop = std::max(spectrumRect.top(), floatingTitleBottom) + 8;
+    m_statusOverlay->setGeometry(spectrumRect.right() - overlayWidth - 7 - reserved,
+                                 overlayTop,
                                  overlayWidth, hint.height());
+
+}
+
+void PanadapterApplet::applyStatusOverlayMask()
+{
+    if (!m_statusOverlay || !m_spectrum) { return; }
+    const QPoint offset = m_spectrum->mapTo(this, QPoint(0, 0)) - m_statusOverlay->pos();
+    const QRegion flags = m_spectrum->receiverFlagRegion().translated(offset);
+    const QRegion strip(m_statusOverlay->rect());
+    if (!flags.intersects(strip)) {
+        if (!m_statusOverlay->mask().isEmpty()) {
+            m_statusOverlay->clearMask();
+        }
+        return;
+    }
+    QRegion shown = strip.subtracted(flags);
+    if (shown.isEmpty()) {
+        // An empty mask means no mask at all, so a strip wholly under the
+        // flags keeps one corner pixel.
+        shown = QRegion(0, 0, 1, 1);
+    }
+    m_statusOverlay->setMask(shown);
 }
 
 void PanadapterApplet::setWideBpf(bool wide, const QString& reason)
@@ -406,8 +471,11 @@ void PanadapterApplet::buildFloatTitleBar()
     m_floatTitleBar = new QWidget(this);
     m_floatTitleBar->setFixedHeight(18);
     m_floatTitleBar->setVisible(false);
+    // Named so the bottom line stays on the bar: an unnamed QWidget rule
+    // reached the grip and title labels and drew the line under each.
+    m_floatTitleBar->setObjectName(QStringLiteral("panFloatTitleBar"));
     m_floatTitleBar->setStyleSheet(QStringLiteral(
-        "QWidget { background: #16202c; border-bottom: 1px solid #203040; }"));
+        "QWidget#panFloatTitleBar { background: #16202c; border-bottom: 1px solid #203040; }"));
 
     auto* bar = new QHBoxLayout(m_floatTitleBar);
     bar->setContentsMargins(6, 0, 4, 0);

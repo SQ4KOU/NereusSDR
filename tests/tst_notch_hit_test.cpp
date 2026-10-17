@@ -56,6 +56,18 @@
 
 using namespace NereusSDR;
 
+// MinGW imports a static constexpr member of an exported class by address
+// when it is bound to a reference (QCOMPARE does), and the Core DLL never
+// exports one, so this test did not link on Windows. It reads these
+// copies by value instead.
+namespace {
+constexpr double kDefaultNotchWidthHz = NereusSDR::NotchModel::kDefaultNotchWidthHz;
+constexpr double kMaxNotchWidthHz = NereusSDR::NotchModel::kMaxNotchWidthHz;
+constexpr double kNarrowNotchWidthHz = NereusSDR::NotchModel::kNarrowNotchWidthHz;
+constexpr double kWheelWidthStepFineHz = NereusSDR::NotchModel::kWheelWidthStepFineHz;
+constexpr double kWheelWidthStepHz = NereusSDR::NotchModel::kWheelWidthStepHz;
+} // namespace
+
 namespace {
 
 // Pan geometry shared by every render test.  8 kHz across 800 px is
@@ -788,8 +800,8 @@ private slots:
     // being minted in the wiring layer.
     void notch_width_constants_come_from_notch_model()
     {
-        QCOMPARE(NotchModel::kDefaultNotchWidthHz, 200.0);
-        QCOMPARE(NotchModel::kNarrowNotchWidthHz, 100.0);
+        QCOMPARE(kDefaultNotchWidthHz, 200.0);
+        QCOMPARE(kNarrowNotchWidthHz, 100.0);
     }
 
     // MainWindow cannot be stood up in a unit test (it boots WDSP, the
@@ -1227,8 +1239,8 @@ private slots:
     // arithmetic above happening to still add up.
     void wheel_steps_come_from_notch_model()
     {
-        QCOMPARE(NotchModel::kWheelWidthStepHz, 10.0);
-        QCOMPARE(NotchModel::kWheelWidthStepFineHz, 1.0);
+        QCOMPARE(kWheelWidthStepHz, 10.0);
+        QCOMPARE(kWheelWidthStepFineHz, 1.0);
     }
 
     // Plan cross-task correction: width clamping lives ONLY in
@@ -1256,7 +1268,7 @@ private slots:
         const int id = model.addNotch(kUiCentreHz, 9995.0);
         QVERIFY(id >= 0);
         QVERIFY(model.setWidth(id, 10005.0));
-        QCOMPARE(model.notchById(id)->widthHz, NotchModel::kMaxNotchWidthHz);
+        QCOMPARE(model.notchById(id)->widthHz, kMaxNotchWidthHz);
     }
 
     void wheel_without_a_selected_notch_does_not_resize()

@@ -2,7 +2,11 @@
 // Modification history (NereusSDR):
 //   2026-10-04 J.J. Boyd (KG4VCF): first media admission/rejoin Auto
 //              convergence regressions. AI-assisted via OpenAI Codex.
+//   2026-10-11 J.J. Boyd (KG4VCF): idle status announcements and the
+//              lights' needless restyle. AI-assisted via Anthropic
+//              Claude Code.
 #include <QtTest>
+#include <QEvent>
 #include <QTemporaryDir>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -30,6 +34,7 @@
 #include "models/PureSignalSettings.h"
 #include "gui/PsaIndicatorWidget.h"
 #include "gui/PsForm.h"
+#include "gui/PureSignalInstruments.h"
 #include "gui/DspAssetDialog.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
@@ -37,6 +42,27 @@
 using namespace NereusSDR;
 
 namespace {
+
+// Counts the style changes a widget is told about. Qt sends one, and
+// polishes the widget again, on every setStyleSheet(), same text or not.
+class StyleChangeCounter : public QObject {
+public:
+    int count{0};
+
+protected:
+    bool eventFilter(QObject*, QEvent* event) override
+    {
+        if (event->type() == QEvent::StyleChange) {
+            ++count;
+        }
+        return false;
+    }
+};
+
+QString statusText(const QJsonObject& status)
+{
+    return QString::fromUtf8(QJsonDocument(status).toJson(QJsonDocument::Compact));
+}
 
 struct AdmissionClient {
     RadioModel radio{RadioModel::Role::Remote};
@@ -664,6 +690,7 @@ private slots:
         // R-R3-49 (parity Task 7): a Core at transmitSettingsVersion 7
         // takes a restore from this window off the air.
         QSignalSpy restoreRequested(manager, &DspAssetDialog::restoreCorrectionRequested);
+        QVERIFY(restoreRequested.isValid());
         QTRY_VERIFY(restore->isEnabled());
         restore->click();
         QCOMPARE(restoreRequested.size(), 1);
@@ -708,15 +735,21 @@ private slots:
         QVERIFY(indicator.findChild<QLabel*>("lblPSFeedback"));
         QCOMPARE(indicator.fbText(), QStringLiteral("Feedback 149"));
         QCOMPARE(facade->statusSnapshot().correctionGainAtPeak, 0.8125);
-        QLabel* correction = applet.findChild<QLabel*>("PsAppletCorrectionDbLabel");
+        QLabel* correction = applet.findChild<QLabel*>("PsAppletCorrectionState");
         QVERIFY(correction);
-        QCOMPARE(correction->text(), QStringLiteral("Correction: Applied"));
-        QLabel* diagnostic = applet.findChild<QLabel*>("PsAppletStatusLabel");
-        QVERIFY(diagnostic);
-        QVERIFY(diagnostic->text().contains("Collect"));
-        QLabel* calibrations = applet.findChild<QLabel*>("PsAppletIterationsLabel");
-        QVERIFY(calibrations);
-        QVERIFY(calibrations->text().contains("5 / 7"));
+        QCOMPARE(correction->text(), QStringLiteral("● Applied"));
+        QLabel* activity = applet.findChild<QLabel*>("PsAppletActivity");
+        QLabel* successes = applet.findChild<QLabel*>("PsAppletSuccessfulCalibrations");
+        QLabel* attempts = applet.findChild<QLabel*>("PsAppletCalibrationAttempts");
+        QLabel* feedback = applet.findChild<QLabel*>("PsAppletFeedbackLevel");
+        auto* feedbackMeter = static_cast<PureSignalFeedbackMeter*>(
+            applet.findChild<QWidget*>("PsAppletFeedbackMeter"));
+        QVERIFY(activity && successes && attempts && feedback && feedbackMeter);
+        QVERIFY(activity->text().contains("Collect"));
+        QVERIFY(successes->text().contains("5"));
+        QVERIFY(attempts->text().contains("7"));
+        QVERIFY(feedback->text().contains("149"));
+        QVERIFY(feedbackMeter->available());
         // A new feedback level can arrive without another calibration attempt.
         status["feedbackLevel"] = 171;
         status["correctionsApplied"] = false;
@@ -724,10 +757,16 @@ private slots:
         QVERIFY(facade->applyRemoteProperty("statusJson",
             QString::fromUtf8(QJsonDocument(status).toJson(QJsonDocument::Compact))));
         QCOMPARE(indicator.fbText(), QStringLiteral("Feedback 171"));
-        QCOMPARE(correction->text(), QStringLiteral("Correction: Off"));
+        QCOMPARE(correction->text(), QStringLiteral("Off"));
+        QVERIFY(feedback->text().contains("171"));
+        QVERIFY(attempts->text().contains("7"));
         facade->resetSession();
         QCOMPARE(indicator.fbText(), QStringLiteral("Feedback —"));
-        QCOMPARE(correction->text(), QStringLiteral("Correction: Off"));
+        QCOMPARE(correction->text(), QStringLiteral("Unavailable"));
+        QCOMPARE(feedback->text(), QStringLiteral("—"));
+        QVERIFY(successes->text().contains(QStringLiteral("—")));
+        QVERIFY(attempts->text().contains(QStringLiteral("—")));
+        QVERIFY(!feedbackMeter->available());
         QVERIFY(!remote.pureSignal());
     }
 
@@ -770,6 +809,152 @@ private slots:
         QVERIFY(!facade->canActuate());
         facade->resetSession();
         QCOMPARE(indicator.psText(), QStringLiteral("PureSignal3"));
+    }
+
+    void idlePollAnnouncesNothingUntilTheStatusChanges()
+    {
+#ifndef HAVE_WDSP
+        QSKIP("requires WDSP");
+#else
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        WdspEngine engine;
+        engine.setSynchronousInitForTest(true);
+        QVERIFY(engine.initialize(directory.path() + QLatin1Char('/')));
+        TxChannel* tx = engine.createTxChannel(WdspEngine::kTxChannelId);
+        QVERIFY(tx);
+        PureSignalSettings settings;
+        PureSignal coordinator(&engine, tx, nullptr, nullptr, nullptr, nullptr);
+        coordinator.setTimersEnabled(false);
+        coordinator.setSettings(&settings);
+        PureSignalSessionFacade facade(nullptr, &coordinator);
+        // The first poll reads the engine's off-the-air state.
+        coordinator.pollTimerTick();
+        const QString published = facade.statusJson();
+        QVERIFY(!published.isEmpty());
+
+        // Off the air every 100 ms poll reads the same state; only the
+        // poll's own counter and clock stamp move. Each announcement
+        // reaches every listener here and every window on this Core.
+        QSignalSpy changed(&facade, &PureSignalSessionFacade::statusChanged);
+        for (int poll = 0; poll < 5; ++poll) {
+            coordinator.pollTimerTick();
+        }
+        QCOMPARE(changed.size(), 0);
+        QCOMPARE(facade.statusJson(), published);
+
+        // A real change is announced by the poll that reads it, once.
+        settings.setRequestedTxDelayNs(settings.requestedTxDelayNs() + 50.0);
+        changed.clear();
+        coordinator.pollTimerTick();
+        QCOMPARE(changed.size(), 1);
+        QCOMPARE(facade.statusSnapshot().requestedTxDelayNs, settings.requestedTxDelayNs());
+        QVERIFY(facade.statusJson() != published);
+        coordinator.pollTimerTick();
+        QCOMPARE(changed.size(), 1);
+#endif
+    }
+
+    void remoteWindowAnnouncesOnlyValuesThatChanged()
+    {
+        RadioModel source;
+        QJsonObject status = QJsonDocument::fromJson(
+            source.pureSignalFacade()->statusJson().toUtf8()).object();
+        QVERIFY(!status.isEmpty());
+        status["feedbackLevel"] = 149;
+        status["sequence"] = QStringLiteral("41");
+        status["capturedAt"] = QStringLiteral("1790000000000");
+        RadioModel remote(RadioModel::Role::Remote);
+        PureSignalSessionFacade* facade = remote.pureSignalFacade();
+        facade->setRemoteCapabilities(true, true);
+        const quint64 generation = facade->displayGeneration() + 1;
+        const auto applyAll = [&] {
+            return facade->applyRemoteProperty("available", true)
+                && facade->applyRemoteProperty("canActuate", true)
+                && facade->applyRemoteProperty("twoToneOn", false)
+                && facade->applyRemoteProperty("statusJson", statusText(status))
+                && facade->applyRemoteProperty("lastActionError", QString())
+                && facade->applyRemoteProperty("displayGeneration", generation);
+        };
+        QVERIFY(applyAll());
+        QCOMPARE(facade->statusSnapshot().feedbackLevel, 149);
+
+        // A Core resends all six whenever any one of them changes, and a
+        // Core that stamps every poll resends them ten times a second.
+        QSignalSpy changed(facade, &PureSignalSessionFacade::statusChanged);
+        QSignalSpy invalidated(facade, &PureSignalSessionFacade::displayInvalidated);
+        status["sequence"] = QStringLiteral("42");
+        status["capturedAt"] = QStringLiteral("1790000000100");
+        QVERIFY(applyAll());
+        QCOMPARE(changed.size(), 0);
+        QCOMPARE(invalidated.size(), 0);
+
+        // Each real change is announced once.
+        status["feedbackLevel"] = 171;
+        QVERIFY(facade->applyRemoteProperty("statusJson", statusText(status)));
+        QCOMPARE(changed.size(), 1);
+        QCOMPARE(facade->statusSnapshot().feedbackLevel, 171);
+        QVERIFY(facade->applyRemoteProperty("lastActionError", QStringLiteral("refused")));
+        QCOMPARE(changed.size(), 2);
+        QCOMPARE(facade->lastActionError(), QStringLiteral("refused"));
+        QVERIFY(facade->applyRemoteProperty("canActuate", false));
+        QCOMPARE(changed.size(), 3);
+        QVERIFY(!facade->canActuate());
+        QVERIFY(facade->applyRemoteProperty("displayGeneration", generation + 1));
+        QCOMPARE(changed.size(), 4);
+        QCOMPARE(invalidated.size(), 1);
+        QVERIFY(facade->applyRemoteProperty("available", false));
+        QCOMPARE(changed.size(), 5);
+        QVERIFY(!facade->available());
+
+        // A value that cannot be read is still refused.
+        QVERIFY(!facade->applyRemoteProperty("statusJson", QStringLiteral("{}")));
+        QVERIFY(!facade->applyRemoteProperty("displayGeneration", quint64{0}));
+        QCOMPARE(changed.size(), 5);
+    }
+
+    void aStatusUpdateRestylesOnlyTheLightsThatChanged()
+    {
+        RadioModel source;
+        QJsonObject status = QJsonDocument::fromJson(
+            source.pureSignalFacade()->statusJson().toUtf8()).object();
+        QVERIFY(!status.isEmpty());
+        status["psEnabled"] = true;
+        status["feedbackLevel"] = 149;
+        RadioModel remote(RadioModel::Role::Remote);
+        PureSignalSessionFacade* facade = remote.pureSignalFacade();
+        facade->setRemoteCapabilities(true, false);
+        facade->applyRemoteProperty("available", true);
+        PsaIndicatorWidget indicator(&remote);
+        PureSignalApplet applet(&remote);
+        QVERIFY(facade->applyRemoteProperty("statusJson", statusText(status)));
+
+        QLabel* banner = indicator.findChild<QLabel*>("lblPSFeedback");
+        QVERIFY(banner);
+        QLabel* correction = applet.findChild<QLabel*>("PsAppletCorrectionState");
+        QLabel* feedbackClass = applet.findChild<QLabel*>("PsAppletFeedbackClass");
+        QLabel* feedback = applet.findChild<QLabel*>("PsAppletFeedbackLevel");
+        QVERIFY(correction && feedbackClass && feedback);
+        // A shown widget is polished; only a polished one is polished again.
+        StyleChangeCounter restyled;
+        for (QLabel* label : {correction, feedbackClass, feedback, banner}) {
+            label->ensurePolished();
+            label->installEventFilter(&restyled);
+        }
+
+        // On the air the reading changes ten times a second while the
+        // styled readouts stay in the same visual states.
+        status["feedbackLevel"] = 150;
+        QVERIFY(facade->applyRemoteProperty("statusJson", statusText(status)));
+        QVERIFY(feedback->text().contains("150"));
+        QCOMPARE(restyled.count, 0);
+
+        // A readout that changes visual state is restyled, and only that one.
+        const QString correctionOff = correction->styleSheet();
+        status["correctionsApplied"] = true;
+        QVERIFY(facade->applyRemoteProperty("statusJson", statusText(status)));
+        QVERIFY(correction->styleSheet() != correctionOff);
+        QCOMPARE(restyled.count, 1);
     }
 };
 

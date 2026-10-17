@@ -20,6 +20,11 @@
 //   2026-09-30: listenerReason names the hosting desktop for the station
 //               device by its hostsCore entry. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-12: receiverHeldReason(): the Core's words for a C-Tune pin on
+//               a receiver another device holds, from the holder the Core
+//               now names on each entry; listenerReason shares the holder's
+//               words with it (holderWords). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SliceAccessMirror.h"
@@ -96,7 +101,8 @@ void SliceAccessMirror::applyObject(const QByteArray& objectKey,
     }
     auto it = m_entries.find(sliceId);
     if (it == m_entries.end()) {
-        it = m_entries.insert(sliceId, Entry{sliceId, 0, QString(), 0, {}, {}, false, false});
+        it = m_entries.insert(sliceId,
+                              Entry{sliceId, 0, QString(), 0, {}, {}, false, false, QString()});
     }
     Entry& e = it.value();
     for (const MirrorUpdate& u : updates) {
@@ -114,6 +120,8 @@ void SliceAccessMirror::applyObject(const QByteArray& objectKey,
             e.txSelected = u.value.toBool();
         } else if (u.name == "onAir") {
             e.onAir = u.value.toBool();
+        } else if (u.name == "receiverHolderDeviceId") {
+            e.receiverHolderDeviceId = u.value.toString();
         }
         // sliceId is the key's; anything a newer Core adds is not kept.
     }
@@ -195,6 +203,14 @@ QString SliceAccessMirror::listenerReason(int sliceId) const
     if (controller.isEmpty()) {
         return QStringLiteral("Nobody controls slice %1. Take control to change it.").arg(letter);
     }
+    const QString owner = holderWords(controller);
+    return QStringLiteral("Slice %1 is controlled by %2. Take control to change it.")
+        .arg(letter)
+        .arg(owner);
+}
+
+QString SliceAccessMirror::holderWords(const QString& deviceId) const
+{
     // Slice control plan Task 17: who controls it, as the Core names it
     // (StationServer::sliceHolderWords): the device's name (the hosting
     // desktop's too), the plain word for its kind when it has no name,
@@ -203,21 +219,48 @@ QString SliceAccessMirror::listenerReason(int sliceId) const
     // hosting desktop's entry (hostsCore), never matched by id.
     std::optional<RemoteConnectedDevice> device;
     if (m_devices) {
-        device = m_devices->sliceHolderDevice(controller);
+        device = m_devices->sliceHolderDevice(deviceId);
     }
-    QString owner;
     if (device && !device->name.isEmpty()) {
-        owner = device->name;
-    } else if (controller == QLatin1String(kStationDevice)) {
-        owner = QStringLiteral("the Core");
-    } else if (device && !device->kind.isEmpty()) {
-        const QString kind = DeviceSessionRegistry::kindWord(device->kind).toLower();
-        owner = QStringLiteral("a %1").arg(kind);
-    } else {
-        owner = QStringLiteral("another device");
+        return device->name;
     }
-    return QStringLiteral("Slice %1 is controlled by %2. Take control to change it.")
-        .arg(letter)
+    if (deviceId == QLatin1String(kStationDevice)) {
+        return QStringLiteral("the Core");
+    }
+    if (device && !device->kind.isEmpty()) {
+        const QString kind = DeviceSessionRegistry::kindWord(device->kind).toLower();
+        return QStringLiteral("a %1").arg(kind);
+    }
+    return QStringLiteral("another device");
+}
+
+QString SliceAccessMirror::receiverHeldReason(int sliceId) const
+{
+    const auto it = m_entries.constFind(sliceId);
+    if (it == m_entries.cend() || m_selfDeviceId.isEmpty()) {
+        return {};
+    }
+    const QString holder = it->receiverHolderDeviceId;
+    if (holder.isEmpty() || holder == m_selfDeviceId) {
+        return {};
+    }
+    // The Core's own two sentences (pinReason and awayPinReason in
+    // StationReceivers.cpp), so the held switch reads as the Core's refusal
+    // of the pin would. A device the Core lists as away is not connected
+    // now; the Core's own position is always there.
+    std::optional<RemoteConnectedDevice> device;
+    if (m_devices) {
+        device = m_devices->sliceHolderDevice(holder);
+    }
+    const QString owner = holderWords(holder);
+    if (holder != QLatin1String(kStationDevice) && device
+        && device->state == QLatin1String("away")) {
+        return QStringLiteral("This panadapter shows the receiver of %1, which is not connected "
+                              "now. Its C-Tune setting stays with %1 until it is back or its "
+                              "three minutes are up.")
+            .arg(owner);
+    }
+    return QStringLiteral("This panadapter shows %1's receiver. Its C-Tune setting is %1's.")
         .arg(owner);
 }
 

@@ -1,4 +1,17 @@
 // no-port-check: NereusSDR-original. Network queue policy; no DSP algorithm.
+//
+// Modification history (NereusSDR):
+//   2026-10-10: hasReady(); takeReady() reads the same due time through
+//               nextDueNs() (R-AUD-15, bench regression). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-12: readyForNs(); a released packet carries its arrival
+//               (R-AUD-15). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-16: concealExpectedNow() conceals an empty queue at the base
+//               hold once the consumer says arrivals have stopped; an
+//               outage's late packets do not deepen the hold, and arm
+//               shedding for the backlog its burst can leave. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/session/media/AudioJitterBuffer.h"
 #include "core/session/media/OpusAudioCodec.h"
 #include <bit>
@@ -77,9 +90,13 @@ void AudioJitterBuffer::shedExcess(qint64 nowNs)
     const qint64 content = queuedSpanNs() + m_downstreamExcessNs;
     if (m_packets.empty() || content <= target) {
         m_excessSinceNs.reset();
-        if (m_holdNs <= kHoldNs) { // paid: disarm
+        // JJ 2026-10-16: an outage's arming outlasts its first empty wake
+        // by one shed interval (see insert()).
+        const bool outageLanding = m_outageArmedNs && nowNs - *m_outageArmedNs < kShrinkIntervalNs;
+        if (m_holdNs <= kHoldNs && !outageLanding) { // paid: disarm
             m_lastLateNs.reset();
             m_stallArmed = false;
+            m_outageArmedNs.reset();
         }
         return;
     }
@@ -125,7 +142,7 @@ void AudioJitterBuffer::noteRelease(quint32 timestamp, qint64 releasedNs, bool c
 }
 
 AudioJitterBuffer::Admission AudioJitterBuffer::insert(
-    const QByteArray& packet, quint32 timestamp, qint64 arrivalNs)
+    const QByteArray& packet, quint32 timestamp, qint64 arrivalNs, bool afterOutage)
 {
     if (packet.isEmpty() || packet.size() > OpusAudioCodecConfig::kMaxRtpPacketBytes
         || arrivalNs < 0 || arrivalNs > std::numeric_limits<qint64>::max() - kMaxHoldNs) {
@@ -138,7 +155,22 @@ AudioJitterBuffer::Admission AudioJitterBuffer::insert(
         for (auto it = m_released.rbegin(); it != m_released.rend(); ++it) {
             if (it->timestamp != timestamp) { continue; }
             if (!it->concealed || arrivalNs <= it->releasedNs) { break; }
+            // JJ 2026-10-16: after an outage (no packet for longer than the
+            // deepest hold) the lateness is the outage's, not the link's
+            // jitter; growing the hold for it would leave every ridden-out
+            // stall up to kMaxHoldNs late for the whole easing time.
             if (!m_adaptive) { return Admission::LateConcealed; }
+            if (afterOutage) {
+                // The burst that brought it can leave a backlog standing
+                // (the rest of it queued ahead in a later pass), which no
+                // late packet would announce: shedding is armed at once,
+                // as a consumer stall arms it, and stays armed for one
+                // shed interval, so the burst's rest can land before an
+                // empty queue disarms it.
+                m_stallArmed = true;
+                m_outageArmedNs = arrivalNs;
+                return Admission::LateConcealed;
+            }
             m_lastLateNs = arrivalNs;
             const qint64 lateNs = arrivalNs - it->releasedNs;
             // A rewind replays every interval released since this one, so
@@ -163,7 +195,7 @@ AudioJitterBuffer::Admission AudioJitterBuffer::insert(
             m_rewound += back;
             m_nextTimestamp = timestamp;
             m_released.erase(std::prev(it.base()), m_released.end());
-            m_packets.try_emplace(m_nextIndex, Entry{packet, arrivalNs + m_holdNs});
+            m_packets.try_emplace(m_nextIndex, Entry{packet, arrivalNs + m_holdNs, arrivalNs});
             return Admission::Rewound;
         }
         return Admission::Late;
@@ -172,34 +204,53 @@ AudioJitterBuffer::Admission AudioJitterBuffer::insert(
     const int ahead = delta / m_packetFrames;
     if (ahead >= m_maxPackets) { return Admission::OutsideWindow; }
     const auto [unused, inserted] = m_packets.try_emplace(
-        m_nextIndex + static_cast<quint64>(ahead), Entry{packet, arrivalNs + m_holdNs});
+        m_nextIndex + static_cast<quint64>(ahead),
+        Entry{packet, arrivalNs + m_holdNs, arrivalNs});
     Q_UNUSED(unused);
     return inserted ? Admission::Accepted : Admission::Duplicate;
+}
+
+std::optional<qint64> AudioJitterBuffer::nextDueNs() const
+{
+    const auto first = m_packets.begin();
+    if (first != m_packets.end() && first->first == m_nextIndex) {
+        // Preserve the producer's clock: received blocks are released at
+        // their own arrival time plus the hold interval. A fixed packet-period
+        // software playout clock here would hide clock drift from rmatch
+        // and instead let this queue grow until it periodically dropped.
+        return first->second.dueNs;
+    }
+    if (first != m_packets.end()) {
+        return first->second.dueNs
+            - static_cast<qint64>(first->first - m_nextIndex) * m_packetDurationNs;
+    }
+    return m_nextMissingDue;
+}
+
+bool AudioJitterBuffer::hasReady(qint64 nowNs) const
+{
+    const std::optional<qint64> due = nextDueNs();
+    return due && nowNs >= *due;
+}
+
+qint64 AudioJitterBuffer::readyForNs(qint64 nowNs) const
+{
+    const std::optional<qint64> due = nextDueNs();
+    return due && nowNs >= *due ? nowNs - *due : 0;
 }
 
 std::optional<AudioJitterBuffer::Playout> AudioJitterBuffer::takeReady(qint64 nowNs)
 {
     tick(nowNs);
     auto first = m_packets.begin();
-    std::optional<qint64> due;
     const bool present = first != m_packets.end() && first->first == m_nextIndex;
-    if (present) {
-        // Preserve the producer's clock: received blocks are released at
-        // their own arrival time plus the hold interval. A fixed packet-period
-        // software playout clock here would hide clock drift from rmatch
-        // and instead let this queue grow until it periodically dropped.
-        due = first->second.dueNs;
-    } else if (first != m_packets.end()) {
-        due = first->second.dueNs
-            - static_cast<qint64>(first->first - m_nextIndex) * m_packetDurationNs;
-    } else {
-        due = m_nextMissingDue;
-    }
+    const std::optional<qint64> due = nextDueNs();
     if (!due || nowNs < *due) { return std::nullopt; }
     Playout result;
     result.timestamp = m_nextTimestamp;
     if (present) {
         result.packet = std::move(first->second.packet);
+        result.arrivalNs = first->second.arrivalNs;
         m_packets.erase(first);
     }
     ++m_nextIndex;
@@ -213,7 +264,7 @@ std::optional<AudioJitterBuffer::Playout> AudioJitterBuffer::takeReady(qint64 no
     return result;
 }
 
-std::optional<AudioJitterBuffer::Playout> AudioJitterBuffer::concealExpectedNow(qint64 nowNs)
+std::optional<AudioJitterBuffer::Playout> AudioJitterBuffer::concealExpectedNow(qint64 nowNs, bool arrivalsStopped)
 {
     // The expected packet missing: a hole (a later one queued), or an
     // empty queue while the hold is deepened and something has played. A
@@ -223,9 +274,14 @@ std::optional<AudioJitterBuffer::Playout> AudioJitterBuffer::concealExpectedNow(
     // empty queue keeps its deadline and the matcher's own accounting (a
     // device outrunning the stream is still a clock-buffer fault). A true
     // outage is still ended by the no-packet rule.
+    // JJ 2026-10-16: once arrivals have stopped for longer than the deepest
+    // hold, an empty queue is concealed on demand at any hold; the loss
+    // deadline follows each late worker wake and would fall behind the
+    // device over a stall of a second or more.
     const auto first = m_packets.begin();
-    if (first != m_packets.end() ? first->first == m_nextIndex
-                                 : (!m_nextMissingDue || m_holdNs <= kHoldNs)) {
+    if (first != m_packets.end()
+            ? first->first == m_nextIndex
+            : (!m_nextMissingDue || (m_holdNs <= kHoldNs && !arrivalsStopped))) {
         return std::nullopt;
     }
     Playout result;
@@ -273,6 +329,7 @@ std::optional<AudioJitterBuffer::Playout> AudioJitterBuffer::takeExpectedPresent
     Playout result;
     result.packet = std::move(first->second.packet);
     result.timestamp = m_nextTimestamp;
+    result.arrivalNs = first->second.arrivalNs;
     const qint64 originalDue = first->second.dueNs;
     m_packets.erase(first);
     ++m_nextIndex;

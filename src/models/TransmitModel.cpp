@@ -15,6 +15,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-09 - VAX TX (virtual device) only where a VAX transmit device
+//                exists: greyed on Windows with the PC Mic route, a saved
+//                choice falls back to PC Mic (R-SPK-21, R-AUD-01).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-04-26 — tunePowerByBand[14] + per-MAC persistence (G.3, Phase 3M-1a)
 //                 ported by J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.
@@ -106,6 +110,10 @@
 //                 refuses a txEqParaEqData or cfcParaEqData value the curve
 //                 loader cannot read. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-10-09 - Two-tone fix wave: the loadFromSettings defaults comment
+//                 gives Level 0 (Thetis) and the schema v10 reset of a
+//                 saved -6. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 // --- From console.cs (Thetis v2.10.3.13) ---
@@ -314,6 +322,10 @@
 //                 own equal-value check, so an integer mirror a restore
 //                 held apart from the curve still follows it. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-14 - Keep the loaded non-VAX source as its persisted VAX
+//                 restore target; read the old restore key only for an
+//                 active VAX source. J.J. Boyd (KG4VCF), AI-assisted via
+//                 OpenAI Codex.
 // =================================================================
 
 #include "TransmitModel.h"
@@ -2359,25 +2371,37 @@ void TransmitModel::loadFromSettings(const QString& mac)
     setMicSource(micSource);
 
     // ── Mic source previous (PhoneCwApplet VAX-toggle restore target) ─────
-    // Lookup order matches Mic_Source: per-MAC -> preconnect -> default Pc.
-    const QString perMacPreVaxStr = s.value(pfx + QLatin1String("Mic_Source_PreVax"),
-                                             QString()).toString();
-    QString preVaxStr;
-    if (perMacPreVaxStr.isEmpty()) {
-        preVaxStr = AppSettings::instance().value(
-            QStringLiteral("tx/preconnect/Mic_Source_PreVax"),
-            QStringLiteral("Pc")).toString();
+    // A loaded non-VAX source is its own restore target. Save it before
+    // entering VAX, so a later load cannot revive a stale restore key.
+    if (m_micSource != MicSource::Vax) {
+        m_previousNonVaxMicSource = m_micSource;
+        persistOne(QStringLiteral("Mic_Source_PreVax"),
+                   m_micSource == MicSource::Radio ? QStringLiteral("Radio")
+                                                   : QStringLiteral("Pc"));
     } else {
-        preVaxStr = perMacPreVaxStr;
+        // Lookup order matches Mic_Source: per-MAC -> preconnect -> default Pc.
+        const QString perMacPreVaxStr = s.value(pfx + QLatin1String("Mic_Source_PreVax"),
+                                                 QString()).toString();
+        QString preVaxStr;
+        if (perMacPreVaxStr.isEmpty()) {
+            preVaxStr = AppSettings::instance().value(
+                QStringLiteral("tx/preconnect/Mic_Source_PreVax"),
+                QStringLiteral("Pc")).toString();
+        } else {
+            preVaxStr = perMacPreVaxStr;
+        }
+        m_previousNonVaxMicSource = (preVaxStr == QLatin1String("Radio"))
+                                        ? MicSource::Radio
+                                        : MicSource::Pc;
     }
-    m_previousNonVaxMicSource = (preVaxStr == QLatin1String("Radio"))
-                                    ? MicSource::Radio
-                                    : MicSource::Pc;
 
     // ── Two-tone test properties (3M-1c B.2) ──────────────────────────────
     // Defaults per design spec §4.4 (option C):
     //   Freq1=700, Freq2=1900 — match Thetis Designer + btnTwoToneF_defaults.
-    //   Level=-6, Power=50    — NereusSDR-original safer (Designer 0/10).
+    //   Level=0               - Thetis udTwoToneLevel default
+    //                           (setup.Designer.cs:62168-62172 [v2.10.3.15]);
+    //                           settings schema v10 resets a saved -6 to 0.
+    //   Power=50              - NereusSDR-original safer (Designer 10).
     //   Freq2Delay=0          — match Thetis Designer.
     //   Invert=true           — Designer chkInvertTones.Checked = true.
     //   Pulsed=false          — Designer (no Checked= line).
@@ -3400,6 +3424,10 @@ void TransmitModel::setMicSource(MicSource source)
     if (source == MicSource::Radio && m_micSourceLocked) {
         source = MicSource::Pc;
     }
+    // R-SPK-21, R-AUD-01: no VAX transmit device on this system (Windows).
+    if (source == MicSource::Vax && !m_vaxSourceAvailable) {
+        source = MicSource::Pc;
+    }
 
     if (source == m_micSource) { return; }  // idempotent guard
     m_micSource = source;
@@ -3477,6 +3505,25 @@ void TransmitModel::setMicSourceLocked(bool lock)
     if (lock && m_micSource == MicSource::Radio) {
         setMicSource(MicSource::Pc);  // will clamp through the lock guard above
     }
+}
+
+// ── VAX TX availability (R-SPK-21, R-AUD-01) ────────────────────────
+// NereusSDR-native, as the HL2 lock above: an unavailable VAX TX source
+// falls back to Pc.
+void TransmitModel::setVaxSourceAvailable(bool available)
+{
+    m_vaxSourceAvailable = available;
+    if (!available && m_micSource == MicSource::Vax) {
+        setMicSource(MicSource::Pc);
+    }
+}
+
+QString TransmitModel::vaxSourceUnavailableReason()
+{
+    return QStringLiteral(
+        "Windows has no VAX transmit device. To transmit a program's audio, set "
+        "the program's output to a virtual cable, choose PC Mic and pick the "
+        "cable's recording end as the PC mic device.");
 }
 
 // ── PC Mic session state (3M-1b I.2) ─────────────────────────────────────────

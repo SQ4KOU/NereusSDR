@@ -66,6 +66,10 @@ DaemonAgcSource::DaemonAgcSource(RadioModel* radioModel, QObject* parent)
         return;
     }
 
+    // This source writes each slice's station noise floor; the model's own
+    // tick (a desktop window acting as Core) must not write it too.
+    m_radioModel->setAutoAgcFloorPublishedBySource(true);
+
     for (const int streamIndex : m_radioModel->suspendedStreams()) {
         m_suspendedStreams.insert(streamIndex);
     }
@@ -124,6 +128,7 @@ DaemonAgcSource::~DaemonAgcSource()
             invalidate(*state);
             m_radioModel->clearStreamNoiseFloorTracker(streamIndex, state->tracker.get());
         }
+        m_radioModel->setAutoAgcFloorPublishedBySource(false);
     }
     m_streams.clear();
     m_source.reset();

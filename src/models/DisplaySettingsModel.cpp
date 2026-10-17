@@ -7,6 +7,17 @@
 // NereusSDR - DisplaySettingsModel implementation.
 //
 // Modification history (NereusSDR)
+//   2026-10-12: Query closed-pan defaults without constructing a model.
+//     J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-12: Read current per-pan values through the persistence visitor.
+//     J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-10: Display pill plan Task 3: waterfall Black Level is 0 to
+//     100 and the Black Level and Color Gain defaults are 57 and 60 (the
+//     Clarity level model). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//     Claude Code.
+//   2026-10-10: Per-pan keys read and written through PanDisplayKeys
+//     (bare key is the Setup default, <base>_<pan> a sparse override).
+//     J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-10-02: Lossless completed-grid reflection and selected RX snapshot
 //     persistence. J.J. Boyd / KG4VCF, AI-assisted via OpenAI Codex.
 //   Created 2026-08-09 by J.J. Boyd / KG4VCF, 3D Stacked-Trace Spectrum
@@ -14,7 +25,8 @@
 
 #include "DisplaySettingsModel.h"
 
-#include "core/AppSettings.h"
+#include "core/settings/PanDisplayKeys.h"
+#include "core/spectrum/ClarityLevels.h"
 
 #include <QString>
 #include <QStringLiteral>
@@ -26,18 +38,35 @@ namespace NereusSDR {
 
 namespace {
 
-// Reimplements the file-local `settingsKey(base, panIndex)` helper in
-// SpectrumWidget.cpp (that one is `static` to its own translation unit
-// and not exported): pan 0 gets the bare key, every other pan gets a
-// "_<panIndex>" suffix. Both copies must keep producing the SAME string
-// for the SAME (base, panIndex) pair -- they read and write the identical
-// AppSettings keys -- so any change to one belongs with the other.
-QString settingsKeyFor(const QString& base, int panIndex)
+// Ship defaults for the fourteen per-pan keys. load() falls back to them
+// and save() passes the same ones to PanDisplayKeys::writeSparse(), which
+// is how a pan that still shows the ship default writes no key of its own.
+// They match SpectrumWidget::loadSettings()'s ship defaults for the same
+// keys exactly, so a fresh install looks identical through either object.
+constexpr int   kDefaultWfColorScheme      = 0;
+// Display pill plan Task 3: the positions that reproduce the look before
+// the Clarity level model (core/spectrum/ClarityLevels.h); they were 45
+// and 104 under the model before it.
+constexpr int   kDefaultWfColorGain        = ClarityLevels::kColorGainDefault;
+constexpr int   kDefaultWfBlackLevel       = ClarityLevels::kBlackLevelDefault;
+constexpr float kDefaultFillAlpha          = 0.70f;
+constexpr bool  kDefaultPanFill            = true;
+constexpr float kDefaultSpectrumFrac       = 0.40f;
+constexpr int   kDefaultSpectrumRenderMode = 0;
+constexpr int   kDefaultDssGain            = 70;
+constexpr int   kDefaultDssRowSpan         = 100;
+constexpr int   kDefaultDssAngle           = 50;
+constexpr int   kDefaultDssRowDivider      = 0;
+constexpr bool  kDefaultThreeDSliceDepth   = false;
+
+QString floatText(float value)
 {
-    if (panIndex == 0) {
-        return base;
-    }
-    return QStringLiteral("%1_%2").arg(base).arg(panIndex);
+    return QString::number(static_cast<double>(value));
+}
+
+QString boolText(bool value)
+{
+    return value ? QStringLiteral("True") : QStringLiteral("False");
 }
 
 } // namespace
@@ -59,7 +88,8 @@ void DisplaySettingsModel::setWfColorScheme(int scheme)
 
 void DisplaySettingsModel::setWfColorGain(int gain)
 {
-    const int clamped = std::clamp(gain, 0, 100);
+    const int clamped = std::clamp(gain, ClarityLevels::kColorGainMin,
+                                   ClarityLevels::kColorGainMax);
     if (m_wfColorGain == clamped) { return; }
     m_wfColorGain = clamped;
     emit wfColorGainChanged(m_wfColorGain);
@@ -67,7 +97,9 @@ void DisplaySettingsModel::setWfColorGain(int gain)
 
 void DisplaySettingsModel::setWfBlackLevel(int level)
 {
-    const int clamped = std::clamp(level, 0, 125);
+    // 0 to 100, 50 = black at the noise floor, up = blacker (was 0 to 125).
+    const int clamped = std::clamp(level, ClarityLevels::kBlackLevelMin,
+                                   ClarityLevels::kBlackLevelMax);
     if (m_wfBlackLevel == clamped) { return; }
     m_wfBlackLevel = clamped;
     emit wfBlackLevelChanged(m_wfBlackLevel);
@@ -208,18 +240,14 @@ void DisplaySettingsModel::setThreeDSliceDepth(bool on)
 
 void DisplaySettingsModel::load()
 {
-    auto& s = AppSettings::instance();
-
-    // Pan-0-fallback inheritance: an untouched pan N reads pan 0's value
-    // until it has one of its own. Mirrors SpectrumWidget::loadSettings()'s
-    // rawValue lambda exactly (2026-07-30 bench fix; see that function's
-    // own comment for the full rationale) -- both must keep agreeing on
-    // this, since they read the same keys for the same operator-visible
-    // behaviour.
+    // A pan reads its own key (<base>_<panIndex>) when it has one, else
+    // the Setup default (the bare key), else the ship default: an
+    // untouched pan follows the Setup default until it is given a value
+    // of its own. SpectrumWidget::loadSettings() reads its keys through
+    // the same PanDisplayKeys helper, so the two cannot disagree about
+    // where a value comes from.
     auto rawValue = [&](const QString& key) -> QString {
-        const QString own = s.value(settingsKeyFor(key, m_panIndex)).toString();
-        if (!own.isEmpty() || m_panIndex == 0) { return own; }
-        return s.value(settingsKeyFor(key, 0)).toString();
+        return PanDisplayKeys::read(key, m_panIndex, QString()).toString();
     };
     auto readFloat = [&](const QString& key, float def) -> float {
         const QString val = rawValue(key);
@@ -244,24 +272,29 @@ void DisplaySettingsModel::load()
     // Defaults match SpectrumWidget::loadSettings()'s ship defaults for
     // the same keys exactly, so a fresh install looks identical through
     // either object.
-    setWfColorScheme(readInt(QStringLiteral("DisplayWfColorScheme"), 0));
-    setWfColorGain(readInt(QStringLiteral("DisplayWfColorGain"), 45));
-    setWfBlackLevel(readInt(QStringLiteral("DisplayWfBlackLevel"), 104));
+    setWfColorScheme(readInt(QStringLiteral("DisplayWfColorScheme"), kDefaultWfColorScheme));
+    setWfColorGain(readInt(QStringLiteral("DisplayWfColorGain"), kDefaultWfColorGain));
+    setWfBlackLevel(readInt(QStringLiteral("DisplayWfBlackLevel"), kDefaultWfBlackLevel));
 
-    const float gridMax = readFloat(QStringLiteral("DisplayGridMax"), -48.0f);
-    const float gridMin = readFloat(QStringLiteral("DisplayGridMin"), -116.0f);
-    reflectDbmRange(gridMax, gridMax - gridMin);
+    // Display pill plan Task 9 (S9): ref level and dynamic range are not
+    // loaded. The receive range is the band store's
+    // (DisplayGridMax_<band> / DisplayGridMin_<band>, PanadapterModel);
+    // these two follow the widget's live range (reflectDbmRange()). The
+    // old per-pan DisplayGridMax / DisplayGridMin keys, bare or with a pan
+    // suffix, are never read, rewritten or deleted.
 
-    setFillAlpha(readFloat(QStringLiteral("DisplayFftFillAlpha"), 0.70f));
-    setPanFill(readBool(QStringLiteral("DisplayPanFill"), true));
-    setSpectrumFrac(readFloat(QStringLiteral("DisplaySpectrumFrac"), 0.40f));
+    setFillAlpha(readFloat(QStringLiteral("DisplayFftFillAlpha"), kDefaultFillAlpha));
+    setPanFill(readBool(QStringLiteral("DisplayPanFill"), kDefaultPanFill));
+    setSpectrumFrac(readFloat(QStringLiteral("DisplaySpectrumFrac"), kDefaultSpectrumFrac));
 
-    setSpectrumRenderMode(readInt(QStringLiteral("DisplaySpectrumRenderMode"), 0));
-    setDssGain(readInt(QStringLiteral("Display3DGain"), 70));
-    setDssRowSpan(readInt(QStringLiteral("Display3DSpan"), 100));
-    setDssAngle(readInt(QStringLiteral("Display3DAngle"), 50));
-    setDssRowDivider(readInt(QStringLiteral("Display3DSpeed"), 0));
-    setThreeDSliceDepth(readBool(QStringLiteral("Display3DSliceShadow"), false));
+    setSpectrumRenderMode(readInt(QStringLiteral("DisplaySpectrumRenderMode"),
+                                  kDefaultSpectrumRenderMode));
+    setDssGain(readInt(QStringLiteral("Display3DGain"), kDefaultDssGain));
+    setDssRowSpan(readInt(QStringLiteral("Display3DSpan"), kDefaultDssRowSpan));
+    setDssAngle(readInt(QStringLiteral("Display3DAngle"), kDefaultDssAngle));
+    setDssRowDivider(readInt(QStringLiteral("Display3DSpeed"), kDefaultDssRowDivider));
+    setThreeDSliceDepth(readBool(QStringLiteral("Display3DSliceShadow"),
+                                 kDefaultThreeDSliceDepth));
     // dssFloorDepth is deliberately not read here: it is not scoped by
     // panIndex() at all, and its persistence lives entirely on
     // PanadapterModel, per band (see the file header).
@@ -269,46 +302,93 @@ void DisplaySettingsModel::load()
 
 void DisplaySettingsModel::save()
 {
-    save(m_refLevel, m_dynamicRange);
+    // Sparse: a key of this pan's own is written only when the pan already
+    // has it or the value differs from what the pan would inherit (see
+    // PanDisplayKeys.h). The bare key is the Setup default and is never
+    // written from here, by any pan.
+    visitPerPanKeys([this](const QString& base, const QString& value,
+                           const QString& fallback) {
+        PanDisplayKeys::writeSparse(base, m_panIndex, value, fallback);
+    });
 }
 
-void DisplaySettingsModel::save(float receiveRefLevel, float receiveDynamicRange)
+QStringList DisplaySettingsModel::perPanKeyBases() const
 {
-    auto& s = AppSettings::instance();
+    QStringList bases;
+    visitPerPanKeys([&bases](const QString& base, const QString&, const QString&) {
+        bases.append(base);
+    });
+    return bases;
+}
 
-    auto writeFloat = [&](const QString& key, float val) {
-        s.setValue(settingsKeyFor(key, m_panIndex), QString::number(static_cast<double>(val)));
+QString DisplaySettingsModel::perPanShipDefault(const QString& wanted) const
+{
+    return perPanShipDefaultForClosedPan(wanted);
+}
+
+QString DisplaySettingsModel::perPanShipDefaultForClosedPan(const QString& wanted)
+{
+    QString found;
+    visitPerPanKeys(nullptr, [&found, &wanted](const QString& base, const QString&,
+                                              const QString& fallback) {
+        if (base == wanted) { found = fallback; }
+    });
+    return found;
+}
+
+QString DisplaySettingsModel::perPanValue(const QString& wanted) const
+{
+    QString found;
+    visitPerPanKeys([&found, &wanted](const QString& base, const QString& value,
+                                     const QString&) {
+        if (base == wanted) { found = value; }
+    });
+    return found;
+}
+
+// The one list of this model's per-pan keys: each key's base name, the
+// value save() stores for it and the ship default load() falls back to,
+// both formatted the way the key is stored. save() and perPanKeyBases()
+// both walk it, so what a reset clears is exactly what a save can write.
+void DisplaySettingsModel::visitPerPanKeys(const PerPanKeyVisitor& visit) const
+{
+    visitPerPanKeys(this, visit);
+}
+
+void DisplaySettingsModel::visitPerPanKeys(const DisplaySettingsModel* source,
+                                        const PerPanKeyVisitor& visit)
+{
+    // Lazy values keep a closed-pan default lookup independent of model
+    // construction, current state, settings and signal emission.
+    auto visitFloat = [&](const QString& key, const auto& value, float def) {
+        visit(key, source ? floatText(value()) : floatText(def), floatText(def));
     };
-    auto writeInt = [&](const QString& key, int val) {
-        s.setValue(settingsKeyFor(key, m_panIndex), QString::number(val));
+    auto visitInt = [&](const QString& key, const auto& value, int def) {
+        visit(key, source ? QString::number(value()) : QString::number(def), QString::number(def));
     };
-    auto writeBool = [&](const QString& key, bool val) {
-        s.setValue(settingsKeyFor(key, m_panIndex),
-                   val ? QStringLiteral("True") : QStringLiteral("False"));
+    auto visitBool = [&](const QString& key, const auto& value, bool def) {
+        visit(key, source ? boolText(value()) : boolText(def), boolText(def));
     };
 
-    writeInt(QStringLiteral("DisplayWfColorScheme"), m_wfColorScheme);
-    writeInt(QStringLiteral("DisplayWfColorGain"), m_wfColorGain);
-    writeInt(QStringLiteral("DisplayWfBlackLevel"), m_wfBlackLevel);
+    visitInt(QStringLiteral("DisplayWfColorScheme"), [&] { return source->m_wfColorScheme; }, kDefaultWfColorScheme);
+    visitInt(QStringLiteral("DisplayWfColorGain"), [&] { return source->m_wfColorGain; }, kDefaultWfColorGain);
+    visitInt(QStringLiteral("DisplayWfBlackLevel"), [&] { return source->m_wfBlackLevel; }, kDefaultWfBlackLevel);
 
-    // Same derived-key shape as SpectrumWidget::saveSettings(): refLevel
-    // is stored directly as DisplayGridMax; dynamicRange is stored as the
-    // computed DisplayGridMin (refLevel - dynamicRange), not as its own
-    // key -- there is no "DisplayGridDynamicRange" key anywhere in this
-    // codebase.
-    writeFloat(QStringLiteral("DisplayGridMax"), receiveRefLevel);
-    writeFloat(QStringLiteral("DisplayGridMin"), receiveRefLevel - receiveDynamicRange);
+    // Display pill plan Task 9 (S9): no DisplayGridMax / DisplayGridMin
+    // here. Ref level and dynamic range are live values, not persisted.
 
-    writeFloat(QStringLiteral("DisplayFftFillAlpha"), m_fillAlpha);
-    writeBool(QStringLiteral("DisplayPanFill"), m_panFill);
-    writeFloat(QStringLiteral("DisplaySpectrumFrac"), m_spectrumFrac);
+    visitFloat(QStringLiteral("DisplayFftFillAlpha"), [&] { return source->m_fillAlpha; }, kDefaultFillAlpha);
+    visitBool(QStringLiteral("DisplayPanFill"), [&] { return source->m_panFill; }, kDefaultPanFill);
+    visitFloat(QStringLiteral("DisplaySpectrumFrac"), [&] { return source->m_spectrumFrac; }, kDefaultSpectrumFrac);
 
-    writeInt(QStringLiteral("DisplaySpectrumRenderMode"), m_spectrumRenderMode);
-    writeInt(QStringLiteral("Display3DGain"), m_dssGain);
-    writeInt(QStringLiteral("Display3DSpan"), m_dssRowSpan);
-    writeInt(QStringLiteral("Display3DAngle"), m_dssAngle);
-    writeInt(QStringLiteral("Display3DSpeed"), m_dssRowDivider);
-    writeBool(QStringLiteral("Display3DSliceShadow"), m_threeDSliceDepth);
+    visitInt(QStringLiteral("DisplaySpectrumRenderMode"), [&] { return source->m_spectrumRenderMode; },
+             kDefaultSpectrumRenderMode);
+    visitInt(QStringLiteral("Display3DGain"), [&] { return source->m_dssGain; }, kDefaultDssGain);
+    visitInt(QStringLiteral("Display3DSpan"), [&] { return source->m_dssRowSpan; }, kDefaultDssRowSpan);
+    visitInt(QStringLiteral("Display3DAngle"), [&] { return source->m_dssAngle; }, kDefaultDssAngle);
+    visitInt(QStringLiteral("Display3DSpeed"), [&] { return source->m_dssRowDivider; }, kDefaultDssRowDivider);
+    visitBool(QStringLiteral("Display3DSliceShadow"), [&] { return source->m_threeDSliceDepth; },
+              kDefaultThreeDSliceDepth);
     // dssFloorDepth is deliberately not written here: same reason as the
     // matching comment in load() above.
 }

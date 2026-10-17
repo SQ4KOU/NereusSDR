@@ -40,6 +40,7 @@
 #include <QMap>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QScrollArea>
 #include <QSlider>
 #include <QTabWidget>
 
@@ -73,7 +74,8 @@ QPushButton* buttonNamed(const QWidget& widget, const QString& text)
 QMap<QString, QSlider*> popupSliders(const DspParamPopup& popup)
 {
     QMap<QString, QSlider*> sliders;
-    QLayout* layout = popup.layout();
+    auto* scroll = popup.findChild<QScrollArea*>();
+    QLayout* layout = scroll && scroll->widget() ? scroll->widget()->layout() : nullptr;
     for (int i = 0; layout && i < layout->count(); ++i) {
         QLayout* row = layout->itemAt(i)->layout();
         if (!row || row->count() != 3) {
@@ -91,7 +93,8 @@ QMap<QString, QSlider*> popupSliders(const DspParamPopup& popup)
 // The readout beside `slider` in its popup row.
 QString readoutOf(const DspParamPopup& popup, const QSlider* slider)
 {
-    QLayout* layout = popup.layout();
+    auto* scroll = popup.findChild<QScrollArea*>();
+    QLayout* layout = scroll && scroll->widget() ? scroll->widget()->layout() : nullptr;
     for (int i = 0; layout && i < layout->count(); ++i) {
         QLayout* row = layout->itemAt(i)->layout();
         if (row && row->count() == 3 && row->itemAt(1)->widget() == slider) {

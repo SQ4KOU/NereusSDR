@@ -1,0 +1,137 @@
+// --- From src/impl/datachannel.cpp ---
+/**
+ * Copyright (c) 2019-2021 Paul-Louis Ageneau
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+// --- From src/impl/peerconnection.cpp ---
+/**
+ * Copyright (c) 2019 Paul-Louis Ageneau
+ * Copyright (c) 2020 Filip Klembara (in2core)
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+// --- From src/impl/sctptransport.cpp ---
+/**
+ * Copyright (c) 2019 Paul-Louis Ageneau
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+// --- From src/impl/track.cpp ---
+/**
+ * Copyright (c) 2020 Paul-Louis Ageneau
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+libdatachannel v0.24.5: each shared mutex is locked once when it is made
+
+MPL-2.0, like the four files above. Modification history (NereusSDR):
+2026-10-16, J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+
+With MinGW-w64, the toolchain of the Windows CI leg and of local Windows
+builds (Qt's MinGW 13.1, winpthreads v11.0.1), libstdc++'s
+std::shared_mutex holds a pthread rwlock made with
+PTHREAD_RWLOCK_INITIALIZER, and winpthreads sets the lock up on its first
+use. When two threads take the first lock at the same moment, the one that
+loses the setup race gets EINVAL (rwlock_static_init and rwl_ref in
+winpthreads' rwlock.c, unchanged through mingw-w64 v14.0.0 and master).
+libstdc++ checks that result only when built with _GLIBCXX_ASSERTIONS,
+which these builds do not set, so the losing thread goes on as if it held
+the lock, and its unlock later releases the other thread's hold. On the
+Windows test machine, two threads taking the first lock of a fresh lock
+together hit this in 19,911 of 20,000 tries, and both were inside the
+exclusive lock in 11,669.
+
+The first two SCTP transports of a process insert into SctpTransport's
+instance set at the same moment. Under load on that machine, the set then
+lost one of them: every write and upcall for that transport was dropped,
+the association never formed, and the far end's INIT waited in incoming()
+for a first write that could not come.
+
+Each of the library's six shared mutexes is now locked and unlocked once in
+its owner's constructor, while only the constructing thread can see it, so
+the setup is never raced. The instance set is made in SctpTransport::Init,
+under the library's init lock. cmake/NereusRemoteMedia.cmake applies this
+patch to MinGW builds only; other toolchains build the library as before.
+Among them is MSVC, which builds the release installer: its
+std::shared_mutex is an SRWLOCK that needs no setup.
+
+--- a/src/impl/datachannel.cpp
++++ b/src/impl/datachannel.cpp
+@@ -79,6 +79,11 @@ DataChannel::DataChannel(weak_ptr<PeerConnection> pc, string label, string proto
+     : mPeerConnection(pc), mLabel(std::move(label)), mProtocol(std::move(protocol)),
+       mRecvQueue(RECV_QUEUE_LIMIT, message_size_func) {
+ 
++	// NereusSDR: lock once while no other thread can see this channel, so a first
++	// lock never races the lazy setup that SctpTransport::InstancesSet describes.
++	mMutex.lock();
++	mMutex.unlock();
++
+ 	if(reliability.maxPacketLifeTime && reliability.maxRetransmits)
+ 		throw std::invalid_argument("Both maxPacketLifeTime and maxRetransmits are set");
+ 
+--- a/src/impl/peerconnection.cpp
++++ b/src/impl/peerconnection.cpp
+@@ -49,6 +49,16 @@ const string PemBeginCertificateTag = "-----BEGIN CERTIFICATE-----";
+ PeerConnection::PeerConnection(Configuration config_) : config(std::move(config_)) {
+ 	PLOG_VERBOSE << "Creating PeerConnection";
+ 
++	// NereusSDR: lock each shared mutex once while no other thread can see this
++	// connection, so a first lock never races the lazy setup that
++	// SctpTransport::InstancesSet describes.
++	mMediaHandlerMutex.lock();
++	mMediaHandlerMutex.unlock();
++	mDataChannelsMutex.lock();
++	mDataChannelsMutex.unlock();
++	mTracksMutex.lock();
++	mTracksMutex.unlock();
++
+ 	if (config.certificatePemFile && config.keyPemFile) {
+ 		std::promise<certificate_ptr> cert;
+ 		cert.set_value(std::make_shared<Certificate>(
+--- a/src/impl/sctptransport.cpp
++++ b/src/impl/sctptransport.cpp
+@@ -61,6 +61,17 @@ static LogCounter COUNTER_UNKNOWN_PPID(plog::warning,
+ 
+ class SctpTransport::InstancesSet {
+ public:
++	// NereusSDR: with MinGW-w64, std::shared_mutex is a pthread rwlock that
++	// winpthreads sets up on its first lock, and a thread that loses that race
++	// gets EINVAL, which libstdc++ checks only under _GLIBCXX_ASSERTIONS, and
++	// goes on without the lock. Two transports made at the same moment then
++	// change mSet together, and a transport lost from it never sends or
++	// receives. Lock once here, while no other thread can see the set.
++	InstancesSet() {
++		mMutex.lock();
++		mMutex.unlock();
++	}
++
+ 	void insert(SctpTransport *instance) {
+ 		std::unique_lock lock(mMutex);
+ 		mSet.insert(instance);
+--- a/src/impl/track.cpp
++++ b/src/impl/track.cpp
+@@ -23,6 +23,11 @@ Track::Track(weak_ptr<PeerConnection> pc, Description::Media desc)
+     : mPeerConnection(pc), mMediaDescription(std::move(desc)),
+       mRecvQueue(RECV_QUEUE_LIMIT, [](const message_ptr &m) { return m->size(); }) {
+ 
++	// NereusSDR: lock once while no other thread can see this track, so a first
++	// lock never races the lazy setup that SctpTransport::InstancesSet describes.
++	mMutex.lock();
++	mMutex.unlock();
++
+ 	// Discard messages by default if track is send only
+ 	if (mMediaDescription.direction() == Description::Direction::SendOnly)
+ 		messageCallback = [](message_variant) {};

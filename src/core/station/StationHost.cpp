@@ -442,8 +442,8 @@ DisplayLoadInputs StationHost::gatherDisplayLoadInputs()
         }
     }
     if (m_hostSampler) {
-        m_hostSampler->setGovernorCpus(inputs.placement.active ? inputs.placement.housekeeping
-                                                               : QList<int>{});
+        const DisplayGovernorCpus governorCpus = displayGovernorCpus(inputs.placement);
+        m_hostSampler->setGovernorCpus(governorCpus.housekeeping, governorCpus.spectrumOnly);
         inputs.systemCpuPercent = m_hostSampler->reading().systemCpuPercent;
         inputs.housekeepingCpuPercent = m_hostSampler->governorCpuPercent();
         inputs.cpuSampleBeganMsAgo = m_hostSampler->cpuSampleBeganMsAgo();

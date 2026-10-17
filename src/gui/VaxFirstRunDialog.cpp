@@ -11,10 +11,40 @@
 // Modification history (NereusSDR):
 //   2026-04-20 — Written by J.J. Boyd (KG4VCF), with AI-assisted
 //                transformation via Anthropic Claude Code.
+//   2026-10-06 - R-SPK-21: Customize and "Why do I need this?" open Setup >
+//                Audio > Digital modes, which holds VAX now. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - native audio plan Task 18 (R-AUD-03, R-AUD-06): the
+//                lists come from the engine's device catalogue and follow
+//                it while the dialog is open; "Rescan now" rescans the
+//                older drivers and lists again. The suggested bindings
+//                and rows are the cables' render ends ("CABLE-A Input"),
+//                the end VAX writes to. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-09 - A detected-cable row names its own style rule, so its
+//                bottom line no longer repeats under every label in it.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09 - "Apply to VAX N && M" doubles its ampersand so Qt draws it
+//                instead of taking it as a mnemonic. J.J. Boyd (KG4VCF), AI-
+//                assisted via Anthropic Claude Code.
+//   2026-10-09 - Workspace preview only: the intro's emphasis takes the
+//                colour of its meaning (ready is the decided ok, nothing
+//                found or not detected the decided warn, new cables plain
+//                text) and the product captions the secondary text, not
+//                the selection blue. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-11 - the "new cables" notice's badge names the system it runs
+//                on (systemBadgeText); it said WINDOWS on every system.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
 // =================================================================
 
 #include "VaxFirstRunDialog.h"
 #include "StyleConstants.h"
+#include "gui/styles/WorkspacePreview.h"
+
+#include "core/AudioEngine.h"
+#include "core/audio/IAudioDeviceCatalog.h"
 
 #include <QFrame>
 #include <QHBoxLayout>
@@ -24,6 +54,7 @@
 #include <QSizePolicy>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <array>
 
 namespace NereusSDR {
@@ -176,7 +207,7 @@ QWidget* makeDetRow(int vaxSlot,
         prodLabel->setStyleSheet(QStringLiteral(
             "QLabel { color: %1; font-size: 9px;"
             " letter-spacing: 0.3px; }")
-            .arg(Style::kAccent));
+            .arg(WorkspacePreview::roleColourName(Style::kAccent, "text-secondary")));
         devLayout->addWidget(prodLabel);
     }
 
@@ -200,8 +231,11 @@ QWidget* makeDetRow(int vaxSlot,
     }
     layout->addWidget(rightSide, 0, Qt::AlignTop);
 
+    // Named so the bottom line stays on the row: an unnamed QWidget rule
+    // reached every label in it and drew the line under each.
+    row->setObjectName(QStringLiteral("vaxDetectedRow"));
     row->setStyleSheet(QStringLiteral(
-        "QWidget { background: transparent; border-bottom: 1px solid %1; }")
+        "QWidget#vaxDetectedRow { background: transparent; border-bottom: 1px solid %1; }")
         .arg(Style::kInsetBorder));
 
     return row;
@@ -302,11 +336,12 @@ QVector<QPair<int, QString>> VaxFirstRunDialog::computeSuggestedBindings() const
         if (channel > 4) {
             break;
         }
-        // Only bind input-side devices — VAX consumes a capture endpoint
-        // (WSJT-X reads the cable's Output; we write to the cable's
-        // Input). matchProduct sees both sides; skip outputs so we don't
-        // duplicate VAX bindings for the same underlying cable.
-        if (!cable.isInput) {
+        // Only bind the render end: VAX writes to the cable's Input (a
+        // playback device, isInput false) and WSJT-X reads its Output (a
+        // recording device). matchProduct sees both ends; skip the
+        // recording end so one cable gives one binding, never a binding
+        // VAX cannot play into.
+        if (cable.isInput) {
             continue;
         }
         bindings.append({channel, cable.deviceName});
@@ -317,13 +352,18 @@ QVector<QPair<int, QString>> VaxFirstRunDialog::computeSuggestedBindings() const
 
 void VaxFirstRunDialog::buildUI()
 {
-    auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setSpacing(0);
-    mainLayout->setContentsMargins(0, 0, 0, 0);
+    m_mainLayout = new QVBoxLayout(this);
+    m_mainLayout->setSpacing(0);
+    m_mainLayout->setContentsMargins(0, 0, 0, 0);
 
     // ── Header bar ─────────────────────────────────────────────────────
-    mainLayout->addWidget(buildHeaderBar());
+    m_mainLayout->addWidget(buildHeaderBar());
 
+    buildBodyAndFooter();
+}
+
+void VaxFirstRunDialog::buildBodyAndFooter()
+{
     // ── Body ──────────────────────────────────────────────────────────
     auto* bodyFrame = new QFrame(this);
     auto* bodyLayout = new QVBoxLayout(bodyFrame);
@@ -348,10 +388,138 @@ void VaxFirstRunDialog::buildUI()
             break;
     }
 
-    mainLayout->addWidget(bodyFrame);
+    m_body = bodyFrame;
+    m_mainLayout->addWidget(bodyFrame);
 
     // ── Footer ────────────────────────────────────────────────────────
-    mainLayout->addWidget(buildFooter());
+    m_footer = buildFooter();
+    m_mainLayout->addWidget(m_footer);
+}
+
+void VaxFirstRunDialog::rebuildBody()
+{
+    // The old body and footer leave the dialog now (so nothing finds their
+    // buttons) and are deleted once their events are done: a click on
+    // "Rescan now" may be what rebuilt them.
+    for (QWidget* old : {m_body, m_footer}) {
+        if (old != nullptr) {
+            m_mainLayout->removeWidget(old);
+            old->setParent(nullptr);
+            old->deleteLater();
+        }
+    }
+    m_body = nullptr;
+    m_footer = nullptr;
+    buildBodyAndFooter();
+}
+
+void VaxFirstRunDialog::setAudioEngine(AudioEngine* engine)
+{
+    if (m_catalogue) {
+        disconnect(m_catalogue, nullptr, this, nullptr);
+    }
+    m_engine = engine;
+    m_catalogue = engine != nullptr ? engine->catalogue() : nullptr;
+    m_rescanWaiting = false;
+    if (!m_catalogue) {
+        return;
+    }
+    if (m_scenario == FirstRunScenario::RescanNewCables) {
+        // The cables there now that the dialog was not given are known.
+        m_known.clear();
+        for (const DetectedCable& c : VirtualCableDetector::filterThirdParty(
+                 VirtualCableDetector::detect(*m_catalogue))) {
+            const bool given = std::any_of(m_detected.cbegin(), m_detected.cend(),
+                                           [&c](const DetectedCable& d) {
+                                               return d.deviceName == c.deviceName;
+                                           });
+            if (!given) {
+                m_known.append(c);
+            }
+        }
+    }
+    // R-AUD-03: a cable added or removed while the dialog is open shows.
+    connect(m_catalogue, &IAudioDeviceCatalog::devicesChanged, this,
+            &VaxFirstRunDialog::refreshFromCatalogue);
+    refreshFromCatalogue();
+}
+
+void VaxFirstRunDialog::refreshFromCatalogue()
+{
+    if (!m_catalogue) {
+        return;
+    }
+    const QVector<DetectedCable> all = VirtualCableDetector::detect(*m_catalogue);
+    QVector<DetectedCable> next;
+    FirstRunScenario scenario = m_scenario;
+    switch (m_scenario) {
+    case FirstRunScenario::WindowsCablesFound:
+    case FirstRunScenario::WindowsNoCables: {
+        next = VirtualCableDetector::filterThirdParty(all);
+        const bool anyRenderEnd = std::any_of(next.cbegin(), next.cend(),
+                                              [](const DetectedCable& c) { return !c.isInput; });
+        scenario = anyRenderEnd ? FirstRunScenario::WindowsCablesFound
+                                : FirstRunScenario::WindowsNoCables;
+        break;
+    }
+    case FirstRunScenario::MacNative:
+    case FirstRunScenario::LinuxNative:
+        for (const DetectedCable& c : all) {
+            if (c.product == VirtualCableProduct::NereusSdrVax) {
+                next.append(c);
+            }
+        }
+        break;
+    case FirstRunScenario::RescanNewCables:
+        for (const DetectedCable& c : VirtualCableDetector::filterThirdParty(all)) {
+            const bool known = std::any_of(m_known.cbegin(), m_known.cend(),
+                                           [&c](const DetectedCable& k) {
+                                               return k.deviceName == c.deviceName;
+                                           });
+            if (!known) {
+                next.append(c);
+            }
+        }
+        break;
+    }
+    const bool same = scenario == m_scenario && next.size() == m_detected.size()
+        && std::equal(next.cbegin(), next.cend(), m_detected.cbegin(),
+                      [](const DetectedCable& a, const DetectedCable& b) {
+                          return a.deviceName == b.deviceName && a.isInput == b.isInput
+                              && a.deviceId == b.deviceId;
+                      });
+    if (same) {
+        return;
+    }
+    m_detected = next;
+    m_scenario = scenario;
+    rebuildBody();
+}
+
+void VaxFirstRunDialog::onRescanNow()
+{
+    // R-AUD-06: the older drivers list their devices again, and the
+    // dialog lists once their new list is in.
+    if (m_engine && m_catalogue) {
+        if (!m_rescanWaiting) {
+            m_rescanWaiting = true;
+            connect(m_catalogue, &IAudioDeviceCatalog::olderDriversRescanned, this,
+                    [this]() {
+                        m_rescanWaiting = false;
+                        refreshFromCatalogue();
+                    },
+                    Qt::SingleShotConnection);
+        }
+        m_engine->rescanOlderDrivers();
+        return;
+    }
+    // No engine: one scan of the older drivers' list.
+    m_detected = VirtualCableDetector::scanThirdPartyOnly();
+    const bool anyRenderEnd = std::any_of(m_detected.cbegin(), m_detected.cend(),
+                                          [](const DetectedCable& c) { return !c.isInput; });
+    m_scenario = anyRenderEnd ? FirstRunScenario::WindowsCablesFound
+                              : FirstRunScenario::WindowsNoCables;
+    rebuildBody();
 }
 
 QWidget* VaxFirstRunDialog::buildHeaderBar()
@@ -378,6 +546,7 @@ QWidget* VaxFirstRunDialog::buildHeaderBar()
     layout->addStretch();
 
     auto* badge = new QLabel(platformBadgeText(), header);
+    badge->setObjectName(QStringLiteral("platformBadge"));
     const QString badgeColor = platformBadgeColor();
     badge->setStyleSheet(QStringLiteral(
         "QLabel { color: %1; background: %2; border: 1px solid %1;"
@@ -391,12 +560,12 @@ QWidget* VaxFirstRunDialog::buildHeaderBar()
 
 void VaxFirstRunDialog::buildBodyWindowsCablesFound(QVBoxLayout* bodyLayout)
 {
-    // Count input-side detections so the intro matches the mockup's
-    // "4 virtual audio cables" phrasing without lying when the actual
-    // count differs.
+    // Count the render ends (one per cable) so the intro matches the
+    // mockup's "4 virtual audio cables" phrasing without lying when the
+    // actual count differs.
     int inputCount = 0;
     for (const auto& c : m_detected) {
-        if (c.isInput) {
+        if (!c.isInput) {
             ++inputCount;
         }
     }
@@ -410,13 +579,13 @@ void VaxFirstRunDialog::buildBodyWindowsCablesFound(QVBoxLayout* bodyLayout)
         " installed on your system. Bind them to VAX slots so digital-mode"
         " apps (WSJT-X, FLDIGI, N1MM+) can see your NereusSDR receivers as"
         " audio sources.")
-        .arg(Style::kAccent)
+        .arg(WorkspacePreview::statusColourName(Style::kAccent, "ok"))
         .arg(inputCount)
         .arg(inputCount == 1 ? QStringLiteral("") : QStringLiteral("s")));
     bodyLayout->addWidget(intro);
 
-    // Detection list — fill slots 1..4 from input-side detections in
-    // order. Slots without a detection get the "no more cables available"
+    // Detection list: fill slots 1..4 from the render ends in order.
+    // Slots without a detection get the "no more cables available"
     // placeholder row matching the mockup.
     auto* listFrame = new QFrame(this);
     listFrame->setObjectName(QStringLiteral("detList"));
@@ -430,7 +599,7 @@ void VaxFirstRunDialog::buildBodyWindowsCablesFound(QVBoxLayout* bodyLayout)
         if (slot > 4) {
             break;
         }
-        if (!cable.isInput) {
+        if (cable.isInput) {
             continue;
         }
         listLayout->addWidget(makeDetRowForCable(
@@ -448,7 +617,7 @@ void VaxFirstRunDialog::buildBodyWindowsCablesFound(QVBoxLayout* bodyLayout)
                            " available —<br/>"
                            "<span style='font-size:9px'>install another"
                            " cable to enable</span></span>")
-                .arg(Style::kTextInactive),
+                .arg(WorkspacePreview::roleColourName(Style::kTextInactive, "text-inactive")),
             QString(),
             QString(), QString(),
             QStringLiteral("unassigned"),
@@ -474,7 +643,7 @@ void VaxFirstRunDialog::buildBodyWindowsCablesFound(QVBoxLayout* bodyLayout)
         " <span style='color:%1;font-weight:bold'>1</span> on the VFO flag."
         " NereusSDR sends RX1 audio to CABLE-A, WSJT-X reads it. Same for"
         " VAX 2/3.")
-        .arg(Style::kTextPrimary));
+        .arg(WorkspacePreview::roleColourName(Style::kTextPrimary, "text")));
     explainLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: %1; font-size: 10px; }")
         .arg(Style::kTextSecondary));
@@ -492,7 +661,7 @@ void VaxFirstRunDialog::buildBodyWindowsNoCables(QVBoxLayout* bodyLayout)
         "VAX channels route audio to digital-mode apps (WSJT-X, FLDIGI,"
         " N1MM+). <b style='color:%1'>No virtual audio cables were found</b>"
         " on your system. Install one of these to enable VAX:")
-        .arg(Style::kAccent));
+        .arg(WorkspacePreview::statusColourName(Style::kAccent, "warn")));
     bodyLayout->addWidget(intro);
 
     // Install-cards grid — 2x2 layout per mockup.
@@ -644,9 +813,9 @@ void VaxFirstRunDialog::buildBodyWindowsNoCables(QVBoxLayout* bodyLayout)
     auto* rescanBtn = new QPushButton(QStringLiteral("Rescan now"), dashedCard);
     rescanBtn->setObjectName(QString::fromUtf8(kBtnRescanNow));
     rescanBtn->setStyleSheet(neutralButtonStyle());
-    // Task 11b owns rescan semantics — for Sub-Phase 11 the button is a
-    // no-op placeholder so the layout matches the mockup. Wiring lands
-    // in MainWindow::checkVaxFirstRun + Setup→Audio→VAX rescan flow.
+    // R-AUD-06: rescans the older drivers and lists again; a cable found
+    // turns this into the suggested bindings.
+    connect(rescanBtn, &QPushButton::clicked, this, &VaxFirstRunDialog::onRescanNow);
     dashedLayout->addWidget(rescanBtn);
     dashedLayout->addStretch();
 
@@ -672,7 +841,7 @@ void VaxFirstRunDialog::buildBodyWindowsNoCables(QVBoxLayout* bodyLayout)
         " cables the ham-radio community already trusts. On macOS and"
         " Linux, NereusSDR ships native VAX drivers so no extra install"
         " is needed.")
-        .arg(Style::kTextPrimary));
+        .arg(WorkspacePreview::roleColourName(Style::kTextPrimary, "text")));
     explainLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: %1; font-size: 10px; }")
         .arg(Style::kTextSecondary));
@@ -723,13 +892,13 @@ void VaxFirstRunDialog::buildBodyMacNative(QVBoxLayout* bodyLayout)
             "NereusSDR ships native VAX audio devices on macOS."
             " <b style='color:%1'>All 4 VAX channels are ready to use</b>"
             " &mdash; no extra installation needed.")
-            .arg(Style::kAccent));
+            .arg(WorkspacePreview::statusColourName(Style::kAccent, "ok")));
     } else if (detectedCount > 0) {
         intro->setText(QStringLiteral(
             "NereusSDR ships native VAX audio devices on macOS."
             " <b style='color:%1'>%2 of 4 VAX channels detected.</b>"
             " Reinstall NereusSDR if this persists.")
-            .arg(Style::kAmberText)
+            .arg(WorkspacePreview::statusColourName(Style::kAmberText, "warn"))
             .arg(detectedCount));
     } else {
         intro->setText(QStringLiteral(
@@ -738,7 +907,7 @@ void VaxFirstRunDialog::buildBodyMacNative(QVBoxLayout* bodyLayout)
             " Reinstall NereusSDR or unblock"
             " <code>NereusSDRVAX.driver</code> in System Settings"
             " &rarr; Privacy &amp; Security to enable native VAX.")
-            .arg(Style::kAmberText));
+            .arg(WorkspacePreview::statusColourName(Style::kAmberText, "warn")));
     }
     bodyLayout->addWidget(intro);
 
@@ -798,7 +967,7 @@ void VaxFirstRunDialog::buildBodyMacNative(QVBoxLayout* bodyLayout)
         " as the audio device. Set RX1's VAX button to"
         " <span style='color:%1;font-weight:bold'>1</span> on the VFO flag."
         " Done.")
-        .arg(Style::kTextPrimary));
+        .arg(WorkspacePreview::roleColourName(Style::kTextPrimary, "text")));
     explainLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: %1; font-size: 10px; }")
         .arg(Style::kTextSecondary));
@@ -817,7 +986,7 @@ void VaxFirstRunDialog::buildBodyLinuxNative(QVBoxLayout* bodyLayout)
         "NereusSDR created <b style='color:%1'>4 native VAX audio"
         " sources</b> via PipeWire. All channels are ready &mdash; no"
         " extra installation needed.")
-        .arg(Style::kAccent));
+        .arg(WorkspacePreview::statusColourName(Style::kAccent, "ok")));
     bodyLayout->addWidget(intro);
 
     auto* listFrame = new QFrame(this);
@@ -852,7 +1021,7 @@ void VaxFirstRunDialog::buildBodyLinuxNative(QVBoxLayout* bodyLayout)
         " PulseAudio (via <code>pipewire-pulse</code> compat). In WSJT-X,"
         " pick <span style='color:%1;font-weight:bold'>\"NereusSDR VAX 1\"</span>"
         " from the audio device list.")
-        .arg(Style::kTextPrimary));
+        .arg(WorkspacePreview::roleColourName(Style::kTextPrimary, "text")));
     explainLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: %1; font-size: 10px; }")
         .arg(Style::kTextSecondary));
@@ -864,7 +1033,7 @@ void VaxFirstRunDialog::buildBodyRescanNewCables(QVBoxLayout* bodyLayout)
 {
     int newCount = 0;
     for (const auto& c : m_detected) {
-        if (c.isInput) {
+        if (!c.isInput) {
             ++newCount;
         }
     }
@@ -877,7 +1046,7 @@ void VaxFirstRunDialog::buildBodyRescanNewCables(QVBoxLayout* bodyLayout)
         "NereusSDR detected <b style='color:%1'>%2 new virtual audio"
         " cable%3</b> since your last setup. Would you like to bind"
         " them to unassigned VAX slots?")
-        .arg(Style::kAccent)
+        .arg(WorkspacePreview::roleColourName(Style::kAccent, "text"))
         .arg(newCount)
         .arg(newCount == 1 ? QStringLiteral("") : QStringLiteral("s")));
     bodyLayout->addWidget(intro);
@@ -899,7 +1068,7 @@ void VaxFirstRunDialog::buildBodyRescanNewCables(QVBoxLayout* bodyLayout)
         if (slot > 4) {
             break;
         }
-        if (!cable.isInput) {
+        if (cable.isInput) {
             continue;
         }
         listLayout->addWidget(makeDetRowForCable(
@@ -996,8 +1165,8 @@ QWidget* VaxFirstRunDialog::buildFooter()
             whyBtn->setObjectName(QString::fromUtf8(kBtnWhyNeeded));
             whyBtn->setStyleSheet(linkButtonStyle());
             connect(whyBtn, &QPushButton::clicked, this, [this]() {
-                // Emit → MainWindow → SetupDialog::selectPage("VAX").
-                emit openSetupAudioPage(QStringLiteral("VAX"));
+                // Emit → MainWindow → SetupDialog::selectPage("Digital modes").
+                emit openSetupAudioPage(QStringLiteral("Digital modes"));
                 // reject() (not accept()) — the user hasn't completed
                 // first-run; they're going to Setup for more info, same
                 // semantics as Customize…
@@ -1049,7 +1218,7 @@ QWidget* VaxFirstRunDialog::buildFooter()
                     nums << QString::number(b.first);
                 }
                 applyLabel = QStringLiteral("Apply to VAX %1")
-                    .arg(nums.join(QStringLiteral(" & ")));
+                    .arg(nums.join(QStringLiteral(" && ")));
             } else {
                 applyLabel = QStringLiteral("Apply suggested");
             }
@@ -1083,7 +1252,7 @@ void VaxFirstRunDialog::onSkip()
 
 void VaxFirstRunDialog::onCustomize()
 {
-    emit openSetupAudioPage(QStringLiteral("VAX"));
+    emit openSetupAudioPage(QStringLiteral("Digital modes"));
     // Customize is "dismissed without completing first-run here" —
     // SetupDialog will persist audio/FirstRunComplete on its own path.
     reject();
@@ -1095,13 +1264,30 @@ void VaxFirstRunDialog::onGotIt()
     accept();
 }
 
+QString VaxFirstRunDialog::systemBadgeText(SoundSystemLine::System system)
+{
+    switch (system) {
+        case SoundSystemLine::System::Mac:
+            return QStringLiteral("MACOS");
+        case SoundSystemLine::System::Linux:
+            return QStringLiteral("LINUX");
+        case SoundSystemLine::System::Windows:
+            break;
+    }
+    return QStringLiteral("WINDOWS");
+}
+
 QString VaxFirstRunDialog::platformBadgeText() const
 {
     switch (m_scenario) {
         case FirstRunScenario::WindowsCablesFound:
         case FirstRunScenario::WindowsNoCables:
-        case FirstRunScenario::RescanNewCables:
             return QStringLiteral("WINDOWS");
+        case FirstRunScenario::RescanNewCables:
+            // The notice opens on every system (the Digital modes page's
+            // Rescan offers a new third-party cable on a Mac or on Linux
+            // as on Windows), so it names the one it runs on.
+            return systemBadgeText(SoundSystemLine::thisSystem());
         case FirstRunScenario::MacNative:
             return QStringLiteral("MACOS");
         case FirstRunScenario::LinuxNative:

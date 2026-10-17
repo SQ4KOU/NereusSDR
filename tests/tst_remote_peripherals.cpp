@@ -84,6 +84,15 @@
 // 2026-09-29: load finding: the nothing-happens checks wait for the link's
 // own flush bound (SessionWait.h), not a number picked by hand. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-09: the 4O3A page carries its page title above its tabs, as
+// every Setup page and the RF-Kit page do. J.J. Boyd (KG4VCF), AI-assisted
+// via Anthropic Claude Code.
+// 2026-10-11: test flaw: coreHereServesThisComputersApps dials an address
+// this computer can reach (reachableOwnAddress), not its first non-loopback
+// one. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-11: reachableOwnAddress moved to ReachableOwnAddress.h, which
+// tst_station_tci_server now shares. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 
 #include <QtTest>
 
@@ -116,6 +125,7 @@
 #include <QWheelEvent>
 
 #include "OperatorWording.h"
+#include "ReachableOwnAddress.h"
 #include "core/PgxlConnection.h"
 #include "core/ConnectionDiagnostics.h"
 #include "core/FaultLog.h"
@@ -149,6 +159,7 @@
 #include "gui/setup/PgxlInterlockPage.h"
 #include "gui/setup/TgxlAdvancedPage.h"
 #include "gui/SetupDialog.h"
+#include "gui/SetupPage.h"
 #include "gui/LanScanDialog.h"
 #include "gui/RelayBar.h"
 #include "gui/PgxlSaveRebootDialog.h"
@@ -580,6 +591,7 @@ private slots:
     void remoteTgxlDraftUsesStationLinkAndSurvivesUnrelatedSnapshots();
     void unknownCapabilityKeepsRemoteTgxlInert();
     void remoteParentPageExposesOnlyStationBackedControls();
+    void pageTitleSitsAboveTheTabsAsOnSetupPages();
     void remoteMasterShowsPendingAndRefusalWithoutLocalActivation();
     void coreTunerErrorsAreShownInUserWords();
     void remoteAmpAndRfKitAppletsFollowTheCore();
@@ -666,6 +678,45 @@ void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
     QVERIFY(actualPage);
     QVERIFY(actualPage->isEnabled());
     QVERIFY(actualPage->findChild<PeripheralsPage*>()->isEnabled());
+}
+
+// The 4O3A page carries a page title above its tabs, drawn as every Setup
+// page draws its own (its General tab strip sat at the top of the page).
+// A remote window with no Core attached: the page opens nothing.
+void RemotePeripheralsTest::pageTitleSitsAboveTheTabsAsOnSetupPages()
+{
+    RadioModel model(RadioModel::Role::Remote);
+    FourO3APage page(&model);
+    page.resize(900, 650);
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+    QTabWidget* tabs = nullptr;
+    for (QTabWidget* t : page.findChildren<QTabWidget*>()) {
+        if (t->parentWidget() == &page) {
+            tabs = t;
+        }
+    }
+    QVERIFY(tabs != nullptr);
+    QLabel* title = nullptr;
+    for (QLabel* label : page.findChildren<QLabel*>()) {
+        if (label->text() == QStringLiteral("4O3A") && label->parentWidget() == &page) {
+            title = label;
+        }
+    }
+    QVERIFY2(title != nullptr, "no 4O3A page title");
+    QVERIFY(title->isVisible());
+    QVERIFY(title->geometry().bottom() < tabs->geometry().top());
+    SetupPage reference(QStringLiteral("Reference"));
+    QLabel* referenceTitle = nullptr;
+    for (QLabel* label : reference.findChildren<QLabel*>()) {
+        if (label->text() == QStringLiteral("Reference")) {
+            referenceTitle = label;
+        }
+    }
+    QVERIFY(referenceTitle != nullptr);
+    QCOMPARE(title->styleSheet(), referenceTitle->styleSheet());
+    QVERIFY(!model.pgxlConnection()->isConnected());
+    QVERIFY(!model.tgxlConnection()->isConnected());
 }
 
 void RemotePeripheralsTest::remoteMasterShowsPendingAndRefusalWithoutLocalActivation()
@@ -931,19 +982,24 @@ void RemotePeripheralsTest::remoteAmpAndRfKitAppletsFollowTheCore()
     QVERIFY(amp.operateButtonShownForTesting());
     QCOMPARE(amp.operateButtonTextForTesting(), QStringLiteral("OPERATE"));
     QCOMPARE(amp.powerLabelTextForTesting(), QStringLiteral("Volts: 240V\u00A0\u00A0Amps: 0.0A"));
-    QCOMPARE(amp.fwdGaugeValueForTesting(), 0.0);
+    // In operate and not keyed: forward power shows dashes, not a number.
+    QVERIFY(!amp.fwdHasValueForTesting());
+    QVERIFY(amp.tempHasValueForTesting());
     QVERIFY(!amp.staleIndicatorVisibleForTesting());
     NEREUS_TRY_COMPARE(rfKit.fwdGaugeValueForTesting(), 850);
     QVERIFY(rfKit.connectedStateForTesting());
     QCOMPARE(rfKit.operateButtonTextForTesting(), QStringLiteral("OPERATE"));
     QCOMPARE(rfKit.nicknameLabelTextForTesting(), QStringLiteral("KG4VCF  G200C267"));
-    QCOMPARE(rfKit.telemetryStripTextForTesting(),
-             QStringLiteral("Fwd 850 W  SWR 1.40  53 V  0.0 A"));
+    // Forward power and SWR are on the face; the strip keeps volts and amps.
+    QVERIFY(rfKit.fwdHasValueForTesting());
+    QVERIFY(std::abs(rfKit.swrGaugeValueForTesting() - 1.4f) < 1e-4f);
+    QCOMPARE(rfKit.telemetryStripTextForTesting(), QStringLiteral("53 V  0.0 A"));
     QVERIFY(!rfKit.staleIndicatorVisibleForTesting());
 
     // Updated as the Core's amps report.
     station.amplifierModel()->applyStatusFrame(pgxlFrame(kTransmit));
     NEREUS_TRY_VERIFY(std::abs(amp.fwdGaugeValueForTesting() - 1000.0) < 1e-3);
+    QVERIFY(amp.fwdHasValueForTesting());
     QVERIFY(std::abs(amp.swrGaugeValueForTesting() - 1.12668) < 1e-4);
     QCOMPARE(amp.powerLabelTextForTesting(), QStringLiteral("Volts: 240V\u00A0\u00A0Amps: 22.5A"));
 
@@ -952,13 +1008,18 @@ void RemotePeripheralsTest::remoteAmpAndRfKitAppletsFollowTheCore()
     station.rfKitModel()->applyOperateMode(QStringLiteral("STANDBY"));
     station.rfKitModel()->applyPower(rfKitPower(0, 1.0f, 0.0f, 0.0f, 0.0f));
     NEREUS_TRY_COMPARE(amp.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
-    NEREUS_TRY_COMPARE(amp.fwdGaugeValueForTesting(), 0.0);
-    QCOMPARE(amp.swrGaugeValueForTesting(), 1.0);
+    // No power passing: forward power and SWR show dashes (they read 0 W
+    // and 1.00 on the old gauges); temperature and the text lines stay live.
+    NEREUS_TRY_VERIFY(!amp.fwdHasValueForTesting());
+    QVERIFY(!amp.swrHasValueForTesting());
+    QVERIFY(amp.tempHasValueForTesting());
     QCOMPARE(amp.powerLabelTextForTesting(), QStringLiteral("Volts: 240V\u00A0\u00A0Amps: 0.0A"));
     NEREUS_TRY_COMPARE(rfKit.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
-    NEREUS_TRY_COMPARE(rfKit.fwdGaugeValueForTesting(), 0);
-    QCOMPARE(rfKit.telemetryStripTextForTesting(),
-             QStringLiteral("Fwd 0 W  SWR 1.00  0 V  0.0 A"));
+    NEREUS_TRY_VERIFY(!rfKit.fwdHasValueForTesting());
+    QVERIFY(!rfKit.swrHasValueForTesting());
+    QVERIFY(rfKit.tempHasValueForTesting());
+    QCOMPARE(rfKit.tempGaugeValueForTesting(), 0.0f);
+    QCOMPARE(rfKit.telemetryStripTextForTesting(), QStringLiteral("0 V  0.0 A"));
 
     // The Core is lost: the last readings stay, marked stale.
     stationEnd->closeLink(QStringLiteral("test: Core lost"));
@@ -1031,14 +1092,15 @@ void RemotePeripheralsTest::localAppletsShowTheSameValuesAsBefore()
     pgxl->injectLineForTesting(QStringLiteral("R1|0|") + QString::fromLatin1(kOperate));
     QCOMPARE(amp.tempGaugeValueForTesting(), 42.5);
     QCOMPARE(amp.operateButtonTextForTesting(), QStringLiteral("OPERATE"));
-    QCOMPARE(amp.fwdGaugeValueForTesting(), 0.0);  // latched peak not shown
+    QVERIFY(!amp.fwdHasValueForTesting());  // latched peak not shown
     pgxl->injectLineForTesting(QStringLiteral("S0|status ") + QString::fromLatin1(kTransmit));
+    QVERIFY(amp.fwdHasValueForTesting());
     QVERIFY(std::abs(amp.fwdGaugeValueForTesting() - 1000.0) < 1e-3);
     QVERIFY(std::abs(amp.swrGaugeValueForTesting() - 1.12668) < 1e-4);
     QCOMPARE(amp.powerLabelTextForTesting(), QStringLiteral("Volts: 240V\u00A0\u00A0Amps: 22.5A"));
     pgxl->injectLineForTesting(QStringLiteral("S0|status ") + QString::fromLatin1(kStandby));
-    QCOMPARE(amp.fwdGaugeValueForTesting(), 0.0);
-    QCOMPARE(amp.swrGaugeValueForTesting(), 1.0);
+    QVERIFY(!amp.fwdHasValueForTesting());   // dashes, where the gauge read 0 W
+    QVERIFY(!amp.swrHasValueForTesting());   // and 1.00
     QCOMPARE(amp.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
     pgxl->injectLineForTesting(QStringLiteral("R2|0|nickname=ShackAmp fan=auto meffa=off led=65"));
     QCOMPARE(amp.meffLabelTextForTesting(), QStringLiteral("MEffA:\u00A0\u00A0\u00A0off"));
@@ -1049,11 +1111,11 @@ void RemotePeripheralsTest::localAppletsShowTheSameValuesAsBefore()
     QCOMPARE(rfKit.fwdGaugeValueForTesting(), 850);
     QVERIFY(std::abs(rfKit.swrGaugeValueForTesting() - 1.4f) < 1e-4f);
     QCOMPARE(rfKit.tempGaugeValueForTesting(), 27.0f);
-    QCOMPARE(rfKit.telemetryStripTextForTesting(),
-             QStringLiteral("Fwd 850 W  SWR 1.40  53 V  0.0 A"));
+    QCOMPARE(rfKit.reflectedValueForTesting(), 3);
+    QCOMPARE(rfKit.telemetryStripTextForTesting(), QStringLiteral("53 V  0.0 A"));
     QCOMPARE(rfKit.operateButtonTextForTesting(), QStringLiteral("OPERATE"));
     conn->injectJsonForTesting(QStringLiteral("/power"), kRfKitIdle);
-    QCOMPARE(rfKit.fwdGaugeValueForTesting(), 0);
+    QVERIFY(!rfKit.fwdHasValueForTesting());   // dashes, where the gauge read 0 W
     QVERIFY(!rfKit.staleIndicatorVisibleForTesting());
 }
 
@@ -2045,13 +2107,9 @@ void RemotePeripheralsTest::coreHereServesThisComputersApps()
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
     const quint16 port = freeLoopbackPort();
-    QString stationAddress;
-    for (const QHostAddress& address : QNetworkInterface::allAddresses()) {
-        if (address.protocol() == QAbstractSocket::IPv4Protocol && !address.isLoopback()) {
-            stationAddress = address.toString();
-            break;
-        }
-    }
+    // 2026-10-11: an address this computer can reach, not the first one it
+    // has (reachableOwnAddress).
+    const QString stationAddress = TestNetwork::reachableOwnAddress();
     // The Core keeps its station switch (off), so it wins at connect.
     AppSettings::instance().clear();
     AppSettings::instance().setValue(QStringLiteral("StationTci_Enabled"), QStringLiteral("False"));

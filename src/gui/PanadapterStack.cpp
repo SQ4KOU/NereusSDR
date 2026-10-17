@@ -22,6 +22,7 @@
 #include "gui/PanadapterStack.h"
 #include "gui/PanadapterApplet.h"
 #include "gui/PanFloatingWindow.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "gui/SpectrumWidget.h"
 #include "core/AppSettings.h"
 #include <QVBoxLayout>
@@ -81,8 +82,11 @@ protected:
     {
         QPainter p(this);
         const QRect r = rect();
-        const QColor line = m_hovered ? QColor(0x3d, 0x6f, 0xa0)
-                                      : QColor(0x20, 0x30, 0x40);
+        // Workspace preview: roleColour() returns the legacy colour with
+        // the switch off.
+        const QColor line = m_hovered
+            ? WorkspacePreview::roleColour(QColor(0x3d, 0x6f, 0xa0), "accent")
+            : WorkspacePreview::roleColour(QColor(0x20, 0x30, 0x40), "border-subtle");
         // Hairline at rest, three logical px under the pointer. Centred in
         // the grab rect so the painted divider sits where the operator's eye
         // says the boundary is, whatever the surrounding hit area costs.

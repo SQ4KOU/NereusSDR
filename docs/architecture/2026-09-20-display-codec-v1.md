@@ -157,9 +157,15 @@ The channel is unordered with no retransmission, so losing any fragment loses
 the whole message; larger frames are proportionally more exposed to loss.
 Core logs the largest keyframe and delta it actually sent, with their
 fragment counts, as `daemon display diagnostics` (every 10 seconds while they
-change, and once when the media peer ends). The Rock check at 4096 points,
-60 fps with 3D, is that this line never exceeds 9,361 bytes / 11 fragments and
-that a capture shows no media datagram above 1000 bytes (969 on IPv4).
+change, and once when the media peer ends). The same line says where a frame
+was lost inside Core before it was sent: `sourceFramesReplaced` (a newer frame
+replaced it before Core's main thread took it from the FFT engine),
+`panFramesReplaced` (a newer frame replaced it before a sender turn took it
+for that pan), and `senderGapMaxMs` with `senderGapMaxSinceLastMs`, the
+longest time between two turns of the 5 ms display sender. The Rock check at
+4096 points, 60 fps with 3D, is that this line never exceeds 9,361 bytes / 11
+fragments and that a capture shows no media datagram above 1000 bytes (969 on
+IPv4).
 
 ## Transport limits (R-R3-04, R-R3-09)
 

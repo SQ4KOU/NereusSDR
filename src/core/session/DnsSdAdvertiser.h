@@ -46,6 +46,7 @@
 #pragma once
 
 #include "StationLanAnnouncement.h"
+#include "core/NereusCoreExport.h"
 
 #include <QByteArray>
 #include <QHostAddress>
@@ -152,7 +153,7 @@ public:
 /// The backend this build has for this platform.
 std::unique_ptr<DnsSdBackend> createPlatformDnsSdBackend();
 
-class DnsSdAdvertiser : public QObject {
+class NEREUS_CORE_EXPORT DnsSdAdvertiser : public QObject {
     Q_OBJECT
 
 public:

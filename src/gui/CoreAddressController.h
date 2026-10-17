@@ -3,12 +3,13 @@
 // 2026-10-02 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 #include "gui/CoreAddressProbe.h"
 #include "gui/CoreTargetStore.h"
+#include "gui/NereusGuiExport.h"
 
 namespace NereusSDR {
 
 /// Inspection never selects or connects a Core. Only deliberate Add/Edit probes.
 /// The store must outlive this controller. Call cancel() on Back/page closure.
-class CoreAddressController : public QObject {
+class NEREUS_GUI_EXPORT CoreAddressController : public QObject {
     Q_OBJECT
 public:
     enum class Outcome { Saved, Refused, TimedOut, Cancelled, StaleTarget, SaveFailed };

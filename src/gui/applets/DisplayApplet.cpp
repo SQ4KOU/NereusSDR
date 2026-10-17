@@ -7,14 +7,24 @@
 // NereusSDR - DisplayApplet implementation.
 //
 // Modification history (NereusSDR)
+//   2026-10-12: Match the rebuilt Display trim labels and native ranges.
+//     J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-10: Display pill plan Task 3: Black Level is 0 to 100 with a
+//     tooltip that says up is blacker, and the scheme list takes its eight
+//     names from wfSchemeName(). J.J. Boyd (KG4VCF), AI-assisted via
+//     Anthropic Claude Code.
 //   Created 2026-09-20 by J.J. Boyd / KG4VCF, 3D Stacked-Trace Spectrum
 //     Plan Task 22. AI tooling: Claude Code.
 
 #include "DisplayApplet.h"
 
+#include "core/spectrum/ClarityLevels.h"
+#include "core/spectrum/WaterfallPalettes.h"
 #include "gui/ComboStyle.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/StyleConstants.h"
+#include "gui/styles/WorkspacePreview.h"
+#include "gui/styles/WorkspaceStyle.h"
 #include "gui/widgets/GuardedComboBox.h"
 #include "gui/widgets/GuardedSlider.h"
 #include "models/DisplaySettingsModel.h"
@@ -78,6 +88,16 @@ void DisplayApplet::buildUI()
         lbl->setStyleSheet(QStringLiteral(
             "QLabel { color: %1; font-size: 10px; font-weight: bold; }"
         ).arg(Style::kAccent));
+        if (WorkspacePreview::enabled()) {
+            // Workspace preview: a tracked caps caption. The row keeps the
+            // original label's height so nothing below it moves; caps
+            // have no descenders, so the 9 px line fits.
+            const int rowHeight = lbl->sizeHint().height();
+            lbl->setStyleSheet(QStringLiteral("QLabel { color: %1; }")
+                                   .arg(Workspace::role("label-mid", "#828288")));
+            lbl->setFont(Workspace::capsFont(lbl->font(), 9));
+            lbl->setFixedHeight(rowHeight);
+        }
         vbox->addWidget(lbl);
     };
 
@@ -95,16 +115,12 @@ void DisplayApplet::buildUI()
             "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextSecondary));
         lbl->setFixedWidth(62);
         m_colorSchemeCombo = new GuardedComboBox(this);
-        m_colorSchemeCombo->addItems({
-            QStringLiteral("Default"),
-            QStringLiteral("Enhanced"),
-            QStringLiteral("Spectran"),
-            QStringLiteral("Black & White"),
-            QStringLiteral("LinLog"),
-            QStringLiteral("LinRad"),
-            QStringLiteral("Custom"),
-            QStringLiteral("Clarity Blue")
-        });
+        // The eight schemes under the names Setup shows, in WfColorScheme
+        // order; the names live in core/spectrum/WaterfallPalettes.cpp.
+        for (int i = 0; i < static_cast<int>(WfColorScheme::Count); ++i) {
+            m_colorSchemeCombo->addItem(
+                QString::fromLatin1(wfSchemeName(static_cast<WfColorScheme>(i))));
+        }
         applyComboStyle(m_colorSchemeCombo);
         row->addWidget(lbl);
         row->addWidget(m_colorSchemeCombo, 1);
@@ -112,17 +128,18 @@ void DisplayApplet::buildUI()
     }
 
     m_colorGainSlider = new GuardedSlider(Qt::Horizontal, this);
-    m_colorGainSlider->setRange(0, 100);
+    m_colorGainSlider->setRange(ClarityLevels::kColorGainMin, ClarityLevels::kColorGainMax);
     m_colorGainSlider->setToolTip(QStringLiteral(
-        "Waterfall color intensity — higher values increase contrast"));
+        "Waterfall Color Gain trim. 60 is centered; a higher value brings color in sooner."));
     m_colorGainValue = insetValue(QStringLiteral("0"));
     vbox->addLayout(sliderRow(QStringLiteral("Color Gain"),
                                m_colorGainSlider, m_colorGainValue));
 
     m_blackLevelSlider = new GuardedSlider(Qt::Horizontal, this);
-    m_blackLevelSlider->setRange(0, 125);
+    m_blackLevelSlider->setRange(ClarityLevels::kBlackLevelMin,
+                                 ClarityLevels::kBlackLevelMax);
     m_blackLevelSlider->setToolTip(QStringLiteral(
-        "Noise floor suppression — higher hides more noise"));
+        "Waterfall Black Level trim. 57 is centered. Up is blacker: more of the row goes black."));
     m_blackLevelValue = insetValue(QStringLiteral("0"));
     vbox->addLayout(sliderRow(QStringLiteral("Black Level"),
                                m_blackLevelSlider, m_blackLevelValue));
@@ -416,13 +433,26 @@ void DisplayApplet::bindTo(DisplaySettingsModel* m)
             m_bindContext, [bound](int v) { bound->setWfBlackLevel(v); });
 
     // ---- Spectrum: control -> model ----
+    // Display pill plan Task 21 (D27): a range set here is the band's, as it
+    // is from the Display pill, the right-click menu and the dB strip. The
+    // pan moves at once through the model; the pan that owns these settings
+    // is then asked to save the range for the band (MainWindow stores it and
+    // refuses it while transmitting).
+    const auto saveBandRange = [this, bound]() {
+        SpectrumWidget* pan = m_model ? m_model->spectrumWidget() : nullptr;
+        if (!pan || pan->displaySettings() != bound) { return; }
+        const float top = bound->refLevel();
+        emit pan->bandRangeRequested(top - bound->dynamicRange(), top);
+    };
     connect(m_refLevelSlider, &QSlider::valueChanged,
-            m_bindContext, [bound](int v) {
+            m_bindContext, [bound, saveBandRange](int v) {
         bound->setRefLevel(static_cast<float>(v));
+        saveBandRange();
     });
     connect(m_dynRangeSlider, &QSlider::valueChanged,
-            m_bindContext, [bound](int v) {
+            m_bindContext, [bound, saveBandRange](int v) {
         bound->setDynamicRange(static_cast<float>(v));
+        saveBandRange();
     });
     connect(m_fillAlphaSlider, &QSlider::valueChanged,
             m_bindContext, [bound](int v) {
@@ -450,6 +480,15 @@ void DisplayApplet::bindTo(DisplaySettingsModel* m)
             m_bindContext, [bound](int v) { bound->setDssRowDivider(v); });
     connect(m_sliceShadowCheck, &QCheckBox::toggled,
             m_bindContext, [bound](bool on) { bound->setThreeDSliceDepth(on); });
+
+    // "Reset this pan" reloads the pan's values with the model's signals
+    // blocked and says so once, with panDisplayReset(): show them again.
+    // The connection goes with m_bindContext on the next bind.
+    SpectrumWidget* pan = m_model ? m_model->spectrumWidget() : nullptr;
+    if (pan && pan->displaySettings() == bound) {
+        connect(pan, &SpectrumWidget::panDisplayReset, m_bindContext,
+                [this]() { syncFromModel(); });
+    }
 
     syncFromModel();
 }

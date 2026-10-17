@@ -225,6 +225,11 @@ void RemoteDisplayPresenter::push(const DisplayCodecFrame& frame,
 
 void RemoteDisplayPresenter::noteLoss()
 {
+    for (Item& item : m_queue) {
+        if (item.kind == Kind::Frame) {
+            item.measurementCurrent = false;
+        }
+    }
     if (!m_waiting) {
         m_waiting = true;
         ++m_counters.keyframeWaits;

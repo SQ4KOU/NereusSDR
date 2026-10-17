@@ -59,6 +59,10 @@
 //                 of the nine keys applied to the Core's analyzer at once,
 //                 keyed or not, through the local page's setters.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-11 : by J.J. Boyd (KG4VCF): saveSettings() hands the file to
+//                 the settings writer thread, so a display change on the
+//                 Core does not hold up its receive audio. AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxAnalyzer.h"
@@ -1009,7 +1013,7 @@ void TxAnalyzer::saveSettings()
     s.setValue(QStringLiteral("DisplayTxWfDetector"),   QString::number(m_wfDetector));
     s.setValue(QStringLiteral("DisplayTxWfAveraging"),  QString::number(m_wfAveraging));
     s.setValue(QStringLiteral("DisplayTxWfAvTimeMs"),   QString::number(m_wfAvTimeMs));
-    s.save();
+    s.saveInBackground();
 }
 
 // ── Remote-window parity Task 30 (R-R3-49, R-R3-21, A12) ─────────────────

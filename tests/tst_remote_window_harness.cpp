@@ -14,6 +14,16 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-16  J.J. Boyd / KG4VCF. A controlled slice keyed to a pan the
+//                window does not show is rehomed onto its pan, with no
+//                hidden pan. AI-assisted via Anthropic Claude Code.
+//   2026-10-16 - Off a RADE mode the RADE applet is grayed whole for its
+//                 capability (disabled, never hidden), so its transmit
+//                 gate is read below the applet (isEnabledTo). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-12  J.J. Boyd / KG4VCF. Take transmit offered and taken with
+//                nobody holding transmit; a program's refused key names
+//                the button. AI-assisted via Anthropic Claude Code.
 //   2026-10-02  J.J. Boyd / KG4VCF. Real window/fake Core TX-letter Take
 //                regressions: cancellation, current refusal, unchanged RX
 //                history, and target lifetime. AI-assisted via OpenAI Codex.
@@ -114,6 +124,16 @@
 //                                    reads "Radio offline"; the width check
 //                                    and its 34 px margin are unchanged.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-06  J.J. Boyd / KG4VCF  R-SPK-21: this computer's microphone
+//                                    buffer is on Setup > Audio >
+//                                    Microphone, in the PC microphone card.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-11  J.J. Boyd / KG4VCF  Six more ctest entries
+//                                    (TestFunctionGroups): the entry left
+//                                    with the slice access and transmit
+//                                    cases had grown past the 120 s limit
+//                                    under load.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -191,6 +211,9 @@
 #include "gui/applets/RadeApplet.h"
 #include "gui/applets/RxApplet.h"
 #include "core/TxSliceArbiter.h"
+#ifdef HAVE_WEBSOCKETS
+#include "core/TciServer.h"
+#endif
 #include "core/safety/TransmitHolder.h"
 #include "gui/setup/DeviceCard.h"
 #include "gui/setup/GeneralOptionsPage.h"
@@ -337,6 +360,24 @@ SliceChooser* openChooser(RemoteWindowHarness& h)
     if (!dashboard || !dashboard->chooserButton()) { return nullptr; }
     dashboard->chooserButton()->click();
     return h.window()->findChild<SliceChooser*>();
+}
+
+// A slice's row in the chooser's list, and a button of its detail by its
+// words, as the operator finds them.
+QPushButton* chooserRowFor(SliceChooser* chooser, int sliceId)
+{
+    for (QPushButton* row : chooser->findChildren<QPushButton*>(QStringLiteral("sliceChooserRow"))) {
+        if (row->property("sliceId").toInt() == sliceId && row->parentWidget()) { return row; }
+    }
+    return nullptr;
+}
+
+QPushButton* chooserActionFor(SliceChooser* chooser, const QString& words)
+{
+    for (QPushButton* button : chooser->findChildren<QPushButton*>()) {
+        if (button->text() == words && button->parentWidget()) { return button; }
+    }
+    return nullptr;
 }
 
 // Optional private offscreen evidence from the same functional fixtures.
@@ -1231,12 +1272,12 @@ private slots:
         QVERIFY(notice->isVisible());
         QCOMPARE(notice->text(), kStationReason);
 
-        // This computer's microphone buffer, on Devices.
-        QWidget* const devices = showSetupLeaf(dialog, QStringLiteral("Devices"));
+        // This computer's microphone buffer, on Microphone (R-SPK-21).
+        QWidget* const devices = showSetupLeaf(dialog, QStringLiteral("Microphone"));
         QVERIFY(devices);
         QVERIFY(devices->isEnabled());
         QVERIFY(!notice->isVisible());
-        DeviceCard* const mic = deviceCardOf(devices, QStringLiteral("TX Input (Microphone)"));
+        DeviceCard* const mic = deviceCardOf(devices, QStringLiteral("PC microphone"));
         QVERIFY(mic);
         QVERIFY(mic->isEnabled());
         QComboBox* const buffer = deviceCardBufferCombo(mic);
@@ -1264,12 +1305,12 @@ private slots:
             5000);
         QVERIFY(!notice->isVisible());
 
-        // The Devices change stuck and is the one the window uses; it never
+        // The Microphone change stuck and is the one the window uses; it never
         // went to the Core.
         QCOMPARE(AppSettings::instance().value(bufferKey).toString(), QString::number(samples));
         QCOMPARE(h.remoteModel()->localAudioDevices()->txInputConfig().bufferSamples, samples);
         QVERIFY(!h.stationSettings().contains(bufferKey));
-        QVERIFY(showSetupLeaf(dialog, QStringLiteral("Devices"))->isEnabled());
+        QVERIFY(showSetupLeaf(dialog, QStringLiteral("Microphone"))->isEnabled());
 
         // The operator's Disconnect: the Core's page is disabled again,
         // with the reason, and still shows the Core's last values.
@@ -1280,7 +1321,7 @@ private slots:
         QCOMPARE(nb->objectName() == QStringLiteral("setupStationPlaceholder"), false);
         QVERIFY(notice->isVisible());
         QCOMPARE(notice->text(), kStationReason);
-        QVERIFY(showSetupLeaf(dialog, QStringLiteral("Devices"))->isEnabled());
+        QVERIFY(showSetupLeaf(dialog, QStringLiteral("Microphone"))->isEnabled());
         QCOMPARE(h.acceptedConnections(), 1);
     }
 
@@ -1318,7 +1359,7 @@ private slots:
         const QString reason = QStringLiteral("The Core has not sent its settings.");
         QCOMPARE(notice->text(), reason);
         QVERIFY(OperatorWording::isPlain(reason));
-        QVERIFY(showSetupLeaf(dialog, QStringLiteral("Devices"))->isEnabled());
+        QVERIFY(showSetupLeaf(dialog, QStringLiteral("Microphone"))->isEnabled());
         QCOMPARE(writes.size(), 0);
         QCOMPARE(removes.size(), 0);
 
@@ -1912,8 +1953,8 @@ private slots:
         QVERIFY(rade);
         QComboBox* const radeProfile = rade->profileComboForTest();
         QPushButton* const radeReset = rade->resetVocoderButtonForTest();
-        QTRY_VERIFY(radeProfile->isEnabled());
-        QVERIFY(radeReset->isEnabled());
+        QTRY_VERIFY(radeProfile->isEnabledTo(rade));
+        QVERIFY(radeReset->isEnabledTo(rade));
 
         StationCapabilities granted = h.server().buildCapabilities();
         granted.txPermitted = true;
@@ -1923,25 +1964,25 @@ private slots:
         QVERIFY(txEq->toolTip() != reason);
         QVERIFY(!vox->isEnabled());
         QCOMPARE(vox->toolTip(), TxRefusals::micNotConnected().text);
-        QVERIFY(radeProfile->isEnabled());
-        QVERIFY(radeReset->isEnabled());
+        QVERIFY(radeProfile->isEnabledTo(rade));
+        QVERIFY(radeReset->isEnabledTo(rade));
 
         StationCapabilities withdrawn = h.server().buildCapabilities();
         withdrawn.txPermitted = false;
         h.pushCapabilities(withdrawn);
         QTRY_VERIFY(!txEq->isEnabled());
         QCOMPARE(txEq->toolTip(), reason);
-        QVERIFY(radeProfile->isEnabled());
-        QVERIFY(radeReset->isEnabled());
+        QVERIFY(radeProfile->isEnabledTo(rade));
+        QVERIFY(radeReset->isEnabledTo(rade));
 
         // A Core without the TX profile commands (transmitSettingsVersion
         // below 3) greys both with the plain reason, on the live session.
         StationCapabilities older = h.server().buildCapabilities();
         older.transmitSettingsVersion = 2;
         h.pushCapabilities(older);
-        QTRY_VERIFY(!radeProfile->isEnabled());
+        QTRY_VERIFY(!radeProfile->isEnabledTo(rade));
         QCOMPARE(radeProfile->toolTip(), IStationLink::transmitSettingsUnavailableReason());
-        QVERIFY(!radeReset->isEnabled());
+        QVERIFY(!radeReset->isEnabledTo(rade));
         QCOMPARE(radeReset->toolTip(), IStationLink::transmitSettingsUnavailableReason());
 
         QCOMPARE(client->sessionEpoch(), epoch);
@@ -2598,6 +2639,63 @@ private slots:
         QVERIFY(!h.remoteModel()->isTune());
     }
 
+    // 2026-10-12: nobody holds transmit, as at a Core that has just
+    // started. A program's key is refused until this window has transmit,
+    // so the TX applet's Take transmit button and holder line are there
+    // before any device holds it, a program's refused key is toasted in
+    // words that name the button, and the button takes transmit at once
+    // with no question. Before, the button showed only while another
+    // device held transmit, and the refusal was a five-second "TCI:" line.
+    // Nothing keys.
+    void takeTransmitIsOfferedAndTakenWhenNobodyHoldsTransmit()
+    {
+        RemoteWindowHarness h(sharingOptions(2, QStringLiteral("2v")));
+        QVERIFY(h.start());
+        h.server().setRemoteTransmitAllowed(true);
+        h.server().setTokenSessionsMayTransmitForTest(true);
+        StationClient* client = h.client();
+        QVERIFY(client);
+        QVERIFY(connectSharing(h));
+        StationCapabilities granted = h.server().buildCapabilities();
+        granted.txPermitted = true;
+        h.pushCapabilities(granted);
+        QTRY_VERIFY(client->capabilities().txPermitted);
+        TransmitHolder* holder = h.server().transmitHolder();
+        QCOMPARE(holder->state(), TransmitHolder::State::Unheld);
+        const QByteArray self = QByteArrayLiteral("token:1");
+
+        auto* takeButton =
+            h.window()->findChild<QPushButton*>(QStringLiteral("TxTakeTransmitButton"));
+        QVERIFY(takeButton != nullptr);
+        QTRY_VERIFY(client->transmitTakeOffered());
+        QVERIFY(!client->transmitHeldElsewhere());
+        QTRY_VERIFY(!takeButton->isHidden());
+        QVERIFY(takeButton->isEnabled());
+        QCOMPARE(client->transmitHolderText(),
+                 QStringLiteral("No device has transmit. MOX and TUNE take it here. A program "
+                                "needs Take transmit first."));
+
+#ifdef HAVE_WEBSOCKETS
+        // A program's key the Core refused for this reason.
+        auto* tci = h.window()->findChild<TciServer*>();
+        QVERIFY(tci != nullptr);
+        emit tci->operatorNotice(QStringLiteral("127.0.0.1:50000"),
+                                 TxRefusals::programNeedsTransmit().text, true);
+        QTRY_COMPARE(toastsSaying(h, QStringLiteral(
+                         "A program using TCI asked to transmit, but this window does not "
+                         "have transmit. Click Take transmit, then try again.")), 1);
+#endif
+
+        takeButton->click();
+        QTRY_VERIFY(client->holdsTransmitHere());
+        QVERIFY(holder->isHeldBy(self));
+        QVERIFY(h.window()->findChild<TakeTransmitDialog*>() == nullptr);
+        QTRY_VERIFY(takeButton->isHidden());
+        QVERIFY(!client->transmitTakeOffered());
+        QCOMPARE(client->transmitHolderText(), QStringLiteral("This computer holds transmit."));
+        QVERIFY(!h.station().mox());
+    }
+
     // TX badge take fix round 1: a window the Core lets transmit (the
     // bench window counted as paired). Case 2: the take question's take
     // brings transmit here and then tx.setTxSlice. Case 3 on the phone's
@@ -3094,6 +3192,38 @@ private slots:
         QVERIFY(stopOffered);
     }
 
+    // A slice this window controls whose pan key names a pan this window
+    // does not show. The window makes no pan for it: a pan outside the
+    // layout is never shown, yet it held the slice and asked the Core for
+    // its spectrum. The slice is rehomed onto the window's pan, as a layout
+    // change rehomes a controlled slice (ruling U7), and the layout stays
+    // the operator's.
+    void remoteControlledSliceOnAPanTheWindowLacksIsRehomedOntoItsPan()
+    {
+        RemoteWindowHarness h(sharingOptions(2, QStringLiteral("1")));
+        QVERIFY(h.start());
+        const int bId = 1;
+        QVERIFY(h.station().sliceById(bId));
+        QCOMPARE(h.station().sliceById(bId)->panKey(), QStringLiteral("pan-1"));
+        QVERIFY(connectSharing(h));
+        auto* stack = h.window()->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        QTRY_VERIFY(h.remoteModel()->sliceById(bId));
+        PanadapterApplet* pan = stack->panadapter(QStringLiteral("pan-0"));
+        QVERIFY(pan);
+        QTRY_COMPARE(h.remoteModel()->sliceById(bId)->panKey(), QStringLiteral("pan-0"));
+        QTRY_COMPARE(h.station().sliceById(bId)->panKey(), QStringLiteral("pan-0"));
+        QTRY_VERIFY(pan->associatedSlices().contains(bId));
+        QTRY_VERIFY(flagFor(h, bId) && flagFor(h, bId)->parentWidget() == pan->spectrumWidget());
+        QTest::qWait(kSettleMs);
+        // Every pan the window holds is one its layout shows.
+        QCOMPARE(stack->currentLayoutId(), QStringLiteral("1"));
+        QCOMPARE(stack->allApplets().size(), 1);
+        QVERIFY(!stack->panadapter(QStringLiteral("pan-1")));
+        QCOMPARE(h.station().sliceById(0)->panKey(), QStringLiteral("pan-0"));
+        QVERIFY(h.addSliceCommands().isEmpty());
+    }
+
     // Slice control plan Task 17 (carried from Task 16, ruling U1): a
     // listen the Core accepts shows the slice in this window. With one pan
     // and no empty one, the window grows to the next layout and places the
@@ -3241,6 +3371,320 @@ private slots:
         QTRY_VERIFY(!flagFor(h, bId)->isListening());
         QVERIFY(h.addSliceCommands().isEmpty());
     }
+
+    // A take of a slice on another band: the pan the window opens for it
+    // shows that band, while the slice is still placed as a listened one
+    // (the answer came before the access update) and after the update says
+    // this window controls it. The window's own pan stays where it was.
+    void remoteTakeLandsItsPanOnTheSlice()
+    {
+        RemoteWindowHarness h(sharingOptions(1, QStringLiteral("1")));
+        QVERIFY(h.start());
+        QVERIFY(connectSharing(h));
+        QObject phoneSession;
+        const QByteArray phone = admitPhone(h, phoneSession);
+        QVERIFY(!phone.isEmpty());
+        const int bId = phonesSliceOnAnotherPan(h, phone);
+        QVERIFY(bId > 0);
+        constexpr double kOtherBandHz = 7'150'000.0;
+        h.station().sliceById(bId)->setFrequency(kOtherBandHz);
+        SliceOwnership* ownership = h.station().sliceOwnership();
+        auto* stack = h.window()->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        SpectrumWidget* own = stack->spectrum(QStringLiteral("pan-0"));
+        QVERIFY(own);
+        const double ownCentre = own->centerFrequency();
+        QVERIFY(std::abs(ownCentre - kOtherBandHz) > own->bandwidth());
+        StationClient* client = h.client();
+        QTRY_VERIFY(client->sliceAccess()->entry(bId).has_value());
+
+        h.server().deviceSessions()->sessionEnded(phone, &phoneSession,
+                                                  DeviceSessionRegistry::EndKind::Dropped);
+        QTRY_COMPARE(client->sliceAccess()->entry(bId)->controlRevision,
+                     ownership->controlRevision(bId));
+        QTest::qWait(kSettleMs);
+        h.coreLink()->holdSliceAccessUpdates();
+        SliceChooser* chooser = openChooser(h);
+        QVERIFY(chooser);
+        QSignalSpy answered(client, &StationClient::deviceCommandFinished);
+        emit chooser->takeControlRequested(bId);
+        QTRY_VERIFY(!answered.isEmpty());
+        QVERIFY(answered.first().at(2).toBool());
+        QTRY_VERIFY(h.coreLink()->heldSliceAccessCount() > 0);
+        QTRY_COMPARE(stack->currentLayoutId(), QStringLiteral("2v"));
+        QTRY_VERIFY(stack->panadapter(QStringLiteral("pan-1"))->associatedSlices().contains(bId));
+        SpectrumWidget* opened = stack->spectrum(QStringLiteral("pan-1"));
+        QVERIFY(opened);
+        QTRY_VERIFY(h.remoteModel()->sliceById(bId)
+                    && h.remoteModel()->sliceById(bId)->frequency() == kOtherBandHz);
+        const auto showsTheSlice = [opened] {
+            return std::abs(opened->centerFrequency() - kOtherBandHz) <= opened->bandwidth() / 2.0;
+        };
+        QTRY_VERIFY2(showsTheSlice(),
+                     qPrintable(QStringLiteral("placed as listened: pan at %1 Hz, slice at %2 Hz")
+                                    .arg(opened->centerFrequency(), 0, 'f', 0)
+                                    .arg(kOtherBandHz, 0, 'f', 0)));
+
+        h.coreLink()->releaseSliceAccessUpdates();
+        QTRY_COMPARE(client->sliceAccess()->entry(bId)->controllerDeviceId,
+                     QStringLiteral("token:1"));
+        QTRY_COMPARE(h.remoteModel()->sliceById(bId)->panKey(), QStringLiteral("pan-1"));
+        QTest::qWait(kSettleMs);
+        QVERIFY2(showsTheSlice(),
+                 qPrintable(QStringLiteral("controlled: pan at %1 Hz, slice at %2 Hz")
+                                .arg(opened->centerFrequency(), 0, 'f', 0)
+                                .arg(kOtherBandHz, 0, 'f', 0)));
+        QCOMPARE(own->centerFrequency(), ownCentre);
+    }
+
+    // A take of a slice whose pan this window also has: nothing is placed
+    // or grown (ruling U2), so nothing else moves that pan. It becomes the
+    // slice the pan shows and the pan's view moves onto it, even though the
+    // operator had moved that pan before.
+    void remoteTakeOfASliceOnAPanThisWindowHasShowsTheSlice()
+    {
+        RemoteWindowHarness h(sharingOptions(1, QStringLiteral("2v")));
+        QVERIFY(h.start());
+        QVERIFY(connectSharing(h));
+        QObject phoneSession;
+        const QByteArray phone = admitPhone(h, phoneSession);
+        QVERIFY(!phone.isEmpty());
+        auto* stack = h.window()->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        QCOMPARE(stack->currentLayoutId(), QStringLiteral("2v"));
+        SpectrumWidget* shared = stack->spectrum(QStringLiteral("pan-1"));
+        QVERIFY(shared);
+        // The operator's own view of that pan, on a third band.
+        constexpr double kOperatorViewHz = 21'200'000.0;
+        constexpr double kOtherBandHz = 7'150'000.0;
+        shared->setCenterFrequency(kOperatorViewHz);
+
+        SliceOwnership* ownership = h.station().sliceOwnership();
+        const QByteArray self = QByteArrayLiteral("token:1");
+        const int bId = h.station().addSlice(QStringLiteral("pan-1"));
+        QVERIFY(bId > 0);
+        h.station().sliceById(bId)->setFrequency(kOtherBandHz);
+        ownership->setOwner(bId, phone);
+        ownership->leave(self, bId);
+        StationClient* client = h.client();
+        QTRY_VERIFY(client->sliceAccess()->entry(bId).has_value()
+                    && client->sliceAccess()->entry(bId)->controllerDeviceId
+                           != QStringLiteral("token:1"));
+        h.server().deviceSessions()->sessionEnded(phone, &phoneSession,
+                                                  DeviceSessionRegistry::EndKind::Dropped);
+        QTRY_COMPARE(client->sliceAccess()->entry(bId)->controlRevision,
+                     ownership->controlRevision(bId));
+        QTest::qWait(kSettleMs);
+        QCOMPARE(shared->centerFrequency(), kOperatorViewHz);
+
+        SliceChooser* chooser = openChooser(h);
+        QVERIFY(chooser);
+        emit chooser->takeControlRequested(bId);
+        QTRY_COMPARE(client->sliceAccess()->entry(bId)->controllerDeviceId,
+                     QStringLiteral("token:1"));
+        PanadapterApplet* pan = stack->panadapter(QStringLiteral("pan-1"));
+        QVERIFY(pan);
+        QTRY_VERIFY(pan->associatedSlices().contains(bId));
+        QTRY_VERIFY(flagFor(h, bId) && flagFor(h, bId)->parentWidget() == shared);
+        QTest::qWait(kSettleMs);
+        QCOMPARE(stack->currentLayoutId(), QStringLiteral("2v"));
+        QCOMPARE(pan->activeSliceIndex(), bId);
+        QVERIFY2(std::abs(shared->centerFrequency() - kOtherBandHz) <= shared->bandwidth() / 2.0,
+                 qPrintable(QStringLiteral("pan at %1 Hz, slice at %2 Hz")
+                                .arg(shared->centerFrequency(), 0, 'f', 0)
+                                .arg(kOtherBandHz, 0, 'f', 0)));
+    }
+
+    // Two of this window's slices on one pan, the pan's view on the first.
+    // Selecting the second from the RX tabs makes it the slice the pan
+    // shows and moves the view onto it; selecting a slice the view already
+    // holds leaves the view where the operator put it.
+    void remoteSelectingASliceLetterTakesItsPanToTheSlice()
+    {
+        RemoteWindowHarness h(sharingOptions(2, QStringLiteral("1")));
+        QVERIFY(h.start());
+        QVERIFY(connectSharing(h));
+        auto* stack = h.window()->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        const int aId = 0;
+        const int bId = 1;
+        QTRY_VERIFY(h.remoteModel()->sliceById(aId) && h.remoteModel()->sliceById(bId));
+        constexpr double kOtherBandHz = 7'150'000.0;
+        h.station().sliceById(bId)->setPanKey(QStringLiteral("pan-0"));
+        h.station().sliceById(bId)->setFrequency(kOtherBandHz);
+        QTRY_COMPARE(h.remoteModel()->sliceById(bId)->panKey(), QStringLiteral("pan-0"));
+        QTRY_COMPARE(h.remoteModel()->sliceById(bId)->frequency(), kOtherBandHz);
+        PanadapterApplet* pan = stack->panadapter(QStringLiteral("pan-0"));
+        SpectrumWidget* sw = stack->spectrum(QStringLiteral("pan-0"));
+        QVERIFY(pan && sw);
+        QTRY_VERIFY(pan->associatedSlices().contains(aId) && pan->associatedSlices().contains(bId));
+        auto* applet = h.window()->findChild<RxApplet*>();
+        QVERIFY(applet);
+        QTest::qWait(kSettleMs);
+
+        // The view on Slice A, Slice A selected.
+        const double aHz = h.remoteModel()->sliceById(aId)->frequency();
+        QVERIFY(std::abs(aHz - kOtherBandHz) > sw->bandwidth());
+        emit applet->sliceActivationRequested(aId);
+        QTRY_COMPARE(pan->activeSliceIndex(), aId);
+        sw->setDisplayWindowPreservingHistory(aHz, sw->bandwidth());
+        QTest::qWait(kSettleMs);
+        QVERIFY(std::abs(sw->centerFrequency() - aHz) <= sw->bandwidth() / 2.0);
+
+        emit applet->sliceActivationRequested(bId);
+        QTRY_COMPARE(pan->activeSliceIndex(), bId);
+        QTRY_VERIFY2(std::abs(sw->centerFrequency() - kOtherBandHz) <= sw->bandwidth() / 2.0,
+                     qPrintable(QStringLiteral("pan at %1 Hz, slice at %2 Hz")
+                                    .arg(sw->centerFrequency(), 0, 'f', 0)
+                                    .arg(kOtherBandHz, 0, 'f', 0)));
+
+        // A slice the view already holds: the operator's offset view stays.
+        const double offset = sw->bandwidth() / 4.0;
+        sw->setDisplayWindowPreservingHistory(kOtherBandHz + offset, sw->bandwidth());
+        emit applet->sliceActivationRequested(bId);
+        QTest::qWait(kSettleMs);
+        QCOMPARE(sw->centerFrequency(), kOtherBandHz + offset);
+    }
+
+    // The bottom RX area's chooser. Two of this window's slices on one pan,
+    // the view on the first. Choosing the second slice's row shows that
+    // slice: it becomes the slice its pan shows and the view moves onto it,
+    // with the span kept. Nothing is asked of the Core, so the window's RX
+    // slice is unchanged. A row whose slice the view already holds moves
+    // nothing.
+    void remoteChoosingASlicesRowInTheBottomChooserShowsTheSlice()
+    {
+        RemoteWindowHarness h(sharingOptions(2, QStringLiteral("1")));
+        QVERIFY(h.start());
+        QVERIFY(connectSharing(h));
+        auto* stack = h.window()->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        const int aId = 0;
+        const int bId = 1;
+        QTRY_VERIFY(h.remoteModel()->sliceById(aId) && h.remoteModel()->sliceById(bId));
+        constexpr double kOtherBandHz = 7'150'000.0;
+        h.station().sliceById(bId)->setPanKey(QStringLiteral("pan-0"));
+        h.station().sliceById(bId)->setFrequency(kOtherBandHz);
+        QTRY_COMPARE(h.remoteModel()->sliceById(bId)->panKey(), QStringLiteral("pan-0"));
+        QTRY_COMPARE(h.remoteModel()->sliceById(bId)->frequency(), kOtherBandHz);
+        PanadapterApplet* pan = stack->panadapter(QStringLiteral("pan-0"));
+        SpectrumWidget* sw = stack->spectrum(QStringLiteral("pan-0"));
+        QVERIFY(pan && sw);
+        QTRY_VERIFY(pan->associatedSlices().contains(aId) && pan->associatedSlices().contains(bId));
+        auto* applet = h.window()->findChild<RxApplet*>();
+        QVERIFY(applet);
+        QTest::qWait(kSettleMs);
+        const double aHz = h.remoteModel()->sliceById(aId)->frequency();
+        emit applet->sliceActivationRequested(aId);
+        QTRY_COMPARE(pan->activeSliceIndex(), aId);
+        QTRY_COMPARE(h.remoteModel()->activeSlice(), h.remoteModel()->sliceById(aId));
+        sw->setDisplayWindowPreservingHistory(aHz, sw->bandwidth());
+        QTest::qWait(kSettleMs);
+        const double span = sw->bandwidth();
+        QVERIFY(std::abs(sw->centerFrequency() - kOtherBandHz) > span / 2.0);
+
+        SliceChooser* chooser = openChooser(h);
+        QVERIFY(chooser);
+        QPushButton* rowB = chooserRowFor(chooser, bId);
+        QVERIFY(rowB);
+        rowB->click();
+        QTRY_COMPARE(pan->activeSliceIndex(), bId);
+        QTRY_VERIFY2(std::abs(sw->centerFrequency() - kOtherBandHz) <= sw->bandwidth() / 2.0,
+                     qPrintable(QStringLiteral("pan at %1 Hz, slice at %2 Hz")
+                                    .arg(sw->centerFrequency(), 0, 'f', 0)
+                                    .arg(kOtherBandHz, 0, 'f', 0)));
+        QCOMPARE(sw->bandwidth(), span);
+        // Showing a slice selects nothing: Select RX is still its own button.
+        QTest::qWait(kSettleMs);
+        QCOMPARE(h.remoteModel()->activeSlice(), h.remoteModel()->sliceById(aId));
+        QVERIFY(chooserActionFor(chooser, QStringLiteral("Select RX")));
+
+        const double offset = sw->bandwidth() / 4.0;
+        sw->setDisplayWindowPreservingHistory(kOtherBandHz + offset, sw->bandwidth());
+        rowB = chooserRowFor(chooser, bId);
+        QVERIFY(rowB);
+        rowB->click();
+        QTest::qWait(kSettleMs);
+        QCOMPARE(sw->centerFrequency(), kOtherBandHz + offset);
+    }
+
+    // The chooser's Select RX: the slice becomes this window's RX slice and
+    // its pan shows it.
+    void remoteSelectRxInTheBottomChooserShowsTheSlice()
+    {
+        RemoteWindowHarness h(sharingOptions(2, QStringLiteral("1")));
+        QVERIFY(h.start());
+        QVERIFY(connectSharing(h));
+        auto* stack = h.window()->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        const int aId = 0;
+        const int bId = 1;
+        QTRY_VERIFY(h.remoteModel()->sliceById(aId) && h.remoteModel()->sliceById(bId));
+        constexpr double kOtherBandHz = 7'150'000.0;
+        h.station().sliceById(bId)->setPanKey(QStringLiteral("pan-0"));
+        h.station().sliceById(bId)->setFrequency(kOtherBandHz);
+        QTRY_COMPARE(h.remoteModel()->sliceById(bId)->panKey(), QStringLiteral("pan-0"));
+        QTRY_COMPARE(h.remoteModel()->sliceById(bId)->frequency(), kOtherBandHz);
+        PanadapterApplet* pan = stack->panadapter(QStringLiteral("pan-0"));
+        SpectrumWidget* sw = stack->spectrum(QStringLiteral("pan-0"));
+        QVERIFY(pan && sw);
+        QTRY_VERIFY(pan->associatedSlices().contains(bId));
+        auto* applet = h.window()->findChild<RxApplet*>();
+        QVERIFY(applet);
+        QTest::qWait(kSettleMs);
+        const double aHz = h.remoteModel()->sliceById(aId)->frequency();
+        emit applet->sliceActivationRequested(aId);
+        QTRY_COMPARE(h.remoteModel()->activeSlice(), h.remoteModel()->sliceById(aId));
+        sw->setDisplayWindowPreservingHistory(aHz, sw->bandwidth());
+        QTest::qWait(kSettleMs);
+
+        SliceChooser* chooser = openChooser(h);
+        QVERIFY(chooser);
+        chooser->selectSlice(bId);
+        QPushButton* select = chooserActionFor(chooser, QStringLiteral("Select RX"));
+        QVERIFY(select);
+        select->click();
+        QTRY_COMPARE(h.remoteModel()->activeSlice(), h.remoteModel()->sliceById(bId));
+        QTRY_COMPARE(pan->activeSliceIndex(), bId);
+        QTRY_VERIFY(std::abs(sw->centerFrequency() - kOtherBandHz) <= sw->bandwidth() / 2.0);
+    }
+
+    // The chooser's Listen in, for a slice on another band: the pan the
+    // window opens for it shows that band.
+    void remoteListenInTheBottomChooserLandsItsPanOnTheSlice()
+    {
+        RemoteWindowHarness h(sharingOptions(1, QStringLiteral("1")));
+        QVERIFY(h.start());
+        QVERIFY(connectSharing(h));
+        QObject phoneSession;
+        const QByteArray phone = admitPhone(h, phoneSession);
+        QVERIFY(!phone.isEmpty());
+        const int bId = phonesSliceOnAnotherPan(h, phone);
+        QVERIFY(bId > 0);
+        constexpr double kOtherBandHz = 7'150'000.0;
+        h.station().sliceById(bId)->setFrequency(kOtherBandHz);
+        auto* stack = h.window()->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        SpectrumWidget* own = stack->spectrum(QStringLiteral("pan-0"));
+        QVERIFY(own);
+        const double ownCentre = own->centerFrequency();
+
+        SliceChooser* chooser = openChooser(h);
+        QVERIFY(chooser);
+        chooser->selectSlice(bId);
+        QPushButton* listen = chooserActionFor(chooser, QStringLiteral("Listen in"));
+        QVERIFY(listen);
+        listen->click();
+        QTRY_VERIFY(h.station().sliceOwnership()->isListening(QByteArrayLiteral("token:1"), bId));
+        QTRY_COMPARE(stack->currentLayoutId(), QStringLiteral("2v"));
+        SpectrumWidget* opened = stack->spectrum(QStringLiteral("pan-1"));
+        QVERIFY(opened);
+        QTRY_VERIFY2(std::abs(opened->centerFrequency() - kOtherBandHz) <= opened->bandwidth() / 2.0,
+                     qPrintable(QStringLiteral("pan at %1 Hz, slice at %2 Hz")
+                                    .arg(opened->centerFrequency(), 0, 'f', 0)
+                                    .arg(kOtherBandHz, 0, 'f', 0)));
+        QCOMPARE(own->centerFrequency(), ownCentre);
+    }
 };
 
 int main(int argc, char** argv)
@@ -3265,6 +3709,15 @@ int main(int argc, char** argv)
     // _setup and _radio (tests/CMakeLists.txt), each 27 to 41 s at that
     // load; the slice access cases run as tst_remote_window_harness. The
     // limit is not raised.
+    // 2026-10-11: the slice access and transmit cases added since had made
+    // that last entry the longest by far (109 s of the binary's 218 s at
+    // load 18 to 20, and past the limit in a loaded run with every case
+    // still passing). They run as six more entries, _letters, _refusals,
+    // _take, _badges, _access and _show, 11 to 15 s each run two at a time
+    // at load 10 to 18 (the longest of the twelve is _links at 24 s), which
+    // leaves tst_remote_window_harness the case that tunes without slice
+    // access, the evidence capture (skipped unless asked for) and whatever
+    // is added next (3 s).
     const std::optional<QStringList> arguments = NereusSDR::TestFunctionGroups::arguments(
         test.metaObject(), app.arguments(), "NEREUS_REMOTE_WINDOW_HARNESS_GROUP",
         {{QStringLiteral("connect"),
@@ -3291,7 +3744,36 @@ int main(int argc, char** argv)
            QStringLiteral("olderCoreLeavesAttenuatorControlsDisabledWithAReason"),
            QStringLiteral("windowFollowsTheCoresRadio"),
            QStringLiteral("pureSignalAppletIsDisabledNotHiddenBelowPureSignal3"),
-           QStringLiteral("capabilityChangeRegatesWithoutReconnect")}}});
+           QStringLiteral("capabilityChangeRegatesWithoutReconnect")}},
+         {QStringLiteral("letters"),
+          {QStringLiteral("theFlagsTxButtonMovesTransmitLikeTheLetterRow"),
+           QStringLiteral("remoteTxLettersRespectPhysicalPttOnItsCurrentSlice"),
+           QStringLiteral("remoteTxLetterPendingTakeRejectsChangedAccessIncarnation"),
+           QStringLiteral("remoteStaleTxLetterNeverTakesControlOfAListenedSlice")}},
+         {QStringLiteral("refusals"),
+          {QStringLiteral("remoteTxLettersPreserveCurrentCoreRefusals")}},
+         {QStringLiteral("take"),
+          {QStringLiteral("remoteTxLettersTakeThenSelectOnTheCoreWithoutKeying"),
+           QStringLiteral("takeTransmitIsOfferedAndTakenWhenNobodyHoldsTransmit")}},
+         {QStringLiteral("badges"),
+          {QStringLiteral("remoteTxBadgeTakesTransmitOnASessionTheCoreLetsTransmit"),
+           QStringLiteral("remoteTxBadgeTakeDoesNotOutliveTheLink"),
+           QStringLiteral("remoteTxBadgeAskClosesWhenTheTakeIsAbandoned"),
+           QStringLiteral("remoteContainerMonAndPsaFollowTheTransmitHolder"),
+           QStringLiteral("remoteTxBadgeOnAListenedSliceTakesTheSliceThenTransmit")}},
+         {QStringLiteral("access"),
+          {QStringLiteral("remoteContainerSliceButtonsFollowTheCoresChangeOfControl"),
+           QStringLiteral("remoteLayoutChangeKeepsListeningToASliceOnARemainingPan"),
+           QStringLiteral("remoteListenTheCoreAcceptsShowsTheSliceHere"),
+           QStringLiteral("remotePlacementsFollowTheCoresAccessUpdates"),
+           QStringLiteral("remoteTakeAnsweredBeforeItsAccessUpdateEndsOnTheWindowsPan")}},
+         {QStringLiteral("show"),
+          {QStringLiteral("remoteTakeLandsItsPanOnTheSlice"),
+           QStringLiteral("remoteTakeOfASliceOnAPanThisWindowHasShowsTheSlice"),
+           QStringLiteral("remoteSelectingASliceLetterTakesItsPanToTheSlice"),
+           QStringLiteral("remoteChoosingASlicesRowInTheBottomChooserShowsTheSlice"),
+           QStringLiteral("remoteSelectRxInTheBottomChooserShowsTheSlice"),
+           QStringLiteral("remoteListenInTheBottomChooserLandsItsPanOnTheSlice")}}});
     return arguments ? QTest::qExec(&test, *arguments) : 1;
 }
 #include "tst_remote_window_harness.moc"

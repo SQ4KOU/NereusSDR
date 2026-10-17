@@ -94,6 +94,7 @@
 #include "core/HpsdrModel.h"
 #include "core/StepAttenuatorController.h"
 #include "core/WdspTypes.h"
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
@@ -164,7 +165,7 @@ public:
     virtual std::optional<LevelCalSpectrum> latestSpectrum() = 0;
 };
 
-class LevelCalibrationRun : public QObject {
+class NEREUS_CORE_EXPORT LevelCalibrationRun : public QObject {
     Q_OBJECT
 public:
     // Thetis's Thread.Sleep values, in milliseconds.

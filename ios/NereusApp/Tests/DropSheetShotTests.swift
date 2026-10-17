@@ -22,7 +22,9 @@ import UIKit
 @Suite("Pan and Display sheets on screen", .serialized)
 @MainActor
 struct DropSheetShotTests {
-    @Test("Pan 1 stays usable after this phone's last slice closes")
+    // The two waits on the pan's slice have no deadline of their own; the
+    // time limit only ends a test that never gets there.
+    @Test("Pan 1 stays usable after this phone's last slice closes", .timeLimit(.minutes(2)))
     func emptyPanShot() async throws {
         let suite = "DropSheetShotTests-empty-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -37,9 +39,9 @@ struct DropSheetShotTests {
             .init(ordinal: 0, name: "json", value: .utf8(station.catalogue(json))),
             .init(ordinal: 1, name: "revision", value: .i64(2)),
         ])))
-        #expect(await settle(seconds: 5) { model.main.pan.sliceLetter == "A" })
+        #expect(await Eventually.holds { model.main.pan.sliceLetter == "A" })
         await station.deliver(.objectDestroy(LinkMessage.ObjectDestroy(key: "slice:0", className: "SliceModel")))
-        #expect(await settle(seconds: 5) { model.main.pan.sliceLetter == nil && model.main.pan.canAddSlice })
+        #expect(await Eventually.holds { model.main.pan.sliceLetter == nil && model.main.pan.canAddSlice })
         #expect(!model.main.pan.canSelectBand)
         #expect(!model.main.pan.canAddNotch)
         try await shoot("pan-sheet-empty-slice", sheet: .pan, sideways: false, model: model, feed: { _ in })
@@ -187,7 +189,11 @@ struct DropSheetShotTests {
         await model.disconnect()
     }
 
-    @Test("Extended view On, zoomed out past the receiver, with the Core's rows across the wider span")
+    // The wait for the Core's rows has no deadline of its own (a slow
+    // computer had taken 2,085 and 2,248 of the 2,400 when a 20 s count ran
+    // out); the time limit only ends a test that never gets there.
+    @Test("Extended view On, zoomed out past the receiver, with the Core's rows across the wider span",
+          .timeLimit(.minutes(5)))
     func extendedViewZoomedOut() async throws {
         let suite = "DropSheetShotTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -209,10 +215,9 @@ struct DropSheetShotTests {
             band.requestView(TuneGestures.View(centerHz: 7_236_400, spanHz: span))
             #expect(await settle(seconds: 30) { band.spanHz == span })
             station.sendDisplayRows(2_400)
-            // The rows arrive through the media client one at a time.
-            for _ in 0..<400 where (band.state.frame?.encoderSequence ?? 0) < 2_400 {
-                try await Task.sleep(for: .milliseconds(50))
-            }
+            // The rows arrive through the media client one at a time. Should
+            // they not all come, the second expectation says how many did.
+            #expect(await Eventually.holds { (band.state.frame?.encoderSequence ?? 0) >= 2_400 })
             #expect((band.state.frame?.encoderSequence ?? 0) >= 2_400)
             #expect(band.state.frame?.traceDbm.count == bandDraw.requestedPixels)
         }

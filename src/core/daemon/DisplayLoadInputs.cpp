@@ -13,8 +13,48 @@ namespace NereusSDR {
 
 bool receiverSharesDisplayCores(const PlacementPlan& placement, int sliceId)
 {
-    return !placement.active || placement.cpuFor(ThreadRole::RxWorker, sliceId) < 0
-        || placement.cpuFor(ThreadRole::DspThread) < 0;
+    if (!placement.active) {
+        return true;
+    }
+    const auto slowedByDisplay = [&placement](ThreadRole role, int channel) {
+        const QList<int> cores = placement.coresFor(role, channel);
+        if (cores.isEmpty()) {
+            return true; // on the housekeeping cores
+        }
+        // A spectrum thread on a raised thread's core takes only the time
+        // that thread leaves.
+        if (placement.raisedFor(role, channel)) {
+            return false;
+        }
+        return std::any_of(cores.cbegin(), cores.cend(),
+                           [&placement](int cpu) { return placement.carriesSpectrum(cpu); });
+    };
+    return slowedByDisplay(ThreadRole::RxWorker, sliceId)
+        || slowedByDisplay(ThreadRole::DspThread, -1);
+}
+
+DisplayGovernorCpus displayGovernorCpus(const PlacementPlan& placement)
+{
+    if (!placement.active) {
+        return {};
+    }
+    DisplayGovernorCpus cpus;
+    cpus.housekeeping = placement.housekeeping;
+    std::sort(cpus.housekeeping.begin(), cpus.housekeeping.end());
+    for (const RoleAssignment& a : placement.assignments) {
+        if (a.role != ThreadRole::SpectrumThread) {
+            continue;
+        }
+        for (int cpu : placement.coresFor(ThreadRole::SpectrumThread, a.channel)) {
+            if (!cpus.housekeeping.contains(cpu)) {
+                cpus.spectrumOnly.append(cpu);
+            }
+        }
+    }
+    std::sort(cpus.spectrumOnly.begin(), cpus.spectrumOnly.end());
+    cpus.spectrumOnly.erase(std::unique(cpus.spectrumOnly.begin(), cpus.spectrumOnly.end()),
+                            cpus.spectrumOnly.end());
+    return cpus;
 }
 
 DisplayLoadReading displayLoadReadingFrom(const DisplayLoadInputs& inputs, qint64 nowMs,

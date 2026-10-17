@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstring>
 #include <mutex>
+#include <thread>
 
 namespace NereusSDR {
 
@@ -35,6 +36,16 @@ public:
         if (clock) {
             m_captureClock = std::move(clock);
         }
+        return true;
+    }
+
+    // Control thread, only while stopped: the producer reads it.
+    bool setBlockWake(std::shared_ptr<DaemonAudioBlockWake> wake)
+    {
+        if (m_running.load(std::memory_order_acquire)) {
+            return false;
+        }
+        m_blockWake = std::move(wake);
         return true;
     }
 
@@ -228,6 +239,16 @@ public:
 
 #ifdef NEREUS_BUILD_TESTS
     std::function<void()> m_takeBlockLockedHookForTest;
+    // Producer thread only.
+    void handOverPendingForTest() noexcept
+    {
+        while (m_pendingValid && m_running.load(std::memory_order_acquire)) {
+            tryHandOverPending();
+            if (m_pendingValid) {
+                std::this_thread::yield();
+            }
+        }
+    }
 #endif
 
 private:
@@ -273,6 +294,8 @@ private:
             m_pendingValid = false;
         }
         pushLocked(m_assemblingSlot, m_assemblingFirstFrame, capturedNs);
+        lock.unlock();
+        wakeConsumer();
     }
 
     // Producer thread only.
@@ -285,6 +308,18 @@ private:
         }
         pushLocked(m_pendingSlot, m_pendingFirstFrame, m_pendingCapturedNs);
         m_pendingValid = false;
+        lock.unlock();
+        wakeConsumer();
+    }
+
+    // Producer thread only, after the bridge lock is let go: the consumer's
+    // thread wakes now, not at its next tick (R-AUD-SEND). One atomic
+    // exchange and at most one semaphore release; see DaemonAudioBlockWake.
+    void wakeConsumer() noexcept
+    {
+        if (m_blockWake) {
+            m_blockWake->notify();
+        }
     }
 
     void pushLocked(int slot, quint64 firstFrame, qint64 capturedNs) noexcept
@@ -359,6 +394,8 @@ private:
 
     // Written only while stopped (setCaptureClock); read by consume().
     DaemonAudioSource::CaptureClock m_captureClock;
+    // Written only while stopped (setBlockWake); read by the producer.
+    std::shared_ptr<DaemonAudioBlockWake> m_blockWake;
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_discontinuity{false};
     std::atomic<std::uint64_t> m_contentionRetries{0};
@@ -481,6 +518,11 @@ bool DaemonAudioSource::setCaptureClock(CaptureClock clock)
     return m_bridge->setCaptureClock(std::move(clock));
 }
 
+bool DaemonAudioSource::setBlockWake(std::shared_ptr<DaemonAudioBlockWake> wake)
+{
+    return m_bridge->setBlockWake(std::move(wake));
+}
+
 bool DaemonAudioSource::isRunning() const noexcept
 {
     return m_bridge->isRunning();
@@ -510,6 +552,11 @@ void DaemonAudioSource::dropIngressForTest(int frames) noexcept
 void DaemonAudioSource::setTakeBlockLockedHookForTest(std::function<void()> hook)
 {
     m_bridge->m_takeBlockLockedHookForTest = std::move(hook);
+}
+
+void DaemonAudioSource::handOverPendingForTest()
+{
+    m_bridge->handOverPendingForTest();
 }
 #endif
 

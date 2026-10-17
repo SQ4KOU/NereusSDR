@@ -31,9 +31,14 @@ extension PACEvaluatingSuites {
 
             // The local service has a self-signed test certificate. Reaching it
             // through CONNECT must still fail ordinary system trust.
+            // The opening's deadline counts from this call. In PR 532's run
+            // 38834527225 a busy runner kept the opening's task from starting
+            // for over 2 s, so a 2 s deadline had run out and the opening
+            // failed without asking the proxy. The route and the refusal
+            // checked here settle the opening long before the backstop.
             let rendezvous = RendezvousWebSocket(
                 server: RendezvousServer(host: "rv.invalid", port: serverPort),
-                openDeadline: .seconds(2), plainOnLoopback: false, proxyResolver: resolver)
+                openDeadline: TestBackstop.hang, plainOnLoopback: false, proxyResolver: resolver)
             receipts.mark("rendezvous opening entered")
             do {
                 _ = try await rendezvous.open { _ in }

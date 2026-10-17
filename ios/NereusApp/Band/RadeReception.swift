@@ -42,7 +42,7 @@ struct RadeReception: Equatable {
     /// The row's prefix when no callsign is decoded.
     static let noCallsignPrefix = "RADE"
     /// The mode labels that carry the row.
-    static let modeLabels: Set<String> = ["RADE-U", "RADE-L"]
+    static let modeLabels: Set<String> = ["RADE-U", "RADE-L", "RADE2-U", "RADE2-L"]
 
     /// The row's dot.
     enum Dot: Equatable {

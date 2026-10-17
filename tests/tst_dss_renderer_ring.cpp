@@ -3,6 +3,8 @@
 #include <cmath>
 
 #include "gui/DssRenderer.h"
+#include "gui/DssQuietOverhang.h"
+#include <limits>
 
 using namespace NereusSDR;
 
@@ -20,6 +22,61 @@ class TestDssRendererRing : public QObject {
     Q_OBJECT
 
 private slots:
+    void quietBaselineUsesFiniteThirtyPercentOfStrideEightFoldedSamples() {
+        // Un-sampled columns are strong carriers: the accepted reference
+        // samples x=0,8,... before selecting floor(count*0.3), not a mean.
+        QVector<float> folded(80, -40.0f);
+        for (int i = 0; i < 10; ++i) { folded[i * 8] = -140.0f + i; }
+        const auto quiet = dssQuietLevelFromFoldedRow(folded);
+        QVERIFY(quiet.has_value());
+        QCOMPARE(*quiet, -137.0f);
+        folded[0] = std::numeric_limits<float>::quiet_NaN();
+        folded[8] = std::numeric_limits<float>::infinity();
+        const auto finiteQuiet = dssQuietLevelFromFoldedRow(folded);
+        QVERIFY(finiteQuiet.has_value());
+        QCOMPARE(*finiteQuiet, -136.0f);
+        QVERIFY(!dssQuietLevelFromFoldedRow({}).has_value());
+        QVERIFY(!dssQuietLevelFromFoldedRow(QVector<float>(80,
+            std::numeric_limits<float>::quiet_NaN())).has_value());
+    }
+
+    void quietBaselineRetainsItsOwnRowAcrossAgeWrapAndReset() {
+        DssRenderer renderer;
+        renderer.pushRow(flatRow(kDssCols, -130.0f), 14.2, 0.192);
+        renderer.pushRow(flatRow(kDssCols, -105.0f), 14.2, 0.192);
+        QVERIFY(renderer.rowQuietDbmAtAge(0).has_value());
+        QVERIFY(renderer.rowQuietDbmAtAge(1).has_value());
+        QCOMPARE(*renderer.rowQuietDbmAtAge(0), -105.0f);
+        QCOMPARE(*renderer.rowQuietDbmAtAge(1), -130.0f);
+        // Capture from the folded row before the renderer's existing
+        // temporal smoothing, preserving the exact row-specific baseline.
+        for (int i = 0; i < kDssRows + 7; ++i) {
+            renderer.pushRow(flatRow(kDssCols, -190.0f + i), 14.2, 0.192);
+        }
+        QCOMPARE(*renderer.rowQuietDbmAtAge(0), -190.0f + kDssRows + 6);
+        QCOMPARE(*renderer.rowQuietDbmAtAge(kDssRows - 1), -183.0f);
+        QVERIFY(!renderer.rowQuietDbmAtAge(-1).has_value());
+        QVERIFY(!renderer.rowQuietDbmAtAge(kDssRows).has_value());
+        renderer.clear();
+        QVERIFY(!renderer.rowQuietDbmAtAge(0).has_value());
+    }
+
+    void quietFallbackPreservesCapturedDataAndOnlyFillsOverhang() {
+        const DssHistorySample exact = dssSampleQuietOverhang(1.2f, -60.0f, -40.0f, -135.0f, -150.0f);
+        QCOMPARE(exact.dbm, -60.0f); QVERIFY(exact.covered);
+        const DssHistorySample wide = dssSampleQuietOverhang(1.2f, std::nullopt, -40.0f, -135.0f, -150.0f);
+        QCOMPARE(wide.dbm, -40.0f); QVERIFY(wide.covered);
+        const DssHistorySample quiet = dssSampleQuietOverhang(1.2f, std::nullopt, std::nullopt, -135.0f, -150.0f);
+        QCOMPARE(quiet.dbm, -135.0f); QVERIFY(quiet.covered);
+        const DssHistorySample inside = dssSampleQuietOverhang(0.5f, std::nullopt, std::nullopt, -135.0f, -150.0f);
+        QCOMPARE(inside.dbm, -150.0f); QVERIFY(!inside.covered);
+        const DssHistorySample unknown = dssSampleQuietOverhang(-0.2f, std::nullopt, std::nullopt, std::nullopt, -150.0f);
+        QCOMPARE(unknown.dbm, -150.0f); QVERIFY(!unknown.covered);
+        const DssHistorySample invalid = dssSampleQuietOverhang(1.2f, std::nullopt, std::nullopt,
+            std::numeric_limits<float>::quiet_NaN(), -150.0f);
+        QCOMPARE(invalid.dbm, -150.0f); QVERIFY(!invalid.covered);
+    }
+
     void emptyRenderer_hasNoData() {
         DssRenderer r;
         QVERIFY(!r.hasData());

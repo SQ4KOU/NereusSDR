@@ -38,6 +38,29 @@
 //               Claude Code.
 //   2026-10-02: cover adopted-session retry ownership by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via OpenAI Codex.
+//   2026-10-15: the address list and admitted rungs of a first race and
+//               a better-path search for a saved Core with IPv6-only
+//               learned addresses, on the web relay. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-15: what a search admits against each current path, and the
+//               race's admitted, dropped, ended and nothing-to-try log
+//               lines. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-15: the live sequence: two failed races, the reconnect
+//               retry through the service, then its better-path searches.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: an ICE pair not known yet ranks below ServiceDirect, and
+//               a session through the service with no pair known searches
+//               ICE (without the relay); one with a host pair does not.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: PR 524 review: a search's own ICE rung that opens with no
+//               pair known moves a session with no pair known, or one on
+//               the TURN relay, once; documentation addresses; the
+//               heartbeat guard for an unknown pair; "canceled", "dialed".
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: Windows: the closed address may be stopped because the
+//               service's path won first. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -50,6 +73,7 @@
 #include <QTcpSocket>
 #include <QTimer>
 
+#include <atomic>
 #include <memory>
 
 #include "core/security/ClientDeviceIdentity.h"
@@ -207,6 +231,111 @@ quint16 closedPort()
 {
     return freeTcpPort();
 }
+
+// The planned rungs (address, start delay) of each race a window starts,
+// read at the line it logs just before the race starts ("Racing every
+// path to the Core", "Looking for a better path to the Core").
+// The first connection's ICE pair in a service session.
+enum class FirstPair { Unknown, Host, Relayed };
+
+struct RacePlans {
+    QPointer<StationClient> client;
+    QList<QList<QPair<QString, int>>> first;
+    QList<QList<QPair<QString, int>>> upgrades;
+    // Milliseconds from each "Looking for a better path" to the racer's
+    // own "All N attempt(s) failed".
+    QList<qint64> upgradeFailMs;
+    QElapsedTimer upgradeClock;
+    bool upgradeRunning = false;
+    // Per better-path search: whether it holds a service rung, and if so
+    // whether that rung may take the relay.
+    QList<std::optional<bool>> upgradeServiceAllowsRelay;
+};
+RacePlans* s_plans = nullptr;
+QtMessageHandler s_previousHandler = nullptr;
+
+void capturePlans(QtMsgType type, const QMessageLogContext& context, const QString& message)
+{
+    if (s_plans != nullptr && s_plans->client) {
+        const bool first = message.contains(QStringLiteral("Racing every path to the Core"));
+        const bool upgrade = message.contains(QStringLiteral("Looking for a better path to the Core"));
+        if (upgrade) {
+            s_plans->upgradeClock.start();
+            s_plans->upgradeRunning = true;
+        }
+        if (s_plans->upgradeRunning && message.contains(QStringLiteral("attempt(s) failed"))
+            && QByteArray(context.category) == QByteArray("nereus.session.pathracer")) {
+            s_plans->upgradeFailMs.append(s_plans->upgradeClock.elapsed());
+            s_plans->upgradeRunning = false;
+        }
+        if (first || upgrade) {
+            const QList<PathRacer*> racers =
+                s_plans->client->findChildren<PathRacer*>(Qt::FindDirectChildrenOnly);
+            if (!racers.isEmpty()) {
+                (first ? s_plans->first : s_plans->upgrades)
+                    .append(racers.last()->plannedStartsForTest());
+                if (upgrade) {
+                    const auto rungs = racers.last()->findChildren<RendezvousPathRung*>();
+                    s_plans->upgradeServiceAllowsRelay.append(
+                        rungs.isEmpty() ? std::nullopt
+                                        : std::optional<bool>(rungs.first()->allowsRelay()));
+                }
+            }
+        }
+    }
+    if (s_previousHandler != nullptr) {
+        s_previousHandler(type, context, message);
+    }
+}
+
+int delayFor(const QList<QPair<QString, int>>& plan, const QString& address)
+{
+    for (const auto& [planned, delay] : plan) {
+        if (planned == address) {
+            return delay;
+        }
+    }
+    return -1;
+}
+
+// Every line the racer logs, while a test holds one of these.
+QStringList* s_racerLines = nullptr;
+QtMessageHandler s_racerPrevious = nullptr;
+
+void captureRacerLines(QtMsgType type, const QMessageLogContext& context, const QString& message)
+{
+    if (s_racerLines != nullptr
+        && QByteArray(context.category) == QByteArray("nereus.session.pathracer")) {
+        s_racerLines->append(message);
+    }
+    if (s_racerPrevious != nullptr) {
+        s_racerPrevious(type, context, message);
+    }
+}
+
+struct RacerLines {
+    QStringList lines;
+    RacerLines()
+    {
+        s_racerLines = &lines;
+        s_racerPrevious = qInstallMessageHandler(captureRacerLines);
+    }
+    ~RacerLines()
+    {
+        qInstallMessageHandler(s_racerPrevious);
+        s_racerPrevious = nullptr;
+        s_racerLines = nullptr;
+    }
+    bool has(const QString& text) const
+    {
+        for (const QString& line : lines) {
+            if (line.contains(text)) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
 
 } // namespace
 
@@ -445,6 +574,475 @@ private slots:
         }
     }
 
+    // A saved Core like JJ's: its own address the IPv4 listener, its
+    // learned addresses two IPv6 ones, its last good addresses all three.
+    // Whatever rank the session has on the service (direct, TURN, or the
+    // web relay), a better-path search admits the IPv4 address, once,
+    // 250 ms after the IPv6 ones. Nothing is started, so nothing is dialed.
+    void anUpgradeOnTheRelayAdmitsTheEntryAddress_data()
+    {
+        QTest::addColumn<int>("rank");
+        QTest::newRow("service direct") << int(PathRacer::ServiceDirect);
+        QTest::newRow("TURN relay") << int(PathRacer::ServiceRelayed);
+        QTest::newRow("web relay") << int(PathRacer::Floor);
+    }
+    void anUpgradeOnTheRelayAdmitsTheEntryAddress()
+    {
+        QFETCH(int, rank);
+        const QUrl v4(QStringLiteral("wss://192.0.2.106:47910"));
+        const QUrl v6a(QStringLiteral("wss://[2001:db8:1:2::4602]:47910"));
+        const QUrl v6b(QStringLiteral("wss://[2001:db8:1:2::15f2]:47910"));
+        // The GUI's last good + learned list, repeats included.
+        // StationClient::setCachedAddresses drops the repeats
+        // (StationClient.cpp:1416-1420); the racer drops them too.
+        const QList<QUrl> plan{v6a, v6b, v4, v6a, v6b, v4};
+        PathRacer racer;
+        racer.setBetterThan(rank);
+        racer.addDirectUrls(plan, StationClient::kMaxIncomingMessageBytes);
+        const auto planned = racer.plannedStartsForTest();
+        QVERIFY2(PathRacer::rankFor(v4) < rank, "the IPv4 address ranks better than the service");
+        QCOMPARE(planned.size(), 3);
+        QCOMPARE(delayFor(planned, QStringLiteral("192.0.2.106:47910")), PathRacer::kIpv4DelayMs);
+        QCOMPARE(delayFor(planned, QStringLiteral("[2001:db8:1:2::4602]:47910")), 0);
+        QCOMPARE(delayFor(planned, QStringLiteral("[2001:db8:1:2::15f2]:47910")), 0);
+    }
+
+    // A search that admits nothing says so in its own words, not as a
+    // path that failed, and says what bar it started with.
+    void aSearchThatAdmitsNothingSaysSo()
+    {
+        RacerLines log;
+        PathRacer racer;
+        QSignalSpy failed(&racer, &PathRacer::failed);
+        racer.setBetterThan(PathRacer::ThisNetwork);
+        racer.addDirectUrls({QUrl(QStringLiteral("wss://192.0.2.106:47910"))},
+                            StationClient::kMaxIncomingMessageBytes);
+        racer.start();
+        QCOMPARE(failed.size(), 1);
+        QVERIFY2(log.has(QStringLiteral("No address was worth trying for a better path")),
+                 qPrintable(log.lines.join(QLatin1Char('\n'))));
+        QVERIFY2(!log.has(QStringLiteral("No path reached the Core")),
+                 qPrintable(log.lines.join(QLatin1Char('\n'))));
+        QVERIFY2(log.has(QStringLiteral("better than rank 0 (this network)")),
+                 qPrintable(log.lines.join(QLatin1Char('\n'))));
+    }
+
+    // Each address is logged as admitted or dropped, with the reason and
+    // the ranks compared, and each attempt's end with its outcome.
+    void eachAddressIsLoggedAdmittedOrDropped()
+    {
+        const QUrl v4(QStringLiteral("wss://192.0.2.106:47910"));
+        const QUrl v6(QStringLiteral("wss://[2001:db8:1:2::4602]:47910"));
+        {
+            RacerLines log;
+            PathRacer racer;
+            racer.setBetterThan(PathRacer::ServiceDirect);
+            racer.addDirectUrls({v6, v4, v4}, StationClient::kMaxIncomingMessageBytes);
+            const QString joined = log.lines.join(QLatin1Char('\n'));
+            QVERIFY2(log.has(QStringLiteral("192.0.2.106:47910 admitted: rank %1")
+                                 .arg(PathRacer::rankFor(v4))), qPrintable(joined));
+            QVERIFY2(log.has(QStringLiteral("is below 2 (service direct)")), qPrintable(joined));
+            QVERIFY2(log.has(QStringLiteral("192.0.2.106:47910 dropped: already in this race")),
+                     qPrintable(joined));
+        }
+        {
+            RacerLines log;
+            PathRacer upgrade;
+            upgrade.setBetterThan(PathRacer::ThisNetwork);
+            upgrade.addDirectUrls({v6}, StationClient::kMaxIncomingMessageBytes);
+            const QString joined = log.lines.join(QLatin1Char('\n'));
+            // A search's own lines say they are a better-path search's.
+            QVERIFY2(log.has(QStringLiteral(
+                         "Better-path search: [2001:db8:1:2::4602]:47910 dropped")),
+                     qPrintable(joined));
+            QVERIFY2(log.has(QStringLiteral(
+                         "[2001:db8:1:2::4602]:47910 dropped: rank %1")
+                         .arg(PathRacer::rankFor(v6))), qPrintable(joined));
+            QVERIFY2(log.has(QStringLiteral("is not below 0 (this network)")), qPrintable(joined));
+        }
+        {
+            // An attempt that ends at once (not a secure address): its end,
+            // with the outcome. Nothing is dialed.
+            RacerLines log;
+            PathRacer first;
+            first.addDirectUrls({QUrl(QStringLiteral("ws://127.0.0.1:1"))},
+                                StationClient::kMaxIncomingMessageBytes);
+            first.start();
+            QTRY_VERIFY2(log.has(QStringLiteral("Attempt at 127.0.0.1:1 ended: failed")),
+                         qPrintable(log.lines.join(QLatin1Char('\n'))));
+            const QString joined = log.lines.join(QLatin1Char('\n'));
+            QVERIFY2(log.has(QStringLiteral("127.0.0.1:1 admitted: rank 0 (this network)")),
+                     qPrintable(joined));
+            QVERIFY2(log.has(QStringLiteral("Race started with 1 attempt(s), any rank")),
+                     qPrintable(joined));
+            // The racer's failure is its own line, not the session's.
+            QTRY_VERIFY2(log.has(QStringLiteral("All 1 attempt(s) failed, any rank")),
+                         qPrintable(log.lines.join(QLatin1Char('\n'))));
+            QVERIFY2(!log.has(QStringLiteral("No path reached the Core")), qPrintable(joined));
+        }
+    }
+
+    // A race canceled with attempts still open (the session ended, or a
+    // new race stopped it) logs its end, naming them and why.
+    void aCanceledRaceLogsItsOpenAttempts()
+    {
+        RacerLines log;
+        PathRacer racer;
+        racer.addDirectUrls({QUrl(QStringLiteral("wss://127.0.0.1:1")),
+                             QUrl(QStringLiteral("wss://127.0.0.1:2"))},
+                            StationClient::kMaxIncomingMessageBytes);
+        racer.cancel(QStringLiteral("the session ended"));
+        const QString joined = log.lines.join(QLatin1Char('\n'));
+        QVERIFY2(log.has(QStringLiteral(
+                     "Race canceled (the session ended) with 2 attempt(s) still open: "
+                     "127.0.0.1:1, 127.0.0.1:2")), qPrintable(joined));
+
+        // Canceled again, or once everything has ended: no second line.
+        log.lines.clear();
+        racer.cancel(QStringLiteral("stopped"));
+        QVERIFY2(!log.has(QStringLiteral("Race canceled")), qPrintable(log.lines.join(QLatin1Char('\n'))));
+    }
+
+    // JJ's entry against every path a session can be on. A search admits
+    // exactly the addresses that rank below the session's path; each
+    // service path admits all three. The this-network and direct rows
+    // depend on this computer's interfaces (192.0.2.106 is this
+    // network only where an interface holds that subnet), which is why
+    // their expectation comes from rankFor.
+    void anUpgradeAdmitsWhatBeatsEachCurrentPath_data()
+    {
+        QTest::addColumn<int>("rank");
+        QTest::newRow("this network") << int(PathRacer::ThisNetwork);
+        QTest::newRow("direct") << int(PathRacer::Direct);
+        QTest::newRow("service direct") << int(PathRacer::ServiceDirect);
+        QTest::newRow("TURN relay") << int(PathRacer::ServiceRelayed);
+        QTest::newRow("web relay") << int(PathRacer::Floor);
+    }
+    void anUpgradeAdmitsWhatBeatsEachCurrentPath()
+    {
+        QFETCH(int, rank);
+        const QList<QUrl> entry{
+            QUrl(QStringLiteral("wss://[2001:db8:1:2::4602]:47910")),
+            QUrl(QStringLiteral("wss://[2001:db8:1:2::15f2]:47910")),
+            QUrl(QStringLiteral("wss://192.0.2.106:47910"))};
+        PathRacer racer;
+        racer.setBetterThan(rank);
+        racer.addDirectUrls(entry + entry, StationClient::kMaxIncomingMessageBytes);
+        QStringList expected;
+        for (const QUrl& url : entry) {
+            if (PathRacer::rankFor(url) < rank) {
+                expected.append(url.port() > 0 ? QStringLiteral("%1:%2").arg(
+                    url.host().contains(QLatin1Char(':')) ? QLatin1Char('[') + url.host() + QLatin1Char(']')
+                                                          : url.host()).arg(url.port())
+                                               : url.host());
+            }
+        }
+        QStringList admitted;
+        for (const auto& [address, delay] : racer.plannedStartsForTest()) {
+            admitted.append(address);
+        }
+        QCOMPARE(admitted, expected);
+        if (rank >= PathRacer::ServiceDirect) {
+            QCOMPARE(admitted.size(), 3);
+        }
+    }
+
+    // The same entry shape with a Core on this computer: the IPv6
+    // addresses refuse at once and the IPv4 one is closed. The first race
+    // after a start and each better-path search while the session runs on
+    // the web relay plan the entry's own address, 250 ms after the IPv6
+    // ones, even after it failed in the race before, and no such search
+    // reports "No path" before that address's turn.
+    void aWebRelaySessionsSearchesPlanTheEntryAddress()
+    {
+        LocalService service;
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
+        Core core;
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        Window window(core);
+        MediaIcePath webRelay;
+        webRelay.localType = QStringLiteral("host");
+        webRelay.remoteType = QStringLiteral("host");
+        webRelay.localAddress = QStringLiteral("127.0.0.1");
+        webRelay.remoteAddress = QStringLiteral("127.0.0.1");
+        webRelay.ownedLoopbackShim = true;
+        DataChannelTransport::setSelectedPathOverrideForTest(
+            [webRelay](const DataChannelTransport*) { return std::optional<MediaIcePath>(webRelay); });
+        const auto clearOverride = qScopeGuard([] { DataChannelTransport::setSelectedPathOverrideForTest({}); });
+
+        const quint16 v4Port = closedPort();
+        const QUrl v4(QStringLiteral("wss://127.0.0.1:%1").arg(v4Port));
+        const QUrl v6a(QStringLiteral("wss://[::1]:%1").arg(closedPort()));
+        const QUrl v6b(QStringLiteral("wss://[::1]:%1").arg(closedPort()));
+        const QString v4Line = QStringLiteral("127.0.0.1:%1").arg(v4Port);
+        StationClient::ServiceRoute route;
+        route.servers = {service.url()};
+        route.rendezvousId = rendezvous.client()->stationId();
+        route.relayAllowed = true;
+        route.controlChannelVersion = 1;
+        // As RemoteConnectionController's source gives it for this entry:
+        // directCandidates (last good + learned), last good, learned.
+        window.route(service, rendezvous.client()->stationId());
+        window.client->setCandidateSource([=]() -> std::optional<StationClient::ConnectionCandidates> {
+            return StationClient::ConnectionCandidates{{v6a, v6b, v4}, route};
+        });
+        window.client->setUpgradeScheduleForTest({300});
+
+        RacePlans plans;
+        plans.client = window.client.get();
+        s_plans = &plans;
+        s_previousHandler = qInstallMessageHandler(capturePlans);
+        const auto restore = qScopeGuard([] {
+            qInstallMessageHandler(s_previousHandler);
+            s_previousHandler = nullptr;
+            s_plans = nullptr;
+        });
+
+        window.client->connectToStation(v4, QString(), QString(), false, identityOf(core));
+        QString why;
+        QVERIFY2(waitForHandshake(*window.client, kServiceConnectBudgetMs, &why), qPrintable(why));
+        QVERIFY(!plans.first.isEmpty());
+        const auto first = plans.first.first();
+        QCOMPARE(delayFor(first, v4Line), PathRacer::kIpv4DelayMs);
+        QCOMPARE(delayFor(first, QStringLiteral("[::1]:%1").arg(v6a.port())), 0);
+        QCOMPARE(delayFor(first, QStringLiteral("[::1]:%1").arg(v6b.port())), 0);
+
+        // The GUI hands the window the entry's last good + learned
+        // addresses after the sign-in (GuiConnectionController.cpp:1030-1035).
+        window.client->setCachedAddresses({v6a, v6b, v4});
+        QTRY_VERIFY_WITH_TIMEOUT(plans.upgrades.size() >= 2, 20000);
+        QCOMPARE(window.client->pathRank(), int(PathRacer::Floor));
+        // A search that holds an IPv6 address and the IPv4 one cannot end
+        // before the IPv4 rung's turn: its failure comes 250 ms or more after
+        // "Looking for a better path", never within a few milliseconds.
+        // A coarse QTimer may fire up to 5% early.
+        constexpr qint64 kEarliestFailMs = PathRacer::kIpv4DelayMs * 19 / 20;
+        QVERIFY(!plans.upgradeFailMs.isEmpty());
+        for (const qint64 ms : std::as_const(plans.upgradeFailMs)) {
+            QVERIFY2(ms >= kEarliestFailMs, qPrintable(QString::number(ms)));
+        }
+        for (const auto& upgrade : std::as_const(plans.upgrades)) {
+            QCOMPARE(delayFor(upgrade, v4Line), PathRacer::kIpv4DelayMs);
+            QCOMPARE(delayFor(upgrade, QStringLiteral("[::1]:%1").arg(v6a.port())), 0);
+            QCOMPARE(delayFor(upgrade, QStringLiteral("[::1]:%1").arg(v6b.port())), 0);
+        }
+        window.client->disconnectFromStation(QStringLiteral("test done"));
+    }
+
+    // libjuice may report no selected pair when the service's connection
+    // opens. Such a pair is not ranked as direct ICE: a better-path search
+    // still tries ICE through the service (without the relay). A known
+    // host pair is direct ICE already, and its searches leave the service
+    // out.
+    void anUnknownIcePairRanksWorseThanServiceDirect()
+    {
+        QVERIFY(PathRacer::rankForPath(std::nullopt) > int(PathRacer::ServiceDirect));
+        MediaIcePath host;
+        host.localType = QStringLiteral("host");
+        host.remoteType = QStringLiteral("host");
+        host.localAddress = QStringLiteral("127.0.0.1");
+        host.remoteAddress = QStringLiteral("127.0.0.1");
+        QCOMPARE(PathRacer::rankForPath(host), int(PathRacer::ServiceDirect));
+    }
+
+    // The session's own path: a host pair, no pair known, or the TURN
+    // relay. Every better-path search's ICE rung opens before its own pair
+    // is known; it takes no relay, so it is direct ICE through the
+    // service, and a session not known to be on it moves there once.
+    void aServiceSessionSearchesIceWhileItsPairIsUnknown_data()
+    {
+        QTest::addColumn<int>("first");
+        QTest::newRow("no selected pair") << int(FirstPair::Unknown);
+        QTest::newRow("host pair") << int(FirstPair::Host);
+        QTest::newRow("TURN relay") << int(FirstPair::Relayed);
+    }
+
+    void aServiceSessionSearchesIceWhileItsPairIsUnknown()
+    {
+        QFETCH(int, first);
+        LocalService service;
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
+        Core core;
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        Window window(core);
+        RacePlans plans;
+        plans.client = window.client.get();
+        MediaIcePath host;
+        host.localType = QStringLiteral("host");
+        host.remoteType = QStringLiteral("host");
+        host.localAddress = QStringLiteral("127.0.0.1");
+        host.remoteAddress = QStringLiteral("127.0.0.1");
+        MediaIcePath turn = host;
+        turn.localType = QStringLiteral("relay");
+        // The first connection's own pair; no pair known for any later one
+        // (the search's own connection included).
+        std::atomic<const DataChannelTransport*> firstTransport{nullptr};
+        DataChannelTransport::setSelectedPathOverrideForTest(
+            [host, turn, first, &firstTransport](const DataChannelTransport* transport) -> std::optional<MediaIcePath> {
+                if (first == int(FirstPair::Host)) {
+                    return host;
+                }
+                const DataChannelTransport* expected = nullptr;
+                firstTransport.compare_exchange_strong(expected, transport);
+                if (first == int(FirstPair::Relayed) && firstTransport.load() == transport) {
+                    return turn;
+                }
+                return std::nullopt;
+            });
+        const auto clearOverride = qScopeGuard([] { DataChannelTransport::setSelectedPathOverrideForTest({}); });
+
+        const QUrl v4(QStringLiteral("wss://127.0.0.1:%1").arg(closedPort()));
+        StationClient::ServiceRoute route;
+        route.servers = {service.url()};
+        route.rendezvousId = rendezvous.client()->stationId();
+        route.relayAllowed = true;
+        route.controlChannelVersion = 1;
+        window.route(service, rendezvous.client()->stationId());
+        window.client->setCandidateSource([=]() -> std::optional<StationClient::ConnectionCandidates> {
+            return StationClient::ConnectionCandidates{{v4}, route};
+        });
+        window.client->setUpgradeScheduleForTest({300});
+
+        s_plans = &plans;
+        s_previousHandler = qInstallMessageHandler(capturePlans);
+        const auto restore = qScopeGuard([] {
+            qInstallMessageHandler(s_previousHandler);
+            s_previousHandler = nullptr;
+            s_plans = nullptr;
+        });
+
+        window.client->connectToStation(v4, QString(), QString(), false, identityOf(core));
+        QString why;
+        QVERIFY2(waitForHandshake(*window.client, kServiceConnectBudgetMs, &why), qPrintable(why));
+        QVERIFY(window.client->connectedUrl().isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(plans.upgradeFailMs.size() >= 2, 20000);
+        QCOMPARE(plans.upgradeServiceAllowsRelay.size(), plans.upgrades.size());
+        const bool moves = first != int(FirstPair::Host);
+        for (qsizetype index = 0; index < plans.upgradeServiceAllowsRelay.size(); ++index) {
+            const auto& allowsRelay = plans.upgradeServiceAllowsRelay.at(index);
+            if (moves && index == 0) {
+                // The search from the first path: ICE through the service,
+                // without the relay.
+                QVERIFY(allowsRelay.has_value());
+                QVERIFY(!*allowsRelay);
+            } else {
+                // From direct ICE through the service: the service is no
+                // better.
+                QVERIFY2(!allowsRelay.has_value(), qPrintable(QString::number(index)));
+            }
+        }
+        QCOMPARE(window.client->pathSwitches(), moves ? 1 : 0);
+        QCOMPARE(window.client->pathRank(), int(PathRacer::ServiceDirect));
+        QVERIFY(!window.client->pathPairUnknown());
+        window.client->disconnectFromStation(QStringLiteral("test done"));
+    }
+
+    // The guards that keep a pair not known yet from reading as the relay:
+    // the heartbeat keeps the direct interval, and a known relay takes the
+    // relayed one.
+    void anUnknownPairKeepsTheDirectHeartbeat()
+    {
+        Core core;
+        Window window(core);
+        constexpr int kIntervalMs = 10000;
+        window.client->setHeartbeatIntervalMs(kIntervalMs);
+        window.client->setPathRankForTest(PathRacer::ServiceRelayed, /*pairUnknown=*/true);
+        QCOMPARE(window.client->effectiveHeartbeatIntervalMs(), kIntervalMs);
+        window.client->setPathRankForTest(PathRacer::ServiceRelayed, /*pairUnknown=*/false);
+        QCOMPARE(window.client->effectiveHeartbeatIntervalMs(),
+                 StationClient::kRelayedHeartbeatIntervalMs);
+        window.client->setPathRankForTest(PathRacer::ServiceDirect, /*pairUnknown=*/false);
+        QCOMPARE(window.client->effectiveHeartbeatIntervalMs(), kIntervalMs);
+    }
+
+    // The live sequence of 2026-10-15 10:11-10:12: the first race and its
+    // first retry fail (the service not reachable then), the window's own
+    // reconnect retry reaches the Core through the service ("Remote access
+    // service (no direct Core address)": race mode, no direct winner), and
+    // the GUI then hands over the entry's last good + learned addresses.
+    // Every better-path search of that session still admits the entry's
+    // IPv4 address and does not fail before its turn.
+    void theRetrySessionThroughTheServiceSearchesTheEntryAddress()
+    {
+        LocalService service;
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
+        Core core;
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        Window window(core);
+        window.client->setReconnectBackoffUnitMs(50);
+        window.client->setUpgradeScheduleForTest({300});
+
+        const quint16 v4Port = closedPort();
+        const QUrl v4(QStringLiteral("wss://127.0.0.1:%1").arg(v4Port));
+        const QUrl v6a(QStringLiteral("wss://[::1]:%1").arg(closedPort()));
+        const QUrl v6b(QStringLiteral("wss://[::1]:%1").arg(closedPort()));
+        const QString v4Line = QStringLiteral("127.0.0.1:%1").arg(v4Port);
+        StationClient::ServiceRoute route;
+        route.servers = {service.url()};
+        route.rendezvousId = rendezvous.client()->stationId();
+        route.relayAllowed = true;
+        route.controlChannelVersion = 1;
+        // As RemoteConnectionController's source gives this entry: its
+        // direct candidates (last good + learned), last good, learned. The
+        // first two races find no service.
+        auto calls = std::make_shared<int>(0);
+        window.client->setCandidateSource([=]() -> std::optional<StationClient::ConnectionCandidates> {
+            ++*calls;
+            StationClient::ConnectionCandidates candidates;
+            candidates.addresses = {v6a, v6b, v4, v6a, v6b, v4, v6a, v6b};
+            if (*calls > 2) {
+                candidates.service = route;
+            }
+            return candidates;
+        });
+
+        RacePlans plans;
+        plans.client = window.client.get();
+        s_plans = &plans;
+        s_previousHandler = qInstallMessageHandler(capturePlans);
+        const auto restore = qScopeGuard([] {
+            qInstallMessageHandler(s_previousHandler);
+            s_previousHandler = nullptr;
+            s_plans = nullptr;
+        });
+
+        QSignalSpy ended(window.client.get(), &StationClient::sessionEnded);
+        window.client->connectToStation(v4, QString(), QString(), false, identityOf(core));
+        // waitForHandshake() gives up at a session's end; here two end first.
+        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), kServiceConnectBudgetMs);
+        QCOMPARE(ended.size(), 2);
+        QVERIFY(*calls >= 3);
+        // "no direct Core address": the service won, in race mode.
+        QVERIFY(window.client->connectedUrl().isEmpty());
+        QVERIFY(window.client->pathRank() >= int(PathRacer::ServiceDirect));
+        QCOMPARE(plans.first.size(), 3);
+        for (const auto& race : std::as_const(plans.first)) {
+            QCOMPARE(delayFor(race, v4Line), PathRacer::kIpv4DelayMs);
+        }
+
+        // rememberAuthenticatedRadio: last good (IPv6 x2 + IPv4), then
+        // learned (IPv6 x2), repeats removed.
+        window.client->setCachedAddresses({v6a, v6b, v4});
+        QTRY_VERIFY_WITH_TIMEOUT(plans.upgradeFailMs.size() >= 2, 20000);
+        constexpr qint64 kEarliestFailMs = PathRacer::kIpv4DelayMs * 19 / 20;
+        for (const auto& upgrade : std::as_const(plans.upgrades)) {
+            QCOMPARE(delayFor(upgrade, v4Line), PathRacer::kIpv4DelayMs);
+        }
+        for (const qint64 ms : std::as_const(plans.upgradeFailMs)) {
+            QVERIFY2(ms >= kEarliestFailMs, qPrintable(QString::number(ms)));
+        }
+        window.client->disconnectFromStation(QStringLiteral("test done"));
+    }
+
     // ── A window and a Core on this computer ──────────────────────────
 
     // Every path open: the Core's address wins, and the service's path is
@@ -510,8 +1108,18 @@ private slots:
         }
         QVERIFY(window.client->pathRank() == int(PathRacer::ServiceDirect)
                 || window.client->pathRank() == int(PathRacer::ServiceRelayed));
+#ifdef Q_OS_WIN
+        // Windows takes about 2 s to refuse a closed localhost port, so the
+        // service's path can win first and the address is stopped.
+        QVERIFY2(window.outcomeFor(StationConnectionAttempt::Path::ThisNetwork)
+                         == StationConnectionAttempt::Outcome::NoAnswer
+                     || window.outcomeFor(StationConnectionAttempt::Path::ThisNetwork)
+                            == StationConnectionAttempt::Outcome::AnotherPathFirst,
+                 qPrintable(window.client->connectionAttempt().summary()));
+#else
         QCOMPARE(window.outcomeFor(StationConnectionAttempt::Path::ThisNetwork),
                  StationConnectionAttempt::Outcome::NoAnswer);
+#endif
         QVERIFY2(window.hasOutcome(StationConnectionAttempt::Outcome::Connected),
                  qPrintable(window.client->connectionAttempt().summary()));
         QCOMPARE(handshakes.size(), 1);

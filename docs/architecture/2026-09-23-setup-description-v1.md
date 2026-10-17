@@ -1,4 +1,4 @@
-# Setup description versions 1–24
+# Setup description versions 1–28
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -165,16 +165,19 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 24. PA has a version-20 ceiling (version 14
+future declaration at version 28. PA has a version-20 ceiling (version 14
 for V14–V19, version 13 for V13, version 5 for V5–V12) and Hardware a version-23 ceiling
 (version 18 for V18–V22, version 17
 for V17, version 16 for V16, version 13
-for V13–V15, version 6 for V6–V12; see Versions 16, 17, 18 and 23); Display a version-12 ceiling, and
-Appearance a version-12 ceiling with its prior version-4 projection for
+for V13–V15, version 6 for V6–V12; see Versions 16, 17, 18 and 23); Display a version-28 ceiling
+(version 26 for V26–V27, version 12 for V12–V25; see Versions 26 and 28), and
+Appearance a version-27 ceiling (version 12 for V12–V26; see Version 27)
+with its prior version-4 projection for
 V4–V6 and version-7 projection for V7–V11. DSP is version 22 to a V22 or
 later peer (see Version 22), version 19 to a V19 to V21 peer (see Version 19)
-and version 15 to a V15 to V18 peer; Audio is version 24 to a V24 or later
-peer (see Version 24) and version 15 to a V15 to V23 peer; Transmit and
+and version 15 to a V15 to V18 peer; Audio is version 25 to a V25 or later
+peer (see Version 25), version 24 to a V24 peer (see Version 24) and version
+15 to a V15 to V23 peer; Transmit and
 Diagnostics are version 15 to a V15 or later peer (see Version 15); CAT & Network is version
 21 to a V21 or later peer (see Version 21) and version 15 to a V15 to V20
 peer; Transmit is version 13 to a V13 or V14 peer and version 3 to
@@ -409,7 +412,11 @@ Three closed fields are new in version 12. `enabledWhen:{"phone":<key>,
 description holds one of the values (Normalize: spectrum detector 2, 3 or 4;
 the waterfall thresholds, AGC and NF-AGC rows: Use spectrum min/max false;
 the grid NF offset and Maintain grid range: Adjust grid min true); the
-desktop disables the same rows. `perBand:{"label":<template>}` marks a row
+desktop disables the same rows. Version 26 adds a second closed form of the
+same field, `enabledWhen:{"allOf":[{"phone":<key>,"oneOf":[<values>]}, ...]}`,
+which enables a row only while every term holds, and moves the waterfall
+level rows to it (see Version 26); a V12 to V25 peer keeps the single form
+above. `perBand:{"label":<template>}` marks a row
 the desktop keeps once per band: the value is stored under
 `<binding.phone>_<band>` for the pan's current band (160m, 80m, 60m, 40m,
 30m, 20m, 17m, 15m, 12m, 10m, 6m, GEN, WWV or XVTR; the band of the pan's
@@ -428,7 +435,9 @@ A `kind:"button"` row with a `binding.phone` is a phone action. It has no
 value or default and acts on the pan the page is editing, exactly as the
 desktop's button acts on its active pan, in a local or a remote window:
 `smoothDefaults` sets Color Scheme to Clarity Blue (7), Spectrum Averaging to
-Log Recursive (3), Trace & Fill Color to `#FFFFFFE6`, Fill under trace off,
+Log Recursive (3), Fill Color (`DisplayFillColor`, Trace & Fill Color before
+version 27) to `#FFFFFFE6`, Trace Color (`DisplayTraceColor`) to the same
+white so that a trace color chosen earlier does not stay, Fill under trace off,
 waterfall AGC on and Update Period 30 ms; `getMonitorHz` sets FPS to the
 screen's refresh rate rounded and held to 10–60, as an edit of the FPS row
 (the same availability); `copySpectrumMinMax` sets High Threshold to the
@@ -436,7 +445,8 @@ pan's spectrum top and Low Threshold to its bottom; `copyWaterfallThresholds`
 sets the current band's dB Max and dB Min to the waterfall High and Low
 Threshold, rounded; `reset3d` sets the six 3D rows to their defaults (3D
 Floor for the current band); `resetColors` sets the ten Colors & Theme
-swatches to their defaults. No action writes a Core setting except
+swatches to their defaults (a chosen Trace Color stays, as on the desktop).
+No action writes a Core setting except
 `getMonitorHz` through the FPS row.
 
 Not described, with the reason: Line Width (the phone has its own line
@@ -1168,6 +1178,210 @@ Two changes follow the connected radio and reach every peer from version
 
 A V15 to V23 peer receives Audio at version 15. This version adds no mirror
 field, ordinal or verb; the Core caps a declaration at 24.
+
+Version 25 (R-SPK-23) follows the desktop's Audio regroup. The page id
+`audio.txInput` is kept, titled `Microphone`, and its first section (Mic
+Gain alone) is titled `Mic gain`, as on the desktop. A new page,
+`audio.outputs`, titled `Outputs`, `where:"station"`, between Microphone
+and TX Profile, holds one section, `Radio speaker`: the radio speaker at
+the Core, the rows of the desktop Outputs page with the same
+`nereusSetupId`s. Its three rows are closed (the Core accepts exactly these
+rows, `validateAudioV25Control`), each with `applies:"live"`,
+`requiresDescriptionVersion:25` and the gate
+`{"capability":"radioSpeakerVersion","min":1}`, so a peer that did not
+declare `radioSpeaker` 1 shows them unavailable:
+
+- `audio.outputs.radioSpeakerVolume`, "Volume:", a `slider` from 0 to 100
+  in steps of 1, bound to `{"property":{"object":"radio","name":"radioSpeakerVolume"}}`.
+- `audio.outputs.radioSpeakerMuted`, "Mute radio speaker", a `toggle` bound
+  to `radio`'s `radioSpeakerMuted`.
+- `audio.outputs.speakerAmplifierMode`, "Speaker amplifier:", a `choice`
+  of Normal (0), Off while transmitting (1) and Always off (2), bound to
+  `radio`'s `speakerAmplifierMode`, with
+  `"enabledWhen":{"property":{"object":"radio","name":"speakerAmplifierAvailable"},"oneOf":[true]}`:
+  the row is enabled while the Core reports the amplifier available.
+
+The two level rows carry the tooltip "Radio speaker at the Core (shared
+with every window and the phone)", a remote window's; the choice has none.
+In Audio the Core accepts a `radio` binding only to these three
+properties, each writable on `RadioModel`, Bidirectional in `MirrorPolicy`
+and of its row's kind; the two read-only reports
+(`radioSpeakerAvailability`, `speakerAmplifierAvailable`) and every other
+`radio` property are refused. Audio's category coverage names the new pages
+(`coverageV25`, sent as `coverage` from 25). A V24 peer receives Audio at
+version 24 exactly as before: no Outputs page, TX Input and PC Mic titles,
+the earlier coverage. This version adds no mirror field, ordinal or verb
+(the properties and the capability are the station link's radio speaker
+lane); the Core caps a declaration at 25.
+
+Version 26 gates Display > Waterfall Defaults' level rows as the desktop
+page greys them: Clarity sets the waterfall levels while it is on, Use
+spectrum min/max sets them while it is on, and NF-AGC is an option under
+AGC. It adds one closed form of `enabledWhen`, beside version 12's single
+form:
+
+```json
+"enabledWhen": {"allOf": [{"phone": <key>, "oneOf": [<values>]}, ...]}
+```
+
+A row with it is enabled only while every term holds. A term is version
+12's single form: the named phone key of this description holds one of the
+values. `allOf` is the object's only key, it has at least one term, a term
+has `phone` and `oneOf` and nothing else, and a term is never itself an
+`allOf`. The form exists only on the Display rows below; the Core accepts
+exactly these rows (`validateDisplayPhoneBinding`, the closed version 26
+table) and a renderer treats any other shape as invalid metadata: the row
+stays visible and unavailable.
+
+Six rows move from `requiresDescriptionVersion:12` to 26. Their ids, labels,
+tooltips, kinds, phone keys, ranges, units, defaults, `applies` and gates
+are version 12's; only `enabledWhen` changes:
+
+| Row | Phone key | Enabled while |
+| --- | --- | --- |
+| `display.waterfallDefaults.highThreshold` | `DisplayWfHighLevel` | `allOf`: `ClarityEnabled` one of `[false]`, `DisplayWfUseSpectrumMinMax` one of `[false]` |
+| `display.waterfallDefaults.lowThreshold` | `DisplayWfLowLevel` | the same two terms |
+| `display.waterfallDefaults.agc` | `DisplayWfAgc` | the same two terms |
+| `display.waterfallDefaults.nfAgc` | `WaterfallNFAGCEnabled` | `allOf`: those two terms, then `DisplayWfAgc` one of `[true]` |
+| `display.waterfallDefaults.nfAgcOffset` | `WaterfallAGCOffsetDb` | the same three terms |
+| `display.waterfallDefaults.useSpectrumMinMax` | `DisplayWfUseSpectrumMinMax` | single form: `ClarityEnabled` one of `[false]` |
+
+The terms are in this order. Version 12 gave the first five rows the single
+form on `DisplayWfUseSpectrumMinMax` and Use spectrum min/max none. The
+description carries no note text for a greyed row; a renderer words its own.
+
+A seventh row, `display.spectrumDefaults.smoothDefaults` (Reset to Smooth
+Defaults), also moves from 12 to 26, for its two sentences only. The button
+sets every panadapter's defaults, and a panadapter adjusted from its Display
+panel keeps its own settings; version 12's `tooltip` and `confirm` said it
+overwrote one panadapter. At 26 the `tooltip` is "Set every panadapter's
+default spectrum and waterfall look to the NereusSDR smooth profile: Clarity
+Blue palette, log-recursive averaging with a 650 ms averaging time, a white
+trace without fill, waterfall AGC on and a 30 ms waterfall update period. A
+panadapter you have adjusted from its Display panel keeps its own settings.
+FFT size, frequency, band stack, and per-band grid ranges are not affected."
+and `confirm` is the desktop's question
+(`SpectrumDefaultsPage::smoothDefaultsQuestion`). Its id, label, kind,
+action and `applies` are version 12's.
+
+An eighth row, `display.spectrumDefaults.clarity` (Enable Clarity), also
+moves from 12 to 26, for its `tooltip` only. Version 12's described a
+percentile estimator and thresholds held at their last values, which is not
+what Clarity does now. At 26 the `tooltip` is "Clarity keeps the waterfall's black point just above the noise floor as band conditions and tuning change. Black Level and Color Gain set how far above the noise the waterfall starts and how much range it shows. When Clarity is off, Low and High set the levels." Its id, label, kind,
+phone key, default, `applies` and gate are version 12's.
+
+Display is version 26 to a V26 or V27 peer (version 28 to a later one; see
+Version 28). A V12 to V25 peer receives
+Display at version 12 exactly as before: the Core sends it the version 12
+form of the eight rows (its closed version 12 table), so nothing a V25 peer
+reads changes, and a V11 or earlier peer still receives none of them. The
+other 92 Display rows and every other category are unchanged. This version
+adds no mirror field, ordinal, verb or capability; the Core capped a
+declaration at 26 until version 27.
+
+Version 27 gives Appearance > Colors & Theme a Trace Color row beside Fill
+Color, as the desktop page has two pickers. The Spectrum section's first two
+rows are:
+
+| Row | Label | Phone key | `requiresDescriptionVersion` | Default |
+| --- | --- | --- | --- | --- |
+| `appearance.colorsTheme.traceColor` | `Trace Color:` | `DisplayTraceColor` | 27 | `#00E5FFFF` |
+| `appearance.colorsTheme.traceFillColor` | `Fill Color:` | `DisplayFillColor` | none, as before | `#00E5FFFF` |
+
+Both are `kind:"colour"`, `applies:"live"`, with the desktop page's tooltips:
+"Click to choose the spectrum trace line color. Until you choose one, the
+trace uses the fill color." and "Click to choose the spectrum fill color. The
+color picker lets you adjust alpha for the fill opacity." Trace Color is one
+exact closed row (`validateAppearanceColourBinding`); the Core accepts no
+other row at 27. The trace line has no colour of its own until one is chosen
+and is drawn in the fill's colour until then (`SpectrumWidget::traceColor()`),
+so the row's default is the fill's and a renderer shows and draws
+`DisplayFillColor` while it keeps no `DisplayTraceColor`. The fill is always
+drawn from `DisplayFillColor`.
+
+Appearance is version 27 to a V27 or later peer. A V12 to V26 peer receives
+Appearance at version 12 exactly as before: no Trace Color row, and the one
+`appearance.colorsTheme.traceFillColor` row with its earlier label
+`Trace & Fill Color:` and tooltip "Click to choose the spectrum trace line
+and fill color. The color picker lets you adjust alpha for the fill
+opacity." (the Core's closed copy of that row), so nothing such a peer reads
+changes. The other nine swatches, Reset all colors, Meter Styles and every
+other category are unchanged. This version adds no mirror field, ordinal,
+verb or capability; the Core capped a declaration at 27 until version 28.
+
+Version 28 describes the FFT sizing mode (pill design D38, D46), as
+Setup > Display > Spectrum Defaults has it on the desktop. The Fast Fourier
+Transform section now reads Sizing, Size, Hz/bin Target, Window, and five
+Display rows need version 28:
+
+| Row | Label | Bound to | What 28 changes |
+| --- | --- | --- | --- |
+| `display.spectrumDefaults.fftSizing` | `Sizing` | station setting `DisplayFftSizingMode` | new |
+| `display.spectrumDefaults.fftSize` | `Size` | station setting `DisplayFftSize` | `enabledWhen` |
+| `display.spectrumDefaults.hzPerBinTarget` | `Hz/bin Target` | station setting `DisplayHzPerBinTarget` | `min`, `default`, `tooltip`, `enabledWhen` |
+| `display.spectrumDefaults.averageTime` | `Spectrum Avg Time:` | phone key `DisplaySpectrumAverageTimeMs` | `min`, `step` |
+| `display.waterfallDefaults.averageTime` | `WF Avg Time:` | phone key `DisplayWaterfallAverageTimeMs` | `min`, `step` |
+
+Sizing is `kind:"choice"`, `applies:"subscription"`, with the tooltip "How the FFT size is chosen. Auto: the zoom picks the size to keep the picture sharp. Hz/bin: the size follows the bin width you set. Fixed: the FFT Size slider sets the size and zoom does not change it." The
+setting holds a word, not a number, so the row carries `options` with text
+values, the form the command-bound rows already use (see `options` under
+Version 15), and a text `default`:
+
+```json
+"options": [{"value": "Auto", "label": "Auto"},
+            {"value": "HzPerBin", "label": "Hz/bin"},
+            {"value": "Fixed", "label": "Fixed"}],
+"default": "Auto"
+```
+
+This is the one addition to the format: a `choice` bound to a station
+`setting` may carry text-valued `options`, and then the chosen option's
+`value` is written to the setting as that text and the stored text selects
+the option. It is closed to this row. With the key never written, the mode
+is read from the target (`DisplayHzPerBinTarget` above 0 is `HzPerBin`,
+anything else `Auto`; design D40), and a renderer applies that rule before
+it shows the row or evaluates a gate on it.
+
+Size and Hz/bin Target carry the single form of `enabledWhen` on that
+station setting, with the stored word as the value:
+`"enabledWhen":{"setting":"DisplayFftSizingMode","oneOf":["Fixed"]}` on Size
+and `"enabledWhen":{"setting":"DisplayFftSizingMode","oneOf":["HzPerBin"]}`
+on Hz/bin Target. The desktop grays the same two rows. Size keeps its seven
+options, label, tooltip and default. Hz/bin Target is a bin width from one
+step up: `min` 0.5 (0 no longer means "Off"; the Sizing choice says whether
+a target is in force), `max` 200, `step` 0.5, `decimals` 2, and the tooltip
+"The bin width to hold at every zoom. The FFT size follows it: sample rate divided by bin width, rounded up to a power of two, within the size limits." Its
+`default` is 200, the coarsest target, which the desktop falls back to when
+it has neither a remembered target nor a running bin width; the row is live
+only in Hz/bin, where the station always holds a target above 0. The stored
+`DisplayHzPerBinTarget` is still 0 outside Hz/bin (design D39), so a
+renderer showing the grayed row takes its number from the station's
+remembered target (`DisplayHzPerBinLastTarget`) or the running bin width,
+not from the 0. A writer that knows the mode writes the mode first and the
+target second.
+
+The two averaging times run from 1 ms in steps of 1 (`min` 1, `step` 1), as
+the desktop's boxes do; `max` 9999 and the defaults 30 and 120 are
+unchanged. The Core takes an averaging time from 1 ms in a display request
+as well.
+
+The Core accepts exactly these five rows at 28 (its closed version 28
+table; `validateDisplaySettingBinding` for the three station rows,
+`validateDisplayPhoneBinding` for the two averaging times) and the resource
+may hold no other form of them.
+
+Display is version 28 to a V28 or later peer. A V26 or V27 peer receives
+Display at version 26 exactly as before, byte for byte: no Sizing row, the
+four other rows in the form they had (the Core's closed copy: Size without a
+gate at `requiresDescriptionVersion` 4, Hz/bin Target from 0 with its earlier
+tooltip and default 0, the averaging times from 10 in steps of 10 at
+`requiresDescriptionVersion` 8), and the section in its earlier order (Size,
+Window, Hz/bin Target). A V12 to V25 peer receives version 12 and an older
+peer its own version, likewise unchanged. Such a peer's Hz/bin Target still
+works: a write of `DisplayHzPerBinTarget` moves the mode on the Core (design
+D41). The other 96 Display rows and every other category are unchanged.
+This version adds no mirror field, ordinal, verb or capability; the Core
+caps a declaration at 28.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

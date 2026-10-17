@@ -7,6 +7,18 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - A floating window is never wider or taller than all the
+//                 screens together: fittedSize bounds a size to that
+//                 (restoreGeometry and the height put back after a
+//                 collapse go through it), and the window's maximum size
+//                 is kept at it (refreshDesktopLimit). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - ensureVisiblePosition reads the screens through a
+//                 ScreenSource and says whether it moved the form, by J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-07 - Workspace preview: the floating shell paints the palette's
+//                 panel surface by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-10-04 — Application quit accepts structured form closure without
 //                 arrangement by J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-02 — Atomic container arrangement and reserved chrome by J.J. Boyd
@@ -60,13 +72,14 @@ mw0lge@grange-lane.co.uk
 
 #include "FloatingContainer.h"
 #include "ContainerWidget.h"
+#include "ScreenSource.h"
 #include "gui/GuiApplication.h"
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
+#include "gui/styles/WorkspacePreview.h"
+#include "gui/styles/WorkspaceStyle.h"
 
 #include <QCloseEvent>
-#include <QGuiApplication>
-#include <QScreen>
 #include <QVBoxLayout>
 
 namespace NereusSDR {
@@ -78,6 +91,12 @@ FloatingContainer::FloatingContainer(int rxSource, QWidget* parent)
     setMinimumSize(ContainerWidget::kMinContainerWidth,
                    ContainerWidget::kMinContainerHeight);
     setStyleSheet(QStringLiteral("background: #0f0f1a;"));
+    if (WorkspacePreview::enabled()) {
+        // Workspace preview: an opaque surface behind the container's plate,
+        // so nothing beneath the window shows through its corners.
+        setStyleSheet(QStringLiteral("background: %1;")
+                          .arg(Workspace::role("panel", "#0f0f1a")));
+    }
     updateTitle();
     qCDebug(lcContainer) << "FloatingContainer created for RX" << rxSource;
 }
@@ -139,7 +158,7 @@ void FloatingContainer::onOwnerMinimisedChanged(bool minimised)
         resize(width(), collapsed);
     } else {
         if (m_unminimisedHeight > 0) {
-            resize(width(), m_unminimisedHeight);
+            resize(fittedSize(QSize(width(), m_unminimisedHeight)));
         }
         m_unminimisedHeight = 0;
     }
@@ -213,7 +232,45 @@ void FloatingContainer::restoreGeometry()
     int w = parts[2].toInt(&ok3);
     int h = parts[3].toInt(&ok4);
     if (ok1 && ok2 && ok3 && ok4) {
-        setGeometry(x, y, w, h);
+        // A saved size is never larger than all the screens together.
+        setGeometry(QRect(QPoint(x, y), fittedSize(QSize(w, h))));
+    }
+}
+
+void FloatingContainer::setScreenSource(const ScreenSource* screens)
+{
+    m_screens = screens;
+    refreshDesktopLimit();
+}
+
+QSize FloatingContainer::sizeWithin(const QSize& size, const QSize& limit, const QSize& minimum)
+{
+    if (!limit.isValid()) {
+        return size.expandedTo(minimum);
+    }
+    return size.boundedTo(limit).expandedTo(minimum);
+}
+
+QSize FloatingContainer::fittedSize(const QSize& wanted) const
+{
+    const ScreenSource* source = m_screens ? m_screens : ScreenSource::system();
+    // With no screen at all there is nothing to fit to.
+    return sizeWithin(wanted, source->desktopSize(), minimumSize());
+}
+
+void FloatingContainer::refreshDesktopLimit()
+{
+    // The backstop: whatever asks for a size (this app, Qt or the
+    // platform), the window is given no more than all the screens
+    // together. Never less than the form's minimum, and no limit with no
+    // screen. A limit smaller than the size the window has (a monitor
+    // went) resizes it once, inside setMaximumSize.
+    const ScreenSource* source = m_screens ? m_screens : ScreenSource::system();
+    const QSize desktop = source->desktopSize();
+    const QSize limit = desktop.isValid() ? desktop.expandedTo(minimumSize())
+                                          : QSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    if (maximumSize() != limit) {
+        setMaximumSize(limit);
     }
 }
 
@@ -228,40 +285,40 @@ QRect FloatingContainer::clampedGeometry(const QRect &geometry, const QRect &ava
         h);
 }
 
-void FloatingContainer::ensureVisiblePosition(QWidget* anchor)
+bool FloatingContainer::ensureVisiblePosition(QWidget* anchor, const ScreenSource* screens)
 {
     // A frameless Qt::Window with no explicit position defaults to (0,0)
     // on Windows, where it's usually obscured by the main application
     // window — which is how Container #0 "disappeared" when first
     // floated. Saved geometry at (0,0) (e.g., after the user closed the
     // invisible form) perpetuates the trap across restarts.
+    const ScreenSource* source = screens ? screens : ScreenSource::system();
     const QRect g = geometry();
     const int minW = ContainerWidget::kMinContainerWidth;
     const int minH = ContainerWidget::kMinContainerHeight;
 
     bool onScreen = false;
-    for (QScreen* s : QGuiApplication::screens()) {
-        if (s && s->availableGeometry().contains(g)) {
+    const QVector<ScreenInfo> present = source->screens();
+    for (const ScreenInfo& s : present) {
+        if (s.available.contains(g)) {
             onScreen = true;
             break;
         }
     }
     const bool atOrigin = (g.x() == 0 && g.y() == 0);
     if (onScreen && !atOrigin && g.width() >= minW && g.height() >= minH) {
-        return;
+        return false;
     }
 
-    QScreen* screen = nullptr;
+    ScreenInfo screen = source->primary();
     QRect anchorRect;
     if (anchor && anchor->window()) {
-        screen = anchor->window()->screen();
         anchorRect = anchor->window()->geometry();
+        screen = source->screenFor(anchorRect);
     }
-    if (!screen) {
-        screen = QGuiApplication::primaryScreen();
-    }
-    const QRect avail = screen ? screen->availableGeometry()
-                               : QRect(100, 100, 800, 600);
+    // With no screen at all, the area the form was always given.
+    constexpr QRect kNoScreenArea(100, 100, 800, 600);
+    const QRect avail = screen.available.isValid() ? screen.available : kNoScreenArea;
 
     const int w = qMax(g.width(),  minW > 0 ? minW : 260);
     const int h = qMax(g.height(), minH);
@@ -279,7 +336,8 @@ void FloatingContainer::ensureVisiblePosition(QWidget* anchor)
             : QSize(minW, minH);
     setGeometry(clampedGeometry(QRect(x, y, w, h), avail, minimum));
     qCDebug(lcContainer) << "FloatingContainer: repositioned to visible area"
-                          << QRect(x, y, w, h) << "on screen" << (screen ? screen->name() : QStringLiteral("(null)"));
+                          << QRect(x, y, w, h) << "on screen" << screen.name;
+    return true;
 }
 
 void FloatingContainer::updateTitle()

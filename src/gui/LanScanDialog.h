@@ -18,6 +18,9 @@
 // Core heard. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // 2026-09-25: R-R3-49 (parity Task 9): the same for the Power Genius
 // (scanPgxlLan). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-08: test seam that skips the scan (setDiscoveryStartSkippedForTest),
+// for offscreen tests and the visual preview. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 
 #pragma once
 
@@ -64,6 +67,12 @@ public:
     enum class CoreDevice { TunerGenius, PowerGenius };
     LanScanDialog(RadioModel* coreModel, QWidget* parent,
                   CoreDevice device = CoreDevice::TunerGenius);
+
+    // Test seam: true makes the local-scan constructor build no
+    // LanDiscovery, so an offscreen test or the visual preview can build
+    // and show the dialog without binding a socket. Process-wide; tests set
+    // it back to false.
+    static void setDiscoveryStartSkippedForTest(bool skipped);
 
     int rowCountForTesting() const;
     QString statusTextForTesting() const;

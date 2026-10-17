@@ -48,6 +48,14 @@ except the first two, which are `constantSnapshot`:
 | `activeRxDeviceIds` | `utf8` | JSON array of devices whose active receive slice this is |
 | `txSelected` | `bool` | The slice is the transmit slice and its owner holds transmit |
 | `onAir` | `bool` | The slice is transmitting now |
+| `receiverHolderDeviceId` | `utf8` | The device that anchors the receiver the slice is on (link 7.5), empty when the slice has no receiver or nobody anchors it, `station` for the Core's own operating position. Added 2026-10-12 with no new `sliceAccessVersion`; a Core from before then sends none |
+
+The receiver's C-Tune pin is its anchor's: the Core refuses
+`requestStreamCtunPinned` from any other device (link 7.5). When
+`receiverHolderDeviceId` names another device, the desktop's remote window
+shows the pin held with the Core's words and does not ask; a phone that
+reads it can do the same. With no value the anchor is unknown, and asking
+is answered as before.
 
 A change of controller, a join or a leave reaches the phone as
 `object.destroy` and `object.create` (`slice:<id>` to `marker:<id>` or back)

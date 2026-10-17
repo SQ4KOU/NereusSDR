@@ -93,12 +93,13 @@ mw0lge@grange-lane.co.uk
 #include <QString>
 
 #include <functional>
+#include "core/NereusCoreExport.h"
 
 class QTimer;
 
 namespace NereusSDR {
 
-class TxTimeOutTimer : public QObject {
+class NEREUS_CORE_EXPORT TxTimeOutTimer : public QObject {
     Q_OBJECT
 
 public:

@@ -41,6 +41,12 @@
 //               the check or the other device's drain runs first in each
 //               turn. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-10-15: a quiet trip from the off-main cut guard (tripQuiet)
+//               stops once in either order. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-16: a quiet trip reports the guard's measured silence when
+//               this clock reads less, never less than its own. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/safety/RemoteTxWatchdog.h"
@@ -117,6 +123,8 @@ private slots:
     void theNumbersAreStatedTogether();
     void keepalivesHoldTenMinutesAndOneMissedStopsBetween400And410();
     void theLinkClosingStopsAtOnce();
+    void aQuietTripFromTheCutGuardStopsOnce();
+    void aQuietTripReportsTheGuardsSilence();
     void aTripLogsTheDeviceIdAsHex();
     void voxArmedIsWatchedAndStops();
     void watchingStartsWithAFresh400ms();
@@ -193,6 +201,7 @@ void TestRemoteTxWatchdog::theLinkClosingStopsAtOnce()
     QVERIFY(rig.watchdog.keepalive(kPhone, 1, 3, RemoteTxWatchdog::Path::TxChannel));
     rig.advanceTo(150);
     QSignalSpy tripped(&rig.watchdog, &RemoteTxWatchdog::tripped);
+    QVERIFY(tripped.isValid());
     rig.watchdog.linkClosed(kPhone);
     QCOMPARE(rig.stops.size(), size_t(1));
     QCOMPARE(rig.stops.front().atMs, qint64(150));
@@ -203,6 +212,74 @@ void TestRemoteTxWatchdog::theLinkClosingStopsAtOnce()
     // A device that was not watched: nothing.
     rig.watchdog.linkClosed(kTablet);
     QCOMPARE(rig.stops.size(), size_t(1));
+}
+
+// Remote transmit cut off the main thread (2026-10-15): the cut guard's
+// judgement reaches the watchdog as tripQuiet. A watched device trips once,
+// as a quiet link with the watchdog's sentence, and is no longer watched,
+// so the check that was due during the stall stops nothing more; a device
+// the watchdog already tripped is not stopped again.
+void TestRemoteTxWatchdog::aQuietTripFromTheCutGuardStopsOnce()
+{
+    Rig rig;
+    rig.watchdog.setKeyed(kPhone, true, 3);
+    rig.advanceTo(100);
+    QVERIFY(rig.watchdog.keepalive(kPhone, 1, 3, RemoteTxWatchdog::Path::TxChannel));
+    QSignalSpy tripped(&rig.watchdog, &RemoteTxWatchdog::tripped);
+    QVERIFY(tripped.isValid());
+
+    // The main thread was held past the deadline; the guard's post runs
+    // before the watchdog's overdue check.
+    rig.nowMs = 1100;
+    QVERIFY(rig.watchdog.tripQuiet(kPhone));
+    QCOMPARE(rig.stops.size(), size_t(1));
+    QCOMPARE(rig.stops.front().device, kPhone);
+    QCOMPARE(rig.stops.front().message, RemoteTxWatchdog::stopMessage(QStringLiteral("JJ's iPhone")));
+    QCOMPARE(tripped.count(), 1);
+    QCOMPARE(tripped.at(0).at(1).toBool(), false);
+    QCOMPARE(tripped.at(0).at(2).toLongLong(), qint64(1000));
+    QVERIFY(!rig.watchdog.isWatching(kPhone));
+    rig.advanceTo(3000);
+    rig.watchdog.onTimer();   // a check that was already due runs anyway
+    QCOMPARE(rig.stops.size(), size_t(1));
+    QCOMPARE(tripped.count(), 1);
+
+    // The other order: the watchdog tripped first; the guard's post stops
+    // nothing more.
+    Rig other;
+    other.watchdog.setKeyed(kTablet, true, 1);
+    other.advanceTo(500);
+    QCOMPARE(other.stops.size(), size_t(1));
+    QVERIFY(!other.watchdog.tripQuiet(kTablet));
+    QCOMPARE(other.stops.size(), size_t(1));
+}
+
+// CI 2026-10-16: the guard judged more than 400 ms on its own clock and the
+// watchdog's clock, rounding at other instants, read 400; the stop said
+// 400 ms. The guard's measurement is what the stop reports when it is the
+// longer; it never lowers the watchdog's own reading.
+void TestRemoteTxWatchdog::aQuietTripReportsTheGuardsSilence()
+{
+    Rig rig;
+    rig.watchdog.setKeyed(kPhone, true, 3);
+    rig.advanceTo(100);
+    QVERIFY(rig.watchdog.keepalive(kPhone, 1, 3, RemoteTxWatchdog::Path::TxChannel));
+    QSignalSpy tripped(&rig.watchdog, &RemoteTxWatchdog::tripped);
+    QVERIFY(tripped.isValid());
+    rig.nowMs = 100 + RemoteTxWatchdog::kLinkLossDeadlineMs;   // reads 400
+    QVERIFY(rig.watchdog.tripQuiet(kPhone, RemoteTxWatchdog::kLinkLossDeadlineMs + 1));
+    QCOMPARE(tripped.count(), 1);
+    QCOMPARE(tripped.at(0).at(2).toLongLong(), qint64(RemoteTxWatchdog::kLinkLossDeadlineMs + 1));
+
+    Rig longer;
+    longer.watchdog.setKeyed(kPhone, true, 3);
+    longer.advanceTo(100);
+    QVERIFY(longer.watchdog.keepalive(kPhone, 1, 3, RemoteTxWatchdog::Path::TxChannel));
+    QSignalSpy longerTripped(&longer.watchdog, &RemoteTxWatchdog::tripped);
+    longer.nowMs = 900;   // reads 800, a main thread held past the guard's cut
+    QVERIFY(longer.watchdog.tripQuiet(kPhone, RemoteTxWatchdog::kLinkLossDeadlineMs + 1));
+    QCOMPARE(longerTripped.count(), 1);
+    QCOMPARE(longerTripped.at(0).at(2).toLongLong(), qint64(800));
 }
 
 // A device id is raw bytes (the link's binary id), so the trip's warning
@@ -315,6 +392,8 @@ void TestRemoteTxWatchdog::lateKeepaliveCannotRescueExpiredWatch()
     QVERIFY(rig.watchdog.keepalive(kPhone, 5, 4, RemoteTxWatchdog::Path::Session));
     QSignalSpy heard(&rig.watchdog, &RemoteTxWatchdog::keepaliveHeard);
     QSignalSpy tripped(&rig.watchdog, &RemoteTxWatchdog::tripped);
+    QVERIFY(heard.isValid());
+    QVERIFY(tripped.isValid());
 
     // A busy event loop can dispatch socket input before its overdue timer.
     // Move the clock without delivering that timer: arrival must check age.

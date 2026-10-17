@@ -124,6 +124,11 @@
 //               does, and away devices (setAwayDevices, isAwaySlice) for
 //               Amendment 8a. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-10-12: receiverHoldersChanged(): says when a receiver's holder
+//               (anchorOf) or the receiver a slice is on may have changed,
+//               for the slice access entries that name the holder. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/NereusCoreExport.h"
@@ -373,6 +378,10 @@ signals:
     void awayChanged();
     /// activeRxFor(device) now reads differently.
     void activeRxChanged(const QByteArray& device);
+    /// Some receiver's anchorOf(), or the receiver some slice is on, may
+    /// read differently now (a slice came to a receiver or left one, or
+    /// the anchor went with a slice to its new owner).
+    void receiverHoldersChanged();
 
 private:
     /// Collects every device's activeRxFor before a change and signals

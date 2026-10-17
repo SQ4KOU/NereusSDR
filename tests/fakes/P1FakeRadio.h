@@ -87,6 +87,11 @@ public:
     // 11-15 and 523-527). Frames dropped while silent are not recorded, and
     // the log is cleared at each metis-stop received.
     QList<QByteArray> ep2CcReceived() const;
+    // When each frame in ep2CcReceived() arrived, in steady_clock
+    // nanoseconds, read on the fake's own thread the moment its datagram
+    // is read off the socket, so it is right even while the connection's
+    // thread is busy.
+    QList<qint64> ep2ArrivalNs() const;
     void clearEp2CcLog();
     bool isRunning()         const;
     int  metisStopCount()    const;
@@ -106,7 +111,7 @@ private:
     void onAutoStreamTick();
     void handleDiscoveryProbe(const QHostAddress& from, quint16 port);
     void handleMetisCommand(const QByteArray& pkt, const QHostAddress& from, quint16 port);
-    void handleEp2Frame(const QByteArray& pkt);
+    void handleEp2Frame(const QByteArray& pkt, qint64 arrivalNs);
     void writeEp6Frames(int count);
 
     // Build one 1032-byte ep6 frame with a fixed DC tone (I=0.5, Q=0.0).
@@ -131,6 +136,7 @@ private:
     QElapsedTimer m_sinceStart;
     int          m_ep2Count{0};
     QList<QByteArray> m_ep2Cc;
+    QList<qint64> m_ep2ArrivalNs;
     int          m_stopCount{0};
     QList<QByteArray> m_metisCommands;
     quint32      m_ep6Seq{0};

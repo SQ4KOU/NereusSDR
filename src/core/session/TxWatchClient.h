@@ -9,6 +9,7 @@
 
 #include <functional>
 #include <utility>
+#include "core/NereusCoreExport.h"
 
 class QTimer;
 class QWebSocket;
@@ -28,7 +29,7 @@ struct AuxiliaryWatchTelemetry {
 // authenticated the primary and supplies its current verified Core TLS digest,
 // a fresh Core ticket, and the immutable logical primary generation.
 // This class has no authority over the primary session or transmit state.
-class TxWatchClient final : public QObject {
+class NEREUS_CORE_EXPORT TxWatchClient final : public QObject {
     Q_OBJECT
 public:
     explicit TxWatchClient(QObject* parent = nullptr);

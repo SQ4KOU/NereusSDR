@@ -5,6 +5,12 @@
 // millisecond. A loopback receiver stands in for the radio's port 1029 and
 // counts the frames against the wall clock, so this is a REALTIME test (a
 // loaded machine can fail it; run it alone).
+//
+// Modification history (NereusSDR):
+//   2026-10-15 - The 300 ms settle counts from the first frame sent, not
+//                from the thread's start, and the time to that frame is
+//                printed. J.J. Boyd (KG4VCF), with AI-assisted
+//                implementation via Anthropic Claude Code.
 #include <QtTest/QtTest>
 
 #include <QElapsedTimer>
@@ -38,6 +44,13 @@ private slots:
     // wire is checked separately: every frame the thread sent arrived, in
     // sequence, once the socket is drained after the stop (the socket gets
     // room for a starved reader).
+    //
+    // The settle counts from the first frame sent, not from the thread's
+    // start. Under load the first frame once went out about 580 ms late
+    // (334 of 334 sent fell inside the measured second, 334.6 a second),
+    // when the Mac sender's first act was a Core Audio workgroup lookup,
+    // and the pacer never makes up lost time. The rate bound is unchanged;
+    // the wall-clock assumption is now "sending has started".
     void sendThread_keepsRadioRateOnTheWire()
     {
         QUdpSocket radio;
@@ -73,12 +86,29 @@ private slots:
         QElapsedTimer clock;
         clock.start();
         conn.startTxIqSenderForTest(QHostAddress::LocalHost);
+        // Sending has started: the first frame is out (5 s at most).
+        qint64 firstFrameMs = -1;
+        while (clock.elapsed() < 5000) {
+            if (conn.txSendStats().framesSent > 0) {
+                firstFrameMs = clock.elapsed();
+                break;
+            }
+            radio.waitForReadyRead(1);
+            drain();
+        }
+        qInfo("first frame sent %lld ms after the start", static_cast<long long>(firstFrameMs));
+        if (firstFrameMs < 0) {
+            conn.stopTxIqSenderForTest();
+            QFAIL("the send thread sent no frame within 5 s of its start");
+        }
+        const qint64 settleAtMs = firstFrameMs + 300;
+        const qint64 endAtMs = settleAtMs + 1000;
         std::optional<quint64> sentAtSettle;
         qint64 settleNs = 0;
-        while (clock.elapsed() < 1300) {
+        while (clock.elapsed() < endAtMs) {
             radio.waitForReadyRead(20);
             drain();
-            if (!sentAtSettle && clock.elapsed() >= 300) {
+            if (!sentAtSettle && clock.elapsed() >= settleAtMs) {
                 sentAtSettle = conn.txSendStats().framesSent;
                 settleNs = clock.nsecsElapsed();
             }

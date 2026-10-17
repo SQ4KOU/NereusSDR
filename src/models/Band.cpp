@@ -111,6 +111,8 @@ mw0lge@grange-lane.co.uk
 #include "Band.h"
 
 #include <QStringLiteral>
+#include <algorithm>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -155,6 +157,22 @@ constexpr double kWwvCenters[] = {
 constexpr double kWwvHalfWindow = 5000.0;
 
 } // namespace
+
+QVector<double> hamBandEdgesHz(double minHz, double maxHz)
+{
+    QVector<double> edges;
+    if (!std::isfinite(minHz) || !std::isfinite(maxHz) || minHz > maxHz) { return edges; }
+    // Existing kHamBandRanges union identity table above; not a new legal
+    // region table. Its facts, per-band cites and inclusive edges are kept.
+    for (const HamBandRange& range : kHamBandRanges) {
+        for (const double edge : {range.lowHz, range.highHz}) {
+            if (edge >= minHz && edge <= maxHz) { edges.append(edge); }
+        }
+    }
+    std::sort(edges.begin(), edges.end());
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    return edges;
+}
 
 QString bandLabel(Band b)
 {

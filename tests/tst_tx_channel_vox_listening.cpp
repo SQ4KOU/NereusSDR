@@ -24,6 +24,8 @@
 //   (e) CRITICAL: setVoxListening operates independently of setRunning.
 //       Both gates allow the pump independently; neither suppresses the
 //       other.  The whole point of the bench fix.
+//   (f) nereusd's thread placement is told the channel is listening while
+//       it is up only for VOX, and transmitting only while keyed.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -32,6 +34,20 @@
 //                 correctly and is independent of m_running.  J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-10-11 - (f): what the channel tells nereusd's thread placement
+//                 on VOX on, key, unkey and VOX off.  J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude
+//                 Code.
+//   2026-10-15 - (f): each thread gets its own ID from the fake system
+//                 calls, so a second registration cannot replace the test's
+//                 DSP thread, and the test checks the DSP thread keeps its
+//                 core.  J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-15 - (f): the test installs WDSP's thread start hook, so the
+//                 transmit worker registers from its own thread, and checks
+//                 the DSP thread keeps its core after that registration.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 #define NEREUS_BUILD_TESTS 1
@@ -39,8 +55,43 @@
 #include <QtTest/QtTest>
 
 #include "core/TxChannel.h"
+#include "core/WdspEngine.h"
+#include "core/platform/ThreadPlacement.h"
+#include "core/wdsp_api.h"
+
+#include <atomic>
+#include <functional>
+#include <memory>
+#include <thread>
 
 using namespace NereusSDR;
+
+namespace {
+
+// Accepts every move and priority change and makes none. Each thread has
+// its own ID, so a registration from another thread (a WDSP worker) never
+// replaces the test thread's. Counts the calls made from threads other than
+// the one that created it, so the test can wait for the worker's.
+class AcceptingApi final : public ThreadSchedulingApi {
+public:
+    explicit AcceptingApi(std::atomic<int>* otherThreadCalls)
+        : m_otherThreadCalls(otherThreadCalls) {}
+    qint64 currentThreadId() override
+    {
+        if (std::this_thread::get_id() != m_creator) {
+            m_otherThreadCalls->fetch_add(1);
+        }
+        return static_cast<qint64>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    }
+    bool setAffinity(qint64, const QList<int>&) override { return true; }
+    bool setNice(qint64, int) override { return true; }
+
+private:
+    std::thread::id m_creator{std::this_thread::get_id()};
+    std::atomic<int>* m_otherThreadCalls;
+};
+
+} // namespace
 
 class TstTxChannelVoxListening : public QObject {
     Q_OBJECT
@@ -143,6 +194,100 @@ private slots:
         ch.setVoxListening(false);
         QCOMPARE(ch.isRunning(),            false);
         QCOMPARE(ch.voxListeningForTest(),  false);
+    }
+
+    // ---------------------------------------------------------------
+    // (f) nereusd's thread placement hears "listening" while the channel
+    //     is up only for VOX and "transmitting" only while keyed.  Three
+    //     receivers on a Rock 5C's cores (0-3 slow, 4-7 fast): listening,
+    //     the later two keep cores 6 and 7 and the transmit worker shares
+    //     them; keyed, the transmit worker has core 6 to itself.  Told
+    //     "transmitting" for as long as VOX was on, placement kept the
+    //     receivers off those cores between transmissions.
+    //
+    //     Last in the file: the process's placement stays started.
+    // ---------------------------------------------------------------
+    void placementHearsListeningApartFromTransmitting() {
+#ifndef HAVE_WDSP
+        QSKIP("needs a live WDSP transmit channel");
+#else
+        CpuTopology rock;
+        for (int cpu = 0; cpu < 8; ++cpu) {
+            rock.online.append(cpu);
+            rock.capacity.insert(cpu, cpu < 4 ? 405 : 1024);
+        }
+        rock.clockDomains = {{0, 1, 2, 3}, {4, 5}, {6, 7}};
+        PlacementDemand startup;
+        startup.rxChannels = {0};
+        startup.dspThread = true;
+        ThreadPlacement& placement = ThreadPlacement::instance();
+        std::atomic<int> workerCalls{0};
+        placement.start(rock, startup, std::make_unique<AcceptingApi>(&workerCalls), true);
+        QVERIFY(placement.isPlacing());
+        placement.registerCurrentThread(ThreadRole::DspThread);
+        for (int channel : {0, 1, 2}) {
+            placement.setChannelActive(ThreadRole::RxWorker, channel, true);
+        }
+
+        const int tx = WdspEngine::kTxChannelId;
+        WdspEngine engine;
+        engine.m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+#ifndef Q_OS_WIN
+        // As WdspEngine::initialize does in nereusd: the transmit worker
+        // registers itself from its own thread as it starts. That
+        // registration must leave the DSP thread's entry alone.
+        WDSPSetThreadStartHook(&ThreadPlacement::wdspThreadStartHook);
+#endif
+        TxChannel* ch = engine.createTxChannel(tx);
+        QVERIFY(ch != nullptr);
+#ifndef Q_OS_WIN
+        QTRY_VERIFY(workerCalls.load() > 0);
+        QCOMPARE(placement.currentPlan().cpuFor(ThreadRole::DspThread), 5);
+#endif
+        QVERIFY(placement.currentPlan().coresFor(ThreadRole::TxWorker, tx).isEmpty());
+
+        const auto expectListening = [&]() {
+            const PlacementPlan plan = placement.currentPlan();
+            QCOMPARE(plan.cpuFor(ThreadRole::DspThread), 5);
+            QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 1), 6);
+            QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 2), 7);
+            QCOMPARE(plan.cpuFor(ThreadRole::TxWorker, tx), -1);
+            QCOMPARE(plan.coresFor(ThreadRole::TxWorker, tx), (QList<int>{6, 7}));
+        };
+
+        // User clicks [VOX].
+        ch->setVoxListening(true);
+        expectListening();
+
+        // Keyed (G-06): the transmit worker goes ahead of the later
+        // receivers. No transmit pump is running here to take core 7.
+        ch->setRunning(true);
+        PlacementPlan plan = placement.currentPlan();
+        QCOMPARE(plan.cpuFor(ThreadRole::TxWorker, tx), 6);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 1), 7);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 2), -1);
+
+        // Unkeyed with VOX still on.
+        ch->setRunning(false);
+        expectListening();
+
+        // VOX off.
+        ch->setVoxListening(false);
+        plan = placement.currentPlan();
+        QVERIFY(plan.coresFor(ThreadRole::TxWorker, tx).isEmpty());
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 1), 6);
+
+        // Keyed and unkeyed without VOX: transmitting, then off.
+        ch->setRunning(true);
+        QCOMPARE(placement.currentPlan().cpuFor(ThreadRole::TxWorker, tx), 6);
+        ch->setRunning(false);
+        QVERIFY(placement.currentPlan().coresFor(ThreadRole::TxWorker, tx).isEmpty());
+
+        engine.destroyTxChannel(tx);
+#ifndef Q_OS_WIN
+        WDSPSetThreadStartHook(nullptr);
+#endif
+#endif
     }
 };
 

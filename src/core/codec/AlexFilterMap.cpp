@@ -36,6 +36,21 @@
 //                Minimum / Maximum) and the neighbour rule (setup.cs
 //                udAlex*LPF*_ValueChanged) shared by the tab and the Core.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - combinesRxBandFilters: the Anvelina Pro 3 passes nothing in
+//                bypass and takes several band filters at once (measured),
+//                and the 6 m LNA switches take the LNA out of such a
+//                selection. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-10-11 - receiveBypassSelection: on the Anvelina Pro 3 a receive
+//                bypass goes out as the five ordinary band filters together
+//                (measured), from the filter policy, from the HPF Bypass
+//                switch, and from a row's own bypass and the Alex-2 master
+//                bypass (rowBypass). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-11 - combineRxBandSelections: on the Anvelina Pro 3 the 6 m
+//                BPF/LNA and the 12/10 m row never go out together
+//                (measured: unstable); the BPF/LNA stays. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis console.cs header (lines 1-50) ===
@@ -318,30 +333,35 @@ AlexHpfEdges AlexHpfEdges::thetisDefaults() noexcept
 //   else
 //   {
 //       NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
-quint8 selectAlexHpfRow(double freqMhz, const AlexHpfRows& rows) noexcept
+// `rowBypass` is that 0x20 on every radio but the one whose bypass passes
+// nothing (receiveBypassSelection).
+quint8 selectAlexHpfRow(double freqMhz, const AlexHpfRows& rows,
+                        quint8 rowBypass) noexcept
 {
     const qint64 hz = toHz(freqMhz);
     for (size_t i = 0; i < rows.size(); ++i) {
         const AlexHpfRow& row = rows[i];
         if (hz >= toHz(row.startMhz) && hz <= toHz(row.endMhz)) {
-            return row.bypass ? kBypassBits : kRowBits[i];
+            return row.bypass ? rowBypass : kRowBits[i];
         }
     }
     return kBypassBits;
 }
 
 quint8 computeRxPreselector(double freqMhz, NereusSDR::HPSDRHW board,
-                            const AlexHpfEdges& edges) noexcept
+                            const AlexHpfEdges& edges, quint8 rowBypass) noexcept
 {
-    return selectAlexHpfRow(freqMhz, usesBpf1Preselector(board) ? edges.bpf1 : edges.hpf);
+    return selectAlexHpfRow(freqMhz, usesBpf1Preselector(board) ? edges.bpf1 : edges.hpf,
+                            rowBypass);
 }
 
-quint8 computeAlex2Hpf(double freqMhz, const AlexHpfEdges& edges) noexcept
+quint8 computeAlex2Hpf(double freqMhz, const AlexHpfEdges& edges,
+                       quint8 rowBypass) noexcept
 {
     if (edges.alex2Bypass) {
-        return kBypassBits;
+        return rowBypass;
     }
-    return selectAlexHpfRow(freqMhz, edges.alex2);
+    return selectAlexHpfRow(freqMhz, edges.alex2, rowBypass);
 }
 
 // From Thetis setup.cs:6190-6205 [v2.10.3.15] (quoted in the header)
@@ -374,6 +394,36 @@ bool usesAlex2Hpf(NereusSDR::HPSDRModel model) noexcept
         default:
             return false;
     }
+}
+
+// A bench measurement, quoted at the declaration. Only the radio measured.
+bool combinesRxBandFilters(NereusSDR::HPSDRModel model) noexcept
+{
+    return model == NereusSDR::HPSDRModel::ANVELINAPRO3;
+}
+
+// A bench measurement, quoted at the declaration. The rows are kRowBits'
+// first five, the band-pass bank without its 6 m BPF/LNA.
+quint8 receiveBypassSelection(NereusSDR::HPSDRModel model) noexcept
+{
+    static constexpr quint8 kFiveBandFilters =
+        kRowBits[0] | kRowBits[1] | kRowBits[2] | kRowBits[3] | kRowBits[4];
+    return combinesRxBandFilters(model) ? kFiveBandFilters : kBypassBits;
+}
+
+// Bench measurements and the maintainer's ruling, quoted at the declaration.
+quint8 combineRxBandSelections(quint8 selections, bool lnaStays) noexcept
+{
+    static constexpr quint8 k12And10mRow = kRowBits[4];
+    static constexpr quint8 k6mBpfLna    = kRowBits[5];
+    quint8 rows = static_cast<quint8>(selections & ~kBypassBits);
+    if (rows == 0) {
+        return selections;
+    }
+    if (lnaStays && (rows & k6mBpfLna) != 0) {
+        rows = static_cast<quint8>(rows & ~k12And10mRow);
+    }
+    return rows;
 }
 
 // From Thetis console.cs:7177-7243 [v2.10.3.15]
@@ -687,8 +737,11 @@ quint8 applyAlex1HpfSwitches(quint8 selected, NereusSDR::HPSDRHW board,
     //   if (alex_hpf_bypass)
     //   {
     //       NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
+    // switches.receiveBypass is that 0x20 on every radio but the one whose
+    // bypass passes nothing, where it is the five band filters
+    // (receiveBypassSelection), keyed or not.
     if (switches.hpfBypass) {
-        return kBypass;
+        return switches.receiveBypass;
     }
     // The 6 m branch, where the band's selection is the BPF/LNA (0x40):
     //   From Thetis console.cs:6931-6936 [v2.10.3.15] (setAlexHPF), and the
@@ -702,9 +755,13 @@ quint8 applyAlex1HpfSwitches(quint8 selected, NereusSDR::HPSDRHW board,
     // The per-row 6 m bypass (alex6bphpf_bypass) is the row's own, applied
     // where the row is selected (selectAlexHpfRow).
     static constexpr quint8 k6mBpfLna = 0x40;
-    if (selected == k6mBpfLna
+    if ((selected & k6mBpfLna) != 0
         && (switches.disable6mLnaOnRx || (keyed && switches.disable6mLnaOnTx))) {
-        return kBypass;
+        // The BPF/LNA alone becomes the bypass, as above. In a combined
+        // selection (combinesRxBandFilters) it is taken out and the other
+        // bands' filters stay.
+        const quint8 others = static_cast<quint8>(selected & ~k6mBpfLna);
+        return others != 0 ? others : kBypass;
     }
     return selected;
 }

@@ -24,7 +24,8 @@ import Testing
         #expect(display.controls.map(\.subscribe) == sent.map { $0["subscribe"] as? String })
         // The Core keeps the FFT's settings; the rest are each device's.
         let station = display.controls.filter(\.isStation).compactMap(\.settingsKey)
-        #expect(station == ["DisplayFftSize", "DisplayFftWindow", "DisplayHzPerBinTarget", "DisplaySpectrumFps"])
+        #expect(station == ["DisplayFftSizingMode", "DisplayFftSize", "DisplayHzPerBinTarget", "DisplayFftWindow",
+                            "DisplaySpectrumFps"])
         let others = display.controls.filter { !$0.isStation }
         #expect(others.allSatisfy { $0.isDevice })
         // Decimation writes no setting of the Core's.
@@ -113,7 +114,8 @@ import Testing
         var display = try #require(raw["display"] as? [String: Any])
         var controls = try #require(display["controls"] as? [[String: Any]])
         // One control without a label is left out; the others stand.
-        controls[1].removeValue(forKey: "label")
+        let window = try #require(controls.firstIndex { $0["settingsKey"] as? String == "DisplayFftWindow" })
+        controls[window].removeValue(forKey: "label")
         display["controls"] = controls
         raw["display"] = display
         let partial = try #require(StationCatalog.parse(json: try StationCatalogTests.text(raw)))

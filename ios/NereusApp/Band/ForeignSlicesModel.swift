@@ -1,5 +1,6 @@
 // NereusSDR for iOS: other devices' slices on this band, read from the Core's markers, never tuned from here
 // SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-NereusSDR-AppStore-permission
+// 2026-10-12: J.J. Boyd (KG4VCF), V2 opt-in/authority gate; AI-assisted via OpenAI Codex.
 
 import Combine
 import Foundation
@@ -59,7 +60,7 @@ final class ForeignSlicesModel: ObservableObject {
 
     /// The catalogue's label for a mode, or "" when it has none.
     func modeLabel(_ mode: Int) -> String {
-        catalog?.modes.first { $0.id == mode }?.label ?? ""
+        catalog?.modeDescription(mode)?.label ?? ""
     }
 
     private func watch() {

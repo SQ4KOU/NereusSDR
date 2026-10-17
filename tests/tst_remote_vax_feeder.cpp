@@ -26,11 +26,19 @@
 //     VAX gives the same signal, and keeps the choice on this computer,
 //     never in the Core's Slice<N>/VaxChannel.
 //
-// The feeders here are pumped by the test with a harness clock; nothing
-// opens this computer's speakers, microphone or VAX devices.
+// The feeders here are pumped by the test with a harness clock; in the
+// end-to-end level tests that clock is this computer's VAX 1 device's
+// (VaxDeviceOnFeederClock), so a busy machine cannot make the device look
+// paused or play the rate matcher dry; the receiver audio streams feeding
+// it hold and conceal on the Core's audio clock, and the tests' deadlines
+// for audio are on that clock too (awaitAudio). Nothing opens this computer's
+// speakers, microphone or VAX devices.
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-15  J.J. Boyd / KG4VCF  A remote window opens its VAX TX
+//                                    device too. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio plan, Task 5.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
@@ -66,6 +74,7 @@
 #include "core/session/media/IReceiverPcmSink.h"
 #include "core/settings/SettingsScope.h"
 #include "fakes/CapacityLimitedTransport.h"
+#include "fakes/FakeMatcherAudioBus.h"
 #include "fakes/PacedAudioBus.h"
 #include "fakes/RemoteAudioSessionHarness.h"
 #include "gui/OperatorReasonText.h"
@@ -611,6 +620,382 @@ private slots:
 #endif
     }
 
+    // ---- A link that delivers in clumps --------------------------------
+    // The remote window's link to a Core can pause 80 to 115 ms and then
+    // deliver the backlog at once (seen over ZeroTier, 2026-10-16). 90 ms
+    // of reserve ran dry at each pause; the reserve grows until the pauses
+    // pass, then holds.
+    void aBurstyLinkGrowsTheReserve_data()
+    {
+        QTest::addColumn<QList<int>>("pausesMs");
+        QTest::addColumn<int>("everyMs");
+        QTest::addColumn<int>("maxRestarts");
+        QTest::addColumn<int>("ringFrames");
+        QTest::newRow("steady: no growth") << QList<int>{} << 3000 << 0
+                                           << RemoteVaxFeeder::kMatcherRingFrames;
+        QTest::newRow("80-115 ms pauses every 3 s") << QList<int>{80, 100, 115, 90} << 3000 << 2
+                                                    << 2 * RemoteVaxFeeder::kMatcherRingFrames;
+        QTest::newRow("80-115 ms pauses every second") << QList<int>{80, 100, 115, 90} << 1000 << 2
+                                                       << 2 * RemoteVaxFeeder::kMatcherRingFrames;
+        QTest::newRow("200 ms pauses grow it to the cap") << QList<int>{200} << 3000 << 3
+                                                          << RemoteVaxFeeder::kMaxMatcherRingFrames;
+    }
+
+    void aBurstyLinkGrowsTheReserve()
+    {
+#ifndef HAVE_WDSP
+        QSKIP("WDSP is disabled");
+#else
+        QFETCH(QList<int>, pausesMs);
+        QFETCH(int, everyMs);
+        QFETCH(int, maxRestarts);
+        QFETCH(int, ringFrames);
+        qint64 now = 0;
+        SimulatedVaxOutput output;
+        output.now = &now;
+        output.ppm = -50;
+        RemoteVaxFeeder feeder(1, output.port(), [&now] { return now; });
+        feeder.setSourceSlice(1);
+
+        constexpr qint64 kMs = 1'000'000;
+        constexpr qint64 kRunNs = 180'000 * kMs;
+        constexpr qint64 kSettledNs = 30'000 * kMs;  // the growth is done
+        quint64 sourceFrames = 0;
+        int queuedPackets = 0;
+        qint64 pauseUntil = -1;
+        int pauseIndex = 0;
+        quint64 dryAtSettled = 0;
+        int restartsAtSettled = 0;
+        double ratioMin = 2.0;
+        double ratioMax = 0.0;
+        for (now = 0; now <= kRunNs; now += kMs) {
+            // The Core's clock: one Opus packet every 40 ms; during a pause
+            // they queue and then arrive together.
+            if (now % (40 * kMs) == 0) {
+                ++queuedPackets;
+            }
+            if (!pausesMs.isEmpty() && now > 0 && now % (everyMs * kMs) == 0) {
+                pauseUntil = now + pausesMs.at(pauseIndex++ % pausesMs.size()) * kMs;
+            }
+            if (now >= pauseUntil) {
+                for (; queuedPackets > 0; --queuedPackets) {
+                    const std::vector<float> block =
+                        toneBlock(sourceFrames, kOpusFrames, 1579.0, 0.19);
+                    feeder.receiverAudioBlock(1, block.data(), kOpusFrames);
+                    sourceFrames += kOpusFrames;
+                }
+            }
+            if (now % (5 * kMs) == 0) {
+                feeder.pump();
+            }
+            if (now == kSettledNs) {
+                output.advance();
+                dryAtSettled = output.dryFrames;
+                restartsAtSettled = feeder.stats().restarts;
+                output.record = true;
+            }
+            if (now > kSettledNs && now % (1000 * kMs) == 0) {
+                const RemoteVaxFeederStats stats = feeder.stats();
+                QCOMPARE(stats.state, RemoteVaxFeederStats::State::Playing);
+                if (stats.ratio) {
+                    ratioMin = std::min(ratioMin, *stats.ratio);
+                    ratioMax = std::max(ratioMax, *stats.ratio);
+                }
+            }
+        }
+        output.advance();
+        // The tone's pitch over each 160 ms (one FT8 symbol), from the
+        // interpolated rising zero crossings of the left channel. FT8 tones
+        // sit 6.25 Hz apart; rmatch's own control swung this one by up to
+        // 25 Hz under these clumps.
+        double toneMinHz = 1e9;
+        double toneMaxHz = 0.0;
+        {
+            const std::vector<float>& heard = output.heard;
+            const std::size_t frames = heard.size() / 2;
+            constexpr std::size_t kSymbolFrames = 7680;
+            for (std::size_t w = 0; w + kSymbolFrames < frames; w += kSymbolFrames) {
+                double first = -1.0;
+                double last = -1.0;
+                int cycles = 0;
+                for (std::size_t i = w + 1; i < w + kSymbolFrames; ++i) {
+                    const float x0 = heard[2 * (i - 1)];
+                    const float x1 = heard[2 * i];
+                    if (x0 < 0.0f && x1 >= 0.0f) {
+                        const double t = double(i - 1) + double(-x0) / double(x1 - x0);
+                        if (first < 0.0) {
+                            first = t;
+                        } else {
+                            ++cycles;
+                        }
+                        last = t;
+                    }
+                }
+                if (cycles > 10) {
+                    const double hz = cycles * 48000.0 / (last - first);
+                    toneMinHz = std::min(toneMinHz, hz);
+                    toneMaxHz = std::max(toneMaxHz, hz);
+                }
+            }
+        }
+        qInfo().noquote() << QStringLiteral("tone per 160 ms: %1..%2 Hz")
+            .arg(toneMinHz, 0, 'f', 2).arg(toneMaxHz, 0, 'f', 2);
+        const RemoteVaxFeederStats stats = feeder.stats();
+        qInfo().noquote() << QStringLiteral(
+            "restarts %1 (%2 after 30 s), ring %3 frames, dry after 30 s %4 frames, "
+            "ratio %5..%6 ppm, delay %7 ms")
+            .arg(stats.restarts).arg(stats.restarts - restartsAtSettled)
+            .arg(stats.matcherRingFrames).arg(output.dryFrames - dryAtSettled)
+            .arg((ratioMin - 1.0) * 1e6, 0, 'f', 0).arg((ratioMax - 1.0) * 1e6, 0, 'f', 0)
+            .arg(stats.delayFrames() / 48.0, 0, 'f', 1);
+
+        // A dropout or two while the reserve grows, then none: the app
+        // hears no gap once it has grown.
+        QVERIFY2(stats.restarts <= maxRestarts,
+                 qPrintable(QStringLiteral("%1 restarts").arg(stats.restarts)));
+        QCOMPARE(stats.restarts - restartsAtSettled, 0);
+        QCOMPARE(output.dryFrames - dryAtSettled, quint64(0));
+        // It grew only as far as the pauses needed.
+        QCOMPARE(stats.matcherRingFrames, ringFrames);
+        QCOMPARE(stats.droppedFrames, quint64(0));
+        // The held ratio follows the clocks, not the pauses: steady within
+        // 200 ppm (a pause-following ratio swings to the 500 ppm cap), and
+        // never at the cap here (the output is 50 ppm off).
+        QVERIFY2(ratioMax - ratioMin < 200e-6,
+                 qPrintable(QStringLiteral("ratio %1..%2").arg(ratioMin, 0, 'f', 6)
+                                .arg(ratioMax, 0, 'f', 6)));
+        QCOMPARE(stats.ratioWindowsAtCap, 0);
+        // The pitch held through every clump, well inside an FT8 tone step
+        // (a ratio that follows the pauses moves it 0.8 Hz at the cap).
+        QVERIFY(toneMaxHz > 0.0);
+        QVERIFY2(std::abs(toneMinHz - 1579.0) < 0.5 && std::abs(toneMaxHz - 1579.0) < 0.5,
+                 qPrintable(QStringLiteral("tone %1..%2 Hz").arg(toneMinHz).arg(toneMaxHz)));
+#endif
+    }
+
+    // A pause longer than kQuietNs (the Core stopped the slice, a link
+    // outage) restarts playback, once per pause, and grows nothing: no
+    // reserve would have covered it. The audio plays again after each one,
+    // whether the pause's backlog is lost or delivered when the link comes
+    // back (it is cut to one Opus packet rather than overflowing the ring).
+    void aPausePastQuietRecoversWithoutGrowing_data()
+    {
+        QTest::addColumn<bool>("backlogSent");
+        QTest::newRow("backlog lost") << false;
+        QTest::newRow("backlog delivered after") << true;
+    }
+
+    void aPausePastQuietRecoversWithoutGrowing()
+    {
+#ifndef HAVE_WDSP
+        QSKIP("WDSP is disabled");
+#else
+        QFETCH(bool, backlogSent);
+        qint64 now = 0;
+        SimulatedVaxOutput output;
+        output.now = &now;
+        RemoteVaxFeeder feeder(1, output.port(), [&now] { return now; });
+        feeder.setSourceSlice(1);
+
+        constexpr qint64 kMs = 1'000'000;
+        quint64 sourceFrames = 0;
+        int queuedPackets = 0;
+        int pauses = 0;
+        int playingChecks = 0;
+        quint64 dryAtRecovered = 0;
+        for (now = 0; now <= 60'000 * kMs; now += kMs) {
+            if (now % (40 * kMs) == 0) {
+                ++queuedPackets;
+            }
+            // 660 ms pauses every 5 s, from 5 s on.
+            const qint64 phase = now % (5000 * kMs);
+            const bool paused = phase < 660 * kMs && now >= 5000 * kMs;
+            if (phase == 200 * kMs && now >= 5000 * kMs) {
+                ++pauses;  // its restart has come
+            }
+            if (paused) {
+                if (!backlogSent) {
+                    // The Core stopped: nothing of the pause comes later.
+                    queuedPackets = 0;
+                }
+            } else {
+                for (; queuedPackets > 0; --queuedPackets) {
+                    const std::vector<float> block =
+                        toneBlock(sourceFrames, kOpusFrames, 1579.0, 0.19);
+                    feeder.receiverAudioBlock(1, block.data(), kOpusFrames);
+                    sourceFrames += kOpusFrames;
+                }
+            }
+            if (now % (5 * kMs) == 0) {
+                feeder.pump();
+            }
+            // Playing again 1.5 s after each pause began, and with no gap
+            // from then to the next pause.
+            if (now >= 5000 * kMs && phase == 1500 * kMs) {
+                output.advance();
+                QCOMPARE(feeder.stats().state, RemoteVaxFeederStats::State::Playing);
+                dryAtRecovered = output.dryFrames;
+            }
+            if (now >= 5000 * kMs && phase == 4999 * kMs) {
+                output.advance();
+                QCOMPARE(feeder.stats().state, RemoteVaxFeederStats::State::Playing);
+                QCOMPARE(output.dryFrames, dryAtRecovered);
+                ++playingChecks;
+            }
+        }
+        const RemoteVaxFeederStats stats = feeder.stats();
+        QCOMPARE(playingChecks, pauses);
+        QCOMPARE(stats.restarts, pauses);
+        QCOMPARE(stats.matcherRingFrames, RemoteVaxFeeder::kMatcherRingFrames);
+#endif
+    }
+
+    // Two slices mixed on the channel; one goes silent with no stop notice
+    // (its stream simply ends). Until kQuietNs passes it still counts in
+    // the mix, so the matcher runs dry once; that is the source stopping,
+    // not a pause, and grows nothing. The other slice plays on.
+    void aSliceGoneSilentGrowsNothing()
+    {
+#ifndef HAVE_WDSP
+        QSKIP("WDSP is disabled");
+#else
+        qint64 now = 0;
+        SimulatedVaxOutput output;
+        output.now = &now;
+        RemoteVaxFeeder feeder(1, output.port(), [&now] { return now; });
+        feeder.setSourceSlices({3, 1});
+
+        constexpr qint64 kMs = 1'000'000;
+        quint64 framesB = 0;
+        quint64 framesD = 0;
+        quint64 dryAtRecovered = 0;
+        for (now = 0; now <= 20'000 * kMs; now += kMs) {
+            if (now % (40 * kMs) == 0) {
+                const std::vector<float> block = toneBlock(framesB, kOpusFrames, 1579.0, 0.10);
+                feeder.receiverAudioBlock(1, block.data(), kOpusFrames);
+                framesB += kOpusFrames;
+            }
+            // Slice 3's stream ends at 12 s.
+            if (now % (40 * kMs) == 20 * kMs && now < 12'000 * kMs) {
+                const std::vector<float> block = toneBlock(framesD, kOpusFrames, 617.0, 0.12);
+                feeder.receiverAudioBlock(3, block.data(), kOpusFrames);
+                framesD += kOpusFrames;
+            }
+            if (now % (5 * kMs) == 0) {
+                feeder.pump();
+            }
+            if (now == 14'000 * kMs) {
+                output.advance();
+                QCOMPARE(feeder.stats().state, RemoteVaxFeederStats::State::Playing);
+                dryAtRecovered = output.dryFrames;
+            }
+        }
+        output.advance();
+        const RemoteVaxFeederStats stats = feeder.stats();
+        QCOMPARE(stats.state, RemoteVaxFeederStats::State::Playing);
+        QCOMPARE(output.dryFrames, dryAtRecovered);
+        QVERIFY2(stats.restarts <= 1, qPrintable(QString::number(stats.restarts)));
+        QCOMPARE(stats.matcherRingFrames, RemoteVaxFeeder::kMatcherRingFrames);
+#endif
+    }
+
+    // The reserve a bursty link grew comes back down a step at a quiet
+    // restart once kShrinkAfterNs passes with no dropout, and not before.
+    void aGrownReserveShrinksAtAQuietRestart()
+    {
+#ifndef HAVE_WDSP
+        QSKIP("WDSP is disabled");
+#else
+        qint64 now = 0;
+        SimulatedVaxOutput output;
+        output.now = &now;
+        RemoteVaxFeeder feeder(1, output.port(), [&now] { return now; });
+        feeder.setSourceSlice(1);
+
+        constexpr qint64 kMs = 1'000'000;
+        constexpr qint64 kClumpsEndNs = 20'000 * kMs;
+        // Quiet pauses: one before kShrinkAfterNs has passed, one after.
+        const qint64 earlyQuietNs = kClumpsEndNs + 60'000 * kMs;
+        const qint64 lateQuietNs = kClumpsEndNs + RemoteVaxFeeder::kShrinkAfterNs + 30'000 * kMs;
+        quint64 sourceFrames = 0;
+        int queuedPackets = 0;
+        qint64 pauseUntil = -1;
+        int ringAfterClumps = 0;
+        int ringAfterEarly = 0;
+        for (now = 0; now <= lateQuietNs + 10'000 * kMs; now += kMs) {
+            if (now % (40 * kMs) == 0) {
+                ++queuedPackets;
+            }
+            if (now < kClumpsEndNs && now > 0 && now % (3000 * kMs) == 0) {
+                pauseUntil = now + 115 * kMs;  // a clump: the backlog follows
+            }
+            const bool quiet = (now >= earlyQuietNs && now < earlyQuietNs + 660 * kMs)
+                || (now >= lateQuietNs && now < lateQuietNs + 660 * kMs);
+            if (quiet) {
+                queuedPackets = 0;
+            } else if (now >= pauseUntil) {
+                for (; queuedPackets > 0; --queuedPackets) {
+                    const std::vector<float> block =
+                        toneBlock(sourceFrames, kOpusFrames, 1579.0, 0.19);
+                    feeder.receiverAudioBlock(1, block.data(), kOpusFrames);
+                    sourceFrames += kOpusFrames;
+                }
+            }
+            if (now % (5 * kMs) == 0) {
+                feeder.pump();
+            }
+            if (now == earlyQuietNs - kMs) {
+                ringAfterClumps = feeder.stats().matcherRingFrames;
+            }
+            if (now == earlyQuietNs + 5000 * kMs) {
+                ringAfterEarly = feeder.stats().matcherRingFrames;
+            }
+        }
+        const RemoteVaxFeederStats stats = feeder.stats();
+        QCOMPARE(ringAfterClumps, 2 * RemoteVaxFeeder::kMatcherRingFrames);
+        QCOMPARE(ringAfterEarly, ringAfterClumps);
+        QCOMPARE(stats.matcherRingFrames, RemoteVaxFeeder::kMatcherRingFrames);
+        QCOMPARE(stats.state, RemoteVaxFeederStats::State::Playing);
+#endif
+    }
+
+    // Clocks further apart than the held ratio's 500 ppm: the ratio sits at
+    // the cap, the stats count it, and the reserve covers the remaining
+    // 100 ppm for minutes.
+    void clocksPastTheCapAreCounted()
+    {
+#ifndef HAVE_WDSP
+        QSKIP("WDSP is disabled");
+#else
+        qint64 now = 0;
+        SimulatedVaxOutput output;
+        output.now = &now;
+        output.ppm = 600;
+        RemoteVaxFeeder feeder(1, output.port(), [&now] { return now; });
+        feeder.setSourceSlice(1);
+
+        constexpr qint64 kMs = 1'000'000;
+        quint64 sourceFrames = 0;
+        for (now = 0; now <= 120'000 * kMs; now += kMs) {
+            if (now % (40 * kMs) == 0) {
+                const std::vector<float> block =
+                    toneBlock(sourceFrames, kOpusFrames, 1579.0, 0.19);
+                feeder.receiverAudioBlock(1, block.data(), kOpusFrames);
+                sourceFrames += kOpusFrames;
+            }
+            if (now % (5 * kMs) == 0) {
+                feeder.pump();
+            }
+        }
+        const RemoteVaxFeederStats stats = feeder.stats();
+        QVERIFY(stats.ratio.has_value());
+        QCOMPARE(*stats.ratio, 1.0 + RemoteVaxFeeder::kMaxRatioPpm * 1e-6);
+        QVERIFY2(stats.ratioWindowsAtCap > 10,
+                 qPrintable(QStringLiteral("%1 windows at the cap").arg(stats.ratioWindowsAtCap)));
+        QCOMPARE(stats.restarts, 0);
+#endif
+    }
+
     // The feeder plays the tone it is given, continuously.
     void playsTheStreamItIsGiven()
     {
@@ -972,6 +1357,79 @@ private slots:
         QCOMPARE(written + stats.droppedFrames, quint64(21 * kOpusFrames));
     }
 
+    // R-AUD-15: an output with its own clock matcher (the Windows VAX
+    // bus) is written as the audio arrives, 48 kHz stereo, even though it
+    // reports pacing; the feeder runs no rate matcher of its own and
+    // restarts the output's matcher when playback starts afresh.
+    void anOutputWithItsOwnMatcherIsWrittenAsItArrives()
+    {
+        constexpr qint64 kMs = 1'000'000;
+        qint64 now = 0;
+        quint64 written = 0;
+        int clockRestarts = 0;
+        VaxOutputPort port;
+        port.pacing = [] {
+            IAudioBus::OutputPacing pacing;
+            pacing.queuedFrames = 240;
+            pacing.capacityFrames = 480;
+            pacing.callbackFrames = 128;
+            return std::optional<IAudioBus::OutputPacing>(pacing);
+        };
+        port.write = [&written](const float*, int frames) { written += quint64(frames); return true; };
+        port.takesStereoMix = [] { return true; };
+        port.restartClockMatch = [&clockRestarts] { ++clockRestarts; };
+        RemoteVaxFeeder feeder(2, port, [&now] { return now; });
+        feeder.setSourceSlice(1);
+        const std::vector<float> block = toneBlock(0, kOpusFrames, 1000.0, 0.1);
+        feeder.receiverAudioBlock(1, block.data(), kOpusFrames);
+        feeder.pump();
+        QCOMPARE(written, quint64(kOpusFrames));
+        QCOMPARE(clockRestarts, 1);
+        QCOMPARE(feeder.stats().state, RemoteVaxFeederStats::State::Playing);
+        QCOMPARE(feeder.stats().matcherFillFrames, 0);
+
+        now += 40 * kMs;
+        feeder.receiverAudioBlock(1, block.data(), kOpusFrames);
+        feeder.pump();
+        QCOMPARE(written, quint64(2 * kOpusFrames));
+        QCOMPARE(clockRestarts, 1);
+
+        // The Core goes quiet, then comes back: a fresh start.
+        now += RemoteVaxFeeder::kQuietNs + kMs;
+        feeder.pump();
+        QCOMPARE(feeder.stats().state, RemoteVaxFeederStats::State::WaitingForAudio);
+        QCOMPARE(clockRestarts, 1);
+        now += 5 * kMs;
+        feeder.receiverAudioBlock(1, block.data(), kOpusFrames);
+        feeder.pump();
+        QCOMPARE(clockRestarts, 2);
+        QCOMPARE(written, quint64(3 * kOpusFrames));
+        QCOMPARE(feeder.stats().state, RemoteVaxFeederStats::State::Playing);
+        QCOMPARE(feeder.stats().restarts, 0);
+
+        // The engine's port asks the channel's bus.
+        AudioEngine engine;
+        AudioStreamRequest request;
+        auto matcherBus = std::make_unique<FakeMatcherAudioBus>(request, true, 128);
+        AudioFormat format;
+        format.sampleRate = 48000;
+        format.channels = 2;
+        format.sample = AudioFormat::Sample::Float32;
+        QVERIFY(matcherBus->open(format));
+        FakeMatcherAudioBus* vax = matcherBus.get();
+        engine.setVaxBusForTest(3, std::move(matcherBus));
+        engine.setVaxBusForTest(4, std::make_unique<CollectingBus>());
+        const VaxOutputPort three = VaxOutputPort::forEngine(&engine, 3);
+        const VaxOutputPort four = VaxOutputPort::forEngine(&engine, 4);
+        QVERIFY(three.takesStereoMix());
+        QVERIFY(!four.takesStereoMix());
+        QVERIFY(!VaxOutputPort::forEngine(&engine, 1).takesStereoMix());
+        three.restartClockMatch();
+        QCOMPARE(vax->restartCount(), 1);
+        QVERIFY(three.write(block.data(), kOpusFrames));
+        QCOMPARE(vax->pushCount(), 1);
+    }
+
     void audioArrivingDuringThePumpIsKept_data()
     {
         QTest::addColumn<bool>("stopped");
@@ -1110,8 +1568,9 @@ private slots:
     }
 
     // A Core opens no VAX device, receive or transmit; a remote window
-    // opens this computer's receive outputs and no transmit device; a
-    // local engine opens all five, as before.
+    // opens this computer's receive outputs and, since 2026-10-15, its VAX
+    // transmit device (VAX as a remote window's transmit source); a local
+    // engine opens all five, as before.
     void aCoreOpensNoVaxDeviceOfEitherDirection()
     {
         const auto countingFactory = [](QList<int>* asked) {
@@ -1156,18 +1615,22 @@ private slots:
             QCOMPARE(asked, (QList<int>{0, 1, 2, 3, 4}));
             local.stop();
         }
-        // A remote window: the receive outputs only, without a start.
+        // A remote window: the receive outputs and the TX device (0),
+        // without a start.
         {
             RadioModel remote(RadioModel::Role::Remote);
             AudioEngine* engine = remote.localAudioDevices();
             QList<int> asked;
             engine->setVaxBusFactoryForTest(countingFactory(&asked));
+            QVERIFY(!engine->isVaxTxBusOpen());
             engine->openVaxOutputs();
             engine->openVaxOutputs();  // idempotent
-            QCOMPARE(asked, (QList<int>{1, 2, 3, 4}));
+            std::sort(asked.begin(), asked.end());
+            QCOMPARE(asked, (QList<int>{0, 1, 2, 3, 4}));
             for (int ch = 1; ch <= 4; ++ch) {
                 QVERIFY(engine->isVaxBusOpen(ch));
             }
+            QVERIFY(engine->isVaxTxBusOpen());
             engine->setVaxBusFactoryForTest({});
             engine->stop();
         }
@@ -1449,19 +1912,19 @@ private slots:
         remoteEngine->setVaxBusForTest(1, std::move(vaxBus));
         remoteEngine->setVaxRxGain(1, 0.5f);
 
+        // The Core's audio, block by block, and this computer's devices
+        // playing it: the speakers, and VAX 1 on its feeder's clock.
+        VaxDeviceOnFeederClock vaxDevice(remoteVax);
+        remoteMedia.setReceiverAudioClockForTest(vaxDevice.sourceClock());
         QTimer source;
         source.setInterval(10);
         source.setTimerType(Qt::PreciseTimer);
-        connect(&source, &QTimer::timeout, &source, [&h] { h.feedMixedTone(); });
-        QTimer devices;
-        devices.setInterval(10);
-        devices.setTimerType(Qt::PreciseTimer);
-        connect(&devices, &QTimer::timeout, &devices, [&h, remoteVax] {
+        connect(&source, &QTimer::timeout, &source, [&h, &vaxDevice] {
+            h.feedMixedTone();
             h.remoteBus->render(Test::RemoteAudioSessionHarness::kFrames);
-            remoteVax->render(Test::RemoteAudioSessionHarness::kFrames);
+            vaxDevice.step();
         });
         source.start();
-        devices.start();
 
         h.connectSession();
         // iPhone app Task 73 (ruling 5.14): once the window owns the Core's
@@ -1475,13 +1938,14 @@ private slots:
         QTRY_VERIFY(h.remote.sliceById(h.sliceB) != nullptr);
 
         const QString coreKey = QStringLiteral("harnesscore");
-        RemoteVaxRouter router(&h.remote, remoteEngine, coreKey);
+        RemoteVaxRouter router(&h.remote, remoteEngine, coreKey,
+                               vaxDevice.feederFactory(remoteEngine), /*startWorkers=*/false);
         router.setReceiverAudio(sourceFor(remoteMedia));
         QTest::qWait(200);
         QCOMPARE(receiverRequests(coreControls, h.sliceB).size(), 0);
 
         if (delayedRoute) {
-            QTRY_VERIFY_WITH_TIMEOUT(remoteVax->heard.size() >= 2 * 48000 * 2, 20000);
+            QVERIFY(awaitAudio(vaxDevice, [remoteVax] { return remoteVax->heard.size() >= 2 * 48000 * 2; }));
         }
 
         // The operator puts slice B on VAX 1 in the remote window.
@@ -1497,8 +1961,10 @@ private slots:
         // and time before the operator routes audio are not playback samples.
         // Keep the original one-second settling interval within this window;
         // any subsequent silence or discontinuity still affects the level.
-        QTRY_VERIFY_WITH_TIMEOUT(router.feeder(1)->stats().state == RemoteVaxFeederStats::State::Playing
-                                 && router.feeder(1)->stats().writtenFrames > 0, 20000);
+        QVERIFY(awaitAudio(vaxDevice, [&router] {
+            return router.feeder(1)->stats().state == RemoteVaxFeederStats::State::Playing
+                && router.feeder(1)->stats().writtenFrames > 0;
+        }));
         qsizetype remoteStart = remoteVax->heard.size();
         qsizetype localStart = stationVax->samples().size();
         constexpr qsizetype measurementSamples = 3 * 48000 * 2;
@@ -1675,19 +2141,19 @@ private slots:
         remoteEngine->setVaxBusForTest(1, std::move(vaxBus));
         remoteEngine->setVaxRxGain(1, 0.5f);
 
+        // The Core's audio, block by block, and this computer's devices
+        // playing it: the speakers, and VAX 1 on its feeder's clock.
+        VaxDeviceOnFeederClock vaxDevice(remoteVax);
+        remoteMedia.setReceiverAudioClockForTest(vaxDevice.sourceClock());
         QTimer source;
         source.setInterval(10);
         source.setTimerType(Qt::PreciseTimer);
-        connect(&source, &QTimer::timeout, &source, [&h] { h.feedMixedTone(); });
-        QTimer devices;
-        devices.setInterval(10);
-        devices.setTimerType(Qt::PreciseTimer);
-        connect(&devices, &QTimer::timeout, &devices, [&h, remoteVax] {
+        connect(&source, &QTimer::timeout, &source, [&h, &vaxDevice] {
+            h.feedMixedTone();
             h.remoteBus->render(Test::RemoteAudioSessionHarness::kFrames);
-            remoteVax->render(Test::RemoteAudioSessionHarness::kFrames);
+            vaxDevice.step();
         });
         source.start();
-        devices.start();
 
         h.connectSession();
         // iPhone app Task 73 (ruling 5.14): once the window owns the Core's
@@ -1702,10 +2168,11 @@ private slots:
         QTRY_VERIFY(h.remote.sliceById(h.sliceB) != nullptr);
 
         const QString coreKey = QStringLiteral("harnesscore2");
-        RemoteVaxRouter router(&h.remote, remoteEngine, coreKey);
+        RemoteVaxRouter router(&h.remote, remoteEngine, coreKey,
+                               vaxDevice.feederFactory(remoteEngine), /*startWorkers=*/false);
         router.setReceiverAudio(sourceFor(remoteMedia));
         if (delayedRoute) {
-            QTRY_VERIFY_WITH_TIMEOUT(remoteVax->heard.size() >= 2 * 48000 * 2, 20000);
+            QVERIFY(awaitAudio(vaxDevice, [remoteVax] { return remoteVax->heard.size() >= 2 * 48000 * 2; }));
         }
         h.remote.sliceById(h.sliceA)->setVaxChannel(1);
         h.remote.sliceById(h.sliceB)->setVaxChannel(1);
@@ -1722,8 +2189,10 @@ private slots:
         // and time before the operator routes audio are not playback samples.
         // Keep the original one-second settling interval within this window;
         // any subsequent silence or discontinuity still affects the level.
-        QTRY_VERIFY_WITH_TIMEOUT(router.feeder(1)->stats().state == RemoteVaxFeederStats::State::Playing
-                                 && router.feeder(1)->stats().writtenFrames > 0, 20000);
+        QVERIFY(awaitAudio(vaxDevice, [&router] {
+            return router.feeder(1)->stats().state == RemoteVaxFeederStats::State::Playing
+                && router.feeder(1)->stats().writtenFrames > 0;
+        }));
         qsizetype remoteStart = remoteVax->heard.size();
         qsizetype localStart = stationVax->samples().size();
         constexpr qsizetype measurementSamples = 3 * 48000 * 2;

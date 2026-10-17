@@ -569,7 +569,11 @@ private slots:
 
         QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel && app.m_radioModel->isConnected(), 15000);
         QTRY_VERIFY(!app.m_stationRadios->switching());
-        QCOMPARE(app.m_stationRadios->savedChoice(), info.macAddress.toUpper());
+        // The choice is saved by the Connected handler (confirmChoice),
+        // queued after the model reports connected. Under load this
+        // change's own deadline can end it before that handler runs, so
+        // wait for the save itself, not for the change to end.
+        QTRY_COMPARE(app.m_stationRadios->savedChoice(), info.macAddress.toUpper());
         QVERIFY(app.m_stationRadios->pendingChoice().isEmpty());
         app.stop();
     }

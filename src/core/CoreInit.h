@@ -27,6 +27,10 @@
 //               the file and stderr, so no logging thread waits on the log.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-10-11: logAfterShutdown(), so a failure that happens after the
+//               window has closed its log still reaches the log. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #pragma once
@@ -64,6 +68,16 @@ bool initialize(const QString& profile = {});
 // event loop returns; mirrors the two-line teardown that used to sit at
 // the bottom of main(). No-op if initialize() was never called.
 void shutdown();
+
+// Writes one warning to the profile's log after shutdown() has closed it:
+// the log is opened again, the line goes through the same handler as every
+// other line, and the log is closed. For a failure that can only happen
+// once the profile has been given up, such as a background Core that does
+// not start at window close. The caller must own the profile again while
+// this runs. Each call starts a new log file, as every start of the log
+// does, so call it for a line worth one. False when the log is still open
+// (log the usual way then) or the file could not be opened.
+bool logAfterShutdown(const QString& profile, const QString& message);
 
 #ifdef NEREUS_BUILD_TESTS
 // Test-only hook, only compiled when NEREUS_BUILD_TESTS is defined. Number

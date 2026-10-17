@@ -286,7 +286,11 @@ void TxMicSource::drainBlock(double* dst)
         return;
     }
 
-    QMutexLocker lock(&m_csOut);
+    // NereusSDR: Thetis uses separate csIN/csOUT locks. Share producer
+    // ownership while copying so an overwrite cannot change this snapshot.
+    // Match start()'s input-before-output lock order; neither lock spans DSP.
+    QMutexLocker lockIn(&m_csIn);
+    QMutexLocker lockOut(&m_csOut);
 
     const int cap = ringFrameCapacity();
     if (cap <= 0) {

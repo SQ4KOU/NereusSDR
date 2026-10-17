@@ -26,6 +26,12 @@
 //                 pan key does not name a window pan, and complete a rise
 //                 once the initial TX slice snapshot follows the keyed state.
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-10 : Display pill plan Task 13: both edges reach every pan
+//                 (keyEveryPan) before the rise and the fall. The rise no
+//                 longer takes Clarity off the transmitting pan and neither
+//                 edge re-primes the waterfall AGC: each pan keeps its level
+//                 through the key. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "gui/MoxDisplayController.h"
@@ -33,6 +39,8 @@
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
 #include "core/MoxController.h"
+#include "core/PureSignal.h"
+#include "core/session/PureSignalSessionFacade.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
 #include "core/session/TransmitStateFacade.h"
@@ -65,9 +73,24 @@ MoxDisplayController::MoxDisplayController(PanadapterStack* pans, RadioModel* mo
     , m_pans(pans)
     , m_model(model)
 {
+    m_showIMDMeasurements = AppSettings::instance().value(
+        QStringLiteral("puresignal/showTwoToneMeasurements"), false).toBool();
+    if (pans != nullptr) {
+        connect(pans, &PanadapterStack::countChanged, this,
+                &MoxDisplayController::applyMeasurementGates);
+    }
     // Parity Task 31: a remote window's DUP follows the Core's
     // txDisplayVersion (3 and above).
     if (model != nullptr) {
+        connect(model, &RadioModel::pureSignalCoordinatorReady, this,
+                &MoxDisplayController::bindMeasurementCoordinator);
+        if (PureSignalSessionFacade* facade = model->pureSignalFacade()) {
+            connect(facade, &PureSignalSessionFacade::statusChanged, this,
+                    &MoxDisplayController::refreshTestingIMD);
+        }
+        if (model->pureSignal() != nullptr) {
+            bindMeasurementCoordinator(model->pureSignal());
+        }
         connect(model, &RadioModel::stationTxDisplayVersionChanged, this,
                 &MoxDisplayController::applyDisplayDuplex);
         // The radio coming on resets every receiver's peaks. From Thetis
@@ -88,6 +111,54 @@ MoxDisplayController::MoxDisplayController(PanadapterStack* pans, RadioModel* mo
                     }
                 });
     }
+    refreshTestingIMD();
+}
+
+void MoxDisplayController::bindMeasurementCoordinator(PureSignal* coordinator)
+{
+    if (m_measurementCoordinator == coordinator) {
+        return;
+    }
+    QObject::disconnect(m_measurementsConnection);
+    m_measurementCoordinator = coordinator;
+    if (coordinator != nullptr) {
+        m_measurementsConnection = connect(coordinator, &PureSignal::show2ToneMeasurementsChanged,
+                                           this, &MoxDisplayController::setShowIMDMeasurements);
+    }
+    // PsForm owns this window-local saved preference. The legacy coordinator
+    // getter is an unpersisted mirror, so its startup false cannot reset a
+    // saved true (and a saved false also wins). Use the snapshot only when
+    // there is no saved preference; keep future explicit legacy signals.
+    const QString key = QStringLiteral("puresignal/showTwoToneMeasurements");
+    AppSettings& settings = AppSettings::instance();
+    setShowIMDMeasurements(settings.contains(key) ? settings.value(key).toBool()
+        : coordinator != nullptr && coordinator->show2ToneMeasurements());
+}
+
+void MoxDisplayController::setShowIMDMeasurements(bool on)
+{
+    m_showIMDMeasurements = on;
+    applyMeasurementGates();
+}
+
+void MoxDisplayController::refreshTestingIMD()
+{
+    PureSignalSessionFacade* facade = m_model ? m_model->pureSignalFacade() : nullptr;
+    m_testingIMD = facade != nullptr && facade->twoToneOn();
+    applyMeasurementGates();
+}
+
+void MoxDisplayController::applyMeasurementGates()
+{
+    if (m_pans.isNull()) {
+        return;
+    }
+    for (PanadapterApplet* applet : m_pans->allApplets()) {
+        if (SpectrumWidget* spectrum = applet != nullptr ? applet->spectrumWidget() : nullptr) {
+            spectrum->setTestingIMD(m_testingIMD);
+            spectrum->setShowIMDMeasurements(m_showIMDMeasurements);
+        }
+    }
 }
 
 void MoxDisplayController::resetPeaksOnEveryPan()
@@ -99,6 +170,44 @@ void MoxDisplayController::resetPeaksOnEveryPan()
         if (SpectrumWidget* sw = applet != nullptr ? applet->spectrumWidget() : nullptr) {
             sw->resetPeaks();
         }
+    }
+}
+
+void MoxDisplayController::setPanBandProvider(std::function<int(const QString& panId)> provider)
+{
+    m_panBand = std::move(provider);
+}
+
+void MoxDisplayController::keyEveryPan(bool keyed)
+{
+    if (m_pans.isNull()) {
+        return;
+    }
+    // NereusSDR, based on Thetis display.cs:7651 [v2.10.3.15]: Thetis has
+    // one waterfall minimum for each receiver and stops following it while
+    // that receiver's display shows the transmitter. Here every pan of the
+    // window has its own follower and the receiver hears the transmitter on
+    // all of them, so every pan's level is frozen for the key, not only the
+    // transmitting pan's.
+    //
+    // NereusSDR, based on Thetis display.cs:5912 and 7640-7651
+    // [v2.10.3.15]: after the un-key each pan holds its level for its own
+    // hold length (SpectrumWidget::moxHoldLengthMs: twice its FFT's fill
+    // time, a second at least) and takes no reading from the frames in it.
+    // Thetis delays its waterfall AGC for one fill time and lets the
+    // noise-floor fast attack ride out the rest; here the hold and the fast
+    // attack are one length, because the purged FFT input is still
+    // refilling for that long.
+    for (PanadapterApplet* applet : m_pans->allApplets()) {
+        SpectrumWidget* sw = applet != nullptr ? applet->spectrumWidget() : nullptr;
+        if (sw == nullptr) {
+            continue;
+        }
+        const QString panId = applet->panId();
+        const int band = m_panBand ? m_panBand(panId) : kNoBandKey;
+        sw->setDisplayKeyed(keyed, sw->moxHoldLengthMs(), band);
+        note(QStringLiteral("setDisplayKeyed(%1) %2")
+                 .arg(keyed ? QStringLiteral("true") : QStringLiteral("false"), panId));
     }
 }
 
@@ -207,6 +316,7 @@ void MoxDisplayController::setKeyed(bool keyed, int txSliceId)
         if (keyed && m_panId.isEmpty()) {
             rise(txSliceId);
             applyHighSwr();
+            emit keyedOwnerCommitted(m_panId);
         }
         return;
     }
@@ -229,12 +339,14 @@ void MoxDisplayController::setKeyed(bool keyed, int txSliceId)
     //       ...
     //       Display.PurgeBuffers();
     resetPeaksOnEveryPan();
+    keyEveryPan(keyed);
     if (keyed) {
         rise(txSliceId);
     } else {
         fall();
     }
     applyHighSwr();
+    emit keyedOwnerCommitted(m_panId);
 }
 
 // ── PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07) ────────
@@ -402,15 +514,16 @@ void MoxDisplayController::beginTransmitView(SpectrumWidget* sw)
     sw->setDisplayWindowPreservingHistory(m_carrierHz, sw->bandwidth());
     note(QStringLiteral("setDisplayWindowPreservingHistory(carrier)"));
 
-    // PR #212 follow-up bench fix (KG4VCF, 2026-05-10): disable Clarity so
-    // the waterfall AGC takes over for TX dynamic range. Clarity tracks RX
-    // noise floor (~-100 dBm range) and was leaving its RX-tuned thresholds
-    // in place during TX, mapping every TX bin (which sits well above the RX
-    // threshold band) to the colormap's red end. Clarity's next RX-side emit
-    // re-enables itself via MainWindow's Clarity lambda (MOX-gated to ignore
-    // TX emissions).
-    sw->setClarityActive(false);
-    note(QStringLiteral("setClarityActive(false)"));
+    // Clarity stays on the pan through the key (#359). The transmit
+    // waterfall does not use its level: with the MOX overlay on, the pan
+    // draws with its own transmit levels (setMoxOverlay(true) above, Thetis
+    // TXWFAmpMin / TXWFAmpMax, display.cs:6420-6427 [v2.10.3.15]), so the
+    // receive level Clarity found is neither shown nor lost. It is kept as
+    // it was, PanClarityRegistry takes no reading while keyed or in the
+    // hold after it, and the first receive row after the un-key is drawn
+    // at the level the pan had before the key. Taking Clarity off here, as
+    // this did until 2026-10-10, left the pan to find its level again from
+    // nothing after every transmission.
 
     // 3M-5d: the waterfall plane is driven by the transmit source's
     // waterfall (pixout=1, DetTypeWF + AverageModeWF applied inside WDSP)
@@ -419,13 +532,11 @@ void MoxDisplayController::beginTransmitView(SpectrumWidget* sw)
     sw->setTxExternalWaterfall(true);
     note(QStringLiteral("setTxExternalWaterfall(true)"));
 
-    // Force the waterfall-AGC tracker to re-prime on the first TX frame.
-    // RX bins live around -110 dBm; TX siphon bins land around -50 dBm.
-    // Without an AGC reset the 0.05-alpha follower needs ~3 s to drag the
-    // colormap thresholds up and the panadapter saturates solid red until
-    // then.
-    sw->resetWaterfallAgc();
-    note(QStringLiteral("resetWaterfallAgc"));
+    // The waterfall AGC is not re-primed here: keyEveryPan saved this
+    // pan's receive level for its band and froze the follower, and the
+    // transmit rows draw with the transmit levels, never the follower's.
+    // From Thetis display.cs:1585 [v2.10.3.15] (Display.MOX):
+    //   _RX1waterfallPreviousMinValue = getWaterfallCachedPreviousMinOrFloor(1, rx1WillBeTx);
     // 3M-5b polish (KG4VCF, 2026-05-10): clear the spectrum + waterfall
     // avenger accumulators on MOX rise so the trace doesn't fade from
     // pre-MOX RX state into TX state via LogRecursive smoothing (~3 s time
@@ -475,6 +586,13 @@ void MoxDisplayController::fall()
     SpectrumWidget* sw = m_pan.data();
     const bool hadPan = !m_panId.isEmpty();
     const bool hadTransmitView = m_transmitView;
+    // A Tune context reports the compensated NCO and temporarily shifts
+    // the TX filter offset. Restore the slice's current XIT before releasing
+    // its reference; an ordinary rekey can report the rise's seeded carrier
+    // and return from carrierChanged without refreshing this widget state.
+    if (sw != nullptr && !m_slice.isNull()) {
+        sw->setTxVfoOffsetHz(m_slice->xitEnabled() ? m_slice->xitHz() : 0);
+    }
     m_panId.clear();
     m_pan.clear();
     m_slice.clear();
@@ -521,11 +639,10 @@ void MoxDisplayController::endTransmitView(SpectrumWidget* sw)
     note(QStringLiteral("disconnect txViewWindowChanged"));
     sw->setTxCenterFrequency(0.0);
     note(QStringLiteral("setTxCenterFrequency(0)"));
-    // Symmetric AGC reset on un-key so the waterfall snaps back to the RX
-    // dynamic range without the same 3 s saturation pause in the other
-    // direction.
-    sw->resetWaterfallAgc();
-    note(QStringLiteral("resetWaterfallAgc"));
+    // No AGC re-prime on the un-key either: keyEveryPan put back the level
+    // this pan had on its band before the key (Thetis display.cs:1585
+    // [v2.10.3.15]), so the first receive row is drawn where the last one
+    // before the key was.
     // Symmetric avenger clear on un-key so the trace doesn't fade from TX
     // tone state into RX state.
     sw->clearAvengers();

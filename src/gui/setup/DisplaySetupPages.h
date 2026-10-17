@@ -9,6 +9,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//                 Native Display assembly interfaces and coherent own-row presentation.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -69,6 +71,9 @@
 //============================================================================================//
 
 #include "gui/SetupPage.h"
+#include "models/PanadapterModel.h"
+
+#include <QPointer>
 
 class QSlider;
 class QComboBox;
@@ -77,12 +82,47 @@ class QDoubleSpinBox;
 class QCheckBox;
 class QLabel;
 class QPushButton;
+class QTimer;
 
 namespace NereusSDR {
 
 class PanadapterModel;
 class ColorSwatchButton;
 class SpectrumWidget;
+
+// Approved Display pages retain the original bound builders as hidden
+// callback owners, and move complete rows into these scoped destinations.
+class DisplayAssemblyPage : public SetupPage {
+    Q_OBJECT
+public:
+    DisplayAssemblyPage(const QString& title, RadioModel* model, const QStringList& keys,
+                        bool panScope, QWidget* parent = nullptr);
+    void takeRows(QWidget* source, const QString& title, const QStringList& ids);
+    void takeGroups(QWidget* source);
+    void addSpectrumScaleChooser();
+    void addWaterfallLevelsChooser();
+    void addViewChooser();
+    void addFftSizingChooser(QWidget* source);
+    void addMissingPictureRows();
+    Q_INVOKABLE void refreshAssemblyPresentation() { pairNumberRows(this); displayPansChanged(); }
+    static void pairNumberRows(QWidget* page);
+    void refreshOwnRows();
+    void positionOwnRows();
+signals:
+    void clarityRetuneRequested(int panIndex);
+    void pageRequested(const QString& pageName);
+    void ownRowReset();
+protected:
+    void displayPansChanged() override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
+    void refreshNumberGates();
+private:
+    QHash<QString, QPointer<QPushButton>> m_ownDots;
+    QHash<QString, QPointer<QLabel>> m_rowReasons;
+    bool m_refreshingOwnRows{false};
+    QVector<std::function<void()>> m_pictureRefreshers;
+};
+
 
 // ---------------------------------------------------------------------------
 // Display > Spectrum Defaults
@@ -99,7 +139,23 @@ public:
     // they are disabled while the Core's settings are unavailable.
     void setStationSettingsAvailable(bool available, const QString& reason) override;
 
+    // Display pill plan Task 20: the window's FFT handlers; the line under
+    // the FFT Size slider is rewritten from what they now report.
+    void setFftHandlers(const SetupFftHandlers& handlers) override;
+
+    // The FFT Size, Window, Hz/bin target, FPS and Decimation rows show the
+    // station's values again, under signal blockers, and nothing is written:
+    // a pan's Display pill, or the Core, changed one while this page was
+    // open. A change this page is making itself is skipped, and so is the
+    // size slider while it is held or its keyboard steps are still waiting.
+    void stationFftSettingsChanged() override;
+
+    // What Reset to Smooth Defaults asks before it runs. The Setup
+    // description's row carries the same question (its `confirm`).
+    static QString smoothDefaultsQuestion();
+
 signals:
+    void fftSizingPresentationChanged();
     /// Emitted when the user clicks "Configure peaks →".
     /// SetupDialog connects to selectPage("Spectrum Peaks").
     void navigateToSpectrumPeaksRequested();
@@ -117,8 +173,50 @@ private:
     // station keys this window holds from the Core), and the size and bin
     // width readouts show what the Core granted the active pan.
     bool remoteWindow();
-    void loadStationSpectrumSettings();
+    // `keepChosenSize` leaves the FFT Size slider where the operator has it.
+    void loadStationSpectrumSettings(bool keepChosenSize = false);
     void refreshGrantedReadouts();
+    // "Reset to Smooth Defaults": the profile as Setup defaults, each value
+    // through applyDisplayDefault, so every pan without a value of its own
+    // takes it and a pan with one keeps it.
+    void applySmoothDefaults();
+    // True while this page hands one of its own FFT changes to the window.
+    bool m_applyingOwnFftChange{false};
+
+    // Display pill plan Task 20 (D22, D23; R-DSP-29, R-DSP-31, R-DSP-61;
+    // issue #296). The FFT Size slider sets the station's baseline size and
+    // nothing else: a drag acts once, as the handle is let go, and keyboard
+    // steps act once, kDisplayFftSizeKeyDelayMs after the last. The size
+    // each stream runs is planned from the baseline by the window.
+    // showChosenFftSize writes the two cells for a slider position without
+    // changing anything; applyChosenFftSize makes the slider's value the
+    // baseline; fftBaselineInUse is the baseline the slider is compared
+    // with; refreshFftReadoutLine rewrites the line under the slider.
+    void showChosenFftSize(int position);
+    void applyChosenFftSize();
+    int  fftBaselineInUse();
+    void refreshFftReadoutLine();
+    DisplayFftReadoutFacts fftReadoutFacts();
+    QTimer* m_fftSizeKeyTimer{nullptr};
+    bool    m_fftSizeReleasePending{false};
+
+    // FFT sizing mode (design D38): "Sizing" picks what sets the FFT size.
+    // refreshFftSizingControls shows the station's mode and what follows
+    // from it: the FFT Size slider is live in Fixed only and otherwise shows
+    // the size running now; the Hz/bin target is live in Hz/bin only and
+    // otherwise shows the remembered target; the two cells and the line
+    // under them show what runs. A size the operator is still choosing is
+    // left where it is. While the station's settings are unavailable every
+    // one of these is held with the station's reason instead.
+    void refreshFftSizingControls();
+    // The two cells for `size` at the rate and decimation in use.
+    void showFftCells(int size, double binWidthHz);
+    QComboBox* m_fftSizingCombo{nullptr};
+    bool       m_stationAvailable{true};
+    QString    m_stationReason;
+    // What the active pan's FFT runs at now (objectName "setupFftReadout"),
+    // in the Display pill's words (DisplayFftReadout.h).
+    QLabel* m_fftReadoutLine{nullptr};
 
     // Section: FFT
     // Phase 2: FFT size is a 0..6 slider (Thetis tbDisplayFFTSize per
@@ -165,7 +263,7 @@ private:
     QSpinBox*  m_decimationSpin{nullptr};    // S16 decimation
     QCheckBox* m_fillToggle{nullptr};        // Fill under spectrum trace
     QSlider*   m_fillAlphaSlider{nullptr};   // 0–100
-    QSlider*   m_lineWidthSlider{nullptr};   // 1–3
+    QSlider*   m_lineWidthSlider{nullptr};   // tenths of a pixel, 1–50 (0.1 to 5 px)
     QCheckBox* m_gradientToggle{nullptr};    // S14 gradient enabled
 
     // Section: Colors moved to Setup → Appearance → Colors & Theme (S11/S12/S13).
@@ -215,11 +313,21 @@ class WaterfallDefaultsPage : public SetupPage {
 public:
     explicit WaterfallDefaultsPage(RadioModel* model, QWidget* parent = nullptr);
 
+protected:
+    void displayPansChanged() override;
+
 private:
     void buildUI();
     void loadFromRenderer();
     void updateEffectiveDepthLabel();
     void updateDelayLabel();          // Task 2.8: live "Delay: NN.N s" readout
+    // Display pill plan Task 21: greys the level rows for whoever is setting
+    // the levels (Clarity on the active pan, "Use spectrum min/max", AGC off
+    // for the NF-AGC rows) and says who in m_levelOwnerNote.
+    void updateLevelOwner();
+    QLabel*            m_levelOwnerNote{nullptr};
+    QSpinBox*          m_highThresholdSpin{nullptr};
+    QSpinBox*          m_lowThresholdSpin{nullptr};
 
     // Section: Levels
     QSlider*           m_highThresholdSlider{nullptr};
@@ -271,6 +379,8 @@ private:
 // ---------------------------------------------------------------------------
 class GridScalesPage : public SetupPage {
     Q_OBJECT
+signals:
+    void trackingPresentationChanged();
 public:
     explicit GridScalesPage(RadioModel* model, QWidget* parent = nullptr);
 
@@ -279,10 +389,25 @@ public:
     // range, so they are disabled while the Core's settings are unavailable.
     void setStationSettingsAvailable(bool available, const QString& reason) override;
 
+protected:
+    void displayPansChanged() override;
+
 private:
     void buildUI();
     void loadFromRenderer();
+    void refreshTrackingPresentation();
     void applyBandSlot(PanadapterModel* pan);
+    // Display pill plan Task 21 (D27): the band rows edit the band store of
+    // the active pan's model (SetupPage::bandGridModel). followBandGridModel
+    // points them at it and shows its band; updateBandRowGate greys them
+    // with the reason while there is no pan or the Core's settings are out
+    // of reach.
+    void followBandGridModel();
+    void updateBandRowGate();
+    QPointer<PanadapterModel> m_bandModel;
+    bool    m_stationAvailable{true};
+    QString m_stationReason;
+    QLabel* m_noPanNote{nullptr};
 
     // Section: Grid
     QCheckBox*      m_gridToggle{nullptr};
@@ -327,6 +452,7 @@ class GradientPickerWidget;
 class TxDisplayPage : public SetupPage {
     Q_OBJECT
 public:
+    void retireInlineGradientEditor();
     explicit TxDisplayPage(RadioModel* model, QWidget* parent = nullptr);
 
     // R-R3-21 / R-R3-10: the TX analyzer settings (FFT size, window, panadapter
@@ -426,6 +552,15 @@ private:
 // SpectrumWidget-first wiring. SetupDialog's production registration
 // passes model->spectrumWidget() through this same constructor.
 //
+// Display pill plan Task 21 (D26) changed what the page holds: Mode, Gain,
+// Span, Angle, Speed and Slice Shadow are the Setup defaults for every pan,
+// stored on the bare keys and pushed to each pan that has no value of its
+// own (SetupPage::applyDisplayDefault). The page shows those defaults and
+// follows them; a pan's own value, set from the Display pill, does not
+// move it. 3D Floor stays per band on the pan the page was built against.
+// The paragraph below describes the sync as it was before that task and
+// still holds for 3D Floor.
+//
 // Two-way sync: this page's seven widgets, the Task 13 overlay menu, and any
 // other bound surface all read and write the SAME SpectrumWidget-owned
 // DisplaySettingsModel (3D Stacked-Trace Spectrum Plan Task 18), reached
@@ -452,7 +587,14 @@ public:
     // logic (SpectrumDefaultsPage::buildUI()'s resetBtn lambda).
     void resetToDefaultsForTest();
 
+protected:
+    void displayPansChanged() override;
+
 private:
+    void showSelectedBandFloor();
+    QPointer<PanadapterModel> m_floorBandModel;
+    QMetaObject::Connection m_floorBandChanged;
+    QMetaObject::Connection m_floorBandStored;
     void buildUI();
     // Seeds all seven widgets from the live DisplaySettingsModel getters
     // (m_spectrumWidget->displaySettings()), under a QSignalBlocker per
@@ -465,6 +607,7 @@ private:
 
     QComboBox* m_modeCombo{nullptr};
     QSlider*   m_floorSlider{nullptr};
+    QSpinBox*  m_floorSpin{nullptr};
     QSlider*   m_gainSlider{nullptr};
     QSlider*   m_spanSlider{nullptr};
     QSlider*   m_angleSlider{nullptr};

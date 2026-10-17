@@ -54,6 +54,11 @@ mw0lge@grange-lane.co.uk
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+// Modification history (NereusSDR):
+//   2026-10-12 - Apply the approved workspace-only 11 px text minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
+#include "gui/styles/WorkspacePreview.h"
 #include "NeedleScalePwrItem.h"
 #include "ResponsiveText.h"
 
@@ -104,7 +109,7 @@ void NeedleScalePwrItem::paint(QPainter& p, int widgetW, int widgetH)
     QFont font;
     font.setFamily(m_fontFamily);
     font.setBold(m_fontBold);
-    font.setPointSizeF(static_cast<double>(fontSizeEm));
+    font.setPointSizeF(static_cast<double>(fontSizeEm)); font = WorkspacePreview::readableFont(font, p.device());
     p.setFont(font);
 
     // Determine if using milliwatts (max power ≤ 1 W)

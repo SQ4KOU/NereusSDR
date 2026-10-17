@@ -92,8 +92,15 @@ public:
     // value); the display derives its averaging constant from it.
     virtual void setSpectrumAverageTimeMs(int ms) = 0;
     virtual void setFillColor(const QColor& color) = 0;
+    // The trace line's own color. The smooth profile sets it to the fill's
+    // white, so a trace color chosen earlier does not outlive the reset.
+    virtual void setTraceColor(const QColor& color) = 0;
     virtual void setPanFillEnabled(bool on) = 0;
     virtual void setWfAgcEnabled(bool on) = 0;
+    // Smooth reset changes Manual to Auto while retaining the other
+    // requested modes and their remembered inactive flags. A sink without
+    // picture mode state retains the existing recipe's behavior.
+    virtual void enableWaterfallAgcIfManual() { setWfAgcEnabled(true); }
     virtual void setWfUpdatePeriodMs(int ms) = 0;
 };
 

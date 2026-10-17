@@ -28,6 +28,14 @@
 //                                    recordStreamVersion and the record
 //                                    streams. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-10-11  J.J. Boyd / KG4VCF  A level mode changed while keyed: the
+//                                    new Clarity's key state and the
+//                                    per-band AGC levels. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-10-11  J.J. Boyd / KG4VCF  calibrationMovesTheFramesBins compares
+//                                    planes that hold nothing, with one
+//                                    endpoint started before the other.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -192,6 +200,17 @@ QJsonObject plane()
 {
     return {{QStringLiteral("detector"), static_cast<int>(SpectrumDetectorMode::Peak)},
             {QStringLiteral("averageMode"), -1},
+            {QStringLiteral("averageAlpha"), 0.0}};
+}
+
+// A plane that keeps nothing from one frame to the next. plane() holds each
+// pixel's maximum, so what an endpoint shows for a frame depends on every
+// frame it was sent before. Two endpoints compared on one source frame
+// need this one: one of them may have started a frame earlier.
+QJsonObject planeWithoutHold()
+{
+    return {{QStringLiteral("detector"), static_cast<int>(SpectrumDetectorMode::Peak)},
+            {QStringLiteral("averageMode"), 0},
             {QStringLiteral("averageAlpha"), 0.0}};
 }
 
@@ -513,7 +532,10 @@ private slots:
         desktop.setActivePeakHoldDropDbPerSec(6.0);
         desktop.setNFShiftDbm(2.0f);
         desktop.setClarityActive(false);
-        desktop.setWfAgcEnabled(levelMode == QLatin1String("agc"));
+        // NF-AGC is an option under AGC (S7): the desktop has both on where
+        // the station link says `noiseFloorAgc`.
+        desktop.setWfAgcEnabled(levelMode == QLatin1String("agc")
+                                || levelMode == QLatin1String("noiseFloorAgc"));
         desktop.setWaterfallNFAGCEnabled(levelMode == QLatin1String("noiseFloorAgc"));
         desktop.setWaterfallAGCOffsetDb(-4);
         desktop.setWfLowThreshold(-125.0f);
@@ -697,6 +719,367 @@ private slots:
         }
     }
 
+    // ── Key edges: kept level, restore, hold (design 5.2, 5.3, 5.6) ─────
+
+private:
+    // One frame with every pixel at `dbm`, adding a waterfall line.
+    static DisplayCodecFrame flatFrame(float dbm)
+    {
+        DisplayCodecFrame frame;
+        frame.context = {1, 1, -180.0f, 0.0f, 64, 64, 0};
+        frame.traceDbm = QVector<float>(64, dbm);
+        frame.waterfallDbm = frame.traceDbm;
+        frame.waterfallAdvance = true;
+        return frame;
+    }
+
+    static DisplayExtrasRequest levelsRequest(WaterfallLevelMode mode)
+    {
+        DisplayExtrasRequest request;
+        DisplayExtrasRequest::WaterfallLevels levels;
+        levels.mode = mode;
+        request.waterfallLevels = levels;
+        request.noiseFloor = DisplayExtrasRequest::NoiseFloor{true, 0.0, true};
+        return request;
+    }
+
+    // A processor on a clock of the test's own, 33 ms a frame.
+    struct Run {
+        DisplayExtrasProcessor station;
+        DisplayExtrasInputs inputs;
+        qint64 nowMs {0};
+
+        explicit Run(const DisplayExtrasRequest& request, qint64 holdLengthMs = 3000)
+            : station(request)
+        {
+            inputs.fps = 30;
+            inputs.sliceHz = 14200000.0;
+            inputs.band = 5;
+            inputs.holdLengthMs = holdLengthMs;
+        }
+        // One frame at the clock as it stands; the clock does not move.
+        DisplayExtrasFrame frameAt(qint64 atMs, float dbm)
+        {
+            nowMs = atMs;
+            inputs.nowMs = atMs;
+            return station.process(flatFrame(dbm), inputs);
+        }
+        // `frames` frames, each 33 ms after the one before.
+        DisplayExtrasFrame frames(int frames, float dbm)
+        {
+            DisplayExtrasFrame out;
+            for (int i = 0; i < frames; ++i) {
+                out = frameAt(nowMs + 33, dbm);
+            }
+            return out;
+        }
+    };
+
+private slots:
+    // D17, R-DSP-23, R-DSP-24: the rows of a key are 40 dB hotter than the
+    // band. The AGC's run level and its low level stay where they were
+    // through the key, and the first receive row after it starts from them:
+    // no re-prime on a row that still holds the transmission.
+    void aKeyKeepsTheAgcRunLevelAndTheUnKeyRestoresIt()
+    {
+        Run run(levelsRequest(WaterfallLevelMode::Agc));
+        run.frames(200, -120.0f);
+        const std::optional<float> before = run.station.agcRunLevel();
+        QVERIFY(before.has_value());
+        QVERIFY(std::abs(*before + 120.0f) < 0.01f);
+        const std::pair<float, float> levelsBefore = run.station.waterfallLevels();
+        QVERIFY(std::abs(levelsBefore.first + 132.0f) < 0.01f);
+
+        run.inputs.mox = true;
+        const DisplayExtrasFrame keyedOut = run.frames(50, -80.0f);
+        QVERIFY(run.station.keyed());
+        QVERIFY(run.station.levelFollower().keyed());
+        QCOMPARE(*run.station.agcRunLevel(), *before);
+        QCOMPARE(keyedOut.waterfallLevelsDbm->first, levelsBefore.first);
+        QCOMPARE(keyedOut.waterfallLevelsDbm->second, levelsBefore.second);
+
+        run.inputs.mox = false;
+        const DisplayExtrasFrame first = run.frames(1, -80.0f);
+        QVERIFY(!run.station.keyed());
+        QVERIFY(run.station.agcRunLevel().has_value());
+        QCOMPARE(*run.station.agcRunLevel(), *before);
+        QCOMPARE(first.waterfallLevelsDbm->first, levelsBefore.first);
+        QCOMPARE(first.waterfallLevelsDbm->second, levelsBefore.second);
+    }
+
+    // A band changed while keyed, with nothing saved for the new band:
+    // the AGC starts at the restart floor, -150 dBm. Each band gets its
+    // own level back.
+    void aBandChangedWhileKeyedStartsAtTheRestartFloor()
+    {
+        Run run(levelsRequest(WaterfallLevelMode::Agc));
+        run.frames(200, -120.0f);
+        const float bandFive = *run.station.agcRunLevel();
+        run.inputs.mox = true;
+        run.frames(10, -80.0f);
+        run.inputs.band = 6;
+        run.frames(10, -80.0f);
+        run.inputs.mox = false;
+        const DisplayExtrasFrame first = run.frames(1, -80.0f);
+        QCOMPARE(*run.station.agcRunLevel(), WaterfallLevelFollower::kAgcRestartFloorDbm);
+        QCOMPARE(*run.station.agcRunLevel(), -150.0f);
+        QCOMPARE(first.waterfallLevelsDbm->first,
+                 -150.0f - WaterfallLevelFollower::kAgcMarginDb);
+
+        // Keyed again on band 6 (inside the hold, so -150 is what is saved),
+        // back to band 5 while keyed: band 5's level returns.
+        run.inputs.mox = true;
+        run.frames(10, -80.0f);
+        run.inputs.band = 5;
+        run.frames(10, -80.0f);
+        run.inputs.mox = false;
+        run.frames(1, -80.0f);
+        QCOMPARE(*run.station.agcRunLevel(), bandFive);
+        // And band 6 keeps the one saved for it.
+        run.inputs.mox = true;
+        run.frames(10, -80.0f);
+        run.inputs.band = 6;
+        run.frames(10, -80.0f);
+        run.inputs.mox = false;
+        run.frames(1, -80.0f);
+        QCOMPARE(*run.station.agcRunLevel(), -150.0f);
+    }
+
+    // S13, R-DSP-28, R-DSP-53: with a hold of 3000 ms the AGC takes nothing
+    // from the rows of the first 3000 ms after the un-key, then follows
+    // again; the noise floor stays in fast attack for at least as long.
+    void theUnKeyHoldKeepsTheAgcAndTheFastAttackForItsLength()
+    {
+        Run run(levelsRequest(WaterfallLevelMode::Agc), 3000);
+        run.frames(300, -120.0f);
+        QVERIFY(!run.station.noiseFloor().fastAttack());
+        const float before = *run.station.agcRunLevel();
+        run.inputs.mox = true;
+        run.frames(30, -80.0f);
+        QVERIFY(run.station.noiseFloor().fastAttack());   // the key edge
+        run.inputs.mox = false;
+        const qint64 unKeyMs = run.nowMs + 33;
+        run.frameAt(unKeyMs, -80.0f);
+        QVERIFY(run.station.levelFollower().inHold(unKeyMs));
+        for (qint64 at = unKeyMs + 33; at < unKeyMs + 3000; at += 33) {
+            const DisplayExtrasFrame out = run.frameAt(at, -80.0f);
+            QCOMPARE(*run.station.agcRunLevel(), before);
+            QVERIFY2(run.station.noiseFloor().fastAttack(), qPrintable(QString::number(at)));
+            QVERIFY(*out.noiseFloorFastAttack);
+        }
+        run.frameAt(unKeyMs + 2999, -80.0f);
+        QCOMPARE(*run.station.agcRunLevel(), before);
+        QVERIFY(run.station.noiseFloor().fastAttack());
+        // The hold has run: the next row moves the level.
+        run.frameAt(unKeyMs + 3000, -80.0f);
+        QVERIFY(!run.station.levelFollower().inHold(unKeyMs + 3000));
+        QVERIFY(*run.station.agcRunLevel() > before);
+        const float resumed = *run.station.agcRunLevel();
+        run.frameAt(unKeyMs + 3033, -80.0f);
+        QVERIFY(*run.station.agcRunLevel() > resumed);
+    }
+
+    // The same hold for Clarity: its floor and levels are the ones from
+    // before the key through the key and the hold, whatever floors arrive;
+    // after the hold it follows again, smoothed from the hold's end.
+    void theUnKeyHoldKeepsClaritysLevelForItsLength()
+    {
+        Run run(levelsRequest(WaterfallLevelMode::Clarity), 3000);
+        qint64 at = 0;
+        for (int step = 0; step < 6; ++step) {
+            at = 1000 + static_cast<qint64>(step) * 600;
+            run.station.feedNoiseFloor(-118.0f, at);
+            run.frameAt(at, -118.0f);
+        }
+        const float floorBefore = run.station.clarity()->smoothedFloor();
+        const std::pair<float, float> levelsBefore = run.station.waterfallLevels();
+        QCOMPARE(floorBefore, -118.0f);
+        QCOMPARE(levelsBefore.first, run.station.clarity()->lastLow());
+
+        // A 20 s key: longer than Clarity's time constant.
+        run.inputs.mox = true;
+        run.frameAt(at + 100, -80.0f);
+        for (qint64 keyed = at + 600; keyed < at + 20'000; keyed += 600) {
+            run.station.feedNoiseFloor(-80.0f, keyed);
+            run.frameAt(keyed, -80.0f);
+        }
+        QCOMPARE(run.station.clarity()->smoothedFloor(), floorBefore);
+        QVERIFY(run.station.waterfallLevels() == levelsBefore);
+
+        run.inputs.mox = false;
+        const qint64 unKeyMs = at + 20'000;
+        run.frameAt(unKeyMs, -80.0f);
+        QVERIFY(run.station.clarity()->inHold(unKeyMs));
+        for (qint64 held = unKeyMs + 500; held < unKeyMs + 3000; held += 500) {
+            run.station.feedNoiseFloor(-80.0f, held);
+            run.frameAt(held, -80.0f);
+            QCOMPARE(run.station.clarity()->smoothedFloor(), floorBefore);
+            QVERIFY(run.station.waterfallLevels() == levelsBefore);
+        }
+        run.station.feedNoiseFloor(-80.0f, unKeyMs + 2999);
+        QCOMPARE(run.station.clarity()->smoothedFloor(), floorBefore);
+        QVERIFY(!run.station.clarity()->inHold(unKeyMs + 3000));
+        // After the hold: the floor moves toward the new reading, smoothed
+        // over the 600 ms since the hold's end, not over the 20 s key.
+        run.station.feedNoiseFloor(-110.0f, unKeyMs + 3600);
+        const float after = run.station.clarity()->smoothedFloor();
+        const float alpha = 1.0f - std::exp(-0.6f / 3.0f);
+        QVERIFY(std::abs(after - (floorBefore + alpha * (-110.0f - floorBefore))) < 0.001f);
+        const DisplayExtrasFrame out = run.frameAt(unKeyMs + 3600, -110.0f);
+        QCOMPARE(out.waterfallLevelsDbm->first, run.station.clarity()->lastLow());
+        QVERIFY(out.waterfallLevelsDbm->first > levelsBefore.first);
+    }
+
+    // A key inside the hold ends that hold and keeps the level; the next
+    // un-key starts a whole new hold.
+    void aReKeyInsideTheHoldKeepsTheLevelAndStartsAFreshHold()
+    {
+        Run run(levelsRequest(WaterfallLevelMode::Agc), 3000);
+        run.frames(200, -120.0f);
+        const float before = *run.station.agcRunLevel();
+        run.inputs.mox = true;
+        run.frames(10, -80.0f);
+        run.inputs.mox = false;
+        const qint64 firstUnKeyMs = run.nowMs + 33;
+        run.frameAt(firstUnKeyMs, -80.0f);
+        run.inputs.mox = true;
+        run.frameAt(firstUnKeyMs + 1000, -80.0f);
+        QVERIFY(!run.station.levelFollower().inHold(firstUnKeyMs + 1000));
+        run.frameAt(firstUnKeyMs + 1500, -80.0f);
+        run.inputs.mox = false;
+        const qint64 secondUnKeyMs = firstUnKeyMs + 2000;
+        run.frameAt(secondUnKeyMs, -80.0f);
+        // Past the first hold's end, inside the second's.
+        run.frameAt(firstUnKeyMs + 3500, -80.0f);
+        QCOMPARE(*run.station.agcRunLevel(), before);
+        run.frameAt(secondUnKeyMs + 2999, -80.0f);
+        QCOMPARE(*run.station.agcRunLevel(), before);
+        run.frameAt(secondUnKeyMs + 3000, -80.0f);
+        QVERIFY(*run.station.agcRunLevel() > before);
+    }
+
+    // D17a, R-DSP-55: a processor that replaces another for the same display
+    // carries on from it. Its levels on the next frame are the ones the
+    // replaced processor would have made.
+    void aReplacementProcessorCarriesTheAgcLevelAndTheNoiseFloor_data()
+    {
+        QTest::addColumn<int>("mode");
+        QTest::newRow("agc") << static_cast<int>(WaterfallLevelMode::Agc);
+        QTest::newRow("noise floor agc") << static_cast<int>(WaterfallLevelMode::NoiseFloorAgc);
+    }
+
+    void aReplacementProcessorCarriesTheAgcLevelAndTheNoiseFloor()
+    {
+        QFETCH(int, mode);
+        const DisplayExtrasRequest request = levelsRequest(static_cast<WaterfallLevelMode>(mode));
+        const QVector<QVector<float>> rows = recordedRows(260, 64);
+        DisplayExtrasProcessor replaced(request);
+        DisplayExtrasProcessor twin(request);
+        DisplayExtrasInputs inputs;
+        inputs.fps = 30;
+        inputs.band = 5;
+        const auto frameOf = [&rows](int i) {
+            DisplayCodecFrame frame = flatFrame(0.0f);
+            frame.traceDbm = rows.at(i);
+            frame.waterfallDbm = rows.at(i);
+            return frame;
+        };
+        for (int i = 0; i < 250; ++i) {
+            inputs.nowMs = static_cast<qint64>(i) * 33;
+            replaced.process(frameOf(i), inputs);
+            twin.process(frameOf(i), inputs);
+        }
+        QVERIFY(twin.agcRunLevel().has_value());
+        // The operator moved High: the request differs, the mode does not.
+        DisplayExtrasRequest moved = request;
+        moved.waterfallLevels->highDbm = -70.0;
+        DisplayExtrasProcessor replacement(moved);
+        QVERIFY(!replacement.agcRunLevel().has_value());
+        replacement.adoptCarry(replaced.takeCarry());
+        QCOMPARE(*replacement.agcRunLevel(), *twin.agcRunLevel());
+        QCOMPARE(replacement.waterfallLevels().first, twin.waterfallLevels().first);
+        QCOMPARE(replacement.waterfallLevels().second, -70.0f);
+        QCOMPARE(replacement.noiseFloor().lerpAverage(), twin.noiseFloor().lerpAverage());
+        for (int i = 250; i < 260; ++i) {
+            inputs.nowMs = static_cast<qint64>(i) * 33;
+            const DisplayExtrasFrame carried = replacement.process(frameOf(i), inputs);
+            const DisplayExtrasFrame expected = twin.process(frameOf(i), inputs);
+            QCOMPARE(*replacement.agcRunLevel(), *twin.agcRunLevel());
+            QCOMPARE(carried.waterfallLevelsDbm->first, expected.waterfallLevelsDbm->first);
+            QCOMPARE(carried.waterfallLevelsDbm->second, -70.0f);
+            QCOMPARE(*carried.noiseFloorDbm, *expected.noiseFloorDbm);
+        }
+
+        // Another level mode starts afresh.
+        DisplayExtrasProcessor manual(levelsRequest(WaterfallLevelMode::Manual));
+        manual.adoptCarry(twin.takeCarry());
+        QVERIFY(!manual.agcRunLevel().has_value());
+        QCOMPARE(manual.waterfallLevels().first, -122.0f);
+    }
+
+    // The same for Clarity, with its smoothing clock, and for a hold that
+    // is still running when the display is asked for again.
+    void aReplacementProcessorCarriesClaritysFloorClockAndHold()
+    {
+        const DisplayExtrasRequest request = levelsRequest(WaterfallLevelMode::Clarity);
+        Run replaced(request, 3000);
+        Run twin(request, 3000);
+        for (Run* run : {&replaced, &twin}) {
+            run->station.feedNoiseFloor(-125.0f, 1000);
+            run->station.feedNoiseFloor(-112.0f, 1700);
+            run->frameAt(1700, -112.0f);
+        }
+        const float floor = twin.station.clarity()->smoothedFloor();
+        QVERIFY(floor > -125.0f && floor < -112.0f);
+
+        Run replacement(request, 3000);
+        replacement.station.adoptCarry(replaced.station.takeCarry());
+        QCOMPARE(replacement.station.clarity()->smoothedFloor(), floor);
+        QCOMPARE(replacement.station.clarity()->lastLow(), twin.station.clarity()->lastLow());
+        QCOMPARE(replacement.station.clarity()->lastHigh(), twin.station.clarity()->lastHigh());
+        QVERIFY(replacement.station.waterfallLevels() == twin.station.waterfallLevels());
+        // Its first frame sends those levels.
+        const DisplayExtrasFrame first = replacement.frameAt(1733, -112.0f);
+        QCOMPARE(first.waterfallLevelsDbm->first, twin.station.clarity()->lastLow());
+        QCOMPARE(first.waterfallLevelsDbm->second, twin.station.clarity()->lastHigh());
+        // The clock came too: the next floor is smoothed over the same time.
+        replacement.station.feedNoiseFloor(-100.0f, 2400);
+        twin.station.feedNoiseFloor(-100.0f, 2400);
+        QCOMPARE(replacement.station.clarity()->smoothedFloor(),
+                 twin.station.clarity()->smoothedFloor());
+
+        // Asked for again inside the un-key hold: the hold carries on.
+        twin.inputs.mox = true;
+        twin.frameAt(3000, -80.0f);
+        twin.inputs.mox = false;
+        twin.frameAt(4000, -80.0f);
+        const float held = twin.station.clarity()->smoothedFloor();
+        Run again(request, 3000);
+        again.station.adoptCarry(twin.station.takeCarry());
+        QVERIFY(again.station.clarity()->inHold(6999));
+        again.station.feedNoiseFloor(-80.0f, 5000);
+        again.frameAt(5000, -80.0f);
+        QCOMPARE(again.station.clarity()->smoothedFloor(), held);
+        QVERIFY(!again.station.clarity()->inHold(7000));
+
+        // A display asked for again while keyed stays keyed: no second edge.
+        Run keyedRun(levelsRequest(WaterfallLevelMode::Agc), 3000);
+        keyedRun.frames(100, -120.0f);
+        const float level = *keyedRun.station.agcRunLevel();
+        keyedRun.inputs.mox = true;
+        keyedRun.frames(5, -80.0f);
+        Run keyedAgain(levelsRequest(WaterfallLevelMode::Agc), 3000);
+        keyedAgain.station.adoptCarry(keyedRun.station.takeCarry());
+        QVERIFY(keyedAgain.station.keyed());
+        keyedAgain.inputs.mox = true;
+        keyedAgain.nowMs = keyedRun.nowMs;
+        keyedAgain.frames(5, -80.0f);
+        QCOMPARE(*keyedAgain.station.agcRunLevel(), level);
+        keyedAgain.inputs.mox = false;
+        keyedAgain.frames(1, -80.0f);
+        QCOMPARE(*keyedAgain.station.agcRunLevel(), level);
+    }
+
     // Version 3: onTx is optional, a bool, and true when absent.
     void activePeakHoldOnTxParses()
     {
@@ -791,6 +1174,166 @@ private slots:
         station.newContext();
         QCOMPARE(station.activePeakHold().size(), 0);
         QVERIFY(station.peakBlobs().blobs().isEmpty());
+    }
+
+    // R-DISP-HOLD: the same picture asked again keeps what its changed
+    // settings do not invalidate.
+    void aChangedRequestKeepsTheStateItsSettingsDoNotInvalidate()
+    {
+        DisplayExtrasRequest request;
+        request.peakBlobs = DisplayExtrasRequest::PeakBlobs{};
+        request.activePeakHold = DisplayExtrasRequest::ActivePeakHold{true, 2000, 6.0};
+        request.noiseFloor = DisplayExtrasRequest::NoiseFloor{true, 0.0, false};
+        request.waterfallLevels = DisplayExtrasRequest::WaterfallLevels{
+            WaterfallLevelMode::Agc, -122.0, -62.0, 0};
+        DisplayExtrasProcessor station(request);
+        DisplayCodecFrame frame;
+        frame.context = {1, 1, -180.0f, 0.0f, 8, 8, 0};
+        frame.traceDbm = {-120, -120, -40, -120, -120, -120, -120, -120};
+        frame.waterfallDbm = frame.traceDbm;
+        frame.waterfallAdvance = true;
+        DisplayExtrasInputs inputs;
+        inputs.fps = 30;
+        // Past the 500 ms display delay, so the blobs and the hold are shown.
+        for (int index = 0; index < 60; ++index) {
+            inputs.nowMs = index * 33;
+            station.process(frame, inputs);
+        }
+        QCOMPARE(station.activePeakHold().size(), 8);
+        QVERIFY(station.activePeakHold().active());
+        QVERIFY(!station.peakBlobs().blobs().isEmpty());
+        const float floorBefore = station.noiseFloor().lerpAverage();
+        const std::pair<float, float> levelsBefore = station.waterfallLevels();
+        QVERIFY(levelsBefore != std::make_pair(-122.0f, -62.0f));
+
+        // Settings of the same state: all of it stays.
+        DisplayExtrasRequest settings = request;
+        settings.peakBlobs->holdMs = 900;
+        settings.activePeakHold->fallDbPerSec = 12.0;
+        settings.noiseFloor->shiftDb = 3.0;
+        settings.waterfallLevels->lowDbm = -130.0;
+        settings.calibrationOffsetDb = 1.0;
+        station.updateRequest(settings);
+        QCOMPARE(station.request(), settings);
+        QCOMPARE(station.activePeakHold().size(), 8);
+        QVERIFY(station.activePeakHold().active());
+        QVERIFY(!station.peakBlobs().blobs().isEmpty());
+        QCOMPARE(station.noiseFloor().lerpAverage(), floorBefore);
+        QCOMPARE(station.waterfallLevels(), levelsBefore);
+
+        // A different blob count starts the blobs again and nothing else.
+        DisplayExtrasRequest fewer = settings;
+        fewer.peakBlobs->count = 1;
+        station.updateRequest(fewer);
+        QVERIFY(station.peakBlobs().blobs().isEmpty());
+        QCOMPARE(station.activePeakHold().size(), 8);
+        QCOMPARE(station.waterfallLevels(), levelsBefore);
+
+        // A different levels mode starts the levels again from those asked.
+        DisplayExtrasRequest mode = fewer;
+        mode.waterfallLevels->mode = WaterfallLevelMode::Clarity;
+        station.updateRequest(mode);
+        QCOMPARE(station.waterfallLevels(), std::make_pair(-130.0f, -62.0f));
+        QVERIFY(station.clarity() != nullptr);
+        QCOMPARE(station.activePeakHold().size(), 8);
+        mode.waterfallLevels->mode = WaterfallLevelMode::Manual;
+        station.updateRequest(mode);
+        QVERIFY(station.clarity() == nullptr);
+
+        // The hold switched off empties its row.
+        DisplayExtrasRequest off = mode;
+        off.activePeakHold->enabled = false;
+        station.updateRequest(off);
+        QCOMPARE(station.activePeakHold().size(), 0);
+        QCOMPARE(station.noiseFloor().lerpAverage(), floorBefore);
+    }
+
+    // The merge of main: a level mode changed while keyed (updateRequest
+    // reaches startWaterfallLevels). The new Clarity is told the key state
+    // the processor holds at once, before any frame: a floor that arrives
+    // first is the transmitter's and is not taken, and the un-key is
+    // Clarity's first edge, so it runs the hold.
+    void aLevelModeChangedWhileKeyedGivesTheNewClarityTheKeyState()
+    {
+        Run run(levelsRequest(WaterfallLevelMode::Agc), 3000);
+        run.frames(200, -120.0f);
+        run.inputs.mox = true;
+        run.frames(10, -80.0f);
+        QVERIFY(run.station.keyed());
+
+        run.station.updateRequest(levelsRequest(WaterfallLevelMode::Clarity));
+        const ClarityController* const clarity = run.station.clarity();
+        QVERIFY(clarity != nullptr);
+        QVERIFY(run.station.keyed());
+        QVERIFY2(clarity->isTransmitting(), "the new Clarity was not told the pan is keyed");
+        QVERIFY(run.station.levelFollower().keyed());
+        // The levels start from those asked for.
+        const std::pair<float, float> asked = run.station.waterfallLevels();
+        QCOMPARE(asked, std::make_pair(-122.0f, -62.0f));
+        // A floor read while keyed, before the next frame, moves nothing.
+        const float floorBefore = clarity->smoothedFloor();
+        run.station.feedNoiseFloor(-80.0f, run.nowMs + 10);
+        QCOMPARE(clarity->smoothedFloor(), floorBefore);
+        QVERIFY(run.station.waterfallLevels() == asked);
+        run.frames(5, -80.0f);
+        run.station.feedNoiseFloor(-80.0f, run.nowMs + 10);
+        QVERIFY(run.station.waterfallLevels() == asked);
+
+        // The un-key: one edge, and Clarity's hold from it.
+        run.inputs.mox = false;
+        const qint64 unKeyMs = run.nowMs + 33;
+        run.frameAt(unKeyMs, -80.0f);
+        QVERIFY(!clarity->isTransmitting());
+        QVERIFY(clarity->inHold(unKeyMs + 1));
+        run.station.feedNoiseFloor(-80.0f, unKeyMs + 500);
+        QVERIFY(run.station.waterfallLevels() == asked);
+        QVERIFY(!clarity->inHold(unKeyMs + 3000));
+
+        // A mode changed while not keyed: the new Clarity is not keyed.
+        Run receiving(levelsRequest(WaterfallLevelMode::Agc), 3000);
+        receiving.frames(20, -120.0f);
+        receiving.station.updateRequest(levelsRequest(WaterfallLevelMode::Clarity));
+        QVERIFY(receiving.station.clarity() != nullptr);
+        QVERIFY(!receiving.station.clarity()->isTransmitting());
+    }
+
+    // The same join: the per-band AGC levels belong to the mode that made
+    // them. A mode changed while keyed clears them, so the un-key finds
+    // nothing saved for the band and starts at the restart floor; without
+    // a mode change the band's level comes back (the control).
+    void aLevelModeChangedWhileKeyedClearsThePerBandAgcLevels()
+    {
+        // The control: no mode change, the band's level returns.
+        Run kept(levelsRequest(WaterfallLevelMode::Agc), 3000);
+        kept.frames(200, -120.0f);
+        const float level = *kept.station.agcRunLevel();
+        QVERIFY(std::abs(level + 120.0f) < 0.01f);
+        kept.inputs.mox = true;
+        kept.frames(10, -80.0f);
+        kept.inputs.mox = false;
+        kept.frames(1, -80.0f);
+        QCOMPARE(*kept.station.agcRunLevel(), level);
+
+        // Keyed on band 5 (its level is saved), then the mode goes to
+        // NF-AGC while keyed.
+        Run run(levelsRequest(WaterfallLevelMode::Agc), 3000);
+        run.frames(200, -120.0f);
+        QCOMPARE(*run.station.agcRunLevel(), level);
+        run.inputs.mox = true;
+        run.frames(10, -80.0f);
+        run.station.updateRequest(levelsRequest(WaterfallLevelMode::NoiseFloorAgc));
+        // The follower forgot its envelope and is still keyed, so the rows
+        // of the key (-80 dBm) prime nothing: it stands at the restart
+        // floor.
+        QVERIFY(run.station.levelFollower().keyed());
+        QVERIFY(!run.station.agcRunLevel().has_value());
+        run.frames(10, -80.0f);
+        QCOMPARE(*run.station.agcRunLevel(), WaterfallLevelFollower::kAgcRestartFloorDbm);
+        // The un-key on band 5: nothing is saved for it any more.
+        run.inputs.mox = false;
+        run.frames(1, -80.0f);
+        QVERIFY(run.station.agcRunLevel().has_value());
+        QCOMPARE(*run.station.agcRunLevel(), WaterfallLevelFollower::kAgcRestartFloorDbm);
     }
 
     // ── The datagram ────────────────────────────────────────────────────
@@ -1025,10 +1568,11 @@ private slots:
         QTest::newRow("normalize as number") << QStringLiteral("normalize") << QJsonValue(1);
         QTest::newRow("calibration 31 dB") << QStringLiteral("calibrationOffsetDb")
                                            << QJsonValue(31.0);
-        QTest::newRow("average 9 ms") << QStringLiteral("averageTimeMs") << QJsonValue(9);
+        QTest::newRow("average 0 ms") << QStringLiteral("averageTimeMs") << QJsonValue(0);
+        QTest::newRow("average 10000 ms") << QStringLiteral("averageTimeMs") << QJsonValue(10000);
         QTest::newRow("average fraction") << QStringLiteral("averageTimeMs") << QJsonValue(30.5);
-        QTest::newRow("waterfall average 9 ms") << QStringLiteral("waterfallAverageTimeMs")
-                                                << QJsonValue(9);
+        QTest::newRow("waterfall average 0 ms") << QStringLiteral("waterfallAverageTimeMs")
+                                                << QJsonValue(0);
         QTest::newRow("waterfall average 10000 ms") << QStringLiteral("waterfallAverageTimeMs")
                                                     << QJsonValue(10000);
         QTest::newRow("waterfall average fraction") << QStringLiteral("waterfallAverageTimeMs")
@@ -1045,6 +1589,23 @@ private slots:
         request.averageTimeMs = 1234;
         QVERIFY(!parseDisplayExtrasRequest(subscribe, request));
         QCOMPARE(*request.averageTimeMs, 1234);
+    }
+
+    // The two averaging times are taken from 1 ms, the floor Setup
+    // description version 28 gives a phone and the desktop's own. (Before
+    // it, a request below 10 ms was refused.)
+    void averageTimesAreTakenFromOneMs()
+    {
+        for (const int timeMs : {1, 5, 9, 10, 9999}) {
+            QJsonObject subscribe = everyExtra();
+            subscribe.insert(QStringLiteral("averageTimeMs"), timeMs);
+            subscribe.insert(QStringLiteral("waterfallAverageTimeMs"), timeMs);
+            DisplayExtrasRequest request;
+            QVERIFY2(parseDisplayExtrasRequest(subscribe, request),
+                     qPrintable(QString::number(timeMs)));
+            QCOMPARE(*request.averageTimeMs, timeMs);
+            QCOMPARE(*request.waterfallAverageTimeMs, timeMs);
+        }
     }
 
     // ── Through a real session ──────────────────────────────────────────
@@ -1399,26 +1960,62 @@ private slots:
         QVERIFY(both.has_value());
         QCOMPARE(both->traceAlpha, spectrum);
         QCOMPARE(both->waterfallAlpha, waterfall);
+        QCOMPARE(both->traceWindowFrames, 7);
+        QCOMPARE(both->waterfallWindowFrames, 42);
         // Absent: the waterfall falls back to averageTimeMs.
         const auto fallback = harness.controller.spectrumAveraging(8);
         QVERIFY(fallback.has_value());
         QCOMPARE(fallback->traceAlpha, spectrum);
         QCOMPARE(fallback->waterfallAlpha, spectrum);
+        QCOMPARE(fallback->traceWindowFrames, 7);
+        QCOMPARE(fallback->waterfallWindowFrames, 7);
         // The waterfall's alone leaves the trace its plane's constant.
         const auto waterfallOnly = harness.controller.spectrumAveraging(9);
         QVERIFY(waterfallOnly.has_value());
         QCOMPARE(waterfallOnly->traceAlpha, 0.0);
         QCOMPARE(waterfallOnly->waterfallAlpha, waterfall);
+        QCOMPARE(waterfallOnly->traceWindowFrames, 2);
+        QCOMPARE(waterfallOnly->waterfallWindowFrames, 42);
         // Neither: both planes' own.
         const auto neither = harness.controller.spectrumAveraging(10);
         QVERIFY(neither.has_value());
         QCOMPARE(neither->traceAlpha, 0.0);
         QCOMPARE(neither->waterfallAlpha, 0.0);
+        QCOMPARE(neither->traceWindowFrames, 2);
+        QCOMPARE(neither->waterfallWindowFrames, 2);
         // No field asks for a section, so every endpoint is charged as today.
         const auto plainCost = spectrumDisplayCost(128, 60, false);
         QVERIFY(plainCost.has_value());
         QCOMPARE(harness.controller.acceptedDisplayCharge().applicationBytesPerSecond,
                  4 * plainCost->charge.applicationBytesPerSecond);
+        // Renew the same real endpoint at its newly accepted cadence.
+        QVERIFY(harness.client.sendMediaControl(
+            withFields(subscription(7, harness.sliceId, centreHz),
+                       {{QStringLiteral("revision"), 2},
+                        {QStringLiteral("fps"), 30},
+                        {QStringLiteral("averageTimeMs"), 120},
+                        {QStringLiteral("waterfallAverageTimeMs"), 700}}),
+            harness.client.sessionEpoch()));
+        QTRY_VERIFY(harness.controller.spectrumAveraging(7).has_value()
+                    && harness.controller.spectrumAveraging(7)->traceAlpha
+                        == averageAlphaForTimeMs(120, 30));
+        const auto renewed = harness.controller.spectrumAveraging(7);
+        QCOMPARE(renewed->traceWindowFrames, 4);
+        QCOMPARE(renewed->waterfallWindowFrames, 21);
+        QCOMPARE(renewed->waterfallAlpha, double(averageAlphaForTimeMs(700, 30)));
+        QVERIFY(harness.client.sendMediaControl(
+            withFields(subscription(7, harness.sliceId, centreHz),
+                       {{QStringLiteral("revision"), 3},
+                        {QStringLiteral("fps"), 30},
+                        {QStringLiteral("averageTimeMs"), 9999},
+                        {QStringLiteral("waterfallAverageTimeMs"), 1}}),
+            harness.client.sessionEpoch()));
+        QTRY_VERIFY(harness.controller.spectrumAveraging(7).has_value()
+                    && harness.controller.spectrumAveraging(7)->traceAlpha
+                        == averageAlphaForTimeMs(9999, 30));
+        const auto retimed = harness.controller.spectrumAveraging(7);
+        QCOMPARE(retimed->traceWindowFrames, 60);
+        QCOMPARE(retimed->waterfallWindowFrames, 2);
         harness.finish();
     }
 
@@ -1433,13 +2030,30 @@ private slots:
         QVERIFY(harness.startReadyPeer());
         const double centreHz = harness.radio.streamCentreHz(harness.streamIndex);
         // The widest interval a request may name, so the tone's skirts and
-        // floor are not clipped.
+        // floor are not clipped. Neither plane holds anything: the two
+        // endpoints are compared on one frame, whatever each was sent before.
         const QJsonObject wide{{QStringLiteral("minDbm"), -400.0},
-                               {QStringLiteral("maxDbm"), 100.0}};
+                               {QStringLiteral("maxDbm"), 100.0},
+                               {QStringLiteral("trace"), planeWithoutHold()},
+                               {QStringLiteral("waterfall"), planeWithoutHold()}};
         QVERIFY(harness.client.sendMediaControl(
             withFields(withFields(subscription(7, harness.sliceId, centreHz), wide),
                        {{QStringLiteral("calibrationOffsetDb"), 20.0}}),
             harness.client.sessionEpoch()));
+        // Endpoint 7 is sent frames before endpoint 8 exists, so the
+        // comparison below covers an endpoint that started earlier. On a
+        // loaded machine that happened by itself now and then, and with
+        // planes that held each pixel's maximum the two traces differed.
+        const auto sentTo = [&harness](quint8 endpoint) {
+            int count = 0;
+            for (const QByteArray& bytes : harness.mediaTransport->displays) {
+                if (!bytes.startsWith("NSDX") && static_cast<quint8>(bytes.at(11)) == endpoint) {
+                    ++count;
+                }
+            }
+            return count;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT((harness.feedRadio(), sentTo(7) >= 3), 10'000);
         QVERIFY(harness.client.sendMediaControl(
             withFields(subscription(8, harness.sliceId, centreHz), wide),
             harness.client.sessionEpoch()));
@@ -1569,7 +2183,7 @@ private slots:
         const double centreHz = harness.radio.streamCentreHz(harness.streamIndex);
         QVERIFY(harness.client.sendMediaControl(
             withFields(subscription(7, harness.sliceId, centreHz),
-                       {{QStringLiteral("averageTimeMs"), 5}}),
+                       {{QStringLiteral("averageTimeMs"), 0}}),
             harness.client.sessionEpoch()));
         // A request the Core can read, sent after it, is taken; the first
         // never became an endpoint.
@@ -1649,6 +2263,143 @@ private slots:
         QCOMPARE(countOf(controls, QStringLiteral("allocation-result"), 7),
                  countOf(controls, QStringLiteral("allocation-result"), 8));
         QCOMPARE(harness.controller.activeEndpointCount(), 3);
+        harness.finish();
+    }
+
+    // D17a, R-DSP-55: a display asked for again on the same receiver (here a
+    // narrower span) gets a new processor, and that processor starts with
+    // the replaced one's Clarity floor and thresholds. Asked for on another
+    // source, it starts afresh.
+    void aDisplayAskedForAgainOnTheSameReceiverKeepsItsLevels()
+    {
+        Harness harness;
+        QVERIFY(harness.establishSession());
+        QSignalSpy controls(&harness.client, &StationClient::mediaControlReceived);
+        QVERIFY(harness.startReadyPeer());
+        const double centreHz = harness.radio.streamCentreHz(harness.streamIndex);
+        const quint32 epoch = harness.client.sessionEpoch();
+        const QJsonObject clarity = withFields(
+            levels(QStringLiteral("clarity")),
+            {{QStringLiteral("tier"), QStringLiteral("wide")}});
+        QVERIFY(harness.client.sendMediaControl(
+            withFields(subscription(7, harness.sliceId, centreHz), clarity), epoch));
+        // Endpoint 9 is not Clarity: its refused Re-tune answers in order,
+        // which marks that the request sent before it has run.
+        QVERIFY(harness.client.sendMediaControl(
+            withFields(subscription(9, harness.sliceId, centreHz), levels(QStringLiteral("agc"))),
+            epoch));
+        QTRY_COMPARE(harness.controller.activeEndpointCount(), 2);
+        DisplayExtrasProcessor* const first = harness.controller.displayExtrasForTest(7);
+        QVERIFY(first && first->clarity());
+        first->feedNoiseFloor(-125.0f, 1000);
+        first->feedNoiseFloor(-112.0f, 1700);
+        const float floor = first->clarity()->smoothedFloor();
+        const std::pair<float, float> levelsBefore = first->waterfallLevels();
+        QVERIFY(floor > -125.0f && floor < -112.0f);
+        QCOMPARE(levelsBefore.first, first->clarity()->lastLow());
+        const quint8 sectionsBefore = first->request().sections();
+
+        // The same receiver, half the span, and more extras asked for (which
+        // shows below that the processor is a new one).
+        QVERIFY(harness.client.sendMediaControl(
+            withFields(withFields(withFields(subscription(7, harness.sliceId, centreHz),
+                                             everyExtra()), clarity),
+                       {{QStringLiteral("revision"), 2}, {QStringLiteral("spanHz"), 24000.0}}),
+            epoch));
+        QVERIFY(harness.client.sendMediaControl(clarityRetune(9), epoch));
+        QTRY_COMPARE(countOf(controls, QStringLiteral("rejected"), 9), 1);
+        QCOMPARE(countOf(controls, QStringLiteral("rejected"), 7), 0);
+        QVERIFY(harness.controller.spectrumGrant(7).has_value());
+        DisplayExtrasProcessor* const second = harness.controller.displayExtrasForTest(7);
+        QVERIFY(second && second->clarity());
+        QVERIFY(second->request().sections() != sectionsBefore);
+        QVERIFY(second->clarity()->carriedState().hasSmoothed);
+        QCOMPARE(second->clarity()->smoothedFloor(), floor);
+        QCOMPARE(second->clarity()->lastLow(), levelsBefore.first);
+        QCOMPARE(second->clarity()->lastHigh(), levelsBefore.second);
+        QVERIFY(second->waterfallLevels() == levelsBefore);
+
+        // Another source (the receiver's other spectrum tier, with its own
+        // engine): nothing is carried.
+        const int sourcesBefore = harness.controller.activeSourceCount();
+        QVERIFY(harness.client.sendMediaControl(
+            withFields(withFields(subscription(7, harness.sliceId, centreHz), clarity),
+                       {{QStringLiteral("revision"), 3},
+                        {QStringLiteral("tier"), QStringLiteral("fine")}}),
+            epoch));
+        QVERIFY(harness.client.sendMediaControl(clarityRetune(9), epoch));
+        QTRY_COMPARE(countOf(controls, QStringLiteral("rejected"), 9), 2);
+        QCOMPARE(countOf(controls, QStringLiteral("rejected"), 7), 0);
+        QCOMPARE(harness.controller.activeSourceCount(), sourcesBefore + 1);
+        QVERIFY(harness.controller.spectrumGrant(7).has_value());
+        DisplayExtrasProcessor* const third = harness.controller.displayExtrasForTest(7);
+        QVERIFY(third && third->clarity());
+        QVERIFY(!third->clarity()->carriedState().hasSmoothed);
+        QCOMPARE(third->waterfallLevels().first, -122.0f);
+        QCOMPARE(third->waterfallLevels().second, -62.0f);
+        harness.finish();
+    }
+
+    // S21, R-DSP-23: the extras' key state is the end of MoxController's
+    // walk (moxStateChanged), not TransmitModel's flag. A key shorter than
+    // the RF delay toggles the flag and never reaches the walk's end: the
+    // extras see nothing. The walk's end does key them, and its other end
+    // un-keys them into the hold.
+    void aKeyShorterThanTheRfDelayChangesNothingInTheExtras()
+    {
+#ifndef HAVE_FFTW3
+        QSKIP("FFTEngine has no FFTW3 backend in this build");
+#endif
+        Harness harness;
+        QVERIFY(harness.establishSession());
+        QSignalSpy controls(&harness.client, &StationClient::mediaControlReceived);
+        QVERIFY(harness.startReadyPeer());
+        const double centreHz = harness.radio.streamCentreHz(harness.streamIndex);
+        QVERIFY(harness.client.sendMediaControl(
+            withFields(subscription(7, harness.sliceId, centreHz), everyExtra()),
+            harness.client.sessionEpoch()));
+        QTRY_COMPARE(harness.controller.activeEndpointCount(), 1);
+        DisplayExtrasProcessor* const extras = harness.controller.displayExtrasForTest(7);
+        QVERIFY(extras);
+        // Frames whose extras the Core has computed and sent.
+        const auto extrasSent = [&harness] {
+            return withMagic(harness.mediaTransport->displays, "NSDX").size();
+        };
+        const auto moreExtras = [&](int count) {
+            const auto before = extrasSent();
+            return QTest::qWaitFor([&] {
+                harness.feedRadio(0.15);
+                return extrasSent() >= before + count;
+            }, 30'000);
+        };
+        QVERIFY(moreExtras(3));
+        QVERIFY(!extras->keyed());
+
+        // The flag alone: a key that never reached the end of its walk.
+        MoxController* const mox = harness.radio.moxController();
+        QVERIFY(mox);
+        QSignalSpy walkEnds(mox, &MoxController::moxStateChanged);
+        harness.radio.transmitModel().setMox(true);
+        QVERIFY(harness.radio.transmitModel().isMox());
+        QVERIFY(moreExtras(3));
+        QVERIFY(!extras->keyed());
+        QVERIFY(!extras->levelFollower().keyed());
+        harness.radio.transmitModel().setMox(false);
+        QVERIFY(moreExtras(3));
+        QVERIFY(!extras->keyed());
+        QVERIFY(!extras->noiseFloor().fastAttack() || extras->noiseFloor().lerpAverage() < 0.0f);
+        QCOMPARE(walkEnds.size(), 0);
+
+        // The walk's end keys the extras, though the flag is off.
+        emit mox->moxStateChanged(true);
+        QVERIFY(!harness.radio.transmitModel().isMox());
+        QVERIFY(moreExtras(2));
+        QVERIFY(extras->keyed());
+        QVERIFY(extras->levelFollower().keyed());
+        emit mox->moxStateChanged(false);
+        QVERIFY(moreExtras(2));
+        QVERIFY(!extras->keyed());
+        QVERIFY(!extras->levelFollower().keyed());
         harness.finish();
     }
 

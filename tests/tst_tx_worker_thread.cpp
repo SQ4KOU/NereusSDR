@@ -54,6 +54,9 @@
 //       TxChannel::sendAntiVoxData.
 //  17.  onAntiVoxBlockReady gate OFF: no copy, no handoff, nothing
 //       reaches TxChannel when the operator has anti-VOX disabled.
+//  18.  macOS: the real worker thread runs at USER_INTERACTIVE QoS. A
+//       Qt start priority makes Darwin refuse the class (EPERM) and
+//       leaves the mic feeder at QOS_CLASS_UNSPECIFIED.
 //
 // =================================================================
 //
@@ -77,6 +80,9 @@
 //                 regressions for unavailable/short PC capture and source
 //                 switching. J.J. Boyd (KG4VCF), AI-assisted via OpenAI
 //                 Codex.
+//   2026-10-15 - Case 18: the worker thread's macOS QoS class, read back
+//                 from inside sendTxIq. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original test file.  No Thetis logic ported.
@@ -98,6 +104,10 @@
 #include "core/audio/TxMicSource.h"
 
 #include "fakes/FakeAudioBus.h"
+
+#ifdef Q_OS_MAC
+#include <pthread/qos.h>
+#endif
 
 using namespace NereusSDR;
 
@@ -136,6 +146,14 @@ public:
 
     void sendTxIq(const float* iq, int n) override
     {
+#ifdef Q_OS_MAC
+        // sendTxIq runs on the TX worker thread, so this is that thread's
+        // QoS class (case 18).
+        qos_class_t qos = QOS_CLASS_UNSPECIFIED;
+        int relPri = 0;
+        pthread_get_qos_class_np(pthread_self(), &qos, &relPri);
+        callerQos.store(static_cast<unsigned>(qos), std::memory_order_relaxed);
+#endif
         callCount.fetch_add(1, std::memory_order_relaxed);
         lastN.store(n, std::memory_order_relaxed);
         // Stash first I sample for override-path verification (atomic
@@ -151,6 +169,7 @@ public:
     std::atomic<int> callCount{0};
     std::atomic<int> lastN{0};
     std::atomic<int32_t> firstISampleBits{0};
+    std::atomic<unsigned> callerQos{0};
 };
 
 // ── MainThreadEmitter — issues signals from the main thread for the C1 ──────
@@ -1037,6 +1056,40 @@ private slots:
         QCOMPARE(warningCount.load(), 0);
 
         qInstallMessageHandler(prev);
+    }
+
+    // ── 18. macOS: the worker runs at USER_INTERACTIVE QoS ──────────────────
+    // run() elevates its own thread with pthread_set_qos_class_self_np.
+    // Starting the QThread with a Qt priority (the old
+    // start(QThread::HighPriority)) makes Darwin refuse that with EPERM and
+    // the thread stays at QOS_CLASS_UNSPECIFIED (0x00).
+    void startPump_workerThreadRunsAtUserInteractiveQos()
+    {
+#ifdef Q_OS_MAC
+        AudioEngine engine;
+        TxChannel ch(kChannelId, kBufSize, kBufSize);
+        MockConnection conn;
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+        TxMicSource src;
+        src.start();
+        TxWorkerThread worker;
+        worker.setTxChannel(&ch);
+        worker.setAudioEngine(&engine);
+        worker.setMicSource(&src);
+
+        worker.startPump();
+        std::vector<float> samples(kBufSize, 0.25f);
+        src.inbound(samples.data(), kBufSize);
+        QTRY_COMPARE_WITH_TIMEOUT(conn.callCount.load(), 1, 1000);
+        // stopPump joins the worker (QThread::wait), which makes its
+        // callerQos store visible here.
+        worker.stopPump();
+
+        QCOMPARE(conn.callerQos.load(), static_cast<unsigned>(QOS_CLASS_USER_INTERACTIVE));
+#else
+        QSKIP("QoS classes exist only on macOS");
+#endif
     }
 };
 

@@ -87,8 +87,17 @@ void LoopbackTransport::deliver(const QByteArray& wire)
     if (!m_open || m_severed) {
         return;
     }
-    m_received.append(wire);
-    emit textReceived(wire);
+    if (!m_rewriteIncoming) {
+        m_received.append(wire);
+        emit textReceived(wire);
+        return;
+    }
+    const QByteArray arrived = m_rewriteIncoming(wire);
+    if (arrived.isEmpty()) {
+        return;
+    }
+    m_received.append(arrived);
+    emit textReceived(arrived);
 }
 
 bool LoopbackTransport::sendBinary(const QByteArray& message)

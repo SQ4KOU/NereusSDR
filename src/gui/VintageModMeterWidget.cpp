@@ -3,6 +3,11 @@
 // =================================================================
 // no-port-check: NereusSDR-original file.  See header.
 // =================================================================
+// Modification history (NereusSDR):
+//   2026-10-12 - Apply the approved workspace-only 11 px text minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
+#include "gui/styles/WorkspacePreview.h"
 #include "gui/VintageModMeterWidget.h"
 
 #include <QFont>
@@ -141,10 +146,10 @@ void VintageModMeterWidget::paintEvent(QPaintEvent* /*event*/)
     auto fitFont = [&](double px, bool bold, const QString& text, double maxWidth) {
         QFont f = font();
         f.setBold(bold);
-        f.setPixelSize(std::max(5, static_cast<int>(px)));
+        f.setPixelSize(WorkspacePreview::readableTextPixelSize(std::max(5, static_cast<int>(px))));
         QFontMetricsF fm(f);
-        while (f.pixelSize() > 5 && fm.horizontalAdvance(text) > maxWidth) {
-            f.setPixelSize(f.pixelSize() - 1);
+        while (f.pixelSize() > WorkspacePreview::readableTextPixelSize(5) && fm.horizontalAdvance(text) > maxWidth) {
+            f.setPixelSize(WorkspacePreview::readableTextPixelSize(f.pixelSize() - 1));
             fm = QFontMetricsF(f);
         }
         return f;
@@ -313,10 +318,12 @@ void AsymmetryBarWidget::paintEvent(QPaintEvent* /*event*/)
     p.fillPath(bez, QColor(0x2a, 0x2a, 0x2c));
 
     QFont f = font();
-    f.setPixelSize(std::clamp(static_cast<int>(r.width() * 0.34), 6, 11));
+    f.setPixelSize(WorkspacePreview::readableTextPixelSize(std::clamp(static_cast<int>(r.width() * 0.34), 6, 11)));
     f.setBold(true);
     p.setFont(f);
-    const double labelH = r.height() * 0.11;
+    const double labelH = WorkspacePreview::enabled()
+        ? std::max(r.height() * 0.11, QFontMetricsF(f).height())
+        : r.height() * 0.11;
     p.setPen(QColor(0x38, 0xd0, 0x60));
     p.drawText(QRectF(r.left(), r.top(), r.width(), labelH), Qt::AlignCenter, QStringLiteral("Pos"));
     p.setPen(QColor(0xff, 0x60, 0x60));

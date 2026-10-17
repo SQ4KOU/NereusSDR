@@ -35,6 +35,9 @@
 //                and 6m/ByPass on RX select the low-pass as Thetis's
 //                setAlexLPF does (radioHardwareVersion 10). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-13 - Declare the scoped filter-edge reset and its authority gate.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation
+//                 via OpenAI Codex.
 // =================================================================
 
 //=================================================================
@@ -105,6 +108,9 @@
 #include <QWidget>
 #include <vector>
 
+#include "gui/NereusGuiExport.h"
+
+class QPushButton;
 class QCheckBox;
 class QDoubleSpinBox;
 class QFrame;
@@ -128,7 +134,7 @@ class RadioModel;
 // and hardware/<mac>/alex/master/{hpfBypass,...}.
 //
 // Source: Thetis Console/setup.designer.cs:23385-25538 (tpAlexFilterControl) [@501e3f5]
-class AntennaAlexAlex1Tab : public QWidget {
+class NEREUS_GUI_EXPORT AntennaAlexAlex1Tab : public QWidget {
     Q_OBJECT
 public:
     explicit AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent = nullptr);
@@ -205,6 +211,7 @@ signals:
     void hpfBypassOnPsChanged(bool checked);
 
 private slots:
+    void resetFilterDefaults();
     void onHpfCheckChanged(bool checked, const QString& settingsKey);
     void onHpfSpinChanged(double value, const QString& settingsKey);
     void onLpfSpinChanged(double value, const QString& settingsKey);
@@ -269,6 +276,9 @@ private:
                         std::vector<HpfRowWidgets>& rows);
 
     static QDoubleSpinBox* makeFreqSpin(double defaultMhz, QWidget* parent);
+
+    QPushButton* m_resetFilterDefaults{nullptr};
+    void updateResetFilterGate();
 
     RadioModel* m_model{nullptr};
     QString     m_currentMac;

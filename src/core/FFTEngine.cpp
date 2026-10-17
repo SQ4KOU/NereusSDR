@@ -23,6 +23,10 @@
 //   2026-09-27: the decimation cite corrected: Thetis's range is 1 to 16;
 //               1 to 32 is NereusSDR's own (R-IOS-06). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-11: Follow-up wave F6, NereusSDR-original: each frame carries
+//               the generation of the input purge it was computed after.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -85,6 +89,7 @@
 #include <QElapsedTimer>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 
@@ -195,7 +200,43 @@ void FFTEngine::setFftSizeBaseline(int size)
 {
     if (size < 1024 || size > kMaxFftSize) { return; }
     if ((size & (size - 1)) != 0) { return; }
-    m_fftSizeBaseline.store(size);
+    const int oldSize = m_fftSizeBaseline.exchange(size);
+
+    // Rulings wave R2: every FFT size change passes through here (a pan's
+    // Display pill, Setup, a station setting change, a new stream's engine),
+    // so the offset is set here and not by Setup's slider alone.
+    //
+    // FFTSizeOffset = slider.Value * 2 dB.  Mirrors Thetis
+    // setup.cs:16154 [v2.10.3.13]:
+    //   Display.RX1FFTSizeOffset = tbDisplayFFTSize.Value * 2;
+    // Subtracted from agc_cal_offset in RadioModel auto-AGC (full
+    // formula at console.cs:33304).
+    setFftSizeOffsetDb(fftSizeOffsetDbForSize(size));
+
+    // Whoever owns a noise-floor tracker fed by this engine restarts its
+    // fast attack on this signal (MainWindow). Once per change: a size that
+    // is already the baseline says nothing.
+    if (oldSize != size) {
+        emit fftSizeBaselineChanged(size);
+    }
+}
+
+void FFTEngine::announceFftSizingChanged()
+{
+    const int size = m_fftSizeBaseline.load();
+    setFftSizeOffsetDb(fftSizeOffsetDbForSize(size));
+    emit fftSizeBaselineChanged(size);
+}
+
+// The slider position of `size` is log2(size / 4096): position 0 is 4096
+// (Thetis setup.cs:16148 [v2.10.3.13], FFTSize = 4096 * 2^slider.Value), and
+// the offset is that position times 2 dB (setup.cs:16154 [v2.10.3.13]).
+double FFTEngine::fftSizeOffsetDbForSize(int size)
+{
+    if (size <= 0) { return 0.0; }
+    const int position = std::countr_zero(static_cast<unsigned int>(size))
+                         - std::countr_zero(static_cast<unsigned int>(kFftSizeOffsetZeroSize));
+    return static_cast<double>(position) * kFftSizeOffsetDbPerPosition;
 }
 
 // Atomic store; the auto-zoom lambda in MainWindow reads it on each
@@ -351,6 +392,15 @@ void FFTEngine::resetInputHistory()
     m_skipPending = 0;
     m_frameTimerStarted = false;
     m_frameTimer.invalidate();
+}
+
+// NereusSDR-original. The stamp changes on the thread that computes the
+// frames, at the purge itself, so no frame holding samples from before the
+// purge can carry the new generation.
+void FFTEngine::purgeInputForGeneration(quint64 generation)
+{
+    resetInputHistory();
+    m_inputGeneration.store(generation);
 }
 
 void FFTEngine::replanFft()
@@ -673,7 +723,8 @@ void FFTEngine::processFrame()
     // and bins in lock-step without a separate setter coordination dance.
     emit fftReady(m_receiverId, binsDbm);
     emit fftReadyLinear(m_receiverId, binsLinear,
-                        m_windowEnb, static_cast<double>(m_dbmOffset));
+                        m_windowEnb, static_cast<double>(m_dbmOffset),
+                        m_inputGeneration.load());
 
     // Overlap shift: copy the trailing (fftSize - advance) samples of
     // m_iqRaw back to the head, then resume writing at position 'overlap'.

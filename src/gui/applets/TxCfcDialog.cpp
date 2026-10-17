@@ -98,6 +98,7 @@
 //============================================================================================//
 
 #include "TxCfcDialog.h"
+#include "gui/styles/WorkspacePreview.h"
 
 #include "core/TxChannel.h"
 #include "core/CfcProfile.h"
@@ -226,6 +227,10 @@ TxCfcDialog::TxCfcDialog(TransmitModel* tm,
     m_barChartTimer = new QTimer(this);
     m_barChartTimer->setInterval(kBarChartTimerMs);
     connect(m_barChartTimer, &QTimer::timeout, this, &TxCfcDialog::onBarChartTick);
+
+    // Workspace preview: the scoped stylesheet pass runs each time the
+    // dialog is shown (preview scaffolding; nothing with the switch off).
+    WorkspacePreview::themeOnShow(this);
 }
 
 TxCfcDialog::~TxCfcDialog()

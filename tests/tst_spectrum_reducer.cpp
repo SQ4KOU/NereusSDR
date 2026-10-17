@@ -60,6 +60,103 @@ class TstSpectrumReducer : public QObject
 
 private slots:
 
+    void timeWindowFrameCountUsesAcceptedTimeAndCadence_data()
+    {
+        QTest::addColumn<int>("timeMs");
+        QTest::addColumn<int>("fps");
+        QTest::addColumn<int>("frames");
+        QTest::newRow("short minimum") << 1 << 60 << 2;
+        QTest::newRow("ship spectrum time") << 30 << 30 << 2;
+        QTest::newRow("ship waterfall time") << 120 << 30 << 4;
+        QTest::newRow("below rounding boundary") << 83 << 30 << 2;
+        QTest::newRow("above rounding boundary") << 84 << 30 << 3;
+        QTest::newRow("half rounds upward") << 150 << 30 << 5;
+        QTest::newRow("smooth time") << 650 << 30 << 20;
+        QTest::newRow("upper limit") << 9999 << 60 << 60;
+        QTest::newRow("changed cadence") << 400 << 10 << 4;
+        QTest::newRow("faster cadence") << 400 << 20 << 8;
+    }
+
+    void timeWindowFrameCountUsesAcceptedTimeAndCadence()
+    {
+        QFETCH(int, timeMs);
+        QFETCH(int, fps);
+        QFETCH(int, frames);
+        QCOMPARE(SpectrumAvenger::windowFramesForTimeMs(timeMs, fps), frames);
+    }
+
+    void configuredTimeWindowRetainsFramesAndResetsOnlyOnDepthChange()
+    {
+        SpectrumReducer reducer;
+        ReducerConfig cfg = baseConfig();
+        cfg.pixels = 32;
+        cfg.averageMode = 2;
+        cfg.averageFrames = 4;
+        cfg.averageAlpha = 0.99; // Recursive alpha does not control a window.
+        QVector<float> output;
+        for (float power : {1.0f, 3.0f, 5.0f}) {
+            reducer.setConfig(cfg); // The widget supplies config every frame.
+            reducer.reduce(flatBins(4096, power), 1.0, 0.0, output);
+        }
+        // Three retained powers average to 3; a fixed-two window yields 4.
+        QVERIFY(std::abs(output[16] - 4.7712125f) < 0.0001f);
+        reducer.reduce(flatBins(4096, 7.0f), 1.0, 0.0, output);
+        QVERIFY(std::abs(output[16] - 6.0206000f) < 0.0001f);
+        reducer.reduce(flatBins(4096, 9.0f), 1.0, 0.0, output);
+        // Oldest power 1 falls out: (3 + 5 + 7 + 9) / 4 = 6.
+        QVERIFY(std::abs(output[16] - 7.7815125f) < 0.0001f);
+        cfg.averageFrames = 2;
+        reducer.setConfig(cfg);
+        reducer.reduce(flatBins(4096, 11.0f), 1.0, 0.0, output);
+        QVERIFY(std::abs(output[16] - 10.413927f) < 0.0001f);
+        reducer.reduce(flatBins(4096, 13.0f), 1.0, 0.0, output);
+        QVERIFY(std::abs(output[16] - 10.791812f) < 0.0001f);
+    }
+
+    void changingWindowDepthDoesNotRestartRecursiveAveraging()
+    {
+        SpectrumReducer subject;
+        SpectrumReducer control;
+        ReducerConfig cfg = baseConfig();
+        cfg.pixels = 32;
+        cfg.averageMode = 3;
+        cfg.averageAlpha = 0.5;
+        cfg.averageFrames = 4;
+        subject.setConfig(cfg);
+        control.setConfig(cfg);
+        QVector<float> got;
+        QVector<float> expected;
+        for (int i = 0; i < 6; ++i) {
+            subject.reduce(flatBins(4096, 1.0e-12f), 1.0, 0.0, got);
+            control.reduce(flatBins(4096, 1.0e-12f), 1.0, 0.0, expected);
+        }
+        cfg.averageFrames = 20;
+        cfg.averageAlpha = 0.9;
+        subject.setConfig(cfg);
+        cfg.averageFrames = 4;
+        control.setConfig(cfg);
+        subject.reduce(flatBins(4096, 1.0e-10f), 1.0, 0.0, got);
+        control.reduce(flatBins(4096, 1.0e-10f), 1.0, 0.0, expected);
+        QCOMPARE(got, expected);
+    }
+
+    void changingAvengerDepthClearsTheWindowSumAndEqualDepthRetainsIt()
+    {
+        SpectrumAvenger avenger;
+        avenger.resize(1);
+        avenger.setNumAverage(4);
+        QVector<float> output;
+        for (float power : {1.0f, 3.0f}) {
+            avenger.apply({power}, 2, 0.99, 1.0, {}, false, 0.0, output);
+        }
+        avenger.setNumAverage(4);
+        avenger.apply({5.0f}, 2, 0.01, 1.0, {}, false, 0.0, output);
+        QVERIFY(std::abs(output[0] - 4.7712125f) < 0.0001f);
+        avenger.setNumAverage(2);
+        avenger.apply({7.0f}, 2, 0.99, 1.0, {}, false, 0.0, output);
+        QVERIFY(std::abs(output[0] - 8.4509802f) < 0.0001f);
+    }
+
     void extremeRemoteCropClampsBeforeIntegerConversion()
     {
         ReducerConfig config = baseConfig();

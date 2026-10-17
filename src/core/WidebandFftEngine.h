@@ -42,6 +42,7 @@
 #include <memory>
 
 #include <fftw3.h>
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
@@ -50,7 +51,7 @@ namespace NereusSDR {
 /// Input: 16384 normalized real samples (typically from
 /// WidebandFrameAccumulator::frameReady).
 /// Output: 32768 raw dB bins (10 * log10(|c|^2)), DC bin dropped.
-class WidebandFftEngine : public QObject {
+class NEREUS_CORE_EXPORT WidebandFftEngine : public QObject {
     Q_OBJECT
 public:
     explicit WidebandFftEngine(QObject* parent = nullptr);

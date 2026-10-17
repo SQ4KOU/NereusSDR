@@ -38,8 +38,25 @@
 //   2026-10-01: Control logging lane: MediaIcePath's candidate
 //               transports and rttMs(). Logging only. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09: Windows test fix: exported from the Core DLL, so a
+//               transport outside the DLL (a test's wrapper) connects to
+//               its signals on Windows. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
+//   2026-10-10: R-AUD-SEND: MediaRtpSink and audioRtpSink(), the audio
+//               line's send from any thread, so the Core's receive audio
+//               leaves on a thread of its own. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-15: setTxReceiptHook, the "tx" channel's
+//               receipts reported off the owner's thread for the remote
+//               transmit cut guard. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-10-15: Display send thread: MediaDisplaySink and displaySink(),
+//               the display and raw I/Q sends from any thread, so the
+//               Core's displays leave on a thread of their own. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+#include "core/NereusCoreExport.h"
 #include "core/session/IceConfiguration.h"
 #include "core/session/NetworkPathSnapshot.h"
 
@@ -50,10 +67,45 @@
 #include <QPair>
 #include <QString>
 
+#include <chrono>
 #include <functional>
+#include <memory>
 #include <optional>
 
 namespace NereusSDR {
+
+/// R-AUD-SEND: where one media connection's audio packets are sent from a
+/// thread other than the transport's owner (the Core's audio send thread).
+/// sendRtp() may be called from any thread, one call at a time or several.
+/// It makes the checks IMediaTransport::sendRtp() makes; Accepted is that
+/// call's true, and its false is told apart here (RtpSendResult). The object
+/// outlives its transport: once the transport has stopped (or is gone) every
+/// call answers NotReady, and no call is inside the transport when the
+/// transport's stop() returns. It never calls back into its caller.
+class MediaRtpSink {
+public:
+    MediaRtpSink() = default;
+    virtual ~MediaRtpSink() = default;
+    MediaRtpSink(const MediaRtpSink&) = delete;
+    MediaRtpSink& operator=(const MediaRtpSink&) = delete;
+
+    /// What became of one packet handed to sendRtp().
+    enum class RtpSendResult {
+        /// The transport took it. Not evidence of network delivery.
+        Accepted,
+        /// A ready transport would not take it: the packet is invalid for
+        /// this connection, the line still holds an earlier one, or the send
+        /// failed. A reader of the diagnostics takes this as a transport
+        /// fault.
+        Refused,
+        /// Nothing was asked of a transport: it has not started, is not
+        /// ready yet, has stopped or is gone. Not a fault; audio simply has
+        /// nowhere to go just now.
+        NotReady,
+    };
+
+    virtual RtpSendResult sendRtp(const QByteArray& packet) = 0;
+};
 
 /// iPhone app plan Task 27: the pair of candidates a connection settled on,
 /// what the desktop's attempt record reads to tell a direct path from a
@@ -164,7 +216,9 @@ struct MediaTransportTelemetry {
     quint64 submittedIqPayloadBytes = 0;
 };
 
-class IMediaTransport : public QObject {
+class MediaDisplaySink;
+
+class NEREUS_CORE_EXPORT IMediaTransport : public QObject {
     Q_OBJECT
 
 public:
@@ -241,6 +295,7 @@ public:
         // Task 23: dedicated reliable ordered raw-I/Q channel, negotiated
         // only when the window declared remoteIqVersion 1.
         bool iqChannel = false;
+        bool waveformChannel = false;
         // iPhone app plan Task 27 (R-IOS-16): set for a connection that came
         // through the remote access service. Its one STUN server goes in at
         // once; automatic gathering is off, and gathering starts with the
@@ -361,7 +416,26 @@ public:
         return DisplaySendResult::Refused;
     }
     virtual bool iqBusy() const { return false; }
+    static constexpr qsizetype kMaxWaveformMessageBytes = 4168;
+    virtual DisplaySendResult submitWaveform(const QByteArray& message)
+    {
+        Q_UNUSED(message);
+        return DisplaySendResult::Refused;
+    }
+    virtual bool waveformBusy() const { return false; }
     virtual bool sendRtp(const QByteArray& packet) = 0;
+    /// R-AUD-SEND: the audio line's send for another thread (MediaRtpSink).
+    /// The same object for the transport's whole life, so it may be asked
+    /// for before start() and kept across stop(). Null (the default) for a
+    /// transport with no send that is safe off its owner's thread; nothing
+    /// is sent from another thread then. Owner's thread only.
+    virtual std::shared_ptr<MediaRtpSink> audioRtpSink() { return nullptr; }
+    /// Display send thread: the display and raw I/Q sends for another
+    /// thread (MediaDisplaySink). The same object for the transport's whole
+    /// life, so it may be asked for before start() and kept across stop().
+    /// Null (the default) for a transport with no such send; the display
+    /// is then sent from the owner's thread. Owner's thread only.
+    virtual std::shared_ptr<MediaDisplaySink> displaySink() { return nullptr; }
     /// Task 36: one RTP packet on the microphone line, which only an
     /// answerer started with micAudioSsrc sends on. False without that
     /// line, before ready, for a packet whose SSRC is not micAudioSsrc, and
@@ -396,6 +470,24 @@ public:
     virtual bool setMicPacketSink(MicPacketSink sink)
     {
         Q_UNUSED(sink);
+        return false;
+    }
+
+    /// Remote transmit cut off the main thread (2026-10-15): called on the
+    /// transport's own receive thread for every message the "tx" data
+    /// channel takes, with when it came off the network, so a guard off
+    /// the owner's thread hears the keepalives while the owner's event loop
+    /// is held. A cancelled or severed transport never calls it. The hook
+    /// must be safe on that thread, must not block, and must not call back
+    /// into the transport.
+    using TxReceiptHook = std::function<void(std::chrono::steady_clock::time_point receivedAt)>;
+    /// Installs `hook` (empty: none) for this start and every later one.
+    /// After it returns, the hook it replaced is never called again. False
+    /// when this transport cannot call one off the owner's thread. Owner's
+    /// thread only.
+    virtual bool setTxReceiptHook(TxReceiptHook hook)
+    {
+        Q_UNUSED(hook);
         return false;
     }
 
@@ -446,6 +538,10 @@ signals:
     void gatheringComplete();
     void displayReceived(const QByteArray& message);
     void iqReceived(const QByteArray& message);
+    void waveformReceived(const QByteArray& message);
+    void waveformErrorOccurred(const QString& reason);
+    void waveformDropped(quint64 packets);
+    void waveformWritable();
     void iqErrorOccurred(const QString& reason);
     void rtpReceived(const QByteArray& packet);
     /// Task 36: an RTP packet that arrived on the microphone line. Never
@@ -481,6 +577,31 @@ signals:
     /// display channel's own error). Reported here only, not also through
     /// errorOccurred.
     void displayErrorOccurred(const QString& message);
+};
+
+/// Display send thread: where one media connection's display and raw I/Q
+/// messages are sent from a thread other than the transport's owner (the
+/// Core's display send thread). Every call may come from any thread, one at
+/// a time or several. submitDisplay(), displayBusy(), submitIq() and
+/// iqBusy() answer as IMediaTransport's do. ready() is IMediaTransport::
+/// isReady() for that thread: false before the transport is ready and
+/// once it has stopped (or is gone), and every submit then answers
+/// Refused. A send error is reported on the owner's thread, as
+/// displayErrorOccurred() or iqErrorOccurred(), never from the call. No
+/// call is inside the transport when the transport's stop() returns. It
+/// never calls back into its caller.
+class MediaDisplaySink {
+public:
+    MediaDisplaySink() = default;
+    virtual ~MediaDisplaySink() = default;
+    MediaDisplaySink(const MediaDisplaySink&) = delete;
+    MediaDisplaySink& operator=(const MediaDisplaySink&) = delete;
+
+    virtual bool ready() const = 0;
+    virtual IMediaTransport::DisplaySendResult submitDisplay(const QByteArray& message) = 0;
+    virtual bool displayBusy() const = 0;
+    virtual IMediaTransport::DisplaySendResult submitIq(const QByteArray& message) = 0;
+    virtual bool iqBusy() const = 0;
 };
 
 } // namespace NereusSDR

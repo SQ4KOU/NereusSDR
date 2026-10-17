@@ -20,6 +20,42 @@
 //                 defaults to the new ones, out-of-range values clamped).
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-10-08 - importFileForNextLaunch(): Import All Settings saves the
+//                 chosen file and holds later saves until restart, so the
+//                 running window no longer writes its old values back over
+//                 the import. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-09 - Schema v10: two-tone leaves TX profiles; the two-tone
+//                 keys saved inside profiles are removed and a live level
+//                 saved at the retired -6 dB default becomes 0, once.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - Display pill plan Task 3:
+//                 convertWaterfallLevelsForClarityModel(), the one-time
+//                 conversion of stored waterfall Black Level and Color Gain.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - Display pill plan Task 8:
+//                 resetPollutedDisplayCalOffset(), the one-time removal of
+//                 stored Cal Offset values that held the station's offset.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - Display pill plan Task 12:
+//                 clearUncalibratedClarityFloors(), the one-time removal of
+//                 per-band noise floors stored before they were calibrated.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - saveInBackground(): the timed settings save writes the
+//                 file on a writer thread, so the Core's main thread, which
+//                 also sends the receive audio, no longer waits for the
+//                 disk. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-12 - Saved-radio key list: firmwareBetaVersion. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15 - addWriteObserver(): more than one observer of local
+//                 writes, beside the single change hook the Core's
+//                 settings proxy owns. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-10-15 - The writer thread is finished as the QCoreApplication
+//                 ends, so a background save still writing at exit no
+//                 longer leaves the Windows process waiting forever.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -79,12 +115,15 @@
 #include <QMap>
 #include <QDateTime>
 #include <QHostAddress>
+#include <atomic>
 #include <functional>
+#include <memory>
 #include <optional>
 
 namespace NereusSDR {
 
 class ISettingsBackend;
+class SettingsFileWriter;
 
 // Saved-radio bundle (Phase 3I Task 15).
 // Combines RadioInfo with the client-side flags that only live in settings.
@@ -121,7 +160,8 @@ public:
     // The file need not exist; it is created on first save().
     explicit AppSettings(const QString& filePath);
 
-    ~AppSettings() = default;
+    // Waits for a background save already handed to the writer thread.
+    ~AppSettings();
     AppSettings(const AppSettings&) = delete;
     AppSettings& operator=(const AppSettings&) = delete;
 
@@ -130,6 +170,25 @@ public:
 
     // Atomic persistence; failure leaves in-memory preferences available for retry.
     bool save(QString* error = nullptr);
+
+    // The same save with the file work (building the XML, rotating .bak,
+    // writing, waiting for the disk) on a writer thread, for a caller that
+    // must not wait: the Core's main thread also sends the receive audio,
+    // and a save takes 140 to 470 ms on a Rock 5C (bench 2026-10-10). The
+    // values written are the ones held when this is called. Returns a
+    // ticket; backgroundSaveNotifier() emits finished(ticket, saved, error)
+    // on the caller's thread when the file is written or the write fails.
+    // A later save() or saveInBackground() replaces one that has not
+    // reached the disk yet, and the replaced one reports nothing. Call from
+    // the thread that owns this store.
+    quint64 saveInBackground();
+    // Created on first use, on the calling thread. Lives as long as this
+    // store.
+    SettingsFileWriter* backgroundSaveNotifier();
+    // Test seam: runs on the writer thread at the start of each background
+    // save, before it decides whether a later save has replaced it. Waits
+    // for the writer thread to finish what it has before changing the hook.
+    void setBackgroundSaveStartHookForTesting(std::function<void()> hook);
 
     // Exact local store, independent of any installed SettingsProxy. The
     // importer replaces the whole store only after its owner has stopped
@@ -142,6 +201,19 @@ public:
     // reads the file directly and checks keys, not element names.
     static QString keyFromXmlTag(const QString& tag);
     bool importLocalXml(const QByteArray& xml, QString* error = nullptr);
+
+    // Setup > Diagnostics > Import All Settings. Reads the file at `path`,
+    // checks it as importLocalXml() does (element names an older build
+    // wrote unescaped are repaired first, as load() repairs them) and saves
+    // it as this store's file for the next launch. The in-memory values
+    // stay as they are: the running window reads them live, and a mix of
+    // its own and the imported values is not a state anyone chose. After
+    // success every later save() writes nothing and reports success until
+    // the process ends, so the running window cannot put its own values
+    // back over the import (the quit flush, a timed save) before the
+    // restart. Nothing is written or held when the file is refused.
+    bool importFileForNextLaunch(const QString& path, QString* error = nullptr);
+    bool savesHeldUntilRestart() const { return m_savesHeldUntilRestart; }
 
     // Get/set top-level settings.
     QVariant value(const QString& key, const QVariant& defaultValue = {}) const;
@@ -235,6 +307,19 @@ public:
     // Pass an empty std::function (or nullptr) to stop observing.
     // ------------------------------------------------------------------
     void setChangeHook(std::function<void(const QString& key)> hook);
+
+    // Further observers of the same per-key fires as the change hook
+    // above: setValue() and remove() on this instance's own map, after
+    // the map is updated, on the caller's thread. The change hook stays a
+    // single slot because the Core's settings proxy owns it; these are
+    // for a model that holds values it will write later and must learn
+    // that someone else wrote one of those keys first (RadioModel's held
+    // per-band values). A write delegated to a remote backend does not
+    // fire them, as it does not fire the change hook. An observer must
+    // not add or remove observers from inside its own call. Returns the
+    // id removeWriteObserver() takes.
+    int addWriteObserver(std::function<void(const QString& key)> observer);
+    void removeWriteObserver(int id);
 
     // ------------------------------------------------------------------
     // Remote Daemon R2, Task 15 -- the delegation seam.
@@ -456,6 +541,7 @@ public:
     //   radios/<macKey>/boardType       (int — HPSDRHW value)
     //   radios/<macKey>/protocol        (int — ProtocolVersion value)
     //   radios/<macKey>/firmwareVersion (int)
+    //   radios/<macKey>/firmwareBetaVersion (int; 0 = the radio reported none)
     //   radios/<macKey>/pinToMac        (bool as "True"/"False")
     //   radios/<macKey>/autoConnect     (bool as "True"/"False")
     //   radios/<macKey>/lastSeen        (ISO 8601 UTC string)
@@ -553,6 +639,14 @@ public:
     //   Slice<N>/RxAntenna  — string (e.g. "ANT1")
     //   Slice<N>/TxAntenna  — string (e.g. "ANT1")
     //   Slice<N>/SnbEnabled — "True"/"False"           — default "False" (session-level)
+    //   Slice<N>/SsqlEnabled: "True"/"False", voice squelch (Thetis VSQL)
+    //   Slice<N>/SsqlThresh:  double, slider value, 0..100
+    //   Slice<N>/AmsqEnabled: "True"/"False", AM squelch (Thetis SQL)
+    //   Slice<N>/AmsqThresh:  double, dB, -160..0
+    //   Slice<N>/FmsqEnabled: "True"/"False", FM squelch
+    //   Slice<N>/FmsqThresh:  double, slider value, -160..0
+    //     Ranges from ControlRanges.h; a load clamps to them. Squelch is per
+    //     receiver as in Thetis console.cs:2830-2852 [v2.10.3.15].
     //
     // <N> = slice index (0-based). <key> = bandKeyName(band) from Band.h
     // (e.g. "20m", "40m", "GEN"). Written by SliceModel::saveToSettings();
@@ -713,6 +807,8 @@ public:
     //   - v8 (R-R3-49): drops TciRateLimitMsgsPerSec (old msg/s unit) once
     //   - v9 (R-IOS-06, R-IOS-27): each slice's saved NR1 values into
     //     Thetis's NR spinbox ranges once (old defaults to new, clamps)
+    //   - v10: removes the two-tone keys under every TX profile and resets
+    //     a live TwoToneLevel saved at the retired -6 to 0, once
     //   - Sets SettingsSchemaVersion=currentVersion
     void ensureSettingsAtVersion(int currentVersion);
 
@@ -760,9 +856,60 @@ public:
     // PennyLaneController::load().
     static void migrateRenamedKeys(AppSettings& s);
 
+    // Display pill plan Task 3: one-time conversion of the waterfall's
+    // stored Black Level and Color Gain to the level model used while
+    // Clarity drives the levels (core/spectrum/ClarityLevels.h), so the
+    // waterfall looks the same after the upgrade. Converts the Setup
+    // defaults (DisplayWfBlackLevel, DisplayWfColorGain) and every pan's
+    // own values (<key>_<N>, pan 0 included). The old colour span depended
+    // on both sliders, so a Color Gain is converted with the Black Level
+    // that pan showed (its own, else the Setup default, else the old ship
+    // default), and a Color Gain key is added where a pan or the Setup
+    // default had only a Black Level of its own and would otherwise change
+    // span. Records DisplayWfClarityLevelsConverted = "True" and never
+    // runs twice on one settings file; a file with none of these keys gets
+    // only the marker. These are this computer's keys: the window calls
+    // this (src/main.cpp), the Core never does, and SettingsSchemaVersion
+    // is not involved.
+    static void convertWaterfallLevelsForClarityModel(AppSettings& settings);
+
+    // Display pill plan Task 8: one-time removal of the stored display Cal
+    // Offset: the Setup default (DisplayCalOffset) and every pan's own
+    // value (DisplayCalOffset_<N>, pan 0 included). Until this task those
+    // keys held the station's receive offset, not a value the operator
+    // chose: the spectrum kept both in one member, the station's offset
+    // was pushed into it with every frame (overwriting the Setup control)
+    // and the save wrote the result. Left in place, each would now be
+    // added to the station's offset a second time. Records
+    // DisplayCalOffsetReset = "True" and never runs twice on one settings
+    // file, so a Cal Offset set afterwards is kept; a file with none of
+    // these keys gets only the marker. These are this computer's keys: the
+    // window calls this (src/main.cpp), the Core never does, and
+    // SettingsSchemaVersion is not involved.
+    static void resetPollutedDisplayCalOffset(AppSettings& settings);
+
+    // Display pill plan Task 12: one-time removal of the stored per-band
+    // noise floors, DisplayBandNFEstimate_<band> and ClarityFloor_<band>.
+    // Until this task Clarity measured the floor on uncalibrated bins;
+    // it now measures in calibrated dB, so a floor stored before would
+    // place a band's first waterfall rows wrong by the calibration offset.
+    // Each band is measured and stored again after about 15 s of steady
+    // reception. Records ClarityFloorsCalibrated = "True" and never runs
+    // twice on one settings file, so a floor stored afterwards is kept; a
+    // file with none of these keys gets only the marker. These are this
+    // computer's keys: the window calls this (src/main.cpp), the Core never
+    // does, and SettingsSchemaVersion is not involved.
+    static void clearUncalibratedClarityFloors(AppSettings& settings);
+
 private:
     // Private default constructor — used only by instance().
     AppSettings();
+
+    // Registered with qAddPostRoutine() for instance() only: finishes its
+    // writer thread while the QCoreApplication ends and every thread still
+    // runs. instance() is a static in the Core library, and on Windows its
+    // destructor runs after the process has ended the writer thread.
+    static void finishInstanceWriter();
 
     // Shared init (resolves file path on macOS/Linux/Win).
     void initFilePath();
@@ -783,6 +930,10 @@ private:
     // above. Instance-scoped; empty (default-constructed) means "no
     // observer", checked before every fire.
     std::function<void(const QString& key)> m_changeHook;
+    // See addWriteObserver(). Keyed by the id it returned.
+    QMap<int, std::function<void(const QString& key)>> m_writeObservers;
+    int m_nextWriteObserverId = 1;
+    void notifyWriteObservers(const QString& key) const;
 
     // Remote Daemon R2, Task 15 -- see setRemoteBackend()'s doc comment
     // above. Non-owning; nullptr means "not in remote mode", checked
@@ -794,6 +945,23 @@ private:
     bool    m_wasCorruptedOnLoad{false};
     QString m_preservedCorruptFilePath;
     bool    m_recoveredFromBackup{false};
+
+    // Set by importFileForNextLaunch(); never cleared (see its comment).
+    bool    m_savesHeldUntilRestart{false};
+
+    // saveInBackground(): the newest save asked for, shared with the jobs
+    // on the writer thread so a job can tell that a later save replaced it.
+    struct BackgroundSaveState {
+        std::atomic<quint64> newestSave{0};
+        std::function<void()> startHookForTesting;
+    };
+    std::shared_ptr<BackgroundSaveState> m_backgroundSave{
+        std::make_shared<BackgroundSaveState>()};
+    // True for instance() only.
+    bool m_isInstance{false};
+    // Declared last: destroyed first, which waits for the writer thread
+    // while the rest of this store is still whole.
+    std::unique_ptr<SettingsFileWriter> m_fileWriter;
 };
 
 } // namespace NereusSDR

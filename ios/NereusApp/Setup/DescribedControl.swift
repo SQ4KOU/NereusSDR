@@ -16,6 +16,13 @@ struct DescribedControl: View {
     @ObservedObject var dispatcher: SetupControlDispatcher
     var specialized: SetupSpecializedPanels = .none
     let profileOwner: UUID?
+    /// The actual described row supplies its existing version context; no
+    /// Core command, new wire field or generalized setting migration is involved.
+    static func performPhoneAction(_ control: SetupDescription.Control, keys: PhoneSetupKeys) -> Bool {
+        guard case .phone(let action)? = control.binding else { return false }
+        return keys.perform(action, descriptionVersion: control.requiresDescriptionVersion ?? SetupDescription.highestVersion)
+    }
+    var effectiveText: String? = nil
 
     @StateObject private var outcomeOwner = SetupRowOutcomeOwner()
     @State private var typedEdit: UInt64?
@@ -176,7 +183,9 @@ struct DescribedControl: View {
                                          set: { request(.bool($0)) }),
                            enabled: state.editable && state.value != nil, id: control.id)
         case .integer?, .decimal?:
-            if let number = state.value?.number, let range = drawn.range {
+            if control.readout != nil && !state.editable {
+                valueRow(effectiveText ?? Self.unavailableText)
+            } else if let number = state.value?.number, let range = drawn.range {
                 SetupNumberRow(title: title, value: number, range: range.minimum...range.maximum,
                                step: range.step, unit: control.unit ?? "", decimals: decimals,
                                enabled: state.editable, id: control.id,
@@ -191,7 +200,9 @@ struct DescribedControl: View {
                 valueRow(Self.unavailableText)
             }
         case .slider?:
-            slider(state)
+            if control.readout != nil && !state.editable {
+                valueRow(effectiveText ?? Self.unavailableText)
+            } else { slider(state) }
         case .choice?:
             choice(state)
         case .text?:
@@ -335,26 +346,39 @@ struct DescribedControl: View {
             ?? (drawn.choices ?? []).enumerated().map { (Int64($0.offset), $0.element) }
         // Options this phone cannot show: in the menu, disabled, each with its reason below.
         let unavailable = dispatcher.unavailableOptions(of: control)
-        VStack(alignment: .leading, spacing: 4) {
-            Picker(title, selection: Binding(get: { state.value?.whole ?? Int64.min },
-                                             set: { request(.integer($0)) })) {
-                if state.value == nil {
-                    Text(Self.unavailableText).tag(Int64.min)
-                }
+        if control.id == "display.levels.waterfallMode" || control.id == "display.levels.scaleMode" {
+            SheetGrid(columns: items.count) {
                 ForEach(items, id: \.value) { item in
-                    Text(item.label).tag(item.value)
-                        .selectionDisabled(unavailable[item.value] != nil)
+                    PanelButton(label: item.label, lit: state.value?.whole == item.value, style: .blue,
+                                disabled: !state.editable || unavailable[item.value] != nil) {
+                        request(.integer(item.value))
+                    }
                 }
             }
-            .pickerStyle(.menu)
-            .disabled(!state.editable)
+            .accessibilityLabel(control.label)
             .accessibilityIdentifier(control.id)
-            ForEach(items.filter { unavailable[$0.value] != nil }, id: \.value) { item in
-                Text("\(item.label): \(unavailable[item.value] ?? "")")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("\(control.id).option.\(item.value)")
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                Picker(title, selection: Binding(get: { state.value?.whole ?? Int64.min },
+                                                 set: { request(.integer($0)) })) {
+                    if state.value == nil {
+                        Text(Self.unavailableText).tag(Int64.min)
+                    }
+                    ForEach(items, id: \.value) { item in
+                        Text(item.label).tag(item.value)
+                            .selectionDisabled(unavailable[item.value] != nil)
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(!state.editable)
+                .accessibilityIdentifier(control.id)
+                ForEach(items.filter { unavailable[$0.value] != nil }, id: \.value) { item in
+                    Text("\(item.label): \(unavailable[item.value] ?? "")")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("\(control.id).option.\(item.value)")
+                }
             }
         }
     }

@@ -230,7 +230,9 @@ public final class FakeStation: @unchecked Sendable {
     /// The pairing connection whose exchange holds the code, from its step 1.
     private var codeHolder: ObjectIdentifier?
     /// Until when no code is shown, after a burned one.
-    private var waitUntil: ContinuousClock.Instant?
+    private var waitUntil: Int64?
+    /// Time for pairing waits; a test can move it independently of hashing.
+    private let pairingClock: any LinkClock
     /// The slice indexes the fixture's snapshot creates.
     private let sliceIds: Set<Int64>
     /// Refusals to give the next time each verb or operation comes.
@@ -284,6 +286,8 @@ public final class FakeStation: @unchecked Sendable {
     let freedvState = FreeDVState()
     /// The TCI server and its apps (``Additions/stationTci``, FakeStation+StationTools.swift).
     let stationToolsState = StationToolsState()
+    /// The Core's CAT (``Additions/stationCat``, FakeStation+StationCat.swift).
+    let stationCatState = StationCatState()
     /// The VAX channels' scene and whether a device follows their meters.
     let vaxState = VaxState()
     /// The radios the Core can see (``Additions/stationRadios``, FakeStation+StationRadios.swift).
@@ -310,10 +314,12 @@ public final class FakeStation: @unchecked Sendable {
     /// A fake that plays the session fixture `fixtureId`. Throws when the
     /// suite has no such fixture or it does not read as the link document
     /// describes. With `requiresPairing`, only a device key paired with the
-    /// fake signs in.
+    /// fake signs in. `pairingClock` controls only the waits after burned codes.
     public init(fixture fixtureId: String = FakeStation.defaultFixture, requiresPairing: Bool = false,
                 additions: Additions = [], stationLabel: String? = nil,
-                withoutCapabilities: Set<String> = []) throws {
+                withoutCapabilities: Set<String> = [],
+                pairingClock: any LinkClock = SystemLinkClock()) throws {
+        self.pairingClock = pairingClock
         guard let fixture = try SessionFixtures.all().first(where: { $0.id == fixtureId }) else {
             throw LinkFixtureLoader.Malformed(description: "the suite has no session fixture \(fixtureId)")
         }
@@ -558,15 +564,14 @@ public final class FakeStation: @unchecked Sendable {
         guard let waitUntil else {
             return false
         }
-        return ContinuousClock.now < waitUntil
+        return pairingClock.nowMilliseconds < waitUntil
     }
 
     private var remainingWaitMs: Int {
         guard let waitUntil else {
             return 0
         }
-        let left = (waitUntil - ContinuousClock.now).components
-        return max(1, Int(left.seconds * 1000 + left.attoseconds / 1_000_000_000_000_000))
+        return max(1, Int(waitUntil - pairingClock.nowMilliseconds))
     }
 
     /// The refusal of a one-tap pairing from the device with `key`, or nil
@@ -647,7 +652,7 @@ public final class FakeStation: @unchecked Sendable {
                 return LinkMessage.PairFail(reason: reason, retryAfterMs: 0)
             }
             let waitMs = Self.firstRetryMs << (failures - 1)
-            waitUntil = ContinuousClock.now + .milliseconds(waitMs)
+            waitUntil = pairingClock.nowMilliseconds + Int64(waitMs)
             return LinkMessage.PairFail(reason: reason, retryAfterMs: waitMs)
         }
     }
@@ -826,6 +831,12 @@ public final class FakeStation: @unchecked Sendable {
             }
             set(name, value)
         }
+        for (name, value) in Self.stationCatCapabilityVersions(additions) where !removed.contains(name) {
+            // The CAT log rides the record streams (at least version 1).
+            let streams = properties.first { $0["name"] as? String == "recordStreamVersion" }?["value"] as? Int
+            set("recordStreamVersion", max(1, streams ?? 0))
+            set(name, value)
+        }
         // The suite's Core now advertises FreeDV Reporter at 2 (its stations'
         // bands); without ``Additions/freedvBand`` the fake plays one at 1.
         if additions.contains(.freedvBand), !removed.contains(freedvCapability) {
@@ -967,6 +978,9 @@ public final class FakeStation: @unchecked Sendable {
             return replies
         }
         if let replies = stationToolReplies(invoke) {
+            return replies
+        }
+        if let replies = stationCatReplies(invoke) {
             return replies
         }
         if let replies = modMonitorReplies(invoke) {

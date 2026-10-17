@@ -49,6 +49,9 @@
 //                 Connected and a slice with no channel. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-10-11 -- Max Bin with several slices: each slice takes its own
+//                 reading (setMaxBinSource). J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -68,6 +71,14 @@
 #include "models/SliceModel.h"
 
 using namespace NereusSDR;
+
+// MinGW imports a static constexpr member of an exported class by address
+// when it is bound to a reference (QCOMPARE does), and the Core DLL never
+// exports one, so this test did not link on Windows. It reads these
+// copies by value instead.
+namespace {
+constexpr double kNoReadingDbm = NereusSDR::SliceMeterPump::kNoReadingDbm;
+} // namespace
 
 namespace {
 // R-R3-39: the pump reads the receive lane's meter cache, and its reads ask
@@ -192,10 +203,10 @@ private slots:
 
         pollSettled(model, pump);
 
-        QCOMPARE(slice->signalStrengthDbm(), SliceMeterPump::kNoReadingDbm);
-        QCOMPARE(slice->signalPeakDbm(), SliceMeterPump::kNoReadingDbm);
-        QCOMPARE(slice->signalAverageDbm(), SliceMeterPump::kNoReadingDbm);
-        QCOMPARE(SliceMeterPump::kNoReadingDbm, -400.0);
+        QCOMPARE(slice->signalStrengthDbm(), kNoReadingDbm);
+        QCOMPARE(slice->signalPeakDbm(), kNoReadingDbm);
+        QCOMPARE(slice->signalAverageDbm(), kNoReadingDbm);
+        QCOMPARE(kNoReadingDbm, -400.0);
     }
 
     // R-R3-13: the no-channel branch on its own. The model reports
@@ -220,9 +231,9 @@ private slots:
         model.setConnectionStateForTest(ConnectionState::Connected);
         pollSettled(model, pump);
 
-        QCOMPARE(slice->signalStrengthDbm(), SliceMeterPump::kNoReadingDbm);
-        QCOMPARE(slice->signalPeakDbm(), SliceMeterPump::kNoReadingDbm);
-        QCOMPARE(slice->signalAverageDbm(), SliceMeterPump::kNoReadingDbm);
+        QCOMPARE(slice->signalStrengthDbm(), kNoReadingDbm);
+        QCOMPARE(slice->signalPeakDbm(), kNoReadingDbm);
+        QCOMPARE(slice->signalAverageDbm(), kNoReadingDbm);
     }
 
     // R-R3-13: LinkLost with a live channel. A local LinkLost keeps the
@@ -246,7 +257,7 @@ private slots:
 
         // Connected first: a real reading lands.
         pollSettled(model, pump);
-        QVERIFY(slice->signalAverageDbm() > SliceMeterPump::kNoReadingDbm);
+        QVERIFY(slice->signalAverageDbm() > kNoReadingDbm);
 
         model.setConnectionStateForTest(ConnectionState::LinkLost);
         // The channel survives LinkLost; that is exactly why the gate is
@@ -254,9 +265,9 @@ private slots:
         QVERIFY(model.wdspEngine()->rxChannel(slice->sliceIndex()) != nullptr);
         pollSettled(model, pump);
 
-        QCOMPARE(slice->signalStrengthDbm(), SliceMeterPump::kNoReadingDbm);
-        QCOMPARE(slice->signalPeakDbm(), SliceMeterPump::kNoReadingDbm);
-        QCOMPARE(slice->signalAverageDbm(), SliceMeterPump::kNoReadingDbm);
+        QCOMPARE(slice->signalStrengthDbm(), kNoReadingDbm);
+        QCOMPARE(slice->signalPeakDbm(), kNoReadingDbm);
+        QCOMPARE(slice->signalAverageDbm(), kNoReadingDbm);
 
         // Link down while keyed still clears: re-seed, key, poll.
         slice->setSignalStrengthDbm(-73.0);
@@ -264,9 +275,9 @@ private slots:
         slice->setSignalAverageDbm(-75.0);
         model.radioStatus().setTransmitting(true);
         pollSettled(model, pump);
-        QCOMPARE(slice->signalStrengthDbm(), SliceMeterPump::kNoReadingDbm);
-        QCOMPARE(slice->signalPeakDbm(), SliceMeterPump::kNoReadingDbm);
-        QCOMPARE(slice->signalAverageDbm(), SliceMeterPump::kNoReadingDbm);
+        QCOMPARE(slice->signalStrengthDbm(), kNoReadingDbm);
+        QCOMPARE(slice->signalPeakDbm(), kNoReadingDbm);
+        QCOMPARE(slice->signalAverageDbm(), kNoReadingDbm);
         model.radioStatus().setTransmitting(false);
 
         // Recovery: Connected again publishes the live channel's readings.
@@ -279,7 +290,7 @@ private slots:
         QCOMPARE(slice->signalPeakDbm(),
                  ch->getMeter(RxMeterType::SignalPeak) + model.rxMeterOffsetDb());
         QCOMPARE(slice->signalAverageDbm(), average);
-        QVERIFY(slice->signalAverageDbm() > SliceMeterPump::kNoReadingDbm);
+        QVERIFY(slice->signalAverageDbm() > kNoReadingDbm);
 
         harness.reset();
     }
@@ -457,6 +468,67 @@ private slots:
                  model.wdspEngine()->rxChannel(slice->sliceIndex())
                      ->getMeter(RxMeterType::SignalAvg) + model.rxMeterOffsetDb());
 
+        harness.reset();
+    }
+
+    // 2026-10-11, the bench fault: four slices on four bands, S-meter
+    // source on Max Bin, and every flag showed one number, the active
+    // pan's. With the window's per-slice source each slice takes its own
+    // reading plus its own receive offset, and a slice no pan shows takes
+    // no reading rather than another slice's.
+    void maxBinGivesEachSliceItsOwnReading()
+    {
+        std::unique_ptr<ConnectableRadioModel> harness = ConnectableRadioModel::create();
+        QVERIFY(harness != nullptr);
+        RadioModel& model = harness->model();
+        SliceMeterPump* pump = model.sliceMeterPump();
+        QVERIFY(pump != nullptr);
+
+        SliceModel* onTwenty = model.sliceById(0);
+        QVERIFY(onTwenty != nullptr);
+        SliceModel* onEighty = model.sliceById(model.addSlice());
+        QVERIFY(onEighty != nullptr);
+        SliceModel* notShown = model.sliceById(model.addSlice());
+        QVERIFY(notShown != nullptr);
+        WdspEngine* engine = model.wdspEngine();
+        for (SliceModel* slice : {onTwenty, onEighty, notShown}) {
+            if (engine->rxChannel(slice->sliceIndex()) == nullptr) {
+                QVERIFY(engine->createRxChannel(slice->sliceIndex()) != nullptr);
+            }
+        }
+
+        constexpr double kQuietBandDbm = -93.25;
+        constexpr double kHotBandDbm = -61.5;
+        pump->setSourceSelector([]() { return SliceMeterPump::MeterSource::MaxBin; });
+        pump->setMaxBinSource([onTwenty, onEighty](const SliceModel* slice) -> double {
+            if (slice == onTwenty) { return kQuietBandDbm; }
+            if (slice == onEighty) { return kHotBandDbm; }
+            return kNoReadingDbm;
+        });
+        pollSettled(model, pump);
+
+        QCOMPARE(onTwenty->signalStrengthDbm(),
+                 kQuietBandDbm + model.rxMeterOffsetDbForSlice(onTwenty->sliceIndex()));
+        QCOMPARE(onEighty->signalStrengthDbm(),
+                 kHotBandDbm + model.rxMeterOffsetDbForSlice(onEighty->sliceIndex()));
+        QCOMPARE(notShown->signalStrengthDbm(), kNoReadingDbm);
+        // The other two readings are still each channel's own.
+        QCOMPARE(onEighty->signalPeakDbm(),
+                 engine->rxChannel(onEighty->sliceIndex())->getMeter(RxMeterType::SignalPeak)
+                     + model.rxMeterOffsetDbForSlice(onEighty->sliceIndex()));
+
+        // Another source than Max Bin does not ask the window at all.
+        int asked = 0;
+        pump->setMaxBinSource([&asked](const SliceModel*) -> double {
+            ++asked;
+            return -50.0;
+        });
+        pump->setSourceSelector([]() { return SliceMeterPump::MeterSource::SignalPeak; });
+        pollSettled(model, pump);
+        QCOMPARE(asked, 0);
+        QCOMPARE(onTwenty->signalStrengthDbm(), onTwenty->signalPeakDbm());
+
+        pump->setMaxBinSource({});
         harness.reset();
     }
 

@@ -2,6 +2,9 @@
 // Regression for the actual patched libjuice poll worker and registry.
 // Modification history (NereusSDR):
 //   2026-10-03: J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
+//   2026-10-11: the interrupt-only case stops the worker before it arms
+//               the error.  J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 #include <QtTest>
 #include "fakes/juice-poll/Hooks.h"
 #include <juice/juice.h>
@@ -204,10 +207,27 @@ private slots:
         QCOMPARE(juice_gather_candidates(old.get()), 0);
         QVERIFY(waitForEvent(old.get(), NereusJuiceBookkeeping));
         const void *registry = nereus_juice_poll_test_registry(old.get());
+        auto &state = fixture();
+        // Stop the worker before a poll first. Gathering's interrupts may
+        // still be bringing it around, and if such a turn found the error
+        // armed, the interrupt meant to bring the error in would arrive
+        // afterward and wake the interrupt-only wait once.
+        {
+            std::lock_guard lock(state.mutex);
+            state.barrierArmed = true;
+            state.barrierReleased = false;
+        }
+        QCOMPARE(nereus_juice_poll_test_interrupt(old.get()), 0);
+        {
+            std::unique_lock lock(state.mutex);
+            QVERIFY(state.changed.wait_for(lock, 1500ms, [&] { return state.barrierHeld; }));
+        }
+        // Written while the worker is stopped: its next poll takes every
+        // interrupt so far and the same turn finds the error.
         armError(old.get());
         QCOMPARE(nereus_juice_poll_test_interrupt(old.get()), 0);
+        resume();
         QVERIFY(waitForEvent(old.get(), NereusJuiceSocketErrorFinished));
-        auto &state = fixture();
         {
             std::unique_lock lock(state.mutex);
             QVERIFY(state.changed.wait_for(lock, 1500ms, [&] {

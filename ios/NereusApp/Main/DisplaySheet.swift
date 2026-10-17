@@ -31,7 +31,7 @@ struct DisplaySheet: View {
             Rectangle().fill(ChromeColours.sheetBorder).frame(height: 1).padding(.vertical, 2)
             SheetCaption("Waterfall:")
             palette
-            SheetGrid(columns: 3) {
+            SheetGrid(columns: 5) {
                 ForEach(DisplaySheetModel.Level.allCases, id: \.label) { level in
                     PanelButton(label: level.label, lit: model.level == level, style: .blue,
                                 disabled: !model.isAvailable(level)) {
@@ -42,7 +42,7 @@ struct DisplaySheet: View {
             }
             levelNote
             if !model.extrasAvailable {
-                SheetNote("Clarity and Auto: \(CatalogFeed.needsNewerCoreText)")
+                SheetNote("Clarity, Auto and Floor: \(CatalogFeed.needsNewerCoreText)")
             }
             PanelSliderRow(label: "Color gain", value: model.colorGain, range: DisplaySheetModel.colorGainRange,
                            accessibility: "Waterfall color gain") { model.setColorGain($0) }
@@ -66,7 +66,7 @@ struct DisplaySheet: View {
                                range: DisplaySheetModel.fillRange, accessibility: "Fill strength",
                                greyed: !(model.fillOn && model.flatControlsAvailable)) { model.setFill($0) }
             }
-            PanelSliderRow(label: "Line", value: model.line, range: DisplaySheetModel.lineRange(scale: displayScale),
+            PanelSliderRow(label: "Line", value: model.line(scale: displayScale), range: DisplaySheetModel.lineRange(scale: displayScale),
                            accessibility: "Trace line width", format: DisplaySheetModel.lineText) {
                 model.setLine($0, scale: displayScale)
             }
@@ -136,26 +136,53 @@ struct DisplaySheet: View {
             }
             more
         }
+        .onAppear { model.focusPan() }
     }
 
     /// The Core's FFT size and Hz/bin target, and the bin width now.
     @ViewBuilder
     private var fft: some View {
         let size = core.sizeControl
+        let target = core.hzPerBinControl
+        // Who sets the FFT size, on a Core that describes the choice.
+        if let sizing = core.sizingControl, core.sizingMode != nil {
+            SheetCaption("\(sizing.label):")
+            SheetGrid(columns: max(1, sizing.options.count)) {
+                ForEach(sizing.options, id: \.value) { option in
+                    PanelButton(label: option.label, lit: core.value(sizing) == option.value, style: .blue) {
+                        core.set(sizing, to: option.value)
+                    }
+                    .accessibilityIdentifier("sheetSizing\(option.token ?? option.label)")
+                }
+            }
+        }
+        let sizeReason = size.flatMap { core.sizingReason($0) }
         PanelSliderRow(label: "FFT size", value: core.sizeIndex, range: core.sizeIndexRange,
-                       accessibility: "FFT size", format: { core.sizeOption(at: $0)?.label ?? "" }, notConfirmed: core.isUnconfirmed(CoreDisplayModel.fftSizeKey)) {
+                       accessibility: "FFT size", format: { core.sizeOption(at: $0)?.label ?? "" },
+                       greyed: sizeReason != nil, notConfirmed: core.isUnconfirmed(CoreDisplayModel.fftSizeKey)) {
             core.setSizeIndex($0)
         }
+        .accessibilityHint(sizeReason ?? "")
         .accessibilityIdentifier("sheetFftSize")
-        let target = core.hzPerBinControl
-        PanelSliderRow(label: "Hz/bin", value: target.flatMap { core.value($0) }, range: target?.range,
+        if let sizeReason {
+            SheetNote(sizeReason)
+                .accessibilityIdentifier("sheetFftSizeReason")
+        }
+        let targetReason = target.flatMap { core.sizingReason($0) }
+        PanelSliderRow(label: "Hz/bin", value: target.flatMap { core.value($0) }, range: target.flatMap { core.range($0) },
                        accessibility: target?.label ?? "Hz per bin target",
-                       format: { value in target?.text(value) ?? "" }, notConfirmed: core.isUnconfirmed(CoreDisplayModel.hzPerBinKey)) { value in
+                       format: { value in target?.text(value) ?? "" },
+                       greyed: targetReason != nil, notConfirmed: core.isUnconfirmed(CoreDisplayModel.hzPerBinKey)) { value in
             if let target {
                 core.set(target, to: value)
             }
         }
+        .accessibilityHint(targetReason ?? "")
         .accessibilityIdentifier("sheetHzPerBin")
+        if let targetReason {
+            SheetNote(targetReason)
+                .accessibilityIdentifier("sheetHzPerBinReason")
+        }
         SheetNote("\(core.binWidthLabel): \(core.binWidthText ?? "")")
             .accessibilityIdentifier("sheetBinWidth")
         if size == nil || target == nil {

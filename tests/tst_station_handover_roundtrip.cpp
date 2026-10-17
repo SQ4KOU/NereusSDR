@@ -1,6 +1,8 @@
 // no-port-check: NereusSDR-original Task 48 process handover acceptance.
 // A GUI owner and the real daemon helper share one sandbox profile. The
 // service command runner is fake; it never invokes the host OS service tool.
+// The daemon helper is started with the words of the entry the GUI owner
+// registered, so what is proven is the hand over a real close performs.
 
 #include <QtTest>
 
@@ -12,6 +14,7 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QScopeGuard>
+#include <QStandardPaths>
 #include <QTcpServer>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -29,6 +32,7 @@
 #include "core/settings/SettingsProxy.h"
 #include "core/station/StationHandover.h"
 #include "core/station/StationHost.h"
+#include "fakes/ServiceEntryWords.h"
 #include "gui/GuiDesktopStationRuntime.h"
 #include "gui/GuiSessionCoordinator.h"
 #include "gui/MainWindow.h"
@@ -91,6 +95,9 @@ int guiHelper(int argc, char* argv[])
     options.profileDirectory = AppSettings::resolveConfigDir(profile);
     options.homeDirectory = home;
     options.binaryPath = QCoreApplication::applicationFilePath();
+    // The entry then starts this binary as the daemon helper, as the parent
+    // does with the entry's own words.
+    options.prefixArguments = {QStringLiteral("--daemon-helper")};
     options.platform = StationPlatform::Linux;
     options.runner = [](const QString& command, const QStringList& args) {
         if (command != QLatin1String("systemctl")) {
@@ -327,14 +334,28 @@ private slots:
                 << handshakes.count() << "port" << port;
     }
 
+    void pairedClientFollowsBothOwners_data()
+    {
+        QTest::addColumn<bool>("named");
+        QTest::newRow("a named profile") << true;
+        // The profile of a window started with no --profile. The window
+        // keeps its Core's identity beside its settings; a Core started
+        // with an empty --profile kept its own in the reserved daemon
+        // profile, so a paired device met a Core it did not know.
+        QTest::newRow("the default profile") << false;
+    }
+
     void pairedClientFollowsBothOwners()
     {
+        QFETCH(bool, named);
         QTemporaryDir scratch;
         QVERIFY(scratch.isValid());
-        const QString profile = profileName();
+        const QString profile = named ? profileName() : QString();
         const QString profileDirectory = AppSettings::resolveConfigDir(profile);
         const auto cleanup = qScopeGuard([&] {
-            QDir(profileDirectory).removeRecursively();
+            // The default profile's folder is the root of every other one,
+            // and it goes with this run's home.
+            if (named) { QDir(profileDirectory).removeRecursively(); }
         });
         QVERIFY(QDir().mkpath(profileDirectory));
         QTcpServer reservation;
@@ -404,8 +425,13 @@ private slots:
         QVERIFY(firstOutput.indexOf("RETIRED first") < firstOutput.indexOf("LAUNCH_REQUEST"));
         QVERIFY(first.state() == QProcess::NotRunning || first.waitForFinished(3000));
         QCOMPARE(first.exitCode(), 0);
-        QVERIFY(QFileInfo::exists(QDir(scratch.path()).filePath(
-            QStringLiteral(".config/systemd/user/nereusd.service"))));
+        QFile entry(QDir(scratch.path()).filePath(
+            QStringLiteral(".config/systemd/user/nereusd.service")));
+        QVERIFY(entry.open(QIODevice::ReadOnly));
+        const QStringList launch = Test::systemdCommandWords(entry.readAll());
+        entry.close();
+        QCOMPARE(launch.value(0), QCoreApplication::applicationFilePath());
+        QCOMPARE(launch.value(1), QStringLiteral("--daemon-helper"));
         QVERIFY(competitor.acquire(0));
         competitor.release();
         QVERIFY(!QFileInfo::exists(QDir(profileDirectory).filePath(
@@ -420,10 +446,7 @@ private slots:
         daemonEnv.insert(QStringLiteral("NEREUS_HANDOVER_TEST_PRIMED_BOARD"),
                          QStringLiteral("1"));
         daemon.setProcessEnvironment(daemonEnv);
-        daemon.start(QCoreApplication::applicationFilePath(),
-                     {QStringLiteral("--daemon-helper"), QStringLiteral("--config"),
-                      QDir(profileDirectory).filePath(QStringLiteral("station.conf")),
-                      QStringLiteral("--profile"), profile});
+        daemon.start(launch.value(0), launch.mid(1));
         QVERIFY(daemon.waitForStarted());
         const qint64 daemonPid = daemon.processId();
         const QString socketPath = QDir(profileDirectory).filePath(
@@ -435,6 +458,19 @@ private slots:
         const qint64 guiToDaemonMs = toDaemon.elapsed();
         QCOMPARE(client.stationIdentityFingerprint(), station.fingerprint());
         QVERIFY(reconnects.count() >= 1);
+        // The background Core is also told where the window's saved FFT
+        // plans are, and says at its start that it will look there. The
+        // helper is this same program in this same home, so the window's
+        // folder is the one read here. No radio connects in this test, so
+        // the folder itself stays unread.
+        const QString plans = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+        const qsizetype plansAt = launch.indexOf(QStringLiteral("--dsp-cache-dir"));
+        QVERIFY2(plansAt >= 0, qPrintable(launch.join(QLatin1Char('|'))));
+        QCOMPARE(launch.value(plansAt + 1), plans);
+        QByteArray daemonLog;
+        const QByteArray plansLine = "saved FFT plans in " + plans.toUtf8();
+        QTRY_VERIFY2_WITH_TIMEOUT((daemonLog += daemon.readAllStandardError()).contains(plansLine),
+                                  daemonLog.constData(), 10000);
 
         QElapsedTimer toGui;
         toGui.start();
@@ -508,8 +544,16 @@ int main(int argc, char* argv[])
     if (!shortHome.isValid()) { return 20; }
     qputenv("HOME", shortHome.path().toUtf8());
     qputenv("CFFIXED_USER_HOME", shortHome.path().toUtf8());
+    // The test home guard (TestHomeGuard.cpp) checks each child process
+    // against NEREUS_TEST_HOME: the home moved, so the marker moves too.
+    qputenv("NEREUS_TEST_HOME", shortHome.path().toUtf8());
+    // The test's own process keeps to a profile of its own. One case hands
+    // the default profile to the helpers; its settings and its log are
+    // theirs alone.
+    const QString own = QStringLiteral("harness");
+    AppSettings::setProfileOverride(own);
     QApplication app(argc, argv);
-    CoreInit::initialize();
+    CoreInit::initialize(own);
     TestStationHandoverRoundtrip tests;
     const int result = QTest::qExec(&tests, argc, argv);
     CoreInit::shutdown();

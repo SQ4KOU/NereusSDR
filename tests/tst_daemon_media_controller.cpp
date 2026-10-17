@@ -34,8 +34,11 @@
 
 #include <QtTest>
 
+#include "fakes/RecordingRtpSink.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/ClarityController.h"
+#include "core/MoxController.h"
 #include "core/SliceOwnership.h"
 #include "core/session/SliceAccessController.h"
 #include "core/FFTEngine.h"
@@ -68,6 +71,9 @@
 #include "fakes/LoopbackTransport.h"
 #include "OperatorWording.h"
 #include "models/RadioModel.h"
+#include "models/RadeWaveformModel.h"
+#include "core/TxSliceArbiter.h"
+#include "core/session/media/WaveformCodec.h"
 #include "models/SliceModel.h"
 
 #include <QDeadlineTimer>
@@ -120,6 +126,50 @@ bool isKeyframe(const QByteArray& frame)
 {
     return frame.size() > 5 && (static_cast<quint8>(frame.at(5)) & 0x01) != 0;
 }
+
+// Display send thread: the display and raw I/Q sends from any thread, as
+// LibDataChannelMediaTransport's displaySink() takes them. Ready while the
+// fake transport's own sink is; it records the thread each raw I/Q message
+// was sent from, and a stalled channel takes none.
+class ThreadDisplaySink final : public MediaDisplaySink {
+public:
+    explicit ThreadDisplaySink(std::shared_ptr<Test::RecordingRtpSink> readiness)
+        : m_readiness(std::move(readiness))
+    {
+    }
+
+    bool ready() const override { return m_readiness->ready.load(std::memory_order_acquire); }
+    IMediaTransport::DisplaySendResult submitDisplay(const QByteArray&) override
+    {
+        return ready() ? IMediaTransport::DisplaySendResult::Sent
+                       : IMediaTransport::DisplaySendResult::Refused;
+    }
+    bool displayBusy() const override { return false; }
+    IMediaTransport::DisplaySendResult submitIq(const QByteArray&) override
+    {
+        if (!ready()) { return IMediaTransport::DisplaySendResult::Refused; }
+        if (stallIq.load(std::memory_order_acquire)) {
+            return IMediaTransport::DisplaySendResult::Busy;
+        }
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        m_iqThreads.append(std::this_thread::get_id());
+        return IMediaTransport::DisplaySendResult::Sent;
+    }
+    bool iqBusy() const override { return stallIq.load(std::memory_order_acquire); }
+
+    QList<std::thread::id> iqThreads() const
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        return m_iqThreads;
+    }
+
+    std::atomic<bool> stallIq{false};
+
+private:
+    const std::shared_ptr<Test::RecordingRtpSink> m_readiness;
+    mutable std::mutex m_mutex;
+    QList<std::thread::id> m_iqThreads;
+};
 
 class FakeTransport final : public IMediaTransport {
 public:
@@ -191,6 +241,14 @@ public:
         return DisplaySendResult::Sent;
     }
     bool iqBusy() const override { return stallIq; }
+    DisplaySendResult submitWaveform(const QByteArray& bytes) override {
+        if (!readyState) { return DisplaySendResult::Refused; }
+        if (stallWaveform) { return DisplaySendResult::Busy; }
+        waveforms.append(bytes); return DisplaySendResult::Sent;
+    }
+    bool waveformBusy() const override { return stallWaveform; }
+    bool stallWaveform = false;
+    QList<QByteArray> waveforms;
     // The peer acknowledges everything outstanding; a held message goes out.
     void acknowledgeDisplayWindow()
     {
@@ -200,14 +258,11 @@ public:
         displays.append(std::exchange(heldDisplay, {}));
         emit displayWritable();
     }
-    bool sendRtp(const QByteArray& packet) override
-    {
-        ++rtpAttempts;
-        if (readyState) { rtpPackets.append(packet); }
-        const auto callback = onRtpSend;
-        if (callback) { callback(packet); }
-        return readyState;
-    }
+    bool sendRtp(const QByteArray& packet) override { return rtpSink->sendRtpAccepted(packet); }
+    std::shared_ptr<MediaRtpSink> audioRtpSink() override { return rtpSink; }
+    // Display send thread: null unless the test set one, so the display
+    // is sent from the owner's thread as before.
+    std::shared_ptr<MediaDisplaySink> displaySink() override { return threadSink; }
     bool isReady() const override { return readyState; }
     bool losslessAudioNegotiated() const override { return losslessNegotiated; }
     std::optional<MediaIcePath> selectedPath() const override { return path; }
@@ -219,16 +274,19 @@ public:
     std::optional<qint64> rtt;
 
     bool started{false};
-    bool readyState{false};
+    // R-AUD-SEND: the Core sends audio from its sender thread, through the
+    // sink; what the sink took is read under its lock.
+    const std::shared_ptr<Test::RecordingRtpSink> rtpSink{
+        std::make_shared<Test::RecordingRtpSink>()};
+    std::atomic<bool>& readyState{rtpSink->ready};
+    Test::SharedPacketList& rtpPackets{rtpSink->packets};
     // Whether the (simulated) answer kept the L16 rtpmap; the real library's
     // answer does (tst_media_transport answerKeepsTheLosslessRtpMap).
     bool losslessNegotiated{false};
     StartOptions startOptions{Role::Answerer, 0};
     QList<QByteArray> displays;
-    QList<QByteArray> rtpPackets;
-    int rtpAttempts{0};
+    std::atomic<int>& rtpAttempts{rtpSink->attempts};
     std::function<bool()> onDisplaySend;
-    std::function<void(const QByteArray&)> onRtpSend;
     qsizetype sctpWindowBytes{0};
     qsizetype unacknowledgedBytes{0};
     QByteArray heldDisplay;
@@ -240,6 +298,7 @@ public:
     bool submitIqBusy{false}; // submit can race iqBusy() and remain Busy.
     std::optional<DisplaySendResult> nextIqSubmitResult;
     std::function<void(const QByteArray&)> onIqSend;
+    std::shared_ptr<ThreadDisplaySink> threadSink;
 };
 
 class ClosingControlTransport final : public Test::LoopbackTransport {
@@ -483,6 +542,9 @@ struct Harness {
     QPointer<FakeTransport> mediaTransport;
     // When set, Core's media transport comes from here instead of a fake.
     std::function<IMediaTransport*(QObject*)> realTransport;
+    // Display send thread: when set, the fake sends displays and raw I/Q
+    // from any thread, so Core sends them from its display thread.
+    bool threadDisplaySink{false};
     QPointer<ClosingControlTransport> stationTransport;
     qint64 nowNs{0};
     // A run in real time paces displays on the wall clock instead of nowNs.
@@ -510,6 +572,10 @@ struct Harness {
                      [this](QObject* parent) -> IMediaTransport* {
                          if (realTransport) { return realTransport(parent); }
                          mediaTransport = new FakeTransport(parent);
+                         if (threadDisplaySink) {
+                             mediaTransport->threadSink =
+                                 std::make_shared<ThreadDisplaySink>(mediaTransport->rtpSink);
+                         }
                          return mediaTransport;
                      },
                      [this] {
@@ -575,7 +641,7 @@ struct Harness {
         QTRY_VERIFY(server.mediaAvailable() && client.mediaAvailable());
     }
 
-    void startReadyPeer(bool iq = false)
+    void startReadyPeer(bool iq = false, bool waveform = false)
     {
         // The exact condition sendMediaControl() checks before it sends.
         QTRY_VERIFY(client.mediaAvailable());
@@ -583,6 +649,7 @@ struct Harness {
             {QStringLiteral("op"), QStringLiteral("start")},
             {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}};
         if (iq) { start.insert(QStringLiteral("remoteIqVersion"), 1); }
+        if (waveform) { start.insert(QStringLiteral("waveformVersion"), 1); }
         QVERIFY(client.sendMediaControl(start, client.sessionEpoch()));
         QTRY_VERIFY(mediaTransport);
         QVERIFY(mediaTransport->started);
@@ -693,6 +760,7 @@ private slots:
     void aPeerTheCoreDropsIsToldToTheAppAtOnce_data();
     void aPeerTheCoreDropsIsToldToTheAppAtOnce();
     void aNewStartReplacesTheSessionsHalfOpenPeer();
+    void aKeyEdgeResetsEveryActiveSourceOnce();
     void staleRevisionAndWrongEpochPreserveTheActiveSource();
     void streamRemovalRetiresEndpointAndSource();
     void nonoverlappingCropIsRejectedBeforeSourceActivation();
@@ -725,6 +793,13 @@ private slots:
     void budgetChargesGrantedPixels();
     void regrantAfterNeighbourLeavesStaysWithinAdmittedCharge();
     void sharedEngineRegrantsEverySurvivorWhenItsSizerLeaves();
+    void sharedEngineReRequestMovesStaleEngine_data();
+    void sharedEngineReRequestMovesStaleEngine();
+    void sharedEngineHolderKeepsEngineOnReRequest();
+    void sharedEngineReRequestStopsAtNeighbourRequest();
+    void sharedEngineDepartureShrinksToRemainingRequest_data();
+    void sharedEngineDepartureShrinksToRemainingRequest();
+    void sharedEngineDepartureRunsAtLargestRemainingRequest();
     void subscribeDecimationReachesTheEndpointsEngine();
     void peerBelowTheGrantMinorCannotAskForDecimation();
     void destroyingControllerWithLiveBudgetSessionIsQuiet();
@@ -737,6 +812,8 @@ private slots:
     void realMicLineTornDownWhileItsThreadDelivers_data();
     void realMicLineTornDownWhileItsThreadDelivers();
     void displayDiagnosticsLineReportsBytesAndFragments();
+    void displayDiagnosticsCountFramesReplacedBeforeTheyWereSent();
+    void displayDiagnosticsMeasureTheLongestGapBetweenSenderTurns();
     void staleEpochAndForeignConnectionLeaveEndpointsUntouched();
     void olderAppNeverReceivesReceiverStreams();
     void receiverStreamRunsBesideTheMainWithoutRestartingIt();
@@ -746,13 +823,21 @@ private slots:
     void olderAppGetsTheWholeProgramAndNoHeadphonesMix();
     void headphonesMixRunsWhileAReceiverIsOnTheHeadphones();
     void headphonesMixFollowsTheProfileAndTheRadio();
-    void headphoneRateSwitchDefersAnExecutingSender();
+    void headphoneRateSwitchRetiresASenderTheThreadIsDraining();
+    void audioLeavesOnTheSenderThreadWhileTheControllersThreadIsHeld();
     void radioDropKeepsTheHeadphonesReasonWhenNothingIsRouted();
     void radioDropTellsAnAppWaitingOnMediaThatTheRadioIsGone();
     void aBoundControllerServesItsOwnSessionAndHearsItsOwnMix();
     void aListenedSliceJoinsTheMixAtTheListenersOwnLevel();
+    void waveformDemandAuthorizationAndRetirement();
+    void waveformMicPrivacyAndContextReentrancy();
+    void waveformWritableRecoversAStalledVisibleEndpoint();
+    void waveformFullRateBudgetRefusal();
+    void waveformUnavailableVisibleDemandRefreshesWithoutCapturing();
+    void waveformStallDropsAndRetiresWithoutKeepingProducerLease();
     void rawIqRunsForSixtySecondsInSequenceAndRetires();
     void stalledRawIqFailsWithoutBlockingControl();
+    void rawIqLeavesOnTheDisplayThreadAndItsStallEndsOnMain();
     void rawIqBusyRetryDebitsOnlyOnce();
     void rawIqSubmitBusyStopsAtDeadline();
     void synchronousIqClosureRetiresPeerBeforeNextSend();
@@ -1888,6 +1973,18 @@ void TstDaemonMediaController::realDisplayErrorIsCountedAndLoggedOnce()
         harness.sendDisplayTick();
         return !farDisplays.isEmpty();
     })(), kRealTransportWaitMs);
+    // Display send thread: on the real transport Core's displays leave on
+    // its display thread, not on a tick of this one.
+    QVERIFY(harness.controller.displaysSentFromThread());
+    // The display thread takes its timed turns while the controller's send
+    // timer runs, as it does whenever a pan is open; the manual ticks above
+    // stopped it. It runs again here, and once one of its turns has passed
+    // on this thread (which copies that for the display thread), the
+    // display thread sends with nothing from this thread.
+    QVERIFY(harness.manualSender);
+    QSignalSpy senderTurns(harness.manualSender.data(), &QTimer::timeout);
+    harness.manualSender->start(static_cast<int>(kDisplaySenderIntervalMs));
+    QTRY_VERIFY(!senderTurns.isEmpty());
     // Every frame Core has sent so far was produced before this point.
     QElapsedTimer sinceLastSend;
     sinceLastSend.start();
@@ -1897,49 +1994,59 @@ void TstDaemonMediaController::realDisplayErrorIsCountedAndLoggedOnce()
     // loop hears of it, the next display send finds the channel closed and
     // libdatachannel throws.
     //
-    // The send needs three things, and each is waited on rather than
+    // Display send thread: a frame no longer waits for a tick of this
+    // thread, since the display thread sends it once it is due. So this
+    // thread stops the far end and is then held, running no event loop,
+    // until the display thread has offered a frame to the closed channel.
+    // Core's event loop has heard of neither the close nor the error, and
+    // its next drain takes both together.
+    //
+    // The send needs two things, and each is waited on rather than
     // assumed after a fixed delay, which a loaded machine outruns:
     //  - the channel holds no earlier message (a busy one is never offered
     //    a frame);
     //  - the frame is due: the endpoint drops a frame produced within one
     //    output period (60 fps, plus 5% early tolerance) of the last one it
     //    sent, so the frame must be published more than that after the
-    //    last send;
-    //  - Core holds that frame as its latest input. frameAvailable is
-    //    emitted on this thread and Core takes the source's latest frame
-    //    inside the emit, so an emit after a newer frame was published
-    //    hands Core a due frame. No display tick runs until the one below.
+    //    last send. The hold below is longer.
     QTRY_VERIFY_WITH_TIMEOUT(!core->displayBusy(), kRealTransportWaitMs);
     constexpr qint64 kOutputPeriodMs = 1000 / 60 + 1;
     QTRY_VERIFY(sinceLastSend.elapsed() > 2 * kOutputPeriodMs);
-    auto* source = &harness.controller.sharedSpectrum()->source();
-    QVERIFY(source);
-    const QList<MediaSourceKey> sourceKeys = source->activeSources();
-    QCOMPARE(sourceKeys.size(), 1);
-    const MediaSourceKey sourceKey = sourceKeys.constFirst();
-    QSignalSpy sourceFrames(source, &DaemonSpectrumSource::frameAvailable);
-    const quint64 publishedBefore = source->publishedFrames(sourceKey);
-    const quint64 submitted = core->telemetry()->submittedDisplayPayloadBytes;
-    bool duePublished = false;
+    // The display thread sends a frame fed above on a turn of its own, so
+    // one could still leave during the hold, before the close or after it.
+    // None waits once no display has been offered for 250 ms, many output
+    // periods.
+    QVERIFY(core->telemetry().has_value());
+    quint64 lastOffered = core->telemetry()->submittedDisplayPayloadBytes;
+    QElapsedTimer nothingOffered;
+    nothingOffered.start();
     QTRY_VERIFY_WITH_TIMEOUT(([&] {
-        if (!duePublished && source->publishedFrames(sourceKey) > publishedBefore) {
-            // An emit already seen may have taken an older frame.
-            duePublished = true;
-            sourceFrames.clear();
+        const quint64 offered = core->telemetry()->submittedDisplayPayloadBytes;
+        if (offered != lastOffered) {
+            lastOffered = offered;
+            nothingOffered.restart();
         }
-        if (duePublished && !sourceFrames.isEmpty()) {
-            return true;
-        }
-        harness.feedRadio(0.3125);
-        return false;
+        return nothingOffered.elapsed() > 250;
     })(), kRealTransportWaitMs);
     far.stop();
     std::this_thread::sleep_for(std::chrono::seconds(2));
-    harness.sendDisplayTick();
+    QVERIFY(core->telemetry().has_value());
+    const quint64 submitted = core->telemetry()->submittedDisplayPayloadBytes;
+    QElapsedTimer held;
+    held.start();
+    int fed = 0;
+    while (core->telemetry()->submittedDisplayPayloadBytes == submitted
+           && held.elapsed() < kRealTransportWaitMs) {
+        harness.feedRadio(0.3125 + 0.0078125 * (++fed % 16));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
     QVERIFY2(core, "Core retired its transport before the send");
     QVERIFY2(core->telemetry()->submittedDisplayPayloadBytes > submitted,
              "no display frame was waiting to be sent");
 
+    // The drain reports the error; the frames the display thread offers
+    // before it are refused without reaching the library again.
+    QTRY_VERIFY(harness.controller.displayDiagnostics().displayTransportErrors > 0);
     QCOMPARE(harness.controller.displayDiagnostics().displayTransportErrors, quint64(1));
     const QStringList displayErrors =
         g_daemonMediaMessages.filter(QStringLiteral("media transport error:"));
@@ -2157,7 +2264,9 @@ void TstDaemonMediaController::displayDiagnosticsLineReportsBytesAndFragments()
                             " largestDelta=1800 bytes/3 fragments"
                             " maxFragments=4 sendRefusals=0 transportErrors=0"
                             " queuedLate=0 keyframeRequests=0"
-                            " keyframeRequestsRefused=0"));
+                            " keyframeRequestsRefused=0"
+                            " sourceFramesReplaced=0 panFramesReplaced=0"
+                            " senderGapMaxMs=-1"));
 
     DaemonDisplayDiagnostics largest;
     largest.displayMaxKeyframeBytes = 9361; // 4096/4096 points with a 768-point 3D row
@@ -2168,15 +2277,228 @@ void TstDaemonMediaController::displayDiagnosticsLineReportsBytesAndFragments()
     largest.displayQueuedLate = 3;
     largest.displayKeyframeRequests = 12;
     largest.displayKeyframeRequestsRefused = 1;
+    largest.displaySourceFramesReplaced = 40;
+    largest.displayPanFramesReplaced = 9;
+    largest.displaySenderGapMaxUs = 141'200;
     QCOMPARE(daemonDisplayDiagnosticsLine(largest),
              QStringLiteral("largestKeyframe=9361 bytes/11 fragments"
                             " largestDelta=9361 bytes/11 fragments"
                             " maxFragments=11 sendRefusals=7 transportErrors=2"
                             " queuedLate=3 keyframeRequests=12"
-                            " keyframeRequestsRefused=1"));
+                            " keyframeRequestsRefused=1"
+                            " sourceFramesReplaced=40 panFramesReplaced=9"
+                            " senderGapMaxMs=141.2"));
     QCOMPARE(IMediaTransport::sctpFragmentCount(876), quint64(1));
     QCOMPARE(IMediaTransport::sctpFragmentCount(877), quint64(2));
     QCOMPARE(IMediaTransport::sctpFragmentCount(65536), quint64(75));
+}
+
+// A frame a newer one replaces before it was sent is counted where it was
+// replaced. In the source's slot (the Core's main thread had not taken it)
+// it counts once, whatever the number of pans on that source. In a pan's
+// slot (no sender turn had taken it) it counts once for that pan, and only
+// when the pan would have sent it: a frame its own pacing would have
+// dropped is not a frame lost.
+void TstDaemonMediaController::displayDiagnosticsCountFramesReplacedBeforeTheyWereSent()
+{
+    constexpr qint64 kStartNs = 1'000'000'000;
+    constexpr qint64 kFps = 60;
+    const auto frameNs = [](qint64 frame) { return kStartNs + frame * 1'000'000'000 / kFps; };
+
+    Harness harness;
+    harness.useManualDisplayTicks();
+    harness.establishSession();
+    harness.startReadyPeer();
+    const double centre = harness.radio.streamCentreHz(harness.streamIndex);
+    // Two pans on one source, each taking every source frame.
+    for (quint32 endpointId : {quint32(61), quint32(62)}) {
+        QVERIFY(harness.client.sendMediaControl(
+            subscription(endpointId, 1, harness.sliceId, centre),
+            harness.client.sessionEpoch()));
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(harness.controller.activeEndpointCount(), 2, 10'000);
+    DaemonSpectrumSource* const source = &harness.controller.sharedSpectrum()->source();
+    const QList<MediaSourceKey> keys = source->activeSources();
+    QCOMPARE(keys.size(), 1);
+    const MediaSourceKey key = keys.constFirst();
+    QCOMPARE(harness.controller.spectrumSourceFps(61), std::optional<int>(int(kFps)));
+
+    const auto publish = [&](qint64 producedAtNs) {
+        harness.nowNs = producedAtNs;
+        return source->publishFrameForTest(key, producedAtNs);
+    };
+    const auto sent = [&] { return harness.mediaTransport->displays.size(); };
+    const auto replacedAtSource = [&] {
+        return harness.controller.displayDiagnostics().displaySourceFramesReplaced;
+    };
+    const auto replacedAtPans = [&] {
+        return harness.controller.displayDiagnostics().displayPanFramesReplaced;
+    };
+
+    // The engine takes its configuration on its own thread; after that
+    // every frame comes from here, never from I/Q (none is fed), and each
+    // is published once: a retried publish would itself replace a frame.
+    // One message goes per sender turn, so two turns send a frame to both
+    // pans.
+    const auto ready = [source, &key] {
+        const DaemonSpectrumSource::InputQueueDiagnostics queue =
+            source->inputQueueDiagnostics(key);
+        return queue.active && !queue.configurationPending;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(ready(), 10'000);
+    QVERIFY(publish(frameNs(0)));
+    harness.sendDisplayTick();
+    harness.sendDisplayTick();
+    QCOMPARE(sent(), 2);
+    QCOMPARE(replacedAtSource(), quint64(0));
+    QCOMPARE(replacedAtPans(), quint64(0));
+
+    // No sender turn between two frames: each pan held the first, would
+    // have sent it, and lost it to the second.
+    QVERIFY(publish(frameNs(1)));
+    QVERIFY(publish(frameNs(2)));
+    QCOMPARE(replacedAtPans(), quint64(2));
+    QCOMPARE(replacedAtSource(), quint64(0));
+    harness.sendDisplayTick();
+    harness.sendDisplayTick();
+    QCOMPARE(sent(), 4);
+
+    // A frame 1 ms after one a pan sent is early for its 60 a second: its
+    // pacing would have dropped it, so replacing it loses nothing.
+    QVERIFY(publish(frameNs(2) + 1'000'000));
+    QVERIFY(publish(frameNs(3)));
+    QCOMPARE(replacedAtPans(), quint64(2));
+    harness.sendDisplayTick();
+    harness.sendDisplayTick();
+    QCOMPARE(sent(), 6);
+
+    // The main thread never takes frame 4 from the source (its notice is
+    // held back here); frame 5 replaces it there. One source frame, counted
+    // once, and no pan held anything.
+    {
+        const QSignalBlocker noticeHeld(source);
+        QVERIFY(publish(frameNs(4)));
+    }
+    QVERIFY(publish(frameNs(5)));
+    QCOMPARE(replacedAtSource(), quint64(1));
+    QCOMPARE(replacedAtPans(), quint64(2));
+    harness.sendDisplayTick();
+    harness.sendDisplayTick();
+    QCOMPARE(sent(), 8);
+
+    // One sender turn between two frames: one pan sent the first, the other
+    // still held it and lost it.
+    QVERIFY(publish(frameNs(6)));
+    harness.sendDisplayTick();
+    QCOMPARE(sent(), 9);
+    QVERIFY(publish(frameNs(7)));
+    QCOMPARE(replacedAtPans(), quint64(3));
+    QCOMPARE(replacedAtSource(), quint64(1));
+    harness.sendDisplayTick();
+    harness.sendDisplayTick();
+    QCOMPARE(sent(), 11);
+    QCOMPARE(replacedAtPans(), quint64(3));
+    QCOMPARE(replacedAtSource(), quint64(1));
+    harness.finish();
+}
+
+// The longest time between two turns of the display sender's timer, for the
+// life of the media peer and since the last diagnostics line. A send the
+// display channel asks for when it clears is not a turn of the timer.
+void TstDaemonMediaController::displayDiagnosticsMeasureTheLongestGapBetweenSenderTurns()
+{
+    g_daemonMediaMessages.clear();
+    const QtMessageHandler previous = qInstallMessageHandler(captureDaemonMediaMessages);
+    const auto restore = qScopeGuard([previous] { qInstallMessageHandler(previous); });
+    const auto lines = [] {
+        return g_daemonMediaMessages.filter(QStringLiteral("daemon display diagnostics"));
+    };
+
+    Harness harness;
+    harness.useManualDisplayTicks();
+    harness.establishSession();
+    harness.startReadyPeer();
+    const auto gapMaxUs = [&] {
+        return harness.controller.displayDiagnostics().displaySenderGapMaxUs;
+    };
+    const auto turnAfterMs = [&](qint64 ms) {
+        harness.nowNs += ms * 1'000'000;
+        harness.sendDisplayTick();
+    };
+    QTimer* diagnostics = nullptr;
+    for (QTimer* timer : harness.controller.findChildren<QTimer*>(
+             QString(), Qt::FindDirectChildrenOnly)) {
+        if (timer->interval() == 10'000) {
+            diagnostics = timer;
+        }
+    }
+    QVERIFY(diagnostics);
+    const auto logNow = [diagnostics] {
+        return QMetaObject::invokeMethod(diagnostics, "timeout", Qt::DirectConnection);
+    };
+
+    // No gap until two turns have run.
+    QCOMPARE(gapMaxUs(), qint64(-1));
+    harness.nowNs = 1'000'000'000;
+    harness.sendDisplayTick();
+    QCOMPARE(gapMaxUs(), qint64(-1));
+    turnAfterMs(5);
+    QCOMPARE(gapMaxUs(), qint64(5'000));
+
+    // The channel clearing 200 ms into a 400 ms gap sends, but the timer
+    // still went 400 ms between its turns.
+    harness.nowNs += 200'000'000;
+    emit harness.mediaTransport->displayWritable();
+    turnAfterMs(200);
+    QCOMPARE(gapMaxUs(), qint64(400'000));
+    turnAfterMs(5);
+    QCOMPARE(gapMaxUs(), qint64(400'000));
+
+    QVERIFY(logNow());
+    QCOMPARE(lines().size(), 1);
+    QVERIFY2(lines().constLast().contains(
+                 QStringLiteral(" senderGapMaxMs=400.0 senderGapMaxSinceLastMs=400.0 ")),
+             qPrintable(lines().constLast()));
+
+    // Turns go on at 5 ms: nothing new to report, so no line.
+    turnAfterMs(5);
+    turnAfterMs(5);
+    QVERIFY(logNow());
+    QCOMPARE(lines().size(), 1);
+
+    // A 50 ms gap is not a new longest, so it alone writes no line. When
+    // something else changes the line, it is the longest since the last one.
+    turnAfterMs(50);
+    turnAfterMs(5);
+    QVERIFY(logNow());
+    QCOMPARE(lines().size(), 1);
+    emit harness.mediaTransport->displayErrorOccurred(QStringLiteral("sctp send failed"));
+    QVERIFY(logNow());
+    QCOMPARE(lines().size(), 2);
+    QVERIFY2(lines().constLast().contains(
+                 QStringLiteral(" senderGapMaxMs=400.0 senderGapMaxSinceLastMs=50.0 ")),
+             qPrintable(lines().constLast()));
+
+    // A new longest gap writes a line by itself.
+    turnAfterMs(450);
+    QVERIFY(logNow());
+    QCOMPARE(lines().size(), 3);
+    QVERIFY2(lines().constLast().contains(
+                 QStringLiteral(" senderGapMaxMs=450.0 senderGapMaxSinceLastMs=450.0 ")),
+             qPrintable(lines().constLast()));
+
+    // A new media peer starts again: the time since the old peer's last
+    // turn is not a gap of the new one.
+    harness.mediaTransport->onDisplaySend = {};
+    emit harness.mediaTransport->closed();
+    QTRY_VERIFY(harness.mediaTransport.isNull());
+    harness.startReadyPeer();
+    QCOMPARE(gapMaxUs(), qint64(-1));
+    turnAfterMs(2'000);
+    QCOMPARE(gapMaxUs(), qint64(-1));
+    turnAfterMs(5);
+    QCOMPARE(gapMaxUs(), qint64(5'000));
+    harness.finish();
 }
 
 void TstDaemonMediaController::exhaustedDisplayCreditDoesNotBlockAudioRtp()
@@ -2762,7 +3084,9 @@ void TstDaemonMediaController::failedSourceUpdateReleasesAllocationAndCanRecover
     QJsonObject request = subscription(102, 1, harness.sliceId, centre);
     QVERIFY(harness.client.sendMediaControl(request, harness.client.sessionEpoch()));
     QTRY_VERIFY(allocationFor(controls, 102, 1).value(QStringLiteral("accepted")).toBool());
-    QCOMPARE(harness.controller.activeSourceCount(), 1);
+    // The source goes active on its engine's thread, after the allocation is
+    // accepted: wait for it, as the other subscriptions in this file do.
+    QTRY_COMPARE(harness.controller.activeSourceCount(), 1);
 
     // Remove the actual producer through its existing QObject/public seam.
     // The next overlapping retune reaches update() on a now-missing source
@@ -2783,7 +3107,7 @@ void TstDaemonMediaController::failedSourceUpdateReleasesAllocationAndCanRecover
     request.insert(QStringLiteral("revision"), 2);
     QVERIFY(harness.client.sendMediaControl(request, harness.client.sessionEpoch()));
     QTRY_VERIFY(allocationFor(controls, 102, 2).value(QStringLiteral("accepted")).toBool());
-    QCOMPARE(harness.controller.activeSourceCount(), 1);
+    QTRY_COMPARE(harness.controller.activeSourceCount(), 1);
     QTRY_VERIFY(([&] {
         harness.feedRadio();
         return !harness.mediaTransport->displays.isEmpty();
@@ -2980,6 +3304,13 @@ void TstDaemonMediaController::nonzeroNoiseFloorMatchesLocalFftBeforeCropAndQuan
         NoiseFloorEstimator estimator;
         const double expected = estimator.estimate(localBins) + harness.radio.rxMeterOffsetDb();
         QVERIFY(expected > -180); // This covers ordinary nonzero data, not the floor sentinel.
+        // R-DSP-60: the same number a local ClarityController with the
+        // station's calibration offset makes from the same bins.
+        NereusSDR::ClarityController localClarity;
+        localClarity.setEnabled(true);
+        localClarity.setCalibrationOffsetDb(float(harness.radio.rxMeterOffsetDb()));
+        localClarity.feedBins(localBins, 0);
+        QVERIFY(std::abs(double(localClarity.smoothedFloor()) - expected) < 0.01);
 
         controls.clear();
         QVERIFY(harness.client.sendMediaControl(subscription(
@@ -2997,6 +3328,65 @@ void TstDaemonMediaController::nonzeroNoiseFloorMatchesLocalFftBeforeCropAndQuan
         QVERIFY2(std::abs(received.value(QStringLiteral("floorDbm")).toDouble() - expected) < 0.01,
                  "Remote Clarity must match full local FFT percentile plus station calibration");
     }
+    harness.finish();
+}
+
+// S21, R-DSP-23: each end of MoxController's walk clears the FFT input of
+// every active source once, on that source's own worker thread (the counter
+// is advanced by the drain that runs there). A repeat of the same edge, as
+// a second device's controller would deliver it, clears nothing.
+void TstDaemonMediaController::aKeyEdgeResetsEveryActiveSourceOnce()
+{
+    Harness harness;
+    harness.establishSession();
+    harness.startReadyPeer();
+    // Two sources: the receiver's two spectrum tiers, each with its own
+    // engine and worker thread.
+    const double centre = harness.radio.streamCentreHz(harness.streamIndex);
+    QVERIFY(harness.client.sendMediaControl(tieredSubscription(
+        31, 1, harness.sliceId, centre, QStringLiteral("wide"), 1024),
+        harness.client.sessionEpoch()));
+    QVERIFY(harness.client.sendMediaControl(tieredSubscription(
+        32, 1, harness.sliceId, centre, QStringLiteral("fine"), 1024),
+        harness.client.sessionEpoch()));
+    QTRY_COMPARE(harness.controller.activeEndpointCount(), 2);
+    QTRY_COMPARE(harness.controller.activeSourceCount(), 2);
+    DaemonSpectrumSource* const source = &harness.controller.sharedSpectrum()->source();
+    const QList<MediaSourceKey> keys = source->activeSources();
+    QCOMPARE(keys.size(), 2);
+    // Each engine has taken its configuration on its own thread.
+    for (const MediaSourceKey& key : keys) {
+        QTRY_VERIFY_WITH_TIMEOUT(source->publishFrameForTest(key, harness.nowNs), 10'000);
+    }
+    QList<quint64> before;
+    for (const MediaSourceKey& key : keys) {
+        before.append(source->inputHistoryResets(key));
+    }
+    const auto resetsSince = [&](int index) {
+        return source->inputHistoryResets(keys.at(index)) - before.at(index);
+    };
+
+    MoxController* const mox = harness.radio.moxController();
+    QVERIFY(mox);
+    emit mox->moxStateChanged(true);
+    QTRY_COMPARE(resetsSince(0), quint64{1});
+    QTRY_COMPARE(resetsSince(1), quint64{1});
+
+    emit mox->moxStateChanged(false);
+    QTRY_COMPARE(resetsSince(0), quint64{2});
+    QTRY_COMPARE(resetsSince(1), quint64{2});
+
+    // The same edge again clears nothing; the next real edge does, so the
+    // count after it proves the repeat added none.
+    harness.controller.sharedSpectrum()->keyEdge(false);
+    emit mox->moxStateChanged(true);
+    QTRY_COMPARE(resetsSince(0), quint64{3});
+    QTRY_COMPARE(resetsSince(1), quint64{3});
+    QTest::qWait(50);
+    QCOMPARE(resetsSince(0), quint64{3});
+    QCOMPARE(resetsSince(1), quint64{3});
+    emit mox->moxStateChanged(false);
+    QTRY_COMPARE(resetsSince(0), quint64{4});
     harness.finish();
 }
 
@@ -3072,13 +3462,13 @@ void TstDaemonMediaController::streamRemovalRetiresEndpointAndSource()
     QTRY_COMPARE(harness.controller.activeSourceCount(), 0);
     // R-R3-01/37: the retirement carries the shared wording the window's
     // refusal filter matches (SpectrumEndpoint.h), not a local copy. Removal
-    // unbinds the slice's stream first, so the binding reason may win.
+    // unbinds the slice's stream first, and a display that ends there is
+    // still said to end because its slice was removed: a window that hears
+    // "binding changed" asks again for a slice that is gone.
     QTRY_VERIFY(!messageFor(controls, QStringLiteral("rejected"), 11).isEmpty());
     const QString retired = messageFor(controls, QStringLiteral("rejected"), 11)
                                 .value(QStringLiteral("reason")).toString();
-    QVERIFY2(retired == QLatin1String(kRetireReasonSliceRemoved)
-                 || retired == QLatin1String(kRetireReasonStreamBindingChanged),
-             qPrintable(retired));
+    QCOMPARE(retired, QString::fromLatin1(kRetireReasonSliceRemoved));
     harness.finish();
 }
 
@@ -3833,14 +4223,326 @@ void TstDaemonMediaController::sharedEngineRegrantsEverySurvivorWhenItsSizerLeav
         QCOMPARE(h.controller.spectrumGrant(regranted)->reason, SpectrumLimitReason::None);
     }
 
-    // E3 leaves. E2 is not held back by anyone, so nothing renews.
+    // E3 leaves. The engine shrinks to the largest remaining request, E2's
+    // 4096, so E2 and E5 are each renewed once more; E4 is untouched.
     QVERIFY(h.client.sendMediaControl(unsubscription(3), h.client.sessionEpoch()));
     QTRY_COMPARE(h.controller.activeEndpointCount(), 3);
+    contextCount(2, e2Contexts + 2);
+    contextCount(5, e5Contexts + 2);
     settle();
-    QCOMPARE(messageCount(controls, QStringLiteral("context"), 2), e2Contexts + 1);
+    QCOMPARE(messageCount(controls, QStringLiteral("context"), 2), e2Contexts + 2);
     QCOMPARE(messageCount(controls, QStringLiteral("context"), 4), e4Contexts);
-    QCOMPARE(messageCount(controls, QStringLiteral("context"), 5), e5Contexts + 1);
+    QCOMPARE(messageCount(controls, QStringLiteral("context"), 5), e5Contexts + 2);
+    for (quint32 shrunk : {2U, 5U}) {
+        const QJsonObject context = messageFor(controls, QStringLiteral("context"), shrunk);
+        QCOMPARE(context.value(QStringLiteral("grantedFftSize")).toInt(), 4096);
+        QCOMPARE(context.value(QStringLiteral("limit")).toString(), QStringLiteral("none"));
+        QCOMPARE(h.controller.spectrumGrant(shrunk)->grantedFftSize, 4096);
+        QCOMPARE(h.controller.spectrumGrant(shrunk)->reason, SpectrumLimitReason::None);
+    }
+    h.finish();
+}
+
+// R-R3-01/R-R3-08: a re-request on the same engine may move it, but only
+// within what every other pan on it accepts (between the engine's size and
+// its own request). Two pans share a "wide" engine at one size and both ask
+// again at another: after the first asks, the second still holds the
+// engine at its own request, so the first is granted the old size ("shared"
+// when that is less than it asked for); once the second asks too, no pan asks for the old size and the
+// engine moves to the new one for both.
+void TstDaemonMediaController::sharedEngineReRequestMovesStaleEngine_data()
+{
+    QTest::addColumn<int>("before");
+    QTest::addColumn<int>("after");
+    QTest::newRow("lower") << 8192 << 2048;
+    QTest::newRow("raise") << 2048 << 8192;
+}
+
+void TstDaemonMediaController::sharedEngineReRequestMovesStaleEngine()
+{
+    QFETCH(int, before);
+    QFETCH(int, after);
+    Harness h;
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    const auto contextAt = [&](quint32 endpointId, int revision, int fftSize) {
+        QTRY_VERIFY(([&] {
+            h.feedRadio();
+            const QJsonObject context = messageFor(controls, QStringLiteral("context"),
+                                                   endpointId);
+            return context.value(QStringLiteral("revision")).toInt() == revision
+                && context.value(QStringLiteral("grantedFftSize")).toInt() == fftSize;
+        })());
+    };
+    const auto limitOf = [&](quint32 endpointId) {
+        return messageFor(controls, QStringLiteral("context"), endpointId)
+            .value(QStringLiteral("limit")).toString();
+    };
+    const auto settle = [&] {
+        for (int i = 0; i < 20; ++i) { h.feedRadio(); QTest::qWait(10); }
+    };
+
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(1, 1, h.sliceId, centre, QStringLiteral("wide"), before),
+        h.client.sessionEpoch()));
+    contextAt(1, 1, before);
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(2, 1, h.sliceId, centre, QStringLiteral("wide"), before),
+        h.client.sessionEpoch()));
+    contextAt(2, 1, before);
+    QCOMPARE(limitOf(1), QStringLiteral("none"));
+    QCOMPARE(limitOf(2), QStringLiteral("none"));
+    settle();
+    const int e2Contexts = messageCount(controls, QStringLiteral("context"), 2);
+
+    // E1 asks again. E2 still asks for the engine's size, so it holds it.
+    // E1 is told the engine is shared only when it got less than it asked
+    // for (grantReason); granted more, it is not limited.
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(1, 2, h.sliceId, centre, QStringLiteral("wide"), after),
+        h.client.sessionEpoch()));
+    contextAt(1, 2, before);
+    const bool e1Held = before < after;
+    QCOMPARE(limitOf(1), e1Held ? QStringLiteral("shared") : QStringLiteral("none"));
+    QCOMPARE(h.controller.spectrumGrant(1)->grantedFftSize, before);
+    QCOMPARE(h.controller.spectrumGrant(1)->reason,
+             e1Held ? SpectrumLimitReason::SharedEngine : SpectrumLimitReason::None);
+    settle();
+    QCOMPARE(messageCount(controls, QStringLiteral("context"), 2), e2Contexts);
+    QCOMPARE(h.controller.spectrumGrant(2)->grantedFftSize, before);
     QCOMPARE(h.controller.spectrumGrant(2)->reason, SpectrumLimitReason::None);
+
+    // E2 asks again at the same size: nobody asks for the old size, so the
+    // engine moves, and E1's renewed context carries the new size too.
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(2, 2, h.sliceId, centre, QStringLiteral("wide"), after),
+        h.client.sessionEpoch()));
+    contextAt(2, 2, after);
+    contextAt(1, 2, after);
+    for (quint32 endpointId : {1U, 2U}) {
+        QCOMPARE(limitOf(endpointId), QStringLiteral("none"));
+        QCOMPARE(h.controller.spectrumGrant(endpointId)->grantedFftSize, after);
+        QCOMPARE(h.controller.spectrumGrant(endpointId)->reason, SpectrumLimitReason::None);
+    }
+    QCOMPARE(h.controller.activeSourceCount(), 1);
+    h.finish();
+}
+
+// R-R3-01: a pan still at exactly its own request holds the engine. E1
+// sized the "wide" engine at 1024; E2 joined asking 4096 and was held to
+// 1024. E2 asking again (at 4096, then 2048) moves nothing, and E1's
+// context is never renewed.
+void TstDaemonMediaController::sharedEngineHolderKeepsEngineOnReRequest()
+{
+    Harness h;
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    const auto waitForE2Revision = [&](int revision) {
+        QTRY_VERIFY(([&] {
+            h.feedRadio();
+            return messageFor(controls, QStringLiteral("context"), 2)
+                .value(QStringLiteral("revision")).toInt() == revision;
+        })());
+    };
+
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(1, 1, h.sliceId, centre, QStringLiteral("wide"), 1024),
+        h.client.sessionEpoch()));
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return !messageFor(controls, QStringLiteral("context"), 1).isEmpty();
+    })());
+    const qint64 e1Generation = messageFor(controls, QStringLiteral("context"), 1)
+        .value(QStringLiteral("contextGeneration")).toInteger();
+    const auto e1Untouched = [&]() {
+        QCOMPARE(messageCount(controls, QStringLiteral("context"), 1), 1);
+        const QJsonObject latest = messageFor(controls, QStringLiteral("context"), 1);
+        QCOMPARE(latest.value(QStringLiteral("contextGeneration")).toInteger(), e1Generation);
+        QCOMPARE(latest.value(QStringLiteral("grantedFftSize")).toInt(), 1024);
+    };
+    const auto e2Held = [&]() {
+        const QJsonObject context = messageFor(controls, QStringLiteral("context"), 2);
+        QCOMPARE(context.value(QStringLiteral("grantedFftSize")).toInt(), 1024);
+        QCOMPARE(context.value(QStringLiteral("limit")).toString(), QStringLiteral("shared"));
+        QCOMPARE(h.controller.spectrumGrant(2)->grantedFftSize, 1024);
+        QCOMPARE(h.controller.spectrumGrant(2)->reason, SpectrumLimitReason::SharedEngine);
+    };
+
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(2, 1, h.sliceId, centre, QStringLiteral("wide"), 4096),
+        h.client.sessionEpoch()));
+    waitForE2Revision(1);
+    e2Held();
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(2, 2, h.sliceId, centre, QStringLiteral("wide"), 4096),
+        h.client.sessionEpoch()));
+    waitForE2Revision(2);
+    e2Held();
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(2, 3, h.sliceId, centre, QStringLiteral("wide"), 2048),
+        h.client.sessionEpoch()));
+    waitForE2Revision(3);
+    e2Held();
+    for (int i = 0; i < 20; ++i) { h.feedRadio(); QTest::qWait(10); }
+    e1Untouched();
+    QCOMPARE(h.controller.spectrumGrant(1)->grantedFftSize, 1024);
+    QCOMPARE(h.controller.spectrumGrant(1)->reason, SpectrumLimitReason::None);
+    h.finish();
+}
+
+// R-R3-01: a re-request moves the engine toward itself only as far as the
+// other pans accept. E1 sized the engine at 8192; E2 joined asking 4096 and
+// was given 8192. E1 asks again at 2048: E2 accepts anything from 8192 down
+// to its own 4096, so the engine stops at 4096. E1 gets more than it asked
+// for and E2 exactly its own request; neither is limited.
+void TstDaemonMediaController::sharedEngineReRequestStopsAtNeighbourRequest()
+{
+    Harness h;
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    const auto contextAt = [&](quint32 endpointId, int revision, int fftSize) {
+        QTRY_VERIFY(([&] {
+            h.feedRadio();
+            const QJsonObject context = messageFor(controls, QStringLiteral("context"),
+                                                   endpointId);
+            return context.value(QStringLiteral("revision")).toInt() == revision
+                && context.value(QStringLiteral("grantedFftSize")).toInt() == fftSize;
+        })());
+    };
+
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(1, 1, h.sliceId, centre, QStringLiteral("wide"), 8192),
+        h.client.sessionEpoch()));
+    contextAt(1, 1, 8192);
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(2, 1, h.sliceId, centre, QStringLiteral("wide"), 4096),
+        h.client.sessionEpoch()));
+    contextAt(2, 1, 8192);
+    QCOMPARE(h.controller.spectrumGrant(2)->reason, SpectrumLimitReason::None);
+
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(1, 2, h.sliceId, centre, QStringLiteral("wide"), 2048),
+        h.client.sessionEpoch()));
+    contextAt(1, 2, 4096);
+    contextAt(2, 1, 4096);
+    for (quint32 endpointId : {1U, 2U}) {
+        QCOMPARE(messageFor(controls, QStringLiteral("context"), endpointId)
+                     .value(QStringLiteral("limit")).toString(), QStringLiteral("none"));
+        QCOMPARE(h.controller.spectrumGrant(endpointId)->grantedFftSize, 4096);
+        QCOMPARE(h.controller.spectrumGrant(endpointId)->reason, SpectrumLimitReason::None);
+    }
+    h.finish();
+}
+
+// R-R3-01/R-R3-08: after a departure the engine runs at the largest request
+// among the pans left on it, down as well as up. E1 sized the "wide" engine
+// at 8192; E2 joined asking 2048 and was given 8192 (more than it asked, so
+// not limited). E1 leaves, by closing or by moving to the "fine" engine, and
+// E2 is regranted its own 2048: the engine no longer runs at the size only
+// the departed pan wanted.
+void TstDaemonMediaController::sharedEngineDepartureShrinksToRemainingRequest_data()
+{
+    QTest::addColumn<bool>("tierChange");
+    QTest::newRow("unsubscribe") << false;
+    QTest::newRow("tierChange") << true;
+}
+
+void TstDaemonMediaController::sharedEngineDepartureShrinksToRemainingRequest()
+{
+    QFETCH(bool, tierChange);
+    Harness h;
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    const auto contextAt = [&](quint32 endpointId, int revision, int fftSize) {
+        QTRY_VERIFY(([&] {
+            h.feedRadio();
+            const QJsonObject context = messageFor(controls, QStringLiteral("context"),
+                                                   endpointId);
+            return context.value(QStringLiteral("revision")).toInt() == revision
+                && context.value(QStringLiteral("grantedFftSize")).toInt() == fftSize;
+        })());
+    };
+
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(1, 1, h.sliceId, centre, QStringLiteral("wide"), 8192),
+        h.client.sessionEpoch()));
+    contextAt(1, 1, 8192);
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(2, 1, h.sliceId, centre, QStringLiteral("wide"), 2048),
+        h.client.sessionEpoch()));
+    contextAt(2, 1, 8192);
+    QCOMPARE(h.controller.spectrumGrant(2)->grantedFftSize, 8192);
+    QCOMPARE(h.controller.spectrumGrant(2)->reason, SpectrumLimitReason::None);
+
+    if (tierChange) {
+        QVERIFY(h.client.sendMediaControl(
+            tieredSubscription(1, 2, h.sliceId, centre, QStringLiteral("fine"), 8192),
+            h.client.sessionEpoch()));
+        QTRY_COMPARE(h.controller.activeSourceCount(), 2);
+        QCOMPARE(h.controller.spectrumGrant(1)->grantedTier, FftTier::Fine);
+    } else {
+        QVERIFY(h.client.sendMediaControl(unsubscription(1), h.client.sessionEpoch()));
+        QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    }
+    contextAt(2, 1, 2048);
+    QCOMPARE(messageFor(controls, QStringLiteral("context"), 2)
+                 .value(QStringLiteral("limit")).toString(), QStringLiteral("none"));
+    QCOMPARE(h.controller.spectrumGrant(2)->grantedFftSize, 2048);
+    QCOMPARE(h.controller.spectrumGrant(2)->reason, SpectrumLimitReason::None);
+    h.finish();
+}
+
+// R-R3-01/R-R3-08: three pans on one "wide" engine, E1 the holder at 8192,
+// E2 asking 4096 and E3 asking 2048 (both given 8192). E1 leaves: the engine
+// runs at the largest remaining request, 4096, for both. E2 gets its own
+// request and E3 more than it asked for; neither is limited.
+void TstDaemonMediaController::sharedEngineDepartureRunsAtLargestRemainingRequest()
+{
+    Harness h;
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    const auto contextAt = [&](quint32 endpointId, int fftSize) {
+        QTRY_VERIFY(([&] {
+            h.feedRadio();
+            return messageFor(controls, QStringLiteral("context"), endpointId)
+                .value(QStringLiteral("grantedFftSize")).toInt() == fftSize;
+        })());
+    };
+
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(1, 1, h.sliceId, centre, QStringLiteral("wide"), 8192),
+        h.client.sessionEpoch()));
+    contextAt(1, 8192);
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(2, 1, h.sliceId, centre, QStringLiteral("wide"), 4096),
+        h.client.sessionEpoch()));
+    contextAt(2, 8192);
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(3, 1, h.sliceId, centre, QStringLiteral("wide"), 2048),
+        h.client.sessionEpoch()));
+    contextAt(3, 8192);
+
+    QVERIFY(h.client.sendMediaControl(unsubscription(1), h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 2);
+    contextAt(2, 4096);
+    contextAt(3, 4096);
+    for (quint32 endpointId : {2U, 3U}) {
+        QCOMPARE(messageFor(controls, QStringLiteral("context"), endpointId)
+                     .value(QStringLiteral("limit")).toString(), QStringLiteral("none"));
+        QCOMPARE(h.controller.spectrumGrant(endpointId)->grantedFftSize, 4096);
+        QCOMPARE(h.controller.spectrumGrant(endpointId)->reason, SpectrumLimitReason::None);
+    }
+    QCOMPARE(h.controller.activeSourceCount(), 1);
     h.finish();
 }
 
@@ -3888,6 +4590,9 @@ void feedAudioBlock(Harness& h)
         engine->rxBlockReady(h.sliceId, left.constData(), 64);
         engine->rxBlockReady(h.spareSliceId, right.constData(), 64);
     }
+    // R-AUD-SEND: no DSP callback follows the last one here; see
+    // DaemonAudioSource::handOverPendingForTest().
+    h.controller.handOverPendingAudioForTest();
 }
 
 quint16 rtpSequence(const QByteArray& packet)
@@ -4470,6 +5175,9 @@ void feedSlicesBlock(Harness& h, const QList<QPair<int, float>>& slices)
             engine->rxBlockReady(sliceId, block.constData(), 64);
         }
     }
+    // R-AUD-SEND: no DSP callback follows the last one here; see
+    // DaemonAudioSource::handOverPendingForTest().
+    h.controller.handOverPendingAudioForTest();
 }
 
 } // namespace
@@ -6370,10 +7078,18 @@ void TstDaemonMediaController::headphonesMixFollowsTheProfileAndTheRadio()
     QCOMPARE(headphonesContextsIn(controls).size(), 5);
 }
 
-// A synchronous RTP recipient may ask for a new main rate while the
-// headphones sender is still emitting. Retirement must leave it alive
-// until that emission and its drain have returned.
-void TstDaemonMediaController::headphoneRateSwitchDefersAnExecutingSender()
+// R-AUD-SEND: a new main rate retires the headphones sender while the
+// sender thread is inside that sender's drain. (Before the sender thread,
+// this test had a synchronous RTP recipient ask for the rate inside the old
+// sender's packetReady emission, on the controller's thread, and proved the
+// sender outlived that emission. No send runs on the controller's thread
+// any more, so the case that exists is this one.) The controller waits for
+// the send under way; the old sender is stopped, sends nothing after that,
+// and is left alive until the event loop reclaims it; and the new sender
+// carries the sequence and the RTP time on from the last packet that went.
+// (That stop() waits for one block and no more is proved with a fixed
+// interleaving in tst_daemon_audio_send_thread.)
+void TstDaemonMediaController::headphoneRateSwitchRetiresASenderTheThreadIsDraining()
 {
     Harness h;
     h.controller.setAudioTargetBitrate(24000);
@@ -6400,64 +7116,195 @@ void TstDaemonMediaController::headphoneRateSwitchDefersAnExecutingSender()
     QPointer<DaemonAudioSender> sender = activeSender();
     QVERIFY(sender);
     const quint32 ssrc = h.mediaTransport->startOptions.headphonesAudioSsrc;
+    const auto sent = [&] { return packetsWithSsrc(h.mediaTransport->rtpPackets, ssrc); };
     feedSlicesBlock(h, {{h.spareSliceId, 0.5f}});
-    sender->drain();
-    const auto firstPackets = packetsWithSsrc(h.mediaTransport->rtpPackets, ssrc);
-    QCOMPARE(firstPackets.size(), 1);
+    QTRY_COMPARE(sent().size(), 1);
+
+    // Each rate switch: two blocks queued and the sender thread held inside
+    // the first one's send when the new rate arrives on the controller's
+    // thread. The held send is let go only once the controller is waiting
+    // in the old sender's stop(): the first thing of the sender's it waits
+    // for, and the one wait a drain gives way to. So the block under way
+    // goes and the one queued behind it never does.
+    const std::shared_ptr<Test::RecordingRtpSink> sink = h.mediaTransport->rtpSink;
     quint32 revision = 0;
-    bool aliveInCallback = false;
-    bool stoppedInCallback = false;
-    const auto switchDuringSend = [&](int bitrate) {
-        h.mediaTransport->onRtpSend = [&, bitrate](const QByteArray&) {
-            h.mediaTransport->onRtpSend = {};
-            QJsonObject control = audioControl(++revision, false, QStringLiteral("opus"));
-            control.insert(QStringLiteral("opusBitrate"), bitrate);
-            emit h.server.mediaControlReceived(control, h.client.sessionEpoch());
-            aliveInCallback = !sender.isNull();
-            stoppedInCallback = sender && !sender->isRunning();
-        };
+    constexpr int kUpperBoundMs = 20'000;
+    const auto switchDuringDrain = [&](int bitrate) -> bool {
+        QSemaphore entered;
+        QSemaphore gate;
+        std::atomic<bool> held{true};
+        std::atomic<bool> ownerWaitedInStop{false};
+        sink->setHook([&](const QByteArray& packet) {
+            if (held.load() && packet.size() >= 12 && rtpSsrcOf(packet) == ssrc) {
+                entered.release();
+                gate.acquire();
+            }
+        });
+        feedSlicesBlock(h, {{h.spareSliceId, 0.5f}});
+        feedSlicesBlock(h, {{h.spareSliceId, 0.5f}});
+        const bool insideASend = entered.tryAcquire(1, kUpperBoundMs);
+        // Alive until this thread's event loop reclaims it, after the join.
+        DaemonAudioSender* const oldSender = sender.data();
+        std::thread releaser([&] {
+            QDeadlineTimer waiting(kUpperBoundMs);
+            while (oldSender->ownersWaitingForTest() == 0 && !waiting.hasExpired()) {
+                std::this_thread::yield();
+            }
+            ownerWaitedInStop.store(oldSender->ownersWaitingForTest() > 0);
+            if (ownerWaitedInStop.load()) {
+                // One send: the block under way.
+                gate.release(1);
+            } else {
+                // The controller is stuck on something else of the send's;
+                // let everything go so the failure is reported, not hung.
+                held.store(false);
+                gate.release(100);
+            }
+        });
+        QJsonObject control = audioControl(++revision, false, QStringLiteral("opus"));
+        control.insert(QStringLiteral("opusBitrate"), bitrate);
+        emit h.server.mediaControlReceived(control, h.client.sessionEpoch());
+        releaser.join();
+        held.store(false);
+        gate.release(100);
+        sink->setHook({});
+        return insideASend && ownerWaitedInStop.load();
     };
-    // The real sender's direct packetReady path proves the lifetime rule
-    // before draining again. On the broken baseline, fail here rather than
-    // deliberately returning from drain into freed encoder state.
-    switchDuringSend(48000);
-    sender->packetReady(firstPackets.constFirst());
-    QVERIFY2(aliveInCallback, "Headphone rate replacement deleted its emitting sender synchronously");
-    QVERIFY(stoppedInCallback);
+
+    qsizetype before = sent().size();
+    QVERIFY(switchDuringDrain(48000));
+    // The block whose send was under way went, and only that one.
+    qsizetype after = sent().size();
+    QCOMPARE(after, before + 1);
+    // Stopped, and alive until the event loop reclaims it.
     QVERIFY(sender);
+    QVERIFY(!sender->isRunning());
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     QVERIFY(sender.isNull());
+    QCOMPARE(sent().size(), after);
     sender = activeSender();
     QVERIFY(sender && sender->encoderProfile());
     QCOMPARE(sender->encoderProfile()->targetBitrate, 48000);
-    h.mediaTransport->rtpPackets.clear();
 
-    // Now exercise actual drain with two queued blocks. Only its first
-    // packet escapes; retirement drops the old queue and preserves RTP time.
-    feedSlicesBlock(h, {{h.spareSliceId, 0.5f}});
-    feedSlicesBlock(h, {{h.spareSliceId, 0.5f}});
-    aliveInCallback = stoppedInCallback = false;
-    switchDuringSend(24000);
-    sender->drain();
-    QVERIFY(aliveInCallback && stoppedInCallback);
+    before = after;
+    QVERIFY(switchDuringDrain(24000));
+    after = sent().size();
+    QCOMPARE(after, before + 1);
+    const QByteArray lastOld = sent().constLast();
     QVERIFY(sender);
-    const auto switchedPackets = packetsWithSsrc(h.mediaTransport->rtpPackets, ssrc);
-    QCOMPARE(switchedPackets.size(), 1);
-    const QByteArray lastOld = switchedPackets.constLast();
+    QVERIFY(!sender->isRunning());
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     QVERIFY(sender.isNull());
     sender = activeSender();
     QVERIFY(sender && sender->encoderProfile());
     QCOMPARE(sender->encoderProfile()->targetBitrate, 24000);
+
+    // The new sender carries on from the last packet that went: the next
+    // sequence number, and RTP time one block on. Nothing of the old
+    // sender's queue comes after it.
     feedSlicesBlock(h, {{h.spareSliceId, 0.5f}});
-    sender->drain();
-    const auto resumedPackets = packetsWithSsrc(h.mediaTransport->rtpPackets, ssrc);
-    QCOMPARE(resumedPackets.size(), 2);
-    const QByteArray next = resumedPackets.constLast();
+    QTRY_COMPARE(sent().size(), after + 1);
+    const QByteArray next = sent().constLast();
     QCOMPARE(qFromBigEndian<quint16>(next.constData() + 2),
              quint16(qFromBigEndian<quint16>(lastOld.constData() + 2) + 1));
     QCOMPARE(qFromBigEndian<quint32>(next.constData() + 4),
              qFromBigEndian<quint32>(lastOld.constData() + 4) + DaemonAudioSource::kBlockFrames);
+    h.finish();
+}
+
+// R-AUD-SEND: the Core's receive audio never leaves on the controller's
+// thread. While this thread is held (it waits for the feeder and runs no
+// event loop) twelve blocks, three capture rings' worth, are each sent,
+// in order and with none dropped; every packet came from the sender
+// thread, named for what it is and never this one; and the diagnostics the
+// controller reads from that thread add up.
+void TstDaemonMediaController::audioLeavesOnTheSenderThreadWhileTheControllersThreadIsHeld()
+{
+    OpusAudioEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    constexpr int kBlocks = 12;
+    Harness h;
+    AudioEngine* const engine = h.radio.audioEngine();
+    engine->masterMixForTest().setRampFrames(1);
+    engine->masterMixForTest().setSlewUpFrames(0);
+    engine->setSliceStreaming(h.sliceId, true);
+    engine->setSliceStreaming(h.spareSliceId, true);
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(profileStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    h.mediaTransport->becomeReady();
+    QVERIFY(h.client.sendMediaControl(audioControl(1, true, QStringLiteral("opus")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(audioContextsIn(controls).size(), 1);
+    const std::optional<RemoteAudioContextMessage> context =
+        decodeRemoteAudioContext(audioContextsIn(controls).constLast(), true, true);
+    QVERIFY(context.has_value());
+    QVERIFY(h.controller.audioDiagnostics().activeContext);
+
+    const std::shared_ptr<Test::RecordingRtpSink> sink = h.mediaTransport->rtpSink;
+    std::mutex nameMutex;
+    QByteArray senderThreadName;
+    sink->setHook([&](const QByteArray&) {
+        char name[64] = {};
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
+        pthread_getname_np(pthread_self(), name, sizeof(name));
+#endif
+        const std::lock_guard<std::mutex> lock(nameMutex);
+        senderThreadName = name;
+    });
+    std::atomic<bool> keptUp{true};
+    std::thread feeder([&] {
+        for (int block = 0; block < kBlocks; ++block) {
+            feedAudioBlock(h);
+            // Until this block has been sent: a condition the controller's
+            // thread cannot bring about while it is held in join() below.
+            QDeadlineTimer deadline(2'000);
+            while (keptUp.load() && sink->packets.size() < block + 1) {
+                if (deadline.hasExpired()) {
+                    keptUp.store(false);
+                }
+                std::this_thread::yield();
+            }
+        }
+    });
+    feeder.join();
+    sink->setHook({});
+
+    QVERIFY2(keptUp.load(), "audio waited for the controller's thread");
+    const QList<QByteArray> packets = h.mediaTransport->rtpPackets;
+    QCOMPARE(packets.size(), kBlocks);
+    for (int index = 0; index < kBlocks; ++index) {
+        QCOMPARE(rtpSsrcOf(packets.at(index)), context->ssrc);
+        QCOMPARE(rtpSequence(packets.at(index)),
+                 static_cast<quint16>(context->firstSequence + index));
+        QCOMPARE(rtpTimestamp(packets.at(index)),
+                 context->firstTimestamp + quint32(index) * DaemonAudioSource::kBlockFrames);
+    }
+    const QList<std::thread::id> threads = sink->threads();
+    QCOMPARE(threads.size(), kBlocks);
+    for (const std::thread::id id : threads) {
+        QVERIFY(id != std::this_thread::get_id());
+        QCOMPARE(id, threads.constFirst());
+    }
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
+    {
+        const std::lock_guard<std::mutex> lock(nameMutex);
+        QCOMPARE(senderThreadName, QByteArray("NereusAudioTx"));
+    }
+#endif
+    const DaemonAudioDiagnostics diagnostics = h.controller.audioDiagnostics();
+    QCOMPARE(diagnostics.sender.source.ringFullDrops, std::uint64_t{0});
+    QCOMPARE(diagnostics.sender.source.sourceDropEvents, std::uint64_t{0});
+    QCOMPARE(diagnostics.sender.consumedBlocks, std::uint64_t{kBlocks});
+    QCOMPARE(diagnostics.sender.encodedPackets, std::uint64_t{kBlocks});
+    QCOMPARE(diagnostics.sendAttempts, std::uint64_t{kBlocks});
+    QCOMPARE(diagnostics.sendAccepted, std::uint64_t{kBlocks});
+    QCOMPARE(diagnostics.sendRejected, std::uint64_t{0});
+    QCOMPARE(diagnostics.sendInFlight, std::uint64_t{0});
+    QCOMPARE(diagnostics.sendUnresolvedAtRetirement, std::uint64_t{0});
     h.finish();
 }
 
@@ -6529,6 +7376,165 @@ void TstDaemonMediaController::radioDropTellsAnAppWaitingOnMediaThatTheRadioIsGo
 // A full minute at the accepted 192 kHz hardware rate uses one ordered frame
 // every five milliseconds. The fake transport verifies the same bytes the
 // real dedicated channel receives, without retaining 90 MB of test frames.
+void TstDaemonMediaController::waveformDemandAuthorizationAndRetirement()
+{
+    Harness h(DisplayBudgetLimits{10'000'000,10'000'000,1});
+    h.establishSession();
+    QCOMPARE(h.client.capabilities().waveformVersion,1);
+    h.startReadyPeer(false,true); QVERIFY(h.mediaTransport->startOptions.waveformChannel);
+    h.useManualDisplayTicks();
+    WaveformPublisher publisher(WaveformKind::DecodedSpeech,24000);
+    auto* model=h.radio.radeWaveformModel(); QVERIFY(model);
+    model->setEndpoint(h.sliceId,WaveformKind::DecodedSpeech,&publisher,UINT64_MAX,true);
+    const QByteArray listener=h.server.mediaSessionDevice(h.server.mediaSessionEpoch());
+    h.radio.sliceOwnership()->setOwner(h.sliceId,SliceOwnership::stationDevice());
+    QVERIFY(h.radio.sliceOwnership()->join(listener,h.sliceId));
+    QSignalSpy messages(&h.client,&StationClient::mediaControlReceived);
+    const auto request=[&h](int slice,WaveformKind kind,int revision,bool enabled) {
+        return QJsonObject{{"op","waveform-stream"},{"connectionId",QLatin1String(kConnectionId)},
+            {"sliceId",slice},{"kind",WaveformCodec::kindName(kind)},{"revision",revision},{"enabled",enabled}};
+    };
+    QVERIFY(h.client.sendMediaControl(request(h.sliceId,WaveformKind::DecodedSpeech,1,true),h.client.sessionEpoch()));
+    QTRY_VERIFY(publisher.bindingToken()!=0);
+    std::vector<float> pcm(2400,0.125f);
+    QVERIFY(publisher.appendFloat(publisher.bindingToken(),pcm.data(),2400,1,100000000,true));
+    QCoreApplication::processEvents(); h.nowNs=100000000; h.sendDisplayTick();
+    QVERIFY(!h.mediaTransport->waveforms.empty());
+    const auto decoded=WaveformCodec::decode(h.mediaTransport->waveforms[0]); QVERIFY(decoded);
+    QCOMPARE(decoded->sourceGeneration,quint64(UINT64_MAX)); QCOMPARE(decoded->batch.sampleRate,24000);
+    QCOMPARE(decoded->batch.samples[0],0.125f);
+    QVERIFY(h.client.sendMediaControl(request(999,WaveformKind::DecodedSpeech,1,true),h.client.sessionEpoch()));
+    QVERIFY(h.client.sendMediaControl(request(h.sliceId,WaveformKind::RawMicrophone,1,true),h.client.sessionEpoch()));
+    QCoreApplication::processEvents();
+    // A receive listener has no station microphone authority.
+    for(const auto& call:messages) {
+        const auto context=call[0].toJsonObject();
+        if(context.value("op")=="waveform-stream-context" && (context.value("sliceId").toInt()==999 || context.value("kind")=="rawMic")) {
+            QVERIFY(!context.value("enabled").toBool());
+        }
+    }
+    QVERIFY(h.radio.sliceOwnership()->leave(listener,h.sliceId));
+    QTRY_COMPARE(publisher.bindingToken(),quint64(0));
+    QVERIFY(h.client.sendMediaControl(request(h.sliceId,WaveformKind::DecodedSpeech,2,false),h.client.sessionEpoch()));
+    QTRY_COMPARE(publisher.bindingToken(),quint64(0));
+    h.finish();
+}
+
+void TstDaemonMediaController::waveformMicPrivacyAndContextReentrancy()
+{
+    Harness h(DisplayBudgetLimits{10000000,10000000,1}); h.establishSession(); h.startReadyPeer(false,true);
+    h.useManualDisplayTicks(); const QByteArray device=h.server.mediaSessionDevice(h.server.mediaSessionEpoch());
+    QVERIFY(!device.isEmpty()); h.radio.sliceOwnership()->setOwner(h.sliceId,device);
+    QVERIFY(h.radio.txSliceArbiter()->requestHandoff(h.sliceId));
+    WaveformPublisher publisher(WaveformKind::RawMicrophone,48000);
+    h.radio.radeWaveformModel()->setEndpoint(h.sliceId,WaveformKind::RawMicrophone,&publisher,7,true);
+    const auto request=[&](int revision) { return QJsonObject{{"op","waveform-stream"},
+        {"connectionId",QLatin1String(kConnectionId)},{"sliceId",h.sliceId},{"kind","rawMic"},
+        {"revision",revision},{"enabled",true}}; };
+    QVERIFY(h.client.sendMediaControl(request(1),h.client.sessionEpoch())); QTest::qWait(10);
+    QCOMPARE(publisher.bindingToken(),quint64(0)); // Local microphone requires the TX holder.
+    TransmitHolder::Holder held; held.deviceId=device; held.source=TransmitHolder::Source::Device;
+    h.server.transmitHolder()->transferTo(held,QStringLiteral("waveform privacy fixture"));
+    QVERIFY(h.client.sendMediaControl(request(2),h.client.sessionEpoch())); QTRY_VERIFY(publisher.bindingToken()!=0);
+    h.radio.openRemoteMicLine(device); h.radio.setRemoteMicPriming(device,true);
+    QVERIFY(h.radio.remoteMicInUse()); QCOMPARE(h.radio.remoteMicWriter(),device);
+    // Install the physical test endpoint after the source lifecycle rebind.
+    h.radio.radeWaveformModel()->setEndpoint(h.sliceId,WaveformKind::RawMicrophone,&publisher,8,true);
+    QVERIFY(h.client.sendMediaControl(request(3),h.client.sessionEpoch())); QTRY_VERIFY(publisher.bindingToken()!=0);
+    const QByteArray other("foreign-device"); h.radio.openRemoteMicLine(other); h.radio.setRemoteMicPriming(other,true);
+    QVERIFY(h.radio.remoteMicWriter()==other); QTRY_COMPARE(publisher.bindingToken(),quint64(0));
+    h.radio.setRemoteMicPriming(other,false); h.radio.closeRemoteMicLine(other);
+    h.radio.setRemoteMicPriming(device,false); h.radio.closeRemoteMicLine(device);
+    h.radio.radeWaveformModel()->setEndpoint(h.sliceId,WaveformKind::RawMicrophone,&publisher,9,true);
+    // Closing synchronously from the context send retires every map/reference.
+    h.stationTransport->closeOnOp="waveform-stream-context";
+    QVERIFY(h.client.sendMediaControl(request(4),h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.sessionEpoch(),quint64(0)); QCOMPARE(publisher.bindingToken(),quint64(0));
+}
+
+void TstDaemonMediaController::waveformWritableRecoversAStalledVisibleEndpoint()
+{
+    Harness h(DisplayBudgetLimits{10000000,10000000,1}); h.establishSession(); h.startReadyPeer(false,true);
+    h.useManualDisplayTicks(); WaveformPublisher publisher(WaveformKind::DecodedSpeech,24000);
+    h.radio.radeWaveformModel()->setEndpoint(h.sliceId,WaveformKind::DecodedSpeech,&publisher,1,true);
+    QVERIFY(h.client.sendMediaControl({{"op","waveform-stream"},{"connectionId",QLatin1String(kConnectionId)},
+        {"sliceId",h.sliceId},{"kind","decodedSpeech"},{"revision",1},{"enabled",true}},h.client.sessionEpoch()));
+    QTRY_VERIFY(publisher.bindingToken()!=0); h.mediaTransport->stallWaveform=true;
+    std::vector<float> pcm(240,0.25f);
+    QVERIFY(publisher.appendFloat(publisher.bindingToken(),pcm.data(),240,1,100000000,true));
+    QCoreApplication::processEvents(); h.nowNs=100000000; h.sendDisplayTick(); h.nowNs=400000000; h.sendDisplayTick();
+    QCOMPARE(publisher.bindingToken(),quint64(0));
+    h.mediaTransport->stallWaveform=false; emit h.mediaTransport->waveformWritable();
+    QTRY_VERIFY(publisher.bindingToken()!=0);
+    QVERIFY(publisher.appendFloat(publisher.bindingToken(),pcm.data(),240,1,500000000,true));
+    QCoreApplication::processEvents(); h.nowNs=500000000; h.sendDisplayTick();
+    QVERIFY(!h.mediaTransport->waveforms.empty()); h.finish();
+}
+
+void TstDaemonMediaController::waveformUnavailableVisibleDemandRefreshesWithoutCapturing()
+{
+    Harness h(DisplayBudgetLimits{10000000,10000000,1}); h.establishSession(); h.startReadyPeer(false,true);
+    h.useManualDisplayTicks(); WaveformPublisher publisher(WaveformKind::DecodedSpeech,24000);
+    auto* model=h.radio.radeWaveformModel();
+    model->setEndpoint(h.sliceId,WaveformKind::DecodedSpeech,&publisher,1,false,QStringLiteral("Source not active yet."));
+    QSignalSpy refresh(model,&RadeWaveformModel::localObservationRefreshRequested);
+    const auto request=[&](int revision,bool enabled) { return QJsonObject{{"op","waveform-stream"},
+        {"connectionId",QLatin1String(kConnectionId)},{"sliceId",h.sliceId},{"kind","decodedSpeech"},
+        {"revision",revision},{"enabled",enabled}}; };
+    QVERIFY(h.client.sendMediaControl(request(1,true),h.client.sessionEpoch())); QTest::qWait(10);
+    QCOMPARE(publisher.bindingToken(),quint64(0));
+    // Stand in for the existing headless physical-source refresh: no capture
+    // demand exists yet, but the already-running source becomes observable.
+    connect(model,&RadeWaveformModel::localObservationRefreshRequested,&h.controller,[&] {
+        model->setEndpoint(h.sliceId,WaveformKind::DecodedSpeech,&publisher,1,true);
+    });
+    QTRY_VERIFY_WITH_TIMEOUT(!refresh.empty(),1000); QTRY_VERIFY(publisher.bindingToken()!=0);
+    QVERIFY(h.client.sendMediaControl(request(2,false),h.client.sessionEpoch())); QTRY_COMPARE(publisher.bindingToken(),quint64(0));
+    const int before=refresh.size(); QTest::qWait(75); QCOMPARE(refresh.size(),before); h.finish();
+}
+
+void TstDaemonMediaController::waveformFullRateBudgetRefusal()
+{
+    Harness h(DisplayBudgetLimits{32000,10000000,1}); h.establishSession(); h.startReadyPeer(false,true);
+    WaveformPublisher publisher(WaveformKind::DecodedSpeech,24000);
+    h.radio.radeWaveformModel()->setEndpoint(h.sliceId,WaveformKind::DecodedSpeech,&publisher,1,true);
+    QSignalSpy messages(&h.client,&StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl({{"op","waveform-stream"},{"connectionId",QLatin1String(kConnectionId)},
+        {"sliceId",h.sliceId},{"kind","decodedSpeech"},{"revision",1},{"enabled",true}},h.client.sessionEpoch()));
+    QTRY_VERIFY(!messages.empty()); QCOMPARE(publisher.bindingToken(),quint64(0));
+    bool refused=false;
+    for(const auto& call:messages) { const auto context=call[0].toJsonObject();
+        if(context.value("op")=="waveform-stream-context") {
+            QVERIFY(!context.value("enabled").toBool());
+            refused=context.value("reason").toString().contains("full sample rate");
+        }
+    }
+    QVERIFY(refused); h.finish();
+}
+
+void TstDaemonMediaController::waveformStallDropsAndRetiresWithoutKeepingProducerLease()
+{
+    Harness h(DisplayBudgetLimits{10'000'000,10'000'000,1}); h.establishSession(); h.startReadyPeer(false,true);
+    h.useManualDisplayTicks(); WaveformPublisher publisher(WaveformKind::DecodedSpeech,24000);
+    auto* model=h.radio.radeWaveformModel();
+    model->setEndpoint(h.sliceId,WaveformKind::DecodedSpeech,&publisher,1,true);
+    QVERIFY(h.client.sendMediaControl({{"op","waveform-stream"},{"connectionId",QLatin1String(kConnectionId)},
+        {"sliceId",h.sliceId},{"kind","decodedSpeech"},{"revision",1},{"enabled",true}},h.client.sessionEpoch()));
+    QTRY_VERIFY(publisher.bindingToken()!=0); h.mediaTransport->stallWaveform=true;
+    std::vector<float> pcm(240,0.25f);
+    for(int i=0;i<8;++i) {
+        QVERIFY(publisher.appendFloat(publisher.bindingToken(),pcm.data(),240,1,100000000+qint64(i)*33000000,true));
+        QCoreApplication::processEvents(); h.nowNs=100000000+qint64(i)*33000000; h.sendDisplayTick();
+    }
+    QVERIFY(h.mediaTransport->waveforms.empty());
+    // A send-stall retirement context can synchronously close this session.
+    h.stationTransport->closeOnOp="waveform-stream-context";
+    h.nowNs=400000000; h.sendDisplayTick();
+    QTRY_COMPARE(h.controller.sessionEpoch(),quint64(0));
+    QCOMPARE(publisher.bindingToken(),quint64(0));
+    h.finish();
+}
+
 void TstDaemonMediaController::rawIqRunsForSixtySecondsInSequenceAndRetires()
 {
     Harness h(DisplayBudgetLimits{10'000'000, 10'000'000, 1});
@@ -6678,6 +7684,69 @@ void TstDaemonMediaController::stalledRawIqFailsWithoutBlockingControl()
         }
         return false;
     })());
+    h.finish();
+}
+
+// Display send thread: with a transport that sends from any thread, raw
+// I/Q leaves on the display thread, never on this one. A stalled channel
+// found there ends the stream on this thread, which sends its context.
+void TstDaemonMediaController::rawIqLeavesOnTheDisplayThreadAndItsStallEndsOnMain()
+{
+    Harness h(DisplayBudgetLimits{10'000'000, 10'000'000, 1});
+    // The display thread reads the clock; a run in real time reads nothing
+    // this thread writes.
+    h.realClock = true;
+    h.threadDisplaySink = true;
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer(true);
+    QVERIFY(h.mediaTransport->threadSink);
+    const std::shared_ptr<ThreadDisplaySink> sink = h.mediaTransport->threadSink;
+    QTRY_VERIFY(h.controller.displaysSentFromThread());
+    std::atomic<int> sentHere{0};
+    h.mediaTransport->onIqSend = [&sentHere](const QByteArray&) { ++sentHere; };
+
+    QVERIFY(h.client.sendMediaControl({
+        {QStringLiteral("op"), QStringLiteral("iq-stream")},
+        {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+        {QStringLiteral("sliceId"), h.sliceId},
+        {QStringLiteral("revision"), 1},
+        {QStringLiteral("enabled"), true}}, h.client.sessionEpoch()));
+    QTRY_VERIFY(([&] {
+        for (const auto& call : controls) {
+            const auto context = call.at(0).toJsonObject();
+            if (context.value(QStringLiteral("op")) == QLatin1String("iq-stream-context")
+                && context.value(QStringLiteral("enabled")).toBool()) { return true; }
+        }
+        return false;
+    })());
+    const QVector<float> block(2048, 0.25f);
+    QTRY_VERIFY(([&] {
+        h.radio.rawIqDataForStream(h.streamIndex, block);
+        return sink->iqThreads().size() >= 3;
+    })());
+    const std::thread::id here = std::this_thread::get_id();
+    for (const std::thread::id& sentFrom : sink->iqThreads()) {
+        QVERIFY(sentFrom != here);
+    }
+    QCOMPARE(sentHere.load(), 0);
+
+    // The channel stalls. The display thread finds it after 250 ms and
+    // leaves the stream's end to this thread.
+    sink->stallIq.store(true, std::memory_order_release);
+    h.radio.rawIqDataForStream(h.streamIndex, block);
+    QTRY_VERIFY_WITH_TIMEOUT(([&] {
+        for (const auto& call : controls) {
+            const auto context = call.at(0).toJsonObject();
+            if (context.value(QStringLiteral("op")) == QLatin1String("iq-stream-context")
+                && context.value(QStringLiteral("revision")).toInt() == 1
+                && !context.value(QStringLiteral("enabled")).toBool()
+                && context.value(QStringLiteral("reason")).toString().contains(
+                    QLatin1String("stalled"))) { return true; }
+        }
+        return false;
+    })(), 10'000);
+    QCOMPARE(sentHere.load(), 0);
     h.finish();
 }
 

@@ -1,6 +1,8 @@
 // no-port-check: NereusSDR-original approved native Core Settings flow.
 // SPDX-License-Identifier: GPL-3.0-or-later
 // 2026-10-02 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+// 2026-10-09 The saved Cores notice is not framed like a field when it stands
+// alone. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "CoresSetupPage.h"
 #include "ThisCorePage.h"
 #include "core/session/RemoteDevicesState.h"
@@ -489,7 +491,13 @@ void CoresSetupPage::refreshTargets()
     const bool restoreCoreFocus = m_coreList->isAncestorOf(QApplication::focusWidget());
     clearLayout(m_coreGrid);
     const QList<SavedCoreTarget> targets = m_store ? m_store->targets() : QList<SavedCoreTarget>{};
-    if (!m_store || targets.isEmpty()) {
+    // The frame belongs to a list of Cores. A notice alone (no store, no
+    // saved Cores) reads as plain text, not as a boxed field.
+    const bool listed = m_store && !targets.isEmpty();
+    m_coreList->setStyleSheet(listed ? QStringLiteral("#coreSettingsCoreList { border:1px solid #304050; }")
+                                     : QString());
+    m_coreGrid->setContentsMargins(listed ? 1 : 0, listed ? 1 : 0, listed ? 1 : 0, listed ? 1 : 0);
+    if (!listed) {
         m_coreGrid->addWidget(text(m_store ? tr("No saved Cores. Add a Core in Connections.")
                                          : tr("Saved Cores are unavailable in this window."), m_coreList, true), 0, 0);
         inspectTarget({});

@@ -1,0 +1,155 @@
+libjuice 3c40a354: on macOS a dual-stack socket also owns its IPv4 port
+
+MPL-2.0, like src/udp.c; original file notice preserved unchanged.
+2026-10-16: J.J. Boyd (KG4VCF), with AI-assisted implementation via Anthropic Claude Code.
+
+Each agent binds one IPv6 wildcard socket with IPV6_V6ONLY off, so it takes
+IPv4 too. On macOS that bind succeeds on a port another socket already holds
+as an IPv4-only wildcard socket, both for an explicit port and for the port
+the system picks for port 0, and IPv4 datagrams to the port then go to the
+other socket. One end's checks are answered and nothing reaches the other,
+so a data channel never opens. Seen 2026-10-16 on a Mac where an Android
+emulator (qemu) held udp4 *.52282 and the test's agent bound udp46 *.52282.
+
+The reverse order is refused (an IPv4 bind on a port a dual-stack socket
+holds fails with EADDRINUSE, with or without SO_REUSEADDR or SO_REUSEPORT),
+so on __APPLE__ only, and only for an IPv6 wildcard bind, the IPv4 wildcard
+port is held first, the dual-stack socket binds onto it, and the hold is
+closed. A port 0 bind lets the system pick the IPv4 port and tries again,
+up to 16 times, when that port is taken for IPv6. An explicit port taken for
+IPv4 fails with EADDRINUSE, so a port range moves on to its next port. If no
+IPv4 socket can be made, the bind is unchanged. Linux already refuses the
+colliding bind with EADDRINUSE and never picks a port held for IPv4 (checked
+2026-10-16 on Linux 6.12); Windows was not checked. Both are unchanged.
+libjuice upstream (v1.7.4 and master on 2026-10-16) has the same src/udp.c
+and no option for this.
+
+--- a/src/udp.c
++++ b/src/udp.c
+@@ -6,6 +6,10 @@
+  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+  */
+ 
++// Modification history (NereusSDR):
++// 2026-10-16: on macOS a dual-stack socket also owns its IPv4 port.
++// J.J. Boyd (KG4VCF), with AI-assisted implementation via Anthropic Claude Code.
++
+ #include "udp.h"
+ #include "addr.h"
+ #include "log.h"
+@@ -42,6 +46,84 @@
+ 	uint16_t next = begin + count++ % (diff + 1);
+ 	mutex_unlock(&mutex);
+ 	return next;
++}
++
++#if defined(__APPLE__)
++// On macOS a dual-stack socket (IPv6 wildcard, IPV6_V6ONLY off) can bind a
++// port that another socket already holds as an IPv4-only wildcard socket,
++// the system-picked port of a port 0 bind included. IPv4 datagrams to that
++// port then reach the other socket, so ICE checks over IPv4 never arrive.
++// The reverse order is refused: once a dual-stack socket holds a port, an
++// IPv4 bind on it fails with EADDRINUSE. So the IPv4 port is taken first,
++// the dual-stack socket binds onto it, and the IPv4 hold is then released.
++#define DUAL_STACK_PICK_ATTEMPTS 16
++
++static socket_t hold_ipv4_port(uint16_t port, uint16_t *held_port) {
++	socket_t hold = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++	if (hold == INVALID_SOCKET)
++		return INVALID_SOCKET;
++
++	struct sockaddr_in sin;
++	memset(&sin, 0, sizeof(sin));
++	sin.sin_len = sizeof(sin);
++	sin.sin_family = AF_INET;
++	sin.sin_addr.s_addr = htonl(INADDR_ANY);
++	sin.sin_port = htons(port);
++	if (bind(hold, (struct sockaddr *)&sin, sizeof(sin)) != 0) {
++		int err = sockerrno;
++		closesocket(hold);
++		errno = err;
++		return INVALID_SOCKET;
++	}
++
++	*held_port = udp_get_port(hold);
++	return hold;
++}
++
++static int bind_dual_stack(socket_t sock, struct sockaddr *addr, socklen_t addrlen) {
++	const uint16_t wanted = addr_get_port(addr);
++	const int attempts = wanted == 0 ? DUAL_STACK_PICK_ATTEMPTS : 1;
++	int err = SEADDRINUSE;
++	for (int i = 0; i < attempts; ++i) {
++		uint16_t port = 0;
++		socket_t hold = hold_ipv4_port(wanted, &port);
++		if (hold == INVALID_SOCKET) {
++			// A port taken for IPv4 is in use for this socket too
++			if (sockerrno == SEADDRINUSE || sockerrno == SEACCES)
++				return -1;
++
++			// No IPv4 here, nothing to collide with
++			JLOG_DEBUG("No IPv4 port hold, errno=%d", sockerrno);
++			addr_set_port(addr, wanted);
++			return bind(sock, addr, addrlen);
++		}
++
++		addr_set_port(addr, port);
++		int ret = bind(sock, addr, addrlen);
++		err = sockerrno;
++		closesocket(hold);
++		if (ret == 0)
++			return 0;
++
++		if (wanted != 0 || err != SEADDRINUSE)
++			break;
++
++		JLOG_DEBUG("UDP port %hu is free for IPv4 only, picking another", port);
++	}
++
++	// Set last, so that no call above changes it
++	addr_set_port(addr, wanted);
++	errno = err;
++	return -1;
++}
++#endif
++
++static int bind_socket(socket_t sock, struct sockaddr *addr, socklen_t addrlen) {
++#if defined(__APPLE__)
++	if (addr->sa_family == AF_INET6 && addr_is_any(addr))
++		return bind_dual_stack(sock, addr, addrlen);
++#endif
++	return bind(sock, addr, addrlen);
+ }
+ 
+ static socket_t create_socket_for_addrinfo(const udp_socket_config_t *config,
+@@ -91,7 +173,11 @@
+ 
+ 	// Bind it
+ 	if (config->port_begin == 0 && config->port_end == 0) {
+-		if (bind(sock, ai->ai_addr, (socklen_t)ai->ai_addrlen) == 0) {
++		struct sockaddr_storage addr;
++		socklen_t addrlen = (socklen_t)ai->ai_addrlen;
++		memcpy(&addr, ai->ai_addr, addrlen);
++
++		if (bind_socket(sock, (struct sockaddr *)&addr, addrlen) == 0) {
+ 			JLOG_DEBUG("UDP socket bound to %s:%hu",
+ 			           config->bind_address ? config->bind_address : "any", udp_get_port(sock));
+ 			return sock;
+@@ -106,7 +192,7 @@
+ 		memcpy(&addr, ai->ai_addr, addrlen);
+ 		addr_set_port((struct sockaddr *)&addr, port);
+ 
+-		if (bind(sock, (struct sockaddr *)&addr, addrlen) == 0) {
++		if (bind_socket(sock, (struct sockaddr *)&addr, addrlen) == 0) {
+ 			JLOG_DEBUG("UDP socket bound to %s:%hu",
+ 			           config->bind_address ? config->bind_address : "any", port);
+ 			return sock;
+@@ -123,7 +209,7 @@
+ 		do {
+ 			uint16_t port = get_next_port_in_range(config->port_begin, config->port_end);
+ 			addr_set_port((struct sockaddr *)&addr, port);
+-			if (bind(sock, (struct sockaddr *)&addr, addrlen) == 0) {
++			if (bind_socket(sock, (struct sockaddr *)&addr, addrlen) == 0) {
+ 				JLOG_DEBUG("UDP socket bound to %s:%hu",
+ 				           config->bind_address ? config->bind_address : "any", port);
+ 				return sock;

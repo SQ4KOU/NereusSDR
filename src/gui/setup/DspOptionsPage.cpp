@@ -62,6 +62,19 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18: Setup description version 15 ids on
 //                the high-resolution box and the time readout. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15 - The warning sign asks for text presentation (U+FE0E), so
+//                Windows draws it in its yellow instead of as a color
+//                emoji. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-10-10 - A per-mode combo's live apply hands the model the
+//                combo's mode, and the model applies it to every slice in
+//                that mode group; the page asked the first slice's mode
+//                alone. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-10-11 - With nothing saved the FM buffer size combos show 64 for
+//                receive and transmit, the block both channels start
+//                with, where they showed Thetis's 256 and 128. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -169,7 +182,10 @@ QComboBox* makeCombo(QWidget* parent, const QStringList& items)
 QLabel* makeWarningIcon(QWidget* parent)
 {
     auto* lbl = new QLabel(parent);
-    lbl->setText(QStringLiteral("⚠"));  // U+26A0 WARNING SIGN
+    // U+26A0 WARNING SIGN. U+FE0E asks for its text form: without it
+    // Windows draws the sign from Segoe UI Emoji in color, ignoring the
+    // yellow below.
+    lbl->setText(QStringLiteral("\u26A0\uFE0E"));
     lbl->setStyleSheet(QStringLiteral("color: #FFC800; font-weight: bold;"));
     lbl->setVisible(false);
     return lbl;
@@ -372,32 +388,23 @@ void DspOptionsPage::refreshBufferAndTransmitGates()
 //
 // When the combo changes:
 //   1. Persist to AppSettings (always — applies on next mode-switch if not live).
-//   2. Determine whether the combo's mode group matches the current slice mode.
+//   2. Call RadioModel::rebuildDspOptionsForMode(comboMode). The model
+//      matches the combo's mode group against each slice's own mode:
 //      - "Phone" group: USB, LSB, AM, SAM, DSB
 //      - "Cw"    group: CWU, CWL
 //      - "Dig"   group: DIGU, DIGL, SPEC, DRM
 //      - "Fm"    group: FM
-//   3. If mode matches, call RadioModel::rebuildDspOptionsForMode(currentMode)
-//      which triggers RxChannel::onModeChanged() + TxChannel::onModeChanged()
-//      and emits dspChangeMeasured(ms) if a rebuild occurred.
+//   3. For every slice in the group that triggers RxChannel::onModeChanged()
+//      on its receiver, and TxChannel::onModeChanged() when the TX-bound
+//      slice is in it, and emits dspChangeMeasured(ms) if a rebuild occurred.
 //
 // comboMode is the representative DSPMode for the group (e.g. DSPMode::USB for
-// the Phone group). The actual comparison uses modeGroupMatches() below.
+// the Phone group). The comparison is dspOptionsModeGroup (core/RxChannel.h),
+// the mapping RxChannel reads its per-mode keys by, so the gate cannot
+// disagree with the keys applied. The gate sat here until 2026-10-10 and
+// asked the first slice alone, so a second receiver never took an edit.
 //
 // NereusSDR-original — design Section 4B.
-
-namespace {
-
-// Returns true if actualMode belongs to the same DSP-Options mode group as
-// comboMode. Only the group membership matters for the live-apply gate.
-// Uses dspOptionsModeGroup (core/RxChannel.h), the mapping RxChannel reads
-// its per-mode keys by, so the gate cannot disagree with the keys applied.
-bool modeGroupMatches(DSPMode actualMode, DSPMode comboMode)
-{
-    return dspOptionsModeGroup(actualMode) == dspOptionsModeGroup(comboMode);
-}
-
-}  // namespace (anon, Task 4.2 helpers)
 
 void DspOptionsPage::wireComboWithLiveApply(QComboBox* combo,
                                              DSPMode   comboMode,
@@ -408,19 +415,13 @@ void DspOptionsPage::wireComboWithLiveApply(QComboBox* combo,
             // 1. Always persist — applies on next mode-switch if not live.
             AppSettings::instance().setValue(key, v);
 
-            // 2. Live-apply if radio is connected and current mode matches.
+            // 2. Live-apply if radio is connected, to each slice whose
+            //    mode is in the combo's group.
             RadioModel* rm = model();
             if (!rm) {
                 return;
             }
-            const SliceModel* slice = rm->sliceById(0);
-            if (!slice) {
-                return;
-            }
-            const DSPMode currentMode = slice->dspMode();
-            if (modeGroupMatches(currentMode, comboMode)) {
-                rm->rebuildDspOptionsForMode(currentMode);
-            }
+            rm->rebuildDspOptionsForMode(comboMode);
         });
 }
 
@@ -446,7 +447,6 @@ void DspOptionsPage::buildUI()
     // TransmitSetupPages, DisplaySetupPages, AppearanceSetupPages, etc.).
     Style::applyDarkPageStyle(this);
 
-    QVBoxLayout* layout = contentLayout();
 
     // One warning icon per outer category — visibility logic in
     // recomputeWarnings() (Task 4.5, ported from Thetis console.cs:38797-38807).
@@ -531,6 +531,25 @@ void DspOptionsPage::buildUI()
     //   dsp_buf_fm_rx    = 256   dsp_buf_fm_tx    = 128
     //   dsp_buf_cw_rx    = 64    (no CW TX)
     //   dsp_buf_dig_rx   = 64    dsp_buf_dig_tx   = 64
+    //
+    // The FM row starts at 64 for both, not Thetis's 256 and 128
+    // (console.cs:39149, 39160 [v2.10.3.15]). With nothing saved, a receive
+    // and a transmit channel both start at a 64 block in every mode
+    // (RxChannel::onModeChanged, TxChannel::onModeChanged), so 256 and 128
+    // were shown here and never ran. JJ's ruling of 2026-10-11, asked
+    // whether the page should show what runs: "your recomendation on the fm
+    // thing", which was 64 for both. Why Thetis's two values do not carry
+    // over:
+    //   - Receive: Thetis raises a receiver's DSP rate to 192,000 in FM
+    //     (console.cs:33974-33982, 37651-37654 [v2.10.3.15]), where 256
+    //     samples are 1.33 ms. NereusSDR's receive DSP rate stays at 48,000
+    //     (WdspEngine::kRxDspSampleRate), where 64 samples are those same
+    //     1.33 ms and 256 would be 5.3 ms.
+    //   - Transmit: both run the transmit channel at 96,000 (cmaster.c:182
+    //     [v2.10.3.15]; WdspEngine::kTxDspSampleRate), so Thetis's 128 would
+    //     mean the same 1.33 ms here. It is not shown because it is not what
+    //     runs: TxChannel starts at 64.
+    // A saved value still wins over these, on the page and in the channels.
     const QString kBufTooltip = tr(
         "Sets the internal buffer size. Larger values give sharper "
         "filters but add latency.");
@@ -542,7 +561,7 @@ void DspOptionsPage::buildUI()
         kBufTooltip, m_bufPhoneRx, m_bufPhoneTx);
     auto* bufFm    = buildModeSubgroup(tr("FM"), kBufferSizes,
         QStringLiteral("DspOptionsBufferSize"), QStringLiteral("Fm"),
-        DSPMode::FM, QStringLiteral("256"), QStringLiteral("128"),
+        DSPMode::FM, QStringLiteral("64"), QStringLiteral("64"),
         kBufTooltip, m_bufFmRx, m_bufFmTx);
     auto* bufCw    = buildModeSubgroup(tr("CW"), kBufferSizes,
         QStringLiteral("DspOptionsBufferSize"), QStringLiteral("Cw"),
@@ -623,7 +642,7 @@ void DspOptionsPage::buildUI()
     topRow->addWidget(bufColumn);
     topRow->addWidget(fszColumn);
     topRow->addWidget(ftColumn);
-    layout->addLayout(topRow);
+    addContent(topRow);
 
     // =========================================================================
     // Group 4: Filter Impulse Cache
@@ -657,7 +676,7 @@ void DspOptionsPage::buildUI()
     cacheLayout->addWidget(m_cacheImpulse);
     cacheLayout->addWidget(m_cacheImpulseSaveRestore);
 
-    layout->addWidget(cacheGroup);
+    addContent(cacheGroup);
 
     // =========================================================================
     // Standalone: High-resolution filter characteristics
@@ -709,7 +728,7 @@ void DspOptionsPage::buildUI()
     // because SetupDialog is constructed after all containers are initialised.
     applyPersistedHighResFilter(model());
 
-    layout->addWidget(m_highResFilterChars);
+    addContent(m_highResFilterChars);
 
     // =========================================================================
     // Time-to-last-change readout
@@ -737,7 +756,7 @@ void DspOptionsPage::buildUI()
         show(model()->dspOptionsLastApplyMs());
     }
 
-    layout->addWidget(m_timeToLastChangeLabel);
+    addContent(m_timeToLastChangeLabel);
 
     // =========================================================================
     // Task 4.5: Warning icon wiring

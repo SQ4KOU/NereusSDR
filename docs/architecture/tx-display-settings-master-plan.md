@@ -438,6 +438,8 @@ QRgb SpectrumWidget::dbmToRgb(float dbm) const
 }
 ```
 
+> Note 2026-10-10: the receive Black Level / Color Gain formula above is superseded by section 4 of `2026-10-09-display-pill-and-levels-design.md` (Black Level is an offset from the noise floor, Color Gain sets the span).
+
 #### Step 1.8: MOX-gate the AGC + Clarity threshold writes in `pushWaterfallRow`
 
 **READ first:**

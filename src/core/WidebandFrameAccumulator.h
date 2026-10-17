@@ -30,6 +30,7 @@
 #include <QObject>
 #include <QByteArray>
 #include <QVector>
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
@@ -45,7 +46,7 @@ namespace NereusSDR {
 ///     the (now partial) frame, return to state 0.
 ///   - On reaching the last packet of a frame (seq == 31), emit and
 ///     return to state 0.
-class WidebandFrameAccumulator : public QObject {
+class NEREUS_CORE_EXPORT WidebandFrameAccumulator : public QObject {
     Q_OBJECT
 public:
     explicit WidebandFrameAccumulator(QObject* parent = nullptr);

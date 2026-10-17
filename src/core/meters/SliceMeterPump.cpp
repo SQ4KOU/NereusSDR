@@ -38,6 +38,10 @@
 //                 rxMeterOffsetDbForSlice), not slice A's. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-10-11 -- Max Bin per slice (setMaxBinSource): with several
+//                 slices every flag showed the one display-0 value, which
+//                 followed the active pan. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -92,6 +96,7 @@ mw0lge@grange-lane.co.uk
 #include "models/SliceModel.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -117,6 +122,11 @@ SliceMeterPump::~SliceMeterPump() = default;
 void SliceMeterPump::setSourceSelector(std::function<MeterSource()> selector)
 {
     m_sourceSelector = std::move(selector);
+}
+
+void SliceMeterPump::setMaxBinSource(std::function<double(const SliceModel*)> source)
+{
+    m_maxBinSource = std::move(source);
 }
 
 // Matches MeterPoller::setIntervalMs's clamp (MeterPoller.cpp) against the
@@ -225,18 +235,20 @@ void SliceMeterPump::poll()
     // display channel 0; each slice's own below.
     const double rxOffsetDb = m_radioModel->rxMeterOffsetDb();
 
-    // MaxBin is a single global reading (FFTEngine display channel 0 --
+    // With no per-slice source (setMaxBinSource: nereusd, tests), MaxBin
+    // is the engine's single reading (FFTEngine display channel 0 --
     // single-panadapter assumption; see WdspEngine::getMaxBinDbm's own doc
     // comment), so it is computed once per tick rather than once per
-    // slice -- every slice would read the identical value in MaxBin mode
-    // regardless. Matches MeterPoller::pollSMeter()'s MaxBin branch:
+    // slice -- every slice reads the identical value. A window supplies the
+    // per-slice source, used in the loop below instead.
+    // Matches MeterPoller::pollSMeter()'s MaxBin branch:
     //
     // From Thetis console.cs:46881 [v2.10.3.13]:
     //   if (max_bin > -400f)
     //       _RX1MeterValues[Reading.SIGNAL_MAX_BIN] = max_bin + offset;
     // (else the -400 "not active" sentinel passes through unchanged).
     double maxBinDbm = -400.0;
-    if (source == MeterSource::MaxBin) {
+    if (source == MeterSource::MaxBin && !m_maxBinSource) {
         const double raw = engine->getMaxBinDbm(/*disp=*/0);
         maxBinDbm = (raw > -400.0) ? (raw + rxOffsetDb) : raw;
     }
@@ -318,7 +330,20 @@ void SliceMeterPump::poll()
             dbm = signalAverageDbm;
             break;
         case MeterSource::MaxBin:
-            dbm = maxBinDbm;
+            if (m_maxBinSource) {
+                // This slice's own reading, with its own receiver's offset.
+                // From Thetis console.cs:47136-47137 [v2.10.3.15] (RX2;
+                // RX1 is :46959-46960, each with its receiver's offset):
+                //   float max_bin = (float)WDSP.GetDetectMaxBin(1);
+                //   if (max_bin > -400f) _RX2MeterValues[Reading.SIGNAL_MAX_BIN] = max_bin + offset;
+                // No pan of this window shows this slice's receiver: no
+                // reading (R-R3-13), never another slice's.
+                const double raw = m_maxBinSource(slice);
+                dbm = (std::isfinite(raw) && raw > kNoReadingDbm)
+                    ? raw + sliceOffsetDb : kNoReadingDbm;
+            } else {
+                dbm = maxBinDbm;
+            }
             break;
         }
         slice->setSignalStrengthDbm(dbm);

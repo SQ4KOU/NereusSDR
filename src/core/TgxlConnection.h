@@ -34,10 +34,18 @@
 //   2026-10-01  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
 //                 (TGXL tune lane fix round): autotuneSent, every `autotune`
 //                 this computer sends the tuner, whoever asked for it.
+//   2026-10-12  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code:
+//                 one `status` in flight (m_statusGate), as on the
+//                 amplifier link.
+//   2026-10-12  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code:
+//                 the status poll runs every 250 ms, and every 62 ms while
+//                 keyed or tuning (setKeyed, m_pollPacer).
 // =================================================================
 #pragma once
 
 #include "core/NereusCoreExport.h"
+#include "core/GeniusPollPacer.h"
+#include "core/GeniusStatusGate.h"
 #include <QObject>
 #include <QTcpSocket>
 #include <QTimer>
@@ -74,12 +82,26 @@ public:
     explicit TgxlConnection(QObject* parent = nullptr);
     ~TgxlConnection() override;
 
+    // How often the link asks for `status` (GeniusPollPacer.h). Receive is
+    // AetherSDR's kPollRxMs, src/core/TgxlConnection.h:78 [@a9a83e66].
+    // Keyed is the rate the vendor's own TunerGeniusDesktop asks at
+    // (captures/flex-pgxl-tgxl-capture_00001_20260519173452.pcapng), not
+    // AetherSDR's 16 ms.
+    static constexpr int kPollReceiveMs = 250;
+    static constexpr int kPollKeyedMs = 62;
+
     bool    isConnected() const { return m_connected; }
     QString version()     const { return m_version; }
     QString peerAddress() const { return m_socket->peerAddress().toString(); }
     quint16 peerPort()    const { return m_socket->peerPort(); }
     quint64 socketAttemptToken() const { return m_socketAttemptGeneration; }
     bool identityAdmissionRequired() const { return m_identityAdmissionRequired; }
+
+    // The Core is on the air (transmitting, TUNE or the two-tone test), or
+    // no longer: the status poll runs at kPollKeyedMs from now, and for
+    // GeniusPollPacer::kHoldMs after. The tuner's own pttA, pttB and tuning
+    // flags do the same without it.
+    void setKeyed(bool keyed) { m_pollPacer.setKeyed(keyed); }
     TgxlIdentityInfo identityInfo() const { return m_identityInfo; }
     bool reconnectPending() const noexcept { return m_reconnectTimer.isActive(); }
 
@@ -131,6 +153,12 @@ public:
                                         quint64 attemptGeneration);
     void testInjectFailureForSocketAttempt(quint64 attemptGeneration);
     void testSetIdentityTimeoutMs(int ms) { m_identityTimeoutMs = ms > 0 ? ms : 1; }
+    // Test-only: how long an unanswered `status` holds back the next one.
+    void testSetStatusReplyWaitMs(int ms) { m_statusGate.setReplyWaitMsForTesting(ms); }
+    // Test-only: the status poll timer's interval now.
+    int testPollIntervalMs() const { return m_pollTimer.interval(); }
+    // Test-only: how long the keyed poll interval outlasts the key.
+    void testSetPollHoldMs(int ms) { m_pollPacer.setHoldMsForTesting(ms); }
 
 public slots:
     void connectToTgxl(const QString& host, quint16 port = 9010);
@@ -217,6 +245,7 @@ private:
     void failIdentityAdmission(quint64 socketAttemptToken,
                                const QString& reason);
     quint32 writeProtocolCommand(const QString& cmd);
+    void noteDeviceKeys(const QMap<QString, QString>& kvs);
 
     // 2026-05-26 KG4VCF: probe the kernel for the local source IP
     // it would use to reach `host` and explicitly bind m_socket to
@@ -228,7 +257,22 @@ private:
     SourceBindResult bindSourceForHost(const QString& host);
 
     QTcpSocket* m_socket{nullptr};
-    QTimer     m_pollTimer;       // 1/sec status poll
+    QTimer     m_pollTimer;       // status poll, paced by m_pollPacer
+    // Sets m_pollTimer's interval: kPollReceiveMs, or kPollKeyedMs while
+    // the Core or the tuner says keyed or tuning and for a hold after.
+    GeniusPollPacer m_pollPacer{&m_pollTimer, kPollReceiveMs, kPollKeyedMs};
+    // The tuner's own flags as last reported, each kept until a frame
+    // carries it again: a state push has `tuning` and no `pttA`.
+    bool       m_devicePttA{false};
+    bool       m_devicePttB{false};
+    bool       m_deviceTuning{false};
+    // One `status` in flight: the poll does not ask again while the tuner
+    // has not answered the one before. The vendor's own program never does
+    // (TunerGeniusDesktop, 9,598 polls in
+    // captures/flex-pgxl-tgxl-capture_00001_20260519173452.pcapng), and the
+    // amplifier, which speaks the same protocol, closed its link on it
+    // (bench 2026-10-12, PgxlConnection.h).
+    GeniusStatusGate m_statusGate;
     QByteArray m_readBuf;
     quint32    m_seq{0};
     bool       m_connected{false};
@@ -238,6 +282,10 @@ private:
     // connectToTgxl() so a fresh manual connect re-arms auto-reconnect.
     bool       m_userInitiatedDisconnect{false};
     QString    m_version;
+    // Last S-frame state logged at info per object (`state`, `status`).
+    // The amp repeats an unchanged state on every poll; only a change
+    // is logged at info (Core journal volume). Cleared on connect.
+    QHash<QString, QString> m_lastLoggedSFrameState;
 
     // Tier 2 state.
     QTimer  m_keepaliveTimer;

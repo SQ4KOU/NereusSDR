@@ -63,6 +63,11 @@ mw0lge@grange-lane.co.uk
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+// Modification history (NereusSDR):
+//   2026-10-12 - Apply the approved workspace-only 11 px text minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
+#include "gui/styles/WorkspacePreview.h"
 #include "TextOverlayItem.h"
 #include "ResponsiveText.h"
 
@@ -171,14 +176,14 @@ void TextOverlayItem::paint(QPainter& p, int widgetW, int widgetH)
 
     // Step 4: draw line 1
     if (!resolved1.isEmpty()) {
-        QFont font1(m_fontFamily1);
+        QFont font1 = WorkspacePreview::readableFont(QFont(m_fontFamily1), p.device());
         font1.setBold(m_fontBold1);
         font1=fitObjectText(font1,m_fontSize1*objectTextScale(rect,{260,120}),resolved1,m_scrollX!=0?QRectF(lineRect1.left(),lineRect1.top(),1e9,lineRect1.height()):QRectF(lineRect1),true,
             m_scrollX!=0?Qt::TextSingleLine:Qt::TextWordWrap,p.device());
         p.setFont(font1);
 
         if (m_showTextBack1 && lineRect1.isValid()) {
-            const QFontMetrics fm1(font1);
+            const QFontMetrics fm1(font1,p.device());
             const QRect textBound = fm1.boundingRect(lineRect1,
                                                       Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap,
                                                       resolved1);
@@ -189,7 +194,7 @@ void TextOverlayItem::paint(QPainter& p, int widgetW, int widgetH)
 
         if (m_scrollX != 0.0f && lineRect1.isValid()) {
             // Scrolling: clip to lineRect1, draw at scrolled x position
-            const QFontMetrics fm1(font1);
+            const QFontMetrics fm1(font1,p.device());
             const int textW = fm1.horizontalAdvance(resolved1);
             p.save();
             p.setClipRect(lineRect1);
@@ -213,14 +218,14 @@ void TextOverlayItem::paint(QPainter& p, int widgetW, int widgetH)
 
     // Step 5: draw line 2
     if (!resolved2.isEmpty()) {
-        QFont font2(m_fontFamily2);
+        QFont font2 = WorkspacePreview::readableFont(QFont(m_fontFamily2), p.device());
         font2.setBold(m_fontBold2);
         font2=fitObjectText(font2,m_fontSize2*objectTextScale(rect,{260,120}),resolved2,m_scrollX!=0?QRectF(lineRect2.left(),lineRect2.top(),1e9,lineRect2.height()):QRectF(lineRect2),true,
             m_scrollX!=0?Qt::TextSingleLine:Qt::TextWordWrap,p.device());
         p.setFont(font2);
 
         if (m_showTextBack2 && lineRect2.isValid()) {
-            const QFontMetrics fm2(font2);
+            const QFontMetrics fm2(font2,p.device());
             const QRect textBound = fm2.boundingRect(lineRect2,
                                                       Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap,
                                                       resolved2);
@@ -230,7 +235,7 @@ void TextOverlayItem::paint(QPainter& p, int widgetW, int widgetH)
         p.setPen(m_textColour2);
 
         if (m_scrollX != 0.0f && lineRect2.isValid()) {
-            const QFontMetrics fm2(font2);
+            const QFontMetrics fm2(font2,p.device());
             const int textW = fm2.horizontalAdvance(resolved2);
             p.save();
             p.setClipRect(lineRect2);

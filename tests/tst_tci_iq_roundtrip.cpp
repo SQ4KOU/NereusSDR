@@ -82,8 +82,9 @@ void TestTciIqRoundtrip::iq_start_subscribes_then_frames_arrive()
     // and inserts 0 into session->iqStreamEnabled.
     client.sendTextMessage(QStringLiteral("iq_start:0;"));
 
-    // Allow subscription to register across the loopback socket + event loop.
-    QTest::qWait(50);
+    // Wait until the subscription is registered; IQ injected before it is
+    // never sent. A fixed 50 ms wait was too short on Windows.
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeIqSubscriberCount(0), 1, 5000);
 
     // Inject synthetic IQ: 1024 complex samples (I=0.5, Q=0.3).
     // With IQSwap=True the wire will carry (Q=0.3, I=0.5).
@@ -95,13 +96,10 @@ void TestTciIqRoundtrip::iq_start_subscribes_then_frames_arrive()
     }
     server.injectRawIqForTest(iqData);
 
-    // Give the slot time to run and sendBinaryMessage to fire.
-    QTest::qWait(100);
-
     // Assert: at least one binary frame arrived.
-    QVERIFY2(binarySpy.count() >= 1,
+    QTRY_VERIFY2_WITH_TIMEOUT(binarySpy.count() >= 1,
              qPrintable(QStringLiteral("Expected ≥1 IQ binary frame, got %1")
-                            .arg(binarySpy.count())));
+                            .arg(binarySpy.count())), 5000);
 
     // Decode and verify the first frame header.
     //
@@ -215,7 +213,7 @@ void TestTciIqRoundtrip::iq_swap_flag_swaps_i_q_pairs()
     client.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
     QVERIFY(clientConnected.wait(2000));
     client.sendTextMessage(QStringLiteral("iq_start:0;"));
-    QTest::qWait(50);
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeIqSubscriberCount(0), 1, 5000);
 
     // 16 complex samples with I=0.7, Q=0.2.
     QVector<float> iqData;
@@ -225,10 +223,9 @@ void TestTciIqRoundtrip::iq_swap_flag_swaps_i_q_pairs()
         iqData.append(0.2f);   // Q
     }
     server.injectRawIqForTest(iqData);
-    QTest::qWait(100);
 
-    QVERIFY2(binarySpy.count() >= 1,
-             "IQSwap=False: expected ≥1 binary frame");
+    QTRY_VERIFY2_WITH_TIMEOUT(binarySpy.count() >= 1,
+             "IQSwap=False: expected ≥1 binary frame", 5000);
 
     const QByteArray frame = binarySpy.at(0).at(0).toByteArray();
     QVERIFY(frame.size() > 64);

@@ -27,6 +27,7 @@
 #include <QSignalSpy>
 #include <QSlider>
 
+#include "core/AppSettings.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/setup/DisplaySetupPages.h"
 #include "models/DisplaySettingsModel.h"
@@ -37,6 +38,10 @@ class TestDssSetupSync : public QObject {
     Q_OBJECT
 
 private slots:
+    // The page stores Setup defaults (Display pill plan Task 21): each case
+    // starts with none.
+    void cleanup() { AppSettings::instance().clear(); }
+
     void setupPageEdit_reachesTheWidget() {
         SpectrumWidget w;
         Display3DSetupPage page(&w);
@@ -44,12 +49,22 @@ private slots:
         QCOMPARE(w.dssAngle(), 70);
     }
 
-    void widgetChange_updatesTheSetupPage() {
+    // The page has All pans selected. Its explicit master write replaces
+    // the pan's prior sparse value while the first page follows without an
+    // echo through the model binding.
+    void allPansChange_replacesThePanValueWithoutAnEcho() {
         SpectrumWidget w;
         Display3DSetupPage page(&w);
+        auto* gain = page.findChild<QSlider*>(QStringLiteral("setup3DGainSlider"));
         w.setDssGain(25);
-        QCOMPARE(page.findChild<QSlider*>(
-                     QStringLiteral("setup3DGainSlider"))->value(), 25);
+        QCOMPARE(gain->value(), 70);
+
+        Display3DSetupPage other(&w);
+        QSignalSpy echoes(gain, &QSlider::valueChanged);
+        other.findChild<QSlider*>(QStringLiteral("setup3DGainSlider"))->setValue(40);
+        QCOMPARE(gain->value(), 40);
+        QCOMPARE(echoes.count(), 0);
+        QCOMPARE(w.dssGain(), 40);
     }
 
     // The guard that stops the two surfaces echoing each other forever.
@@ -74,13 +89,20 @@ private slots:
         QCOMPARE(modelSpy.count(), 1);    // the model's guard is the real loop terminator now
     }
 
+    // Fix wave M1: gain, span and angle are moved off the ship values the
+    // way this page moves them, as Setup defaults. (They were the pan's own
+    // unsaved changes, which Reset, a set of Setup defaults, now leaves
+    // alone as it leaves a stored one.) 3D Floor is per band, not a default.
     void resetButton_restoresEveryDefault() {
         SpectrumWidget w;
         Display3DSetupPage page(&w);
         w.setDssFloorDepth(20);
-        w.setDssGain(10);
-        w.setDssRowSpan(5);
-        w.setDssAngle(90);
+        page.findChild<QSlider*>(QStringLiteral("setup3DGainSlider"))->setValue(10);
+        page.findChild<QSlider*>(QStringLiteral("setup3DSpanSlider"))->setValue(5);
+        page.findChild<QSlider*>(QStringLiteral("setup3DAngleSlider"))->setValue(90);
+        QCOMPARE(w.dssGain(),    10);
+        QCOMPARE(w.dssRowSpan(),  5);
+        QCOMPARE(w.dssAngle(),   90);
         page.resetToDefaultsForTest();
         QCOMPARE(w.dssFloorDepth(),  6);
         QCOMPARE(w.dssGain(),       70);
@@ -104,14 +126,20 @@ private slots:
         QCOMPARE(w.displaySettings()->dssRowDivider(), 6);
         QCOMPARE(modelSpy.count(), 1);
 
+        // Display pill plan Task 21: the pan's own change is not the Setup
+        // default, so the slider stays on the default it set.
         modelSpy.clear();
         w.displaySettings()->setDssRowDivider(9);
-        QCOMPARE(slider->value(), 9);
+        QCOMPARE(slider->value(), 6);
         QCOMPARE(modelSpy.count(), 1);
 
+        // Reset is an explicit All-pans write, so it replaces the pan's
+        // prior sparse value with the master default.
         page.resetToDefaultsForTest();
         QCOMPARE(w.displaySettings()->dssRowDivider(), 0);
         QCOMPARE(slider->value(), 0);
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("Display3DSpeed")).toString(),
+                 QStringLiteral("0"));
     }
 };
 

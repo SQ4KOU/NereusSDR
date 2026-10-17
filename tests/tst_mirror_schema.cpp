@@ -44,6 +44,13 @@
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
 // 2026-09-28: Slice control plan Task 4: SliceAccess joins it. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-07: CAT setup from a connected desktop: StationCatModel joins it.
+// J.J. Boyd (KG4VCF). AI tooling: Claude Code.
+// 2026-10-08: Rotor control plan Task 4b: RotorModel joins it. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-09: native audio plan Task 21 (R-AUD-25, R-AUD-27): radio's six
+// Core speaker properties. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+// Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -71,7 +78,9 @@
 #include "models/TunerModel.h"
 #include "models/AmplifierModel.h"
 #include "models/RfKitModel.h"
+#include "models/StationCatModel.h"
 #include "models/StationTciModel.h"
+#include "models/RotorModel.h"
 #include "models/AccessoryDataModel.h"
 #include "models/AccessorySettingsModel.h"
 #include "core/session/StationCatalog.h"
@@ -266,10 +275,10 @@ private slots:
         // Negative, and one past the last declared enumerator, are the
         // two ways to walk off either end.
         QVERIFY(!MirrorSchema::decode(*dsp, QVariant(qlonglong(-1))).isValid());
-        QVERIFY(!MirrorSchema::decode(*dsp, QVariant(qlonglong(14))).isValid());
+        QVERIFY(!MirrorSchema::decode(*dsp, QVariant(qlonglong(16))).isValid());
 
-        // Every declared enumerator still round-trips, including the two
-        // NereusSDR-native RADE modes at the top of the range.
+        // Representative enabled enumerators still round-trip through the
+        // live model.
         for (const DSPMode mode : { DSPMode::LSB, DSPMode::AM, DSPMode::DRM,
                                     DSPMode::RADE_U, DSPMode::RADE_L }) {
             const QVariant wire(static_cast<qlonglong>(mode));
@@ -277,6 +286,19 @@ private slots:
                      qPrintable(QString::number(static_cast<int>(mode))));
             QVERIFY(schema.write(*dsp, &slice, wire));
             QCOMPARE(slice.dspMode(), mode);
+        }
+
+        // The two declared RADE V2 enumerators remain valid on the wire, but
+        // the default-off feature gate belongs to SliceModel and refuses a
+        // live transition. QMetaProperty::write reports delivery to the
+        // setter; the unchanged model value is the authority check.
+        for (const DSPMode mode : {static_cast<DSPMode>(14), static_cast<DSPMode>(15)}) {
+            const QVariant wire(static_cast<qlonglong>(mode));
+            QVERIFY2(MirrorSchema::decode(*dsp, wire).isValid(),
+                     qPrintable(QString::number(static_cast<int>(mode))));
+            const DSPMode beforeBlockedWrite = slice.dspMode();
+            QVERIFY(schema.write(*dsp, &slice, wire));
+            QCOMPARE(slice.dspMode(), beforeBlockedWrite);
         }
 
         // Band carries a Count sentinel that is NOT a band. It must not
@@ -858,6 +880,56 @@ private slots:
         QVERIFY(MirrorPolicy::inboundAllowed("PanadapterModel", "centerFrequency"));
     }
 
+    // Radio speaker (R-SPK-13, R-SPK-14): the first writable RadioModel
+    // properties are Bidirectional, the two reports Outbound, and all five
+    // reach only a peer that declared radioSpeaker 1.
+    void radioSpeakerSettablesAreBidirectionalAndReportsOutbound()
+    {
+        for (const char* name : { "radioSpeakerVolume", "radioSpeakerMuted",
+                                  "speakerAmplifierMode" }) {
+            QVERIFY2(MirrorPolicy::inboundAllowed("RadioModel", name), name);
+        }
+        for (const char* name : { "radioSpeakerAvailability",
+                                  "speakerAmplifierAvailable" }) {
+            QVERIFY2(MirrorPolicy::hasExplicitEntry("RadioModel", name), name);
+            QVERIFY2(!MirrorPolicy::inboundAllowed("RadioModel", name), name);
+        }
+        for (const char* name : { "radioSpeakerVolume", "radioSpeakerMuted",
+                                  "speakerAmplifierMode", "radioSpeakerAvailability",
+                                  "speakerAmplifierAvailable" }) {
+            const MirrorPolicy::FeatureGate* gate =
+                MirrorPolicy::featureGateFor("RadioModel", name);
+            QVERIFY2(gate != nullptr, name);
+            QCOMPARE(QByteArray(gate->feature), QByteArrayLiteral("radioSpeaker"));
+            QCOMPARE(gate->minVersion, 1);
+        }
+    }
+
+    // Core speaker (native audio plan Task 21): the level, mute, device and
+    // details are Bidirectional, the card list and state Outbound, and all
+    // six reach only a peer that declared coreSpeaker 1.
+    void coreSpeakerSettablesAreBidirectionalAndReportsOutbound()
+    {
+        for (const char* name : { "coreSpeakerVolume", "coreSpeakerMuted",
+                                  "coreSpeakerDevice", "coreSpeakerDetails" }) {
+            QVERIFY2(MirrorPolicy::hasExplicitEntry("RadioModel", name), name);
+            QVERIFY2(MirrorPolicy::inboundAllowed("RadioModel", name), name);
+        }
+        for (const char* name : { "coreSpeakerDevices", "coreSpeakerState" }) {
+            QVERIFY2(MirrorPolicy::hasExplicitEntry("RadioModel", name), name);
+            QVERIFY2(!MirrorPolicy::inboundAllowed("RadioModel", name), name);
+        }
+        for (const char* name : { "coreSpeakerVolume", "coreSpeakerMuted",
+                                  "coreSpeakerDevice", "coreSpeakerDevices",
+                                  "coreSpeakerState", "coreSpeakerDetails" }) {
+            const MirrorPolicy::FeatureGate* gate =
+                MirrorPolicy::featureGateFor("RadioModel", name);
+            QVERIFY2(gate != nullptr, name);
+            QCOMPARE(QByteArray(gate->feature), QByteArrayLiteral("coreSpeaker"));
+            QCOMPARE(gate->minVersion, 1);
+        }
+    }
+
     void policyEntriesAreUnique()
     {
         QSet<QByteArray> seen;
@@ -890,6 +962,8 @@ private:
                  &AmplifierModel::staticMetaObject,
                  &RfKitModel::staticMetaObject,
                  &StationTciModel::staticMetaObject,
+                 // CAT setup from a connected desktop: the Core's CAT.
+                 &StationCatModel::staticMetaObject,
                  // R-R3-47 / R-R3-22: the Core's accessory records.
                  &AccessoryDataModel::staticMetaObject,
                  // R-R3-47 / R-R3-22: the amp's and tuner's own settings.
@@ -914,7 +988,9 @@ private:
                  // iPhone app plan Task 25 (R-IOS-18): the Core's computer's VAX.
                  &StationVax::staticMetaObject,
                  // R-R3-49 / R-IOS-18: the Core's PA Gain profiles, read-only.
-                 &PaProfilesFacade::staticMetaObject };
+                 &PaProfilesFacade::staticMetaObject,
+                 // Rotor control plan Task 4b: the Core's rotor, read-only.
+                 &RotorLink::RotorModel::staticMetaObject };
     }
 };
 

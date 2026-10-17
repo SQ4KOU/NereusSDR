@@ -32,11 +32,13 @@ import Testing
         return store
     }
 
+    /// `receiverHolder` is the value a Core sends since 2026-10-12; nil is a
+    /// Core from before then, which sends none.
     private static func access(_ sliceId: Int64 = 1, incarnation: Int64 = 3, controller: String,
-                               revision: Int64 = 12, listeners: [String] = []) -> LinkMessage {
+                               revision: Int64 = 12, listeners: [String] = [],
+                               receiverHolder: String? = nil) -> LinkMessage {
         let list = LinkJSON.array(listeners.map(LinkJSON.string)).compactText
-        return .objectCreate(LinkMessage.ObjectCreate(key: "access:\(sliceId)", className: SliceAccess.accessClass,
-                                                      properties: [
+        var properties: [LinkMessage.PropertyEntry] = [
             .init(ordinal: 0, name: "sliceId", value: .i64(sliceId)),
             .init(ordinal: 1, name: "incarnation", value: .i64(incarnation)),
             .init(ordinal: 2, name: "controllerDeviceId", value: .utf8(controller)),
@@ -45,7 +47,12 @@ import Testing
             .init(ordinal: 5, name: "activeRxDeviceIds", value: .utf8("[]")),
             .init(ordinal: 6, name: "txSelected", value: .bool(false)),
             .init(ordinal: 7, name: "onAir", value: .bool(false)),
-        ]))
+        ]
+        if let receiverHolder {
+            properties.append(.init(ordinal: 8, name: "receiverHolderDeviceId", value: .utf8(receiverHolder)))
+        }
+        return .objectCreate(LinkMessage.ObjectCreate(key: "access:\(sliceId)", className: SliceAccess.accessClass,
+                                                      properties: properties))
     }
 
     @Test func theGateNeedsMinorElevenAndTheCapability() {
@@ -74,8 +81,28 @@ import Testing
         let properties = try #require(classes[SliceAccess.accessClass]?["properties"] as? [[String: Any]])
         #expect(properties.compactMap { $0["name"] as? String } == [
             "sliceId", "incarnation", "controllerDeviceId", "controlRevision", "listenerDeviceIds",
-            "activeRxDeviceIds", "txSelected", "onAir",
+            "activeRxDeviceIds", "txSelected", "onAir", "receiverHolderDeviceId",
         ])
+    }
+
+    /// The Core names who holds the slice's receiver in each access object
+    /// (`receiverHolderDeviceId`, appended last, no new `sliceAccessVersion`).
+    /// The phone does not read it: the object reads as it did, whoever is
+    /// named, and when only that value changes afterwards.
+    @Test(arguments: ["", "station", "mac", "phone"])
+    func theReceiverHolderTheCoreAddsChangesNothingThePhoneReads(holder: String) throws {
+        let without = store(version: 3)
+        without.apply(Self.access(controller: "mac", listeners: ["mac", "phone"]))
+        let expected = try #require(SliceAccess.states(in: without)[1])
+
+        let with = store(version: 3)
+        with.apply(Self.access(controller: "mac", listeners: ["mac", "phone"], receiverHolder: holder))
+        #expect(SliceAccess.states(in: with) == [1: expected])
+
+        with.apply(.delta(LinkMessage.Delta(key: "access:1", properties: [
+            .init(ordinal: 8, name: "receiverHolderDeviceId", value: .utf8("another")),
+        ])))
+        #expect(SliceAccess.states(in: with) == [1: expected])
     }
 
     // MARK: The Core's words

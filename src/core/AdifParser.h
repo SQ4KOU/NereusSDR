@@ -32,6 +32,7 @@
 #include <QString>
 #include <QVector>
 #include <QObject>
+#include "core/NereusCoreExport.h"
 
 namespace NereusSDR {
 
@@ -51,7 +52,7 @@ struct QsoRecord {
 // Parses .adi / .adif log files into QsoRecord vectors.
 // Can be used synchronously (parseFile) or from a worker thread.
 // ---------------------------------------------------------------------------
-class AdifParser : public QObject {
+class NEREUS_CORE_EXPORT AdifParser : public QObject {
     Q_OBJECT
 
 public:

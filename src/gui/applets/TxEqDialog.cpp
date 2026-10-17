@@ -158,6 +158,7 @@
 //============================================================================================//
 
 #include "TxEqDialog.h"
+#include "gui/styles/WorkspacePreview.h"
 
 #include "core/AppSettings.h"
 #include "core/ParaEqCurve.h"
@@ -300,6 +301,10 @@ TxEqDialog::TxEqDialog(RadioModel* radio, QWidget* parent)
     updateEditRowFromSelection();
     rebaseEditHistory();
     applySettingsPermitted();  // R-R3-49 (parity Task 4)
+
+    // Workspace preview: the scoped stylesheet pass runs each time the
+    // dialog is shown (preview scaffolding; nothing with the switch off).
+    WorkspacePreview::themeOnShow(this);
 }
 
 TxEqDialog::~TxEqDialog()

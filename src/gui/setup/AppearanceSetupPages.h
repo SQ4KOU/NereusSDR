@@ -21,11 +21,19 @@ class ColorsThemePage : public SetupPage {
 public:
     explicit ColorsThemePage(RadioModel* model, QWidget* parent = nullptr);
 
+    // Test seam: what "Reset all colors to defaults" does once confirmed,
+    // without the confirmation box.
+    void resetColorsToDefaultsForTest();
+    // Transfer the two existing bound picture rows into Display > Spectrum.
+    // This page remains their callback owner for the dialog's lifetime.
+    QWidget* takePictureColourRows(QWidget* parent);
+
 private:
     void buildUI();
 
     // Section: Spectrum — functional colour pickers (live, wired to SpectrumWidget).
-    ColorSwatchButton* m_traceFillColorBtn{nullptr};   // → setFillColor
+    ColorSwatchButton* m_traceColorBtn{nullptr};       // → setTraceColor
+    ColorSwatchButton* m_traceFillColorBtn{nullptr};   // → setFillColor (the Fill button)
     ColorSwatchButton* m_gridColorBtn{nullptr};        // → setGridColor       (G9)
     ColorSwatchButton* m_gridFineColorBtn{nullptr};    // → setGridFineColor   (G10)
     ColorSwatchButton* m_hGridColorBtn{nullptr};       // → setHGridColor      (G11)

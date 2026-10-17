@@ -9,6 +9,8 @@
 //   NereusSDR is also GPLv3. Attribution follows GPLv3 section 5 requirements.
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Add explicit display marker/top scale by J.J. Boyd
+//                 (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-05-19  Ported in C++20/Qt6 for NereusSDR by J.J. Boyd (KG4VCF),
 //                 with AI-assisted transformation via Anthropic Claude Code.
 //                 Layout from AetherSDR src/gui/SMeterWidget.{h,cpp} [@0cd4559].
@@ -75,6 +77,33 @@
 //                 does not send shows "--" with the reason, never 0.  The TX
 //                 readout text of both faces moved unchanged into txReadout().
 //                 NereusSDR-native; no upstream equivalent.
+//   2026-10-08  Per-copy settings for a dial added to a container
+//                 (workspace preview) by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+//                 SettingsStore::Instance: the TX mode, RX mode, peak hold,
+//                 decay and face start at today's defaults and never read
+//                 or write the AppSettings keys; instanceSettingsChanged()
+//                 tells the owner to keep them.  peakHoldEnabled() and
+//                 peakDecayRate() accessors.  The Main Panel's dial
+//                 (SettingsStore::Global) is unchanged.
+//                 NereusSDR-native; no upstream equivalent.
+//   2026-10-08  An added dial's face follows Setup until the copy picks
+//                 its own, and a test-only plate limit for wide containers
+//                 (workspace preview), by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+//                 setFollowsSetupFace() / followsSetupFace() and
+//                 SMeterSetupFace (the SMeter_FaceStyle change notice);
+//                 setPlateLimitForTest() and plateRect().  The paint code
+//                 changes only in the rectangle the vintage plate is drawn
+//                 in; with the limit off (the product) it is rect().
+//                 NereusSDR-native; no upstream equivalent.
+//   2026-10-08  JJ's dial decision (D20) by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+//                 The plate limit is the product for every dial and
+//                 setPlateLimitForTest() is gone; outside the bezel the
+//                 vintage faces leave the widget clear, so the container
+//                 behind shows (updatePaintOpacity()).
+//                 NereusSDR-native; no upstream equivalent.
 // =================================================================
 #pragma once
 
@@ -95,6 +124,25 @@ namespace NereusSDR {
 
 class RadioModel;
 
+// The face chosen on Setup > Appearance > Meter Styles (the SMeter_FaceStyle
+// key) changed.  Emitted by the page and by the Main Panel's dial, the two
+// writers of that key; an added dial that has no face of its own follows
+// it.  Main thread only.  NereusSDR-native.
+class SMeterSetupFace : public QObject {
+    Q_OBJECT
+
+public:
+    static SMeterSetupFace& instance();
+    // The face SMeter_FaceStyle holds now (Aged Cream when absent), as an
+    // SMeterWidget::FaceStyle value.
+    static int current();
+    // Tells every follower that SMeter_FaceStyle now holds `face`.
+    void notify(int face) { emit changed(face); }
+
+signals:
+    void changed(int face);
+};
+
 // Analog S-Meter gauge widget matching the SmartSDR look.
 //
 // S-unit scale:
@@ -110,6 +158,19 @@ class SMeterWidget : public QWidget {
 
 public:
     explicit SMeterWidget(QWidget* parent = nullptr);
+
+    // Where the widget keeps its TX mode, RX mode, peak hold, decay and
+    // face.  Global: the Main Panel's dial and its AppSettings keys
+    // (SMeter_TxSelect, SMeter_RxSelect, PeakHoldEnabled, PeakDecayRate,
+    // SMeter_FaceStyle), read in the constructor and written by the
+    // setters.  Instance: a dial added to a container (workspace preview);
+    // it starts at today's defaults (Power, Signal, peak hold on, Medium,
+    // Aged Cream), never touches those keys, and emits
+    // instanceSettingsChanged() when one of the five changes, so its owner
+    // keeps them in the workspace document.  NereusSDR-native.
+    enum class SettingsStore { Global, Instance };
+    explicit SMeterWidget(SettingsStore store, QWidget* parent = nullptr);
+    SettingsStore settingsStore() const { return m_settingsStore; }
 
     // Overload that subscribes to RadioModel::externalAmpOperateChanged so
     // the 2 kW power scale flips for both PGXL and RF-Kit without the caller
@@ -143,12 +204,36 @@ public:
     enum class FaceStyle { AgedCream, VuAmber, CollinsWhite, Blackface, Carbon, Ice, Classic };
     FaceStyle faceStyle() const { return m_faceStyle; }
 
+    // SettingsStore::Instance only: draw the face chosen on Setup's Meter
+    // Styles page (SMeter_FaceStyle, read, never written) and follow it
+    // through SMeterSetupFace, until setFaceStyle() gives the copy a face
+    // of its own.  A face shown this way does not emit
+    // instanceSettingsChanged().  NereusSDR-native.
+    void setFollowsSetupFace(bool follow);
+    bool followsSetupFace() const { return m_followsSetupFace; }
+
+    // The rectangle the vintage face (bezel, card, scale, pointer) is drawn
+    // in (NereusSDR-native): rect(), or for a widget wider than
+    // kPlateMaxAspect times its height, a centred rectangle that wide, with
+    // whatever is behind the widget showing on both sides.  Every dial (the
+    // Main Panel's and added copies alike) keeps the Main Panel dial's
+    // proportions this way.  The Classic face has no plate and ignores it.
+    QRectF plateRect() const;
+    // The Main Panel's dial at its normal width in the mixed-container and
+    // profile-dx captures at mac-1512x869@2: the widget's rect, which the
+    // plate is drawn in, is 298 x 140 logical px (596 x 280 device px; the
+    // bezel's outer edge, 1 px inside, is 296 x 138).
+    static constexpr double kPlateMaxAspect = 298.0 / 140.0;
+
     // Current RX/TX mode accessors.
     // Used by MeterPoller::pollSMeter() (Task 41) to branch on the active
     // WDSP source without coupling the poller to AppSettings.
     // NereusSDR-native (AetherSDR reads mode directly from its combo box).
     RxMode rxMode() const { return m_rxMode; }
     TxMode txMode() const { return m_txMode; }
+    // Peak hold state, as the right-click menu shows it.  NereusSDR-native.
+    bool peakHoldEnabled() const { return m_peakHoldEnabled; }
+    DecayRate peakDecayRate() const;
 
     // Test-only accessors. Production code uses paintEvent's internal logic.
     float testPowerScaleMax()  const { return m_powerScaleMax; }
@@ -202,6 +287,9 @@ signals:
     // R-R3-21: the face, peak hold or peak decay changed (and was saved),
     // from the right-click menu or from Setup.
     void settingsChanged();
+    // SettingsStore::Instance only: the TX mode, RX mode, peak hold, decay
+    // or face changed (from the right-click menu).  NereusSDR-native.
+    void instanceSettingsChanged();
 
 public slots:
     // Update the displayed RX level (S-meter dBm).
@@ -229,6 +317,8 @@ public slots:
     // Set TX power gauge scale: barefoot (120W), Aurora (600W), amplifier (2000W).
     // From AetherSDR src/gui/SMeterWidget.h:54 [@0cd4559]
     void setPowerScale(int maxWatts, bool hasAmplifier);
+    // Display geometry only; no transmit or hardware limit is changed.
+    void setPowerDisplayScale(double legalMarkerW, double scaleTopW);
 
     // Peak hold configuration.
     // From AetherSDR src/gui/SMeterWidget.h:57-61 [@0cd4559]
@@ -271,6 +361,11 @@ private:
     // paint body, unchanged; paintVintage draws via gui/VintageMeterFace.
     void paintClassic(QPainter& p);
     void paintVintage(QPainter& p);
+    // NereusSDR-native: the Classic face fills rect() and stays opaque; a
+    // vintage face leaves its corners outside the bezel clear, so Qt
+    // paints what is behind the widget first.  Call after m_faceStyle
+    // changes.
+    void updatePaintOpacity();
 
 
     void updateNeedleTarget();
@@ -347,6 +442,13 @@ private:
     float   m_txSwr{1.0f};
     float   m_micLevel{-50.0f};
     float   m_compLevel{0.0f};
+
+    // Global (the AppSettings keys) or Instance (no AppSettings).
+    // NereusSDR-native.
+    SettingsStore m_settingsStore{SettingsStore::Global};
+    // Instance only: the face shown is Setup's (SMeter_FaceStyle), not the
+    // copy's own.  NereusSDR-native.
+    bool m_followsSetupFace{false};
 
     // Mode state
     // From AetherSDR src/gui/SMeterWidget.h:92-94 [@0cd4559]

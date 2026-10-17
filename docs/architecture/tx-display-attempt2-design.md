@@ -141,6 +141,8 @@ Preserve attempt 1's framework. Six files, same shape as attempt 1:
 | `src/gui/SpectrumWidget.h` | `resetWaterfallAgc()`. | No change. |
 | `CMakeLists.txt` | Add `TxAnalyzer.cpp` to `CORE_SOURCES`. | No change. |
 
+> Note 2026-10-10: the `resetWaterfallAgc()` row above (re-prime the waterfall AGC on each MOX edge) is superseded by section 5 of `2026-10-09-display-pill-and-levels-design.md` (key and un-key: every pan keeps its level and Clarity resumes after a hold).
+
 ### 4.1 Exact `SetAnalyzer` call (attempt 2)
 
 ```cpp

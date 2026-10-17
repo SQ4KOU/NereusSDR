@@ -150,6 +150,7 @@ void TestDspAssetDialog::importAndVerifiedExportUseBoundedServiceRequests()
     DspAssetService service(settings, true);
     DspAssetDialog dialog(nullptr, &service, DspAssetKind::NnrModel);
     QSignalSpy operations(&dialog, &DspAssetDialog::operationFinished);
+    QVERIFY(operations.isValid());
     auto* table = dialog.findChild<QTableWidget*>(QStringLiteral("dspAssetTable"));
     QVERIFY(table);
     QTRY_VERIFY(dialog.findChild<QPushButton*>(QStringLiteral("dspAssetImportButton"))
@@ -285,6 +286,7 @@ void TestDspAssetDialog::restoreEmitsOnlySelectedCorrectionIdentity()
     radio.pureSignalFacade()->applyRemoteProperty("canActuate", true);
     DspAssetDialog dialog(&radio, &service, DspAssetKind::Ps3Correction);
     QSignalSpy restored(&dialog, &DspAssetDialog::restoreCorrectionRequested);
+    QVERIFY(restored.isValid());
     auto* table = dialog.findChild<QTableWidget*>(QStringLiteral("dspAssetTable"));
     auto* button = dialog.findChild<QPushButton*>(QStringLiteral("restoreCorrectionAssetButton"));
     QVERIFY(table && button);
@@ -451,6 +453,7 @@ void TestDspAssetDialog::nr3PickerLocalSelectsAndLoads()
     QCOMPARE(status->text(), QStringLiteral("Using the bundled large model."));
 
     QSignalSpy finished(&picker, &Nr3ModelPicker::selectionFinished);
+    QVERIFY(finished.isValid());
     combo->setCurrentIndex(2);
     QVERIFY(QMetaObject::invokeMethod(combo, "activated", Qt::DirectConnection, Q_ARG(int, 2)));
     QTRY_COMPARE(finished.count(), 1);
@@ -531,6 +534,7 @@ void TestDspAssetDialog::nr3PickerRemoteUsesCommandsAndOlderCoreWording()
 
     // The Core refuses: the reason is shown and the Core's choice stays.
     QSignalSpy finished(&picker, &Nr3ModelPicker::selectionFinished);
+    QVERIFY(finished.isValid());
     QVERIFY(service.receiveRemoteResult(101 + before, "dspAssets.selectNr3Model", false,
                                         QStringLiteral("That bundled NR3 model is not installed on this Core."),
                                         {}));

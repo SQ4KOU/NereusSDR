@@ -37,6 +37,9 @@
 //                 monitor reads RadioModel::hl2LinkFigures(), so a remote
 //                 window shows the Core's HL2 link ("From the Core").
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - Test seams for the throttle line's three states
+//                 (showThrottleStateForTest, throttleStatusSheetForTest).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim mi0bot Console/setup.cs header (lines 1-50) ===
@@ -94,6 +97,7 @@
 #include <array>
 
 #include "core/IoBoardHl2.h"
+#include "gui/NereusGuiExport.h"
 
 class QCheckBox;
 class QFrame;
@@ -133,7 +137,7 @@ struct BoardCapabilities;
 // NereusSDR spin: register state table + I2C transaction log + state-machine
 // viz + bandwidth monitor mini are pure NereusSDR diagnostic surfaces
 // (mi0bot does not expose them in the Thetis UI).
-class Hl2IoBoardTab : public QWidget {
+class NEREUS_GUI_EXPORT Hl2IoBoardTab : public QWidget {
     Q_OBJECT
 
 public:
@@ -184,6 +188,10 @@ public:
     QString ep2RateTextForTest() const;
     QString throttleStatusTextForTest() const;
     QString throttleEventTextForTest() const;
+    // Shows one of the throttle line's three states (no reading,
+    // throttled, not throttled) and reads the sheet it ends up with.
+    void showThrottleStateForTest(std::optional<bool> throttled) { showThrottleState(throttled); }
+    QString throttleStatusSheetForTest() const;
     // Triggers one manual pass through updateBwDisplay().
     void pollBandwidthNowForTest();
 

@@ -158,6 +158,33 @@
 //                UpdateRX1DDSFreq), so diversity's partner DDC1 is no longer
 //                left at 0 Hz. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-10-06 - Radio speaker (R-SPK-09, R-SPK-15): the speaker amplifier
+//                inputs, sent at once while running, and byte 1400 bit 1 from
+//                speakerAmplifierOff in buildCodecContext. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-12 - applyDdcAssignment's log line names the rate of DDC4 to
+//                DDC6 too, the receivers that host a third to fifth stream.
+//                Log text only. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-10 - applySocketBufferSizes logs the receive buffer the
+//                system gave. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-10-11 - That line gives the buffer in the terms it was asked (Linux
+//                reports it doubled) and says when the system cut the request
+//                short and what limit did it. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-10-14 - TxIqNativeDest and fillTxIqNativeDest moved unchanged to
+//                TxIqNativeDest.h, shared with the Protocol 1 EP2 sender.
+//                J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                Anthropic Claude Code.
+//   2026-10-15 - A request cut short names the limit to raise, not the
+//                Core's packages, since the desktop app logs it too. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15 - On the Mac the transmit I/Q send thread is raised to
+//                USER_INTERACTIVE QoS without the output device's audio
+//                workgroup, whose Core Audio lookup could hold up the first
+//                frames and stopTxIqSender's join. J.J. Boyd (KG4VCF), with
+//                AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //
@@ -357,6 +384,7 @@ warren@wpratt.com
 #include "LogCategories.h"
 #include "OcMatrix.h"
 #include "SharedInputLowPass.h"
+#include "SpeakerAmplifier.h"
 #include "CalibrationController.h"
 #include "PerfMonitor.h"
 #include "audio/RealtimeAudioPriority.h"
@@ -367,6 +395,7 @@ warren@wpratt.com
 #include "codec/P2CodecSaturn.h"
 #include "models/Band.h"
 #include "platform/ThreadPlacement.h"
+#include "TxIqNativeDest.h"
 
 #ifdef Q_OS_WIN
 #include <winsock2.h>
@@ -658,7 +687,31 @@ void P2RadioConnection::applySocketBufferSizes()
     m_socket->setSocketOption(QAbstractSocket::SendBufferSizeSocketOption,
                               QVariant(0xfa000));
     m_socket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption,
-                              QVariant(0x400000));  // 4 MB requested; kernel may cap
+                              QVariant(kRadioSocketReceiveBufferBytes));  // 4 MB requested; kernel may cap
+    // What the system gave, in the terms it was asked. Linux caps the
+    // request at net.core.rmem_max and reports the size doubled: at the
+    // stock 212,992 a socket reports 425,984 bytes, 9 ms of three wide
+    // receivers on the Rock 5C (2026-10-10), where one 14 ms stall of the
+    // connection thread then lost packets. A request cut short is said in
+    // so many words, so it can be read in the log without knowing that.
+    const int granted = grantedReceiveBufferBytes(
+        m_socket->socketOption(QAbstractSocket::ReceiveBufferSizeSocketOption).toInt());
+    if (granted >= kRadioSocketReceiveBufferBytes) {
+        qCInfo(lcConnection) << "P2: radio socket receive buffer" << granted
+                             << "bytes, all that was asked for";
+    } else {
+#ifdef Q_OS_LINUX
+        qCInfo(lcConnection) << "P2: radio socket receive buffer" << granted << "bytes of the"
+                             << kRadioSocketReceiveBufferBytes
+                             << "asked for. The system's limit, net.core.rmem_max, holds it there;"
+                                " raising it to" << kRadioSocketReceiveBufferBytes
+                             << "lets the socket have it all.";
+#else
+        qCInfo(lcConnection) << "P2: radio socket receive buffer" << granted << "bytes of the"
+                             << kRadioSocketReceiveBufferBytes
+                             << "asked for; the system's own limit holds it there.";
+#endif
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1537,6 +1590,13 @@ void P2RadioConnection::setMox(bool enabled)
     if (enabled && m_linkLossLatched) {
         return;
     }
+    // The transmit cut (2026-10-15): a key is refused until the main
+    // thread's catch-up clears the cut (RadioConnection::clearTransmitCut).
+    // setMox(false) never clears it.
+    if (enabled && transmitCut()) {
+        qCWarning(lcConnection) << "P2: key refused while the transmit is cut";
+        return;
+    }
 
     // Guard idempotent transitions: the 100 ms high-priority periodic cadence
     // already re-emits the current m_mox state on every tick, so there is no
@@ -1867,6 +1927,45 @@ void P2RadioConnection::setPaDisabled(bool disabled)
     m_tx[0].pa = bit;
     if (m_running && m_socket) {
         sendCmdGeneral();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The speaker amplifier inputs (R-SPK-09, R-SPK-15). Each change goes out in
+// one high-priority packet at once; MOX needs nothing here, because the
+// packet setMox already sends composes byte 1400 from m_mox
+// (buildCodecContext).
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setSpeakerAmplifierMode(int mode)
+{
+    if (m_speakerAmplifierMode == mode) {
+        return;
+    }
+    RadioConnection::setSpeakerAmplifierMode(mode);
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+void P2RadioConnection::setRadioSpeakerMuted(bool muted)
+{
+    if (m_radioSpeakerMuted == muted) {
+        return;
+    }
+    RadioConnection::setRadioSpeakerMuted(muted);
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+void P2RadioConnection::setSidetoneExpected(bool expected)
+{
+    if (m_sidetoneExpected == expected) {
+        return;
+    }
+    RadioConnection::setSidetoneExpected(expected);
+    if (m_running) {
+        sendCmdHighPriority();
     }
 }
 
@@ -2247,6 +2346,8 @@ void P2RadioConnection::discardWidebandFrames()
 void P2RadioConnection::sendTxIq(const float* iq, int n)
 {
     if (n <= 0 || iq == nullptr) { return; }
+    // The transmit cut (2026-10-15): no TX I/Q is queued while it is set.
+    if (transmitCut()) { return; }
 
     // First call after MOX engage: push a zero-sample cushion into the
     // ring BEFORE the real first-block I/Q.  It gives the send thread a
@@ -2436,6 +2537,9 @@ int P2RadioConnection::composeTxIqFrame(char* buf)
     // Cite: deskhpsdr/src/new_protocol.c:1950-1956, 2811-2816 [@120188f]
     //   memcpy(&iqbuffer[4], &TXIQRINGBUF[txiq_outptr], 1440);
     int underrunSamples = 0;
+    // The transmit cut (2026-10-15): what is queued is still taken from the
+    // ring, so none of it leads a later key, but the frame carries zeros.
+    const bool cut = transmitCut();
     for (int s = 0; s < 240; ++s) {
         int i24 = 0;
         int q24 = 0;
@@ -2451,8 +2555,10 @@ int P2RadioConnection::composeTxIqFrame(char* buf)
             m_txIqRingRead.store(rp, std::memory_order_relaxed);
             // relaxed: the producer observes this via its acquire load.
             m_txIqRingCount.fetch_sub(2, std::memory_order_relaxed);
-            i24 = toInt24(fI);
-            q24 = toInt24(fQ);
+            if (!cut) {
+                i24 = toInt24(fI);
+                q24 = toInt24(fQ);
+            }
         } else {
             ++underrunSamples;
         }
@@ -2513,7 +2619,8 @@ void P2RadioConnection::noteTxIqPadding(qint64 nowNs, int underrunSamples)
 
 int P2RadioConnection::serviceTxIqSend(qint64 nowNs, TxIqFrameSink sink, void* ctx)
 {
-    const bool keyed = m_mox.load();
+    // The transmit cut (2026-10-15) reads as unkeyed.
+    const bool keyed = wireMox();
     qint64 gapNs = 0;
     const double dry = m_txIqPacer.advance(nowNs, &gapNs);
     // TX diagnostics lane: a new key (resetTxSendStats) starts the send
@@ -2710,60 +2817,6 @@ int P2RadioConnection::serviceRadioAudioSend(qint64 nowNs, TxIqFrameSink sink, v
 
 namespace {
 
-// The native send on the connection socket's descriptor (the same source
-// port as every other packet to the radio, as Thetis's single listenSock).
-// The kernel serialises datagrams on one socket, so this thread and the
-// connection thread may send on it at once. QUdpSocket binds
-// QHostAddress::Any as a dual-stack IPv6 socket, so the destination is
-// written in the socket's own family (an IPv4-mapped address on IPv6).
-struct TxIqNativeDest {
-    qintptr fd{-1};
-    sockaddr_storage addr{};
-    int addrLen{0};
-    int lastError{0};
-};
-
-bool fillTxIqNativeDest(TxIqNativeDest* d, qintptr fd, quint32 ipv4, quint16 port)
-{
-    d->fd = fd;
-    sockaddr_storage local{};
-#ifdef Q_OS_WIN
-    int localLen = static_cast<int>(sizeof(local));
-    if (::getsockname(static_cast<SOCKET>(fd), reinterpret_cast<sockaddr*>(&local), &localLen) != 0) {
-        return false;
-    }
-#else
-    socklen_t localLen = sizeof(local);
-    if (::getsockname(static_cast<int>(fd), reinterpret_cast<sockaddr*>(&local), &localLen) != 0) {
-        return false;
-    }
-#endif
-    if (local.ss_family == AF_INET6) {
-        auto* a6 = reinterpret_cast<sockaddr_in6*>(&d->addr);
-        a6->sin6_family = AF_INET6;
-        a6->sin6_port = htons(port);
-        // ::ffff:a.b.c.d
-        unsigned char* b = reinterpret_cast<unsigned char*>(&a6->sin6_addr);
-        b[10] = 0xff;
-        b[11] = 0xff;
-        b[12] = static_cast<unsigned char>((ipv4 >> 24) & 0xff);
-        b[13] = static_cast<unsigned char>((ipv4 >> 16) & 0xff);
-        b[14] = static_cast<unsigned char>((ipv4 >> 8) & 0xff);
-        b[15] = static_cast<unsigned char>(ipv4 & 0xff);
-        d->addrLen = static_cast<int>(sizeof(sockaddr_in6));
-        return true;
-    }
-    if (local.ss_family == AF_INET) {
-        auto* a4 = reinterpret_cast<sockaddr_in*>(&d->addr);
-        a4->sin_family = AF_INET;
-        a4->sin_port = htons(port);
-        a4->sin_addr.s_addr = htonl(ipv4);
-        d->addrLen = static_cast<int>(sizeof(sockaddr_in));
-        return true;
-    }
-    return false;
-}
-
 P2RadioConnection::TxIqSinkResult sendTxIqNative(void* ctx, const char* frame, int len)
 {
     using Result = P2RadioConnection::TxIqSinkResult;
@@ -2849,15 +2902,33 @@ void P2RadioConnection::stopTxIqSender()
 void P2RadioConnection::txIqSenderMain()
 {
     // Priority as the TX pump has it (TxWorkerThread::run): in nereusd on
-    // Linux thread placement gives this thread a core and raised priority
-    // while transmitting (R-R3-41); elsewhere it runs at audio priority, as
+    // Linux thread placement owns this thread (R-R3-41, role TxIqSender).
+    // While transmitting it gets a signal core and raised priority only if
+    // one is left after the first receiver, the DSP thread and the two
+    // transmit workers. On the Pi 4 (two signal cores) and the Rock (four
+    // fast cores) none is, so it runs on the housekeeping cores at nice 0,
+    // as it does while receiving. Elsewhere it runs at audio priority, as
     // Thetis's ob_main runs at "Pro Audio" (obbuffs.c:155-158 [v2.10.3.15]).
+    //
+    // On the Mac that is USER_INTERACTIVE QoS without joining the default
+    // output device's audio workgroup, as P1's EP2 sender does. This thread
+    // does no work for that device's I/O cycle, and finding the workgroup
+    // is a Core Audio query (the first in a process starts the audio server
+    // connection) that took 0.25 to 1.9 s under load: no transmit I/Q went
+    // out until it returned, and stopTxIqSender's join on disconnect waited
+    // for it. Under load tst_p2_tx_iq_send_realtime saw the first frame
+    // about 580 ms late (2026-10-15). prio stays nullptr, which
+    // leaveAudioThreadPriority takes as a no-op.
     const bool placed = ThreadPlacement::managesThreadPriority();
     AudioPriorityToken* prio = nullptr;
     if (placed) {
         ThreadPlacement::instance().registerCurrentThread(ThreadRole::TxIqSender);
     } else {
+#ifdef Q_OS_MAC
+        elevateLatencyCriticalThreadPriority(/*logSuccess=*/false);
+#else
         prio = elevateAudioThreadPriority();
+#endif
     }
 
     TxIqNativeDest dest;
@@ -3415,6 +3486,12 @@ void P2RadioConnection::applyDdcAssignment(const DdcAssignment& a)
                              << "rate[1]=" << a.rate[1]
                              << "rate[2]=" << a.rate[2]
                              << "rate[3]=" << a.rate[3]
+                             // DDC4 to DDC6 host the third to fifth
+                             // streams; their rates go on the wire above
+                             // and belong in this line as well.
+                             << "rate[4]=" << a.rate[4]
+                             << "rate[5]=" << a.rate[5]
+                             << "rate[6]=" << a.rate[6]
                              << "nDdc=" << a.nDdc
                              << "psFwdDdc=" << m_psFbDdc
                              << "psRevDdc=" << m_psTxMonDdc;
@@ -4148,7 +4225,8 @@ CodecContext P2RadioConnection::buildCodecContext() const
     // m_tx[0].pttOut is the rear-panel PTT-out relay (deferred to 3M-3) — NOT
     // the MOX source.  m_mox (3M-1a E.7) is the correct source for byte 4 bit 1.
     ctx.p2Running  = m_running;
-    ctx.p2PttOut   = m_mox ? 1 : 0;    // 3M-1a E.7: was m_tx[0].pttOut (latent bug)
+    // The transmit cut (2026-10-15) reads as unkeyed on the wire.
+    ctx.p2PttOut   = wireMox() ? 1 : 0;    // 3M-1a E.7: was m_tx[0].pttOut (latent bug)
     ctx.p2Cwx      = m_tx[0].cwx;
     ctx.p2Dot      = m_tx[0].dot;
     ctx.p2Dash     = m_tx[0].dash;
@@ -4166,7 +4244,7 @@ CodecContext P2RadioConnection::buildCodecContext() const
     //         deskhpsdr/src/alex.h:91-96 + new_protocol.c:996-1004 [@120188f].
     // Note: P1 already wires these (P1RadioConnection.cpp:1268-1275); P2
     // had a gap that this commit closes.
-    ctx.mox        = m_mox;
+    ctx.mox        = wireMox();
     ctx.trxRelay   = m_trxRelay;
 
     // ADC / DAC counts
@@ -4397,6 +4475,12 @@ CodecContext P2RadioConnection::buildCodecContext() const
     // (ocOutputCount, every Protocol 2 row) drives the pins.
     ctx.ocByte = composedOcByte();
 
+    // The speaker amplifier mute, high-priority byte 1400 bit 1, only on a
+    // model with the switchable amplifier (R-SPK-08, R-SPK-09).
+    ctx.p2SpeakerAmpOff = speakerAmplifierOff(m_hardwareProfile.hasAudioAmplifier,
+                                              m_speakerAmplifierMode, m_radioSpeakerMuted,
+                                              m_mox, m_sidetoneExpected);
+
     // From Thetis cmaster.SetADCSupply / NetworkIO.LRAudioSwap [v2.10.3.15]
     // Per clsHardwareSpecific.cs:85-191 — forwarded to WDSP, not a P2 wire byte.
     ctx.adcSupplyVoltage = m_hardwareProfile.adcSupplyVoltage;
@@ -4550,7 +4634,8 @@ void P2RadioConnection::composeCmdHighPriorityLegacy(char buf[kBufLen]) const
     // bit 1, which is wrong — pttOut is a TX-confirmation output, not the MOX
     // initiator.  m_mox is the correct source.  m_tx[0].pttOut is retained for
     // future 3M-3 rear-panel-PTT-out wiring but must NOT drive the MOX wire bit.
-    buf[4] = static_cast<char>((m_mox ? 0x02 : 0x00) | (m_running ? 0x01 : 0x00));
+    // The transmit cut (2026-10-15) reads as unkeyed on the wire.
+    buf[4] = static_cast<char>((wireMox() ? 0x02 : 0x00) | (m_running ? 0x01 : 0x00));
 
     // From Thetis network.c:931-933
     buf[5] = (m_tx[0].dash << 2 | m_tx[0].dot << 1 | m_tx[0].cwx) & 0x7;
@@ -4689,28 +4774,45 @@ void P2RadioConnection::composeCmdTxLegacy(char buf[60]) const
 
 // --- Command Senders (compose + UDP dispatch) ---
 
-void P2RadioConnection::sendCmdGeneral()
+// TAPR openHPSDR Ethernet Protocol v4.4, command packet Sequence Number
+// sections p20/26/29/34 [@e7c6584]: each is a 4-byte integer set to zero.
+constexpr quint32 kCommandSequence = 0;
+
+QByteArray P2RadioConnection::buildCmdGeneralPacket()
 {
     char buf[60];
     memset(buf, 0, sizeof(buf));
-    // Stamp sequence number before compose so wire bytes include it.
-    writeBE32(buf, 0, m_seqGeneral++);
+    // TAPR openHPSDR Ethernet Protocol v4.4, General Packet p20 [@e7c6584].
+    writeBE32(buf, 0, kCommandSequence);
     composeCmdGeneral(buf);
+    QByteArray pkt(buf, sizeof(buf));
+    return pkt;
+}
+
+void P2RadioConnection::sendCmdGeneral()
+{
+    const QByteArray pkt = buildCmdGeneralPacket();
     // From Thetis network.c:910
     // sendPacket(listenSock, packetbuf, sizeof(packetbuf), prn->base_outbound_port);
-    QByteArray pkt(buf, sizeof(buf));
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort);
+}
+
+QByteArray P2RadioConnection::buildCmdHighPriorityPacket()
+{
+    char buf[kBufLen];
+    memset(buf, 0, sizeof(buf));
+    // TAPR openHPSDR Ethernet Protocol v4.4, High Priority Packet p34 [@e7c6584].
+    writeBE32(buf, 0, kCommandSequence);
+    composeCmdHighPriority(buf);
+    QByteArray pkt(buf, sizeof(buf));
+    return pkt;
 }
 
 void P2RadioConnection::sendCmdHighPriority()
 {
-    char buf[kBufLen];
-    memset(buf, 0, sizeof(buf));
-    writeBE32(buf, 0, m_seqHighPri++);
-    composeCmdHighPriority(buf);
+    const QByteArray pkt = buildCmdHighPriorityPacket();
     // From Thetis network.c:1062
     // sendPacket(listenSock, packetbuf, BUFLEN, prn->base_outbound_port + 3);
-    QByteArray pkt(buf, sizeof(buf));
     // 2026-07-27: check the send result.  Previously the return was discarded,
     // so disconnect() logged "SendStop complete" whether or not the run=0 frame
     // ever reached the wire — three rounds of ANAN-G2E lockup debugging trusted
@@ -4730,25 +4832,39 @@ void P2RadioConnection::sendCmdHighPriority()
     notePingSent();
 }
 
-void P2RadioConnection::sendCmdRx()
+QByteArray P2RadioConnection::buildCmdRxPacket()
 {
     char buf[kBufLen];
     memset(buf, 0, sizeof(buf));
-    writeBE32(buf, 0, m_seqRx++);
+    // TAPR openHPSDR Ethernet Protocol v4.4, DDC Specific Packet p26 [@e7c6584].
+    writeBE32(buf, 0, kCommandSequence);
     composeCmdRx(buf);
-    // From Thetis network.c:1178
     QByteArray pkt(buf, sizeof(buf));
+    return pkt;
+}
+
+void P2RadioConnection::sendCmdRx()
+{
+    const QByteArray pkt = buildCmdRxPacket();
+    // From Thetis network.c:1178
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 1);
+}
+
+QByteArray P2RadioConnection::buildCmdTxPacket()
+{
+    char buf[60];
+    memset(buf, 0, sizeof(buf));
+    // TAPR openHPSDR Ethernet Protocol v4.4, DUC Specific Packet p29 [@e7c6584].
+    writeBE32(buf, 0, kCommandSequence);
+    composeCmdTx(buf);
+    QByteArray pkt(buf, sizeof(buf));
+    return pkt;
 }
 
 void P2RadioConnection::sendCmdTx()
 {
-    char buf[60];
-    memset(buf, 0, sizeof(buf));
-    writeBE32(buf, 0, m_seqTx++);
-    composeCmdTx(buf);
+    const QByteArray pkt = buildCmdTxPacket();
     // From Thetis network.c:1247
-    QByteArray pkt(buf, sizeof(buf));
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_baseOutboundPort + 2);
 }
 

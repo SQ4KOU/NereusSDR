@@ -7,6 +7,7 @@
 #include "core/session/TxWatchClient.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "core/session/media/MediaPeer.h"
+#include "gui/NereusGuiExport.h"
 #include <QElapsedTimer>
 #include <QObject>
 #include <QPointer>
@@ -48,7 +49,7 @@ struct RemoteTelemetryView {
 
 // All methods run on the GUI thread. Collection continues while the dialog is
 // closed; no spectrum callbacks, settings writes or connection policy live here.
-class RemoteTelemetryController final : public QObject {
+class NEREUS_GUI_EXPORT RemoteTelemetryController final : public QObject {
     Q_OBJECT
 public:
     using Clock = std::function<qint64()>;

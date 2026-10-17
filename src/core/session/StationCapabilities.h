@@ -59,6 +59,18 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12: The radio's second firmware number: firmwareBeta, after
+//               spectrumPictureVersion and before coreBuildInfo. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-11: R-DISP-RETUNE (third wave): spectrumPictureVersion. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09: Core speaker: coreSpeakerVersion, after radioSpeakerVersion
+//               and before coreBuildInfo (native audio plan Task 21,
+//               R-AUD-25). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-06: Radio speaker: radioSpeakerVersion, after
+//               radeReasonVersion and before coreBuildInfo (R-SPK-14).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: RADE reason: radeReasonVersion, after
 //               rxFilterLowPassVersion and before coreBuildInfo. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -224,6 +236,14 @@
 //                after radioAntennaRowsVersion, only for a peer that
 //                declared sliceAccess with sessionHolder. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-07 - CAT setup from a connected desktop: stationCatVersion, after
+//                radeReasonVersion, only for a peer that declared stationCat.
+//                J.J. Boyd (KG4VCF). AI tooling: Claude Code.
+//   2026-10-08 - Rotor control plan Task 4b: remoteRotorControlVersion,
+//                after accessoryTxVersion, sent when it is not 0. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-10 - txReadingsVersion 4: the six transmit peak readings.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -460,6 +480,12 @@ struct StationCapabilities {
     int accessoryDataVersion = 0;
     /// Task 42: transmit-coupled accessory command family, minor 11.
     int accessoryTxVersion = 0;
+    /// Rotor control plan Task 4b: 1 means the Core owns a rotor
+    /// connection, mirrors it as the read-only `rotor` object, takes the
+    /// seven rotor commands, and its spots' bearingDeg can be read (remote
+    /// rotor control v1). Sent after accessoryTxVersion in the minor-11
+    /// block, only when it is not 0; absent reads as 0.
+    int remoteRotorControlVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core sends its Tuner Genius's own
     /// settings (the tgxl* properties of `accessorySettings`) and takes the
     /// setTgxlName, setTgxlNetwork, saveTgxlSettings and readTgxlSettings
@@ -598,6 +624,27 @@ struct StationCapabilities {
     /// decodes). Sent after rxFilterLowPassVersion and before coreBuildInfo,
     /// only to a peer whose hello declared `radeReason` 1; 0 otherwise.
     int radeReasonVersion = 0;
+    /// CAT setup from a connected desktop: 1 means the Core sends its CAT
+    /// as the read-only `stationCat` object and the `catLog` record stream,
+    /// and takes setStationCatChannel, setStationCatGlobal,
+    /// testStationCatCommand and refreshStationCatDevices. Sent after
+    /// radeReasonVersion and before coreBuildInfo, only to a peer whose
+    /// hello declared `stationCat` 1, from a Core that runs CAT; 0
+    /// otherwise.
+    int stationCatVersion = 0;
+    /// Radio speaker (R-SPK-14): 1 means radio carries radioSpeakerVolume,
+    /// radioSpeakerMuted and speakerAmplifierMode (writable) and
+    /// radioSpeakerAvailability and speakerAmplifierAvailable (read-only).
+    /// Sent after stationCatVersion and before coreBuildInfo, only to a
+    /// peer whose hello declared `radioSpeaker` 1; 0 otherwise.
+    int radioSpeakerVersion = 0;
+    /// Core speaker (native audio plan Task 21): 1 means radio carries
+    /// coreSpeakerVolume, coreSpeakerMuted, coreSpeakerDevice and
+    /// coreSpeakerDetails (writable) and coreSpeakerDevices and
+    /// coreSpeakerState (read-only). Sent after radioSpeakerVersion and
+    /// before coreBuildInfo, only to a peer whose hello declared
+    /// `coreSpeaker` 1, from a Core that has its own speaker; 0 otherwise.
+    int coreSpeakerVersion = 0;
     /// At most this many URLs are read, each at most kMaxMediaStunUrlBytes.
     static constexpr int kMaxMediaStunUrls = 8;
     static constexpr int kMaxMediaStunUrlBytes = 512;
@@ -649,9 +696,26 @@ struct StationCapabilities {
     /// Task 23: one dedicated ordered raw-I/Q media stream for a window's
     /// TCI apps, only after the media start declares this version.
     int remoteIqVersion = 0;
+    int waveformVersion = 0;
     /// A media peer may declare version 1 and subscribe to a receiver-scoped
     /// mini display with displayRole="mini". Absent means a normal pan.
     int miniDisplayVersion = 0;
+    /// R-DISP-RETUNE: a media peer may declare version 1 in its start, and
+    /// each spectrum context it is sent then carries `pictureGeneration`,
+    /// which names the picture the context's frames continue (the media
+    /// document's "The picture a context continues"). Sent only to a peer
+    /// whose hello declared spectrumPicture 1, at minor 11 with media on;
+    /// absent reads as 0: an older Core, whose contexts state no picture.
+    int spectrumPictureVersion = 0;
+    /// The radio's second firmware number (RadioInfo::firmwareBetaVersion:
+    /// byte 23 of a Protocol 2 discovery reply, byte 21 of an HL2's), which
+    /// `firmwareVersion` leaves out. On the wire it is `firmwareBeta`, an
+    /// i64 of 0 to 255: 0 when the radio reported none. Sent after
+    /// spectrumPictureVersion and before coreBuildInfo, only to a peer at
+    /// minor 11 whose hello declared `firmwareBeta` 1 (firmwareBetaEntry);
+    /// absent reads as 0: an older Core, which sends the first number alone.
+    bool firmwareBetaEntry = false;
+    int firmwareBetaVersion = 0;
     /// R-IOS-26 / R-R3-49 (iPhone app plan Task 22, remote-window parity
     /// Task 20): 1 means the Core runs FreeDV Reporter itself, registered
     /// with its own callsign, grid square and message and listing its own
@@ -754,6 +818,10 @@ struct StationCapabilities {
     /// 3 also carries the seven stage readings a local window's container
     /// meters show (eqDb, levelerDb, levelerGainDb, cfcDb, cfcGainDb,
     /// alcGainDb, alcGroupDb; A9), read with the other meters.
+    /// 4 also carries the six peak readings a local window's container
+    /// meter bars show as their main value (micPeakDb, alcPeakDb,
+    /// compressionPeakDb, eqPeakDb, levelerPeakDb, cfcPeakDb), read with
+    /// the other meters.
     int txReadingsVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A

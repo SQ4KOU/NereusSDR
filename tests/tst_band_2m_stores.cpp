@@ -63,6 +63,37 @@ private slots:
         QCOMPARE(pan.dBmFloor(), -150);
     }
 
+    // Display pill plan Task 9: a change to the transverter slot's key
+    // arriving underneath (from the Core, or Setup) reaches a pan on 2 m,
+    // which shows that slot. The comparison was with the band itself, so a
+    // pan on 2 m kept its old range until its next band change.
+    void panadapter_on_2m_applies_a_station_change_to_xvtr()
+    {
+        PanadapterModel pan;
+        pan.setCenterFrequency(144'300'000.0);
+        QCOMPARE(pan.band(), k2m);
+        QCOMPARE(pan.dBmCeiling(), -40);
+        QCOMPARE(pan.dBmFloor(), -140);
+        QSignalSpy level(&pan, &PanadapterModel::levelChanged);
+
+        AppSettings::instance().setValue(QStringLiteral("DisplayGridMax_XVTR"), -55);
+        pan.applyStationGridSetting(QStringLiteral("DisplayGridMax_XVTR"));
+        QCOMPARE(pan.dBmCeiling(), -55);
+        QCOMPARE(level.count(), 1);
+
+        AppSettings::instance().setValue(QStringLiteral("DisplayGridMin_XVTR"), -125);
+        pan.applyStationGridSetting(QString());   // a whole snapshot
+        QCOMPARE(pan.dBmFloor(), -125);
+        QCOMPARE(pan.dBmCeiling(), -55);
+
+        // Another band's key leaves the pan alone.
+        AppSettings::instance().setValue(QStringLiteral("DisplayGridMax_GEN"), -20);
+        level.clear();
+        pan.applyStationGridSetting(QStringLiteral("DisplayGridMax_GEN"));
+        QCOMPARE(level.count(), 0);
+        QCOMPARE(pan.dBmCeiling(), -55);
+    }
+
     void transmit_power_round_trip()
     {
         {

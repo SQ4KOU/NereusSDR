@@ -159,12 +159,19 @@ void MultiDeviceController::closeDialogQuietly()
 
 void MultiDeviceController::askTakeTransmit()
 {
-    if (!m_client || !m_client->transmitHeldElsewhere()) {
+    if (!m_client || !m_client->transmitTakeOffered()) {
         return;
     }
     const TransmitState& tx = *m_client->transmitState();
     if (tx.holderTransferring()) {
         emit refusal(QStringLiteral("Transmit is changing hands. Try again in a moment."));
+        return;
+    }
+    if (!m_client->transmitHeldElsewhere()) {
+        // Nobody holds transmit: there is no holder to show or to ask, and
+        // the Core takes it at once (TransmitHolder::askTake), as the TX
+        // badge's take does.
+        m_lastTakeCommandId = m_client->requestTakeTransmit(false, 0, false);
         return;
     }
     // What the operator is shown is what the take carries (ruling 8.7): the

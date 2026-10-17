@@ -1,7 +1,7 @@
 # Thetis Contributor Index
 
-**Generated mechanically** by `scripts/generate-contributor-indexes.py` on `2026-04-30T12:51:05+00:00`
-from corpus `docs/attribution/thetis-author-tags.json` (thetis@`501e3f51`, mi0bot@`c26a8a4`).
+**Generated mechanically** by `scripts/generate-contributor-indexes.py` on `2026-10-17T14:23:15+00:00`
+from corpus `docs/attribution/thetis-author-tags.json` (thetis@`3759d096`, mi0bot@`c26a8a4c`).
 
 **Do NOT hand-edit this file.** To add or correct a contributor, edit `docs/attribution/thetis-author-tags.json` and re-run the generator.
 
@@ -16,6 +16,7 @@ Historical Pass 5/6a snapshot preserved at `thetis-contributor-index-v020-snapsh
 | `DH1KLM` | Sigi | MIDI, skins & UI improvements; RedPitaya enum slot contribution |
 | `MI0BOT` | Reid Campbell | Hermes Lite 2 fork maintainer; HL2 I/O, bandwidth monitor, I2C TLV |
 | `G8NJJ` | Laurence Barker | G2, Andromeda, protocols; ANAN_G2_1K PA wiring |
+| `N1GP` | Rick Koch | ANAN-G2E (HermesC10) support, added in v2.10.3.15 |
 | `W4TME` | Ke Chen | FlexRadio Systems contributor; database/memory form tweaks |
 | `W4WMT` | Bryan Rambo | Resampler, VAC & cmASIO |
 | `MI0BIT` | Unknown | mi0bot fork HL2 contributions (TX latency, PTT hang, I2C, channel swap); identity unconfirmed — possible alt callsign for MI0BOT |
@@ -24,7 +25,7 @@ Historical Pass 5/6a snapshot preserved at `thetis-contributor-index-v020-snapsh
 | `W5WC` | Doug Wigley | UI, ChannelMaster, various; naming of 'Thetis' |
 | `WU2O` | Scott | Forum admin; WDSP SSQL default-threshold tuning |
 | `IK4JPN` | Unknown | 2014 console.cs modification (region marked IK4JPN+/IK4JPN-); identity to be researched |
-| `MW0GLE` | Richard Samphire | Typo of MW0LGE (Richie Samphire) in setup.cs:2740 version tag [2.10.3.6_dev4]; preserved verbatim |
+| `MW0GLE` | Richard Samphire | Typo of MW0LGE (Richie Samphire) in setup.cs:2741 version tag [2.10.3.6_dev4]; preserved verbatim |
 | `DK1HLM` | Unknown | OrionMKII/Saturn PA handling contribution; identity to be researched |
 | `K2UE` | George Donadio | EME/antenna authority; ANAN-8000D Hi-Z/Lo-Z load detection idea |
 | `KE9NS` | Darrin | Various contributions including SunTracking and memory-form URL drag-drop |

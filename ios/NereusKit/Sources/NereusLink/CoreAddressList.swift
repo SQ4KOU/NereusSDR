@@ -38,8 +38,12 @@ public enum CoreAddressList {
     /// An entry is `[<IPv6>]:<port>` or `<IPv4>:<port>` with a port from 1 to
     /// 65535; one that is not, or names an address no network but the
     /// Core's own could reach (``LocalNetworks/isGlobal(_:)``), is left out.
-    /// An empty list means the Core has none to name now, not that the ones
-    /// kept are wrong.
+    /// An empty list is the Core's own `"addresses":[]`: it has none to name
+    /// now, and the ones kept are cleared (``PairedStation/keepCoreAddresses(_:)``).
+    /// The Core re-reads its interfaces every 5 s, so a brief gap heals at
+    /// once, while a kept dead address costs every reconnect. A list that
+    /// had entries but none the phone can dial is not that answer: it is
+    /// nil, and the ones kept stay.
     public static func parse(_ text: String) -> [StationEndpoint]? {
         guard case .object(let object)? = try? LinkJSON.parse(text), case .array(let entries)? = object["addresses"] else {
             return nil
@@ -55,6 +59,9 @@ public enum CoreAddressList {
             if addresses.count == maximumCount {
                 break
             }
+        }
+        guard !addresses.isEmpty || entries.isEmpty else {
+            return nil
         }
         return addresses
     }

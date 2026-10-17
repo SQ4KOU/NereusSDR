@@ -3,11 +3,28 @@
 //   2026-10-02  J.J. Boyd / KG4VCF. Real window/fake Core TX-letter Take
 //                regressions: cancellation, current refusal, unchanged RX
 //                history, and target lifetime. AI-assisted via OpenAI Codex.
+//   2026-10-08  J.J. Boyd / KG4VCF. Issue #357: the hosting window's TUNE
+//                (TX applet and container TUN) clears on the release press.
+//                AI-assisted via Anthropic Claude Code.
+//   2026-10-08  J.J. Boyd / KG4VCF. Rotor control plan Task 8: the Rotor
+//                applet is shown by default. AI-assisted via Anthropic
+//                Claude Code.
+//   2026-10-11  J.J. Boyd / KG4VCF. A pan shows the stream of its own
+//                slice: the two-band bench case, where a layout change moved
+//                a 20 m slice onto a 40 m pan and a drag sent the 40 m
+//                receiver to 20 m. AI-assisted via Anthropic Claude Code.
+//   2026-10-11  J.J. Boyd / KG4VCF. Run as nine ctest entries
+//                (TestFunctionGroups), past the 120 s limit as one under
+//                load. AI-assisted via Anthropic Claude Code.
+//   2026-10-16  J.J. Boyd / KG4VCF. A reveal that grows the layout docks
+//                another device's slice keyed to the pan it makes, flag and
+//                stream. AI-assisted via Anthropic Claude Code.
 
 #include "gui/HostingSliceActions.h"
 #include "gui/MainWindow.h"
 
 #include "core/FFTRouter.h"
+#include "core/ReceiverManager.h"
 #include "core/TxSliceArbiter.h"
 #include "core/AppSettings.h"
 #include "core/MoxController.h"
@@ -19,12 +36,14 @@
 #include "core/safety/TxRefusal.h"
 #include "core/session/DeviceSessionRegistry.h"
 #include "core/session/StationServer.h"
+#include "core/spectrum/FftEnginePool.h"
 #include "gui/containers/ContainerManager.h"
 #include "gui/containers/ContainerWidget.h"
 #include "gui/meters/MeterWidget.h"
 #include "gui/meters/OtherButtonItem.h"
 #include "gui/applets/RxApplet.h"
 #include "gui/applets/TxApplet.h"
+#include "gui/applets/AppletVisibilityController.h"
 #include "gui/multidevice/NoticeCard.h"
 #include "gui/multidevice/TakeTransmitDialog.h"
 #include "core/session/SliceAccessController.h"
@@ -43,6 +62,7 @@
 #include "models/TransmitModel.h"
 #include "models/NotchModel.h"
 
+#include <cmath>
 #include <QImage>
 #include <QLabel>
 #include <QMenu>
@@ -59,7 +79,10 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include "TestFunctionGroups.h"
+
 #include <memory>
+#include <optional>
 
 using namespace NereusSDR;
 
@@ -302,9 +325,122 @@ double ownStreamShift(RadioModel* model, SliceModel* slice)
     return slice->frequency() - model->streamCentreHz(slice->streamIndex());
 }
 
+// Bench case of 2026-10-11 (JJ, Anvelina Pro 3): a window that owns the
+// radio with two pans, Slice A on 40 m on pan-0 and Slice B on 20 m on
+// pan-1, each on its own receiver, A the active slice. Going to layout "1"
+// moves B onto pan-0.
+struct TwoBands
+{
+    std::unique_ptr<MainWindow> window;
+    RadioModel* model{nullptr};
+    PanadapterStack* stack{nullptr};
+    SliceModel* a{nullptr};
+    SliceModel* b{nullptr};
+    SpectrumWidget* kept{nullptr};
+    double viewCenter{0.0};
+    double viewSpan{0.0};
+};
+
+constexpr double kFortyMetersHz = 7'254'400.0;
+constexpr double kTwentyMetersHz = 14'074'000.0;
+
+// The frequency last sent to the receiver a slice is on.
+double receiverHz(RadioModel* model, SliceModel* slice)
+{
+    return double(model->receiverManager()->receiverConfig(slice->streamIndex()).frequencyHz);
+}
+
+// True while every slice sits inside the window of its own receiver.
+bool receiverCovers(RadioModel* model, SliceModel* slice)
+{
+    const double halfWindow = model->streamSampleRateHz(slice->streamIndex()) / 2.0;
+    return std::abs(slice->frequency() - receiverHz(model, slice)) <= halfWindow;
+}
+
+void prepareTwoBands(TwoBands& f)
+{
+    f.window = std::make_unique<MainWindow>(RemoteStationOptions{}, nullptr,
+                                            MainWindow::ConnectionStartup::Deferred);
+    f.model = f.window->radioModel();
+    f.model->setBoardForTest(HPSDRHW::Saturn);
+    f.model->configureStreamPool(5, 5, 192000);
+    f.model->setConnectionStateForTest(ConnectionState::Connected);
+    const int aId = f.model->addSlice(QStringLiteral("pan-0"));
+    const int bId = f.model->addSlice(QStringLiteral("pan-1"));
+    QVERIFY(applyLayout(*f.window, QStringLiteral("2v")));
+    f.stack = f.window->findChild<PanadapterStack*>();
+    QVERIFY(f.stack);
+    f.a = f.model->sliceById(aId);
+    f.b = f.model->sliceById(bId);
+    QVERIFY(f.a && f.b);
+    f.a->setFrequency(kFortyMetersHz);
+    f.b->setFrequency(kTwentyMetersHz);
+    QVERIFY(f.a->streamIndex() >= 0);
+    QVERIFY(f.b->streamIndex() >= 0);
+    QVERIFY(f.a->streamIndex() != f.b->streamIndex());
+    f.model->setActiveSlice(f.model->slices().indexOf(f.a));
+    QCOMPARE(f.model->activeSlice(), f.a);
+    QVERIFY(f.model->receiverManager());
+    QVERIFY(receiverCovers(f.model, f.a));
+    QVERIFY(receiverCovers(f.model, f.b));
+    f.kept = f.stack->spectrum(QStringLiteral("pan-0"));
+    QVERIFY(f.kept);
+    QVERIFY(f.kept->ctunEnabled());
+    QTRY_COMPARE(f.kept->ddcCenterFrequency(), f.model->streamCentreHz(f.a->streamIndex()));
+    f.viewCenter = f.kept->centerFrequency();
+    f.viewSpan = f.kept->bandwidth();
+    QVERIFY(std::abs(f.viewCenter - kFortyMetersHz) <= f.viewSpan / 2.0);
+}
+
+// Layout "1": B moves onto pan-0, and `own` is that pan's own slice after.
+void shrinkToOnePan(TwoBands& f, SliceModel* own)
+{
+    const int aStream = f.a->streamIndex();
+    const int bStream = f.b->streamIndex();
+    QVERIFY(applyLayout(*f.window, QStringLiteral("1")));
+    QCOMPARE(f.stack->currentLayoutId(), QStringLiteral("1"));
+    QCOMPARE(f.stack->spectrum(QStringLiteral("pan-0")), f.kept);
+    PanadapterApplet* pan = f.stack->panadapter(QStringLiteral("pan-0"));
+    QVERIFY(pan);
+    QVERIFY(pan->associatedSlices().contains(f.b->sliceIndex()));
+    QCOMPARE(pan->activeSliceIndex(), own->sliceIndex());
+    QCOMPARE(f.a->streamIndex(), aStream);
+    QCOMPARE(f.b->streamIndex(), bStream);
+}
+
+// What a pan drag does: the widget moves its view, then reports the center.
+void dragPan(SpectrumWidget* pan, double byHz)
+{
+    const double center = pan->centerFrequency() + byHz;
+    pan->setFrequencyRange(center, pan->bandwidth());
+    emit pan->centerChanged(center);
+}
+
+// One FFT frame from `stream`, as its engine hands it to the window.
+bool feedFrame(MainWindow& window, int stream)
+{
+    const QVector<float> frame(4096, 1.0e-12f);
+    return QMetaObject::invokeMethod(&window, "dispatchFftFrameToPans", stream, frame, 1.0, 0.0,
+                                     window.fftEnginePoolForTest()->inputGeneration());
+}
+
 class TstDesktopStationWindow final : public QObject {
     Q_OBJECT
 private slots:
+    // Rotor control plan Task 8: the Rotor applet is shown by default, like
+    // the amplifier and tuner; with no rotor it stays, greyed with the
+    // reason.
+    void theRotorAppletIsShownByDefault()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        auto* visibility = window.findChild<AppletVisibilityController*>();
+        QVERIFY(visibility);
+        QVERIFY(visibility->isVisible(QStringLiteral("Rotor")));
+    }
+
     void hostedDashboardClearsWhenDesktopLosesLastReceiver()
     {
         if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
@@ -1375,6 +1511,63 @@ private slots:
         QCOMPARE(tx->tuneButton()->isChecked(), model->isTune());
     }
 
+    // Issue #357: the hosting window's TUNE goes back to "TUNE" on the
+    // press that stops it. TUNE's end runs after the radio is back on
+    // receive, and the TX applet and a container's TUN read that late
+    // flag, so the button stayed red until a third press.
+    void hostTuneReleasePressClearsTheButton()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = model->addSlice(QStringLiteral("pan-0"));
+        QVERIFY(sliceId >= 0);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        TxApplet* tx = window.findChild<TxApplet*>();
+        QVERIFY(tx && tx->tuneButton());
+        auto* manager = window.findChild<ContainerManager*>();
+        QVERIFY(manager);
+        ContainerWidget* container = manager->createContainer(sliceId + 1, DockMode::Floating);
+        auto* meter = new MeterWidget();
+        container->setContent(meter);
+        auto* buttons = new OtherButtonItem();
+        meter->addItem(buttons);
+        container->wireInteractiveItem(buttons);
+        const auto destroy = qScopeGuard([manager, container] {
+            manager->destroyContainer(container->id());
+        });
+        using Id = OtherButtonItem::ButtonId;
+
+        tx->tuneButton()->click();
+        QTRY_VERIFY(model->isTune());
+        QTRY_VERIFY(tx->tuneButton()->isChecked());
+        QCOMPARE(tx->tuneButton()->text(), QStringLiteral("TUNING..."));
+        QTRY_VERIFY(buttons->buttonState(Id::Tun));
+
+        // The press that stops it. TUNE's end is still to come.
+        tx->tuneButton()->click();
+        QVERIFY(model->isTune());
+        QVERIFY(!tx->tuneButton()->isChecked());
+        QCOMPARE(tx->tuneButton()->text(), QStringLiteral("TUNE"));
+        QVERIFY(!buttons->buttonState(Id::Tun));
+
+        // It stays there once TUNE's end has run.
+        QTRY_VERIFY(!model->isTune());
+        QVERIFY(!model->mox());
+        QVERIFY(!tx->tuneButton()->isChecked());
+        QCOMPARE(tx->tuneButton()->text(), QStringLiteral("TUNE"));
+        QVERIFY(!buttons->buttonState(Id::Tun));
+        controller.stop();
+    }
+
     // Fix wave (hosting 2-TONE parity): while another device holds
     // transmit, the hosting window's 2-TONE asks to take it, as its MOX and
     // TUNE do, from the TX applet and from a container. Nothing keys until
@@ -1850,6 +2043,50 @@ private slots:
         QCOMPARE(f.remaining->centerFrequency(), f.viewCentre);
     }
 
+    // D is the phone's, keyed by the phone to pan-1, which layout 1 does not
+    // show, so D sits on no pan here and keeps its key. A reveal that grows
+    // the window makes pan-1, and D goes onto it with its flag and its
+    // stream, as the hidden pan that held D used to when a layout took it up.
+    void aRevealGrowDocksASliceKeyedToThePanItMakes()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        PlacedListen f;
+        prepareListenedSlice(f, true);
+        if (QTest::currentTestFailed()) { return; }
+        placeListenedSlice(f);
+        if (QTest::currentTestFailed()) { return; }
+        PanadapterApplet* kept = f.stack->panadapter(QStringLiteral("pan-0"));
+        QVERIFY(kept);
+        const int dId = f.model->addSlice(QStringLiteral("pan-1"));
+        QVERIFY(dId >= 0);
+        SliceModel* d = f.model->sliceById(dId);
+        d->setFrequency(f.model->sliceById(f.aId)->frequency() + 3'000'000.0);
+        f.model->sliceOwnership()->setOwner(dId, f.phone);
+        QVERIFY(!kept->associatedSlices().contains(dId));
+        // E: the phone's, on no pan of this window's; revealing it grows the
+        // window to two pans.
+        const int eId = f.model->addSlice(QStringLiteral("pan-7"));
+        QVERIFY(eId >= 0);
+        f.model->sliceById(eId)->setFrequency(
+            f.model->sliceById(f.aId)->frequency() + 2'000'000.0);
+        f.model->sliceOwnership()->setOwner(eId, f.phone);
+        f.window->revealSliceInWindowForTest(eId);
+        QCOMPARE(f.stack->currentLayoutId(), QStringLiteral("2v"));
+        PanadapterApplet* made = f.stack->panadapter(QStringLiteral("pan-1"));
+        QVERIFY(made);
+        QVERIFY(made->associatedSlices().contains(dId));
+        QVERIFY(!kept->associatedSlices().contains(dId));
+        QCOMPARE(d->panKey(), QStringLiteral("pan-1"));
+        QVERIFY(flagOn(f.stack->spectrum(QStringLiteral("pan-1")), dId));
+        QVERIFY(!flagOn(f.remaining, dId));
+        QVERIFY(d->streamIndex() >= 0);
+        const QList<QString> fed = f.model->fftRouter()->pansForReceiver(d->streamIndex());
+        QVERIFY2(fed.contains(QStringLiteral("pan-1")),
+                 qPrintable(QStringLiteral("stream %1 feeds %2")
+                                .arg(d->streamIndex()).arg(fed.join(QLatin1Char(',')))));
+        QVERIFY(!fed.contains(QStringLiteral("pan-0")));
+    }
+
     void aPlacedListenedSliceIsNeverTheRemainingPansActiveSlice()
     {
         if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
@@ -2016,6 +2253,303 @@ private slots:
                  stack->panadapter(QStringLiteral("pan-1"))->spectrumWidget());
         QCOMPARE(model->slices().size(), count);
         controller.stop();
+    }
+
+    // A window that owns the radio: selecting a slice whose pan was moved
+    // off it takes that pan back to the slice, keeping its span. A view
+    // that already holds the slice stays where the operator put it.
+    void selectingASliceLetterTakesItsPanToTheSlice()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        const int bId = model->addSlice(QStringLiteral("pan-1"));
+        QVERIFY(applyLayout(window, QStringLiteral("2v")));
+        auto* stack = window.findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        SliceModel* b = model->sliceById(bId);
+        constexpr double kOtherBandHz = 7'150'000.0;
+        b->setFrequency(kOtherBandHz);
+        SpectrumWidget* sw = stack->spectrum(QStringLiteral("pan-1"));
+        QVERIFY(sw);
+        const auto holdsTheSlice = [sw] {
+            return std::abs(sw->centerFrequency() - kOtherBandHz) <= sw->bandwidth() / 2.0;
+        };
+        QTRY_VERIFY(holdsTheSlice());
+        RxApplet* applet = window.findChild<RxApplet*>();
+        QVERIFY(applet);
+        emit applet->sliceActivationRequested(aId);
+        QCOMPARE(model->activeSlice(), model->sliceById(aId));
+
+        // The operator's view of pan-1, zoomed in beside the slice.
+        constexpr double kSpanHz = 20'000.0;
+        constexpr double kAsideHz = kOtherBandHz + 60'000.0;
+        sw->setDisplayWindowPreservingHistory(kAsideHz, kSpanHz);
+        QVERIFY(!holdsTheSlice());
+        emit applet->sliceActivationRequested(bId);
+        QCOMPARE(model->activeSlice(), b);
+        QVERIFY2(holdsTheSlice(),
+                 qPrintable(QStringLiteral("pan at %1 Hz, span %2 Hz, slice at %3 Hz")
+                                .arg(sw->centerFrequency(), 0, 'f', 0)
+                                .arg(sw->bandwidth(), 0, 'f', 0)
+                                .arg(kOtherBandHz, 0, 'f', 0)));
+        QCOMPARE(sw->bandwidth(), kSpanHz);
+
+        // On screen already, off centre: nothing moves.
+        const double offCentre = kOtherBandHz + kSpanHz / 4.0;
+        sw->setDisplayWindowPreservingHistory(offCentre, kSpanHz);
+        emit applet->sliceActivationRequested(aId);
+        emit applet->sliceActivationRequested(bId);
+        QCOMPARE(sw->centerFrequency(), offCentre);
+    }
+
+    // A pan shows the receiver of its own slice. A slice a layout change
+    // moves onto the pan, on another band and another receiver, leaves the
+    // pan's view where the operator had it.
+    void aSliceMovedOntoAPanLeavesItsViewAlone()
+    {
+        TwoBands f;
+        prepareTwoBands(f);
+        if (QTest::currentTestFailed()) { return; }
+        shrinkToOnePan(f, f.a);
+        if (QTest::currentTestFailed()) { return; }
+        QCOMPARE(f.kept->centerFrequency(), f.viewCenter);
+        QCOMPARE(f.kept->bandwidth(), f.viewSpan);
+        QCOMPARE(f.kept->ddcCenterFrequency(), f.model->streamCentreHz(f.a->streamIndex()));
+        // B is on the pan as its flag, and off this view as its own edge
+        // marker, on the right, in its own color. A is the pan's VFO.
+        VfoWidget* flagB = flagOn(f.kept, f.b->sliceIndex());
+        QVERIFY(flagB);
+        QVERIFY(flagB->isHidden());
+        QVERIFY(f.kept->isEdgeMarkedSlice(f.b->sliceIndex()));
+        QVERIFY(!f.kept->isEdgeMarkedSlice(f.a->sliceIndex()));
+        QVERIFY(edgeMarkerPixels(f.kept, f.b->sliceIndex(), true) > 0);
+        QCOMPARE(edgeMarkerPixels(f.kept, f.b->sliceIndex(), false), 0);
+        QVERIFY(flagOn(f.kept, f.a->sliceIndex()));
+        QVERIFY(!flagOn(f.kept, f.a->sliceIndex())->isHidden());
+        // B tuned, inside its receiver and to another one, moves only B.
+        for (const double step : {5'000.0, 150'000.0, 3'000'000.0}) {
+            f.b->setFrequency(f.b->frequency() + step);
+            QCOMPARE(f.kept->centerFrequency(), f.viewCenter);
+            QCOMPARE(f.kept->bandwidth(), f.viewSpan);
+            QCOMPARE(f.kept->ddcCenterFrequency(), f.model->streamCentreHz(f.a->streamIndex()));
+            QCOMPARE(f.b->shiftOffsetHz(), ownStreamShift(f.model, f.b));
+            QVERIFY(edgeMarkerPixels(f.kept, f.b->sliceIndex(), true) > 0);
+        }
+        QCOMPARE(f.a->frequency(), kFortyMetersHz);
+        QCOMPARE(f.a->shiftOffsetHz(), ownStreamShift(f.model, f.a));
+    }
+
+    // The slice the operator is tuning (the active slice) is the one the
+    // layout change moves: it becomes the own slice of the pan it lands
+    // on, so that pan shows it, and a drag moves its receiver.
+    void theActiveSliceMovedOntoAPanBecomesItsOwn()
+    {
+        TwoBands f;
+        prepareTwoBands(f);
+        if (QTest::currentTestFailed()) { return; }
+        f.model->setActiveSlice(f.model->slices().indexOf(f.b));
+        QCOMPARE(f.model->activeSlice(), f.b);
+        shrinkToOnePan(f, f.b);
+        if (QTest::currentTestFailed()) { return; }
+        QCOMPARE(f.kept->ddcCenterFrequency(), f.model->streamCentreHz(f.b->streamIndex()));
+        QVERIFY(std::abs(f.kept->centerFrequency() - kTwentyMetersHz)
+                <= f.kept->bandwidth() / 2.0);
+        QVERIFY(!f.kept->isEdgeMarkedSlice(f.b->sliceIndex()));
+        QVERIFY(f.kept->isEdgeMarkedSlice(f.a->sliceIndex()));
+        QVERIFY(edgeMarkerPixels(f.kept, f.a->sliceIndex(), false) > 0);
+        QVERIFY(feedFrame(*f.window, f.b->streamIndex()));
+        QVERIFY(feedFrame(*f.window, f.a->streamIndex()));
+        QCOMPARE(f.kept->localSpectrumSourceForTest(), f.b->streamIndex());
+        const double aReceiver = receiverHz(f.model, f.a);
+        const double draggedTo = f.kept->centerFrequency() + 5'000.0;
+        dragPan(f.kept, 5'000.0);
+        QCOMPARE(receiverHz(f.model, f.b), draggedTo);
+        QCOMPARE(receiverHz(f.model, f.a), aReceiver);
+        QVERIFY(receiverCovers(f.model, f.a));
+        QVERIFY(receiverCovers(f.model, f.b));
+    }
+
+    // The bench fault itself: the pan had gone to B's band while it still
+    // tuned A, so a drag sent A's receiver to 20 m with A on 40 m. After
+    // any drag, each slice is still inside its own receiver's window.
+    void aPanDragNeverTakesAReceiverOffItsSlice()
+    {
+        TwoBands f;
+        prepareTwoBands(f);
+        if (QTest::currentTestFailed()) { return; }
+        shrinkToOnePan(f, f.a);
+        if (QTest::currentTestFailed()) { return; }
+        const double bReceiver = receiverHz(f.model, f.b);
+        dragPan(f.kept, 5'000.0);
+        for (SliceModel* slice : {f.a, f.b}) {
+            QVERIFY2(receiverCovers(f.model, slice),
+                     qPrintable(QStringLiteral("Slice %1 at %2 Hz, its receiver at %3 Hz")
+                                    .arg(QChar(u'A' + slice->sliceIndex()))
+                                    .arg(slice->frequency(), 0, 'f', 0)
+                                    .arg(receiverHz(f.model, slice), 0, 'f', 0)));
+        }
+        // The drag moved the receiver the pan shows, A's, and only that one.
+        QCOMPARE(receiverHz(f.model, f.a), f.viewCenter + 5'000.0);
+        QCOMPARE(receiverHz(f.model, f.b), bReceiver);
+        QCOMPARE(f.a->frequency(), kFortyMetersHz);
+        QCOMPARE(f.a->shiftOffsetHz(), kFortyMetersHz - (f.viewCenter + 5'000.0));
+    }
+
+    // Two receivers feed the pan's slices; it draws only its own slice's,
+    // never the other band's frames on its own slice's scale.
+    void aPanDrawsOnlyItsOwnSlicesReceiver()
+    {
+        TwoBands f;
+        prepareTwoBands(f);
+        if (QTest::currentTestFailed()) { return; }
+        shrinkToOnePan(f, f.a);
+        if (QTest::currentTestFailed()) { return; }
+        QVERIFY(feedFrame(*f.window, f.a->streamIndex()));
+        QCOMPARE(f.kept->localSpectrumSourceForTest(), f.a->streamIndex());
+        QVERIFY(feedFrame(*f.window, f.b->streamIndex()));
+        QCOMPARE(f.kept->localSpectrumSourceForTest(), f.a->streamIndex());
+    }
+
+    // The operator makes the other slice the pan's own: the pan goes to
+    // that slice's receiver, draws it, and a drag moves it and no other.
+    void aPanFollowsItsOwnSliceToThatSlicesReceiver()
+    {
+        TwoBands f;
+        prepareTwoBands(f);
+        if (QTest::currentTestFailed()) { return; }
+        shrinkToOnePan(f, f.a);
+        if (QTest::currentTestFailed()) { return; }
+        PanadapterApplet* pan = f.stack->panadapter(QStringLiteral("pan-0"));
+        const auto holds = [&f](double hz) {
+            return std::abs(f.kept->centerFrequency() - hz) <= f.kept->bandwidth() / 2.0;
+        };
+        // B becomes the active slice, from the model alone (a CAT command,
+        // a keyboard shortcut): nothing reveals it.
+        f.model->setActiveSlice(f.model->slices().indexOf(f.b));
+        QCOMPARE(f.model->activeSlice(), f.b);
+        QCOMPARE(pan->activeSliceIndex(), f.b->sliceIndex());
+        QCOMPARE(f.kept->ddcCenterFrequency(), f.model->streamCentreHz(f.b->streamIndex()));
+        QVERIFY(holds(kTwentyMetersHz));
+        QVERIFY(feedFrame(*f.window, f.b->streamIndex()));
+        QVERIFY(feedFrame(*f.window, f.a->streamIndex()));
+        QCOMPARE(f.kept->localSpectrumSourceForTest(), f.b->streamIndex());
+        const double aReceiver = receiverHz(f.model, f.a);
+        const double draggedTo = f.kept->centerFrequency() + 5'000.0;
+        dragPan(f.kept, 5'000.0);
+        QCOMPARE(receiverHz(f.model, f.b), draggedTo);
+        QCOMPARE(receiverHz(f.model, f.a), aReceiver);
+        QVERIFY(receiverCovers(f.model, f.a));
+        QVERIFY(receiverCovers(f.model, f.b));
+        // And back to A, then to B again: the pan maps B's receiver from
+        // where the drag left it.
+        f.model->setActiveSlice(f.model->slices().indexOf(f.a));
+        QCOMPARE(pan->activeSliceIndex(), f.a->sliceIndex());
+        QCOMPARE(f.kept->ddcCenterFrequency(), f.model->streamCentreHz(f.a->streamIndex()));
+        QVERIFY(holds(kFortyMetersHz));
+        QVERIFY(f.kept->isEdgeMarkedSlice(f.b->sliceIndex()));
+        QVERIFY(!f.kept->isEdgeMarkedSlice(f.a->sliceIndex()));
+        f.model->setActiveSlice(f.model->slices().indexOf(f.b));
+        QCOMPARE(f.kept->ddcCenterFrequency(), draggedTo);
+        QVERIFY(holds(kTwentyMetersHz));
+    }
+
+    // The bottom RX area's chooser in a window that runs its own radio.
+    // Choosing a slice's row shows that slice: its floating pan comes
+    // forward and a view moved off the slice goes back to it, span kept.
+    // It selects nothing; Select RX then makes it the RX slice. A view that
+    // already holds the slice stays where the operator put it.
+    void choosingASlicesRowInTheBottomChooserShowsTheSlice()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        const int bId = model->addSlice(QStringLiteral("pan-1"));
+        QVERIFY(applyLayout(window, QStringLiteral("2v")));
+        auto* stack = window.findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        SliceModel* a = model->sliceById(aId);
+        SliceModel* b = model->sliceById(bId);
+        constexpr double kOtherBandHz = 7'150'000.0;
+        b->setFrequency(kOtherBandHz);
+        SpectrumWidget* sw = stack->spectrum(QStringLiteral("pan-1"));
+        QVERIFY(sw);
+        const auto holdsTheSlice = [sw] {
+            return std::abs(sw->centerFrequency() - kOtherBandHz) <= sw->bandwidth() / 2.0;
+        };
+        QTRY_VERIFY(holdsTheSlice());
+        RxApplet* applet = window.findChild<RxApplet*>();
+        QVERIFY(applet);
+        emit applet->sliceActivationRequested(aId);
+        QCOMPARE(model->activeSlice(), a);
+        stack->setActivePan(QStringLiteral("pan-0"));
+        stack->floatPanadapter(QStringLiteral("pan-1"));
+        PanFloatingWindow* floater = stack->floatingWindowForTest(QStringLiteral("pan-1"));
+        QVERIFY(floater);
+        floater->showMinimized();
+        QTRY_VERIFY(floater->isMinimized());
+        constexpr double kSpanHz = 20'000.0;
+        sw->setDisplayWindowPreservingHistory(kOtherBandHz + 60'000.0, kSpanHz);
+        QVERIFY(!holdsTheSlice());
+
+        RxDashboard* dashboard = window.findChild<RxDashboard*>();
+        QVERIFY(dashboard);
+        dashboard->chooserButton()->click();
+        SliceChooser* chooser = window.findChild<SliceChooser*>();
+        QVERIFY(chooser);
+        const auto rowFor = [chooser](int sliceId) -> QPushButton* {
+            for (QPushButton* row :
+                 chooser->findChildren<QPushButton*>(QStringLiteral("sliceChooserRow"))) {
+                if (row->property("sliceId").toInt() == sliceId && row->parentWidget()) {
+                    return row;
+                }
+            }
+            return nullptr;
+        };
+        const auto actionFor = [chooser](const QString& words) -> QPushButton* {
+            for (QPushButton* button : chooser->findChildren<QPushButton*>()) {
+                if (button->text() == words && button->parentWidget()) { return button; }
+            }
+            return nullptr;
+        };
+        QVERIFY(rowFor(bId));
+        rowFor(bId)->click();
+        QCOMPARE(stack->activePanId(), QStringLiteral("pan-1"));
+        QTRY_VERIFY(!floater->isMinimized());
+        QVERIFY2(holdsTheSlice(),
+                 qPrintable(QStringLiteral("pan at %1 Hz, slice at %2 Hz")
+                                .arg(sw->centerFrequency(), 0, 'f', 0)
+                                .arg(kOtherBandHz, 0, 'f', 0)));
+        QCOMPARE(sw->bandwidth(), kSpanHz);
+        QCOMPARE(model->activeSlice(), a);
+
+        // On screen already, off center: the row moves nothing.
+        const double offCenter = kOtherBandHz + kSpanHz / 4.0;
+        sw->setDisplayWindowPreservingHistory(offCenter, kSpanHz);
+        QVERIFY(rowFor(bId));
+        rowFor(bId)->click();
+        QCOMPARE(sw->centerFrequency(), offCenter);
+
+        // Select RX: the RX slice, and its pan back on it.
+        sw->setDisplayWindowPreservingHistory(kOtherBandHz + 60'000.0, kSpanHz);
+        QPushButton* select = actionFor(QStringLiteral("Select RX"));
+        QVERIFY(select);
+        select->click();
+        QCOMPARE(model->activeSlice(), b);
+        QVERIFY(holdsTheSlice());
+        QCOMPARE(sw->bandwidth(), kSpanHz);
     }
 
     // Slice control plan Task 16 (ruling U3): a click on a pan's background
@@ -2684,5 +3218,64 @@ private slots:
     }
 };
 
-QTEST_MAIN(TstDesktopStationWindow)
+int main(int argc, char** argv)
+{
+    QApplication app(argc, argv);
+    app.setAttribute(Qt::AA_Use96Dpi, true);
+    TstDesktopStationWindow test;
+    QTEST_SET_MAIN_SOURCE_PATH
+    // 95 s by itself at load 18 to 28, every case a hosting window of its
+    // own at about 2 s (one with eight rows 16 s), and past ctest's 120 s
+    // in a loaded run with every case still passing. Eight groups run as
+    // their own ctest entries, tst_desktop_station_window_host, _listen,
+    // _keying, _layout, _placed, _select, _pending and _badges
+    // (tests/CMakeLists.txt), 6 to 11 s each run two at a time at load 10
+    // to 18; the rest as tst_desktop_station_window (9 s). The limit is not
+    // raised.
+    const std::optional<QStringList> arguments = NereusSDR::TestFunctionGroups::arguments(
+        test.metaObject(), app.arguments(), "NEREUS_DESKTOP_STATION_WINDOW_GROUP",
+        {{QStringLiteral("host"),
+          {QStringLiteral("hostModeOwnFlagsAndDetach"),
+           QStringLiteral("hostShowsOtherDeviceAsForeignMarker"),
+           QStringLiteral("hostTakeItBackCardStaysWhileItMayBeTriedAgain"),
+           QStringLiteral("hostTakeItBackCardGoesAfterThePhoneReleases"),
+           QStringLiteral("closingTheHostCardForgetsItsTakeBack")}},
+         {QStringLiteral("listen"),
+          {QStringLiteral("hostListensToAnotherDevicesSlice"),
+           QStringLiteral("hostRxAppletFollowsAListenedTab"),
+           QStringLiteral("hostContainerOnAListenedSliceRefusesMute"),
+           QStringLiteral("hostTabFallbackReachesAListenedSlice")}},
+         {QStringLiteral("keying"),
+          {QStringLiteral("appletAndContainerAskWithoutOptimisticKey"),
+           QStringLiteral("hostTuneReleasePressClearsTheButton"),
+           QStringLiteral("hostTwoToneAsksTheTakeQuestion"),
+           QStringLiteral("hostVoxFollowsTheTransmitHolder")}},
+         {QStringLiteral("layout"),
+          {QStringLiteral("layoutChangeKeepsListeningToASliceOnARemainingPan"),
+           QStringLiteral("aRevealStillCentresThePanItOpensOnTheSlice"),
+           QStringLiteral("aRevealGrowDocksASliceKeyedToThePanItMakes"),
+           QStringLiteral("aPlacedListenedSliceIsNeverTheRemainingPansActiveSlice"),
+           QStringLiteral("aListenedSliceWhosePanIsGoneKeepsItsOwnShift")}},
+         {QStringLiteral("placed"),
+          {QStringLiteral("aPlacedListenedSliceTunedByItsControllerKeepsItsShiftAndThePansView"),
+           QStringLiteral("aPlacedListenedSlicesEdgeMarkerStaysWhileTheOperatorTunes"),
+           QStringLiteral("aPlacedListenedSliceNeverScrollsAPanWithCtunOff"),
+           QStringLiteral("aPlacedListenedSliceChangingStreamLeavesNoStaleWindow")}},
+         {QStringLiteral("select"),
+          {QStringLiteral("listeningToAnUnseenSliceGrowsTheMainWindow"),
+           QStringLiteral("selectingASliceInAFloatingPanBringsItForward"),
+           QStringLiteral("selectingASliceLetterTakesItsPanToTheSlice"),
+           QStringLiteral("choosingASlicesRowInTheBottomChooserShowsTheSlice"),
+           QStringLiteral("panBackgroundClickNeverChangesTheSlice")}},
+         {QStringLiteral("pending"),
+          {QStringLiteral("hostTxLetterPendingTargetMustStillBeTheSameControlledSlice")}},
+         {QStringLiteral("badges"),
+          {QStringLiteral("hostTxLettersTakeTransmitThenSelectWithoutKeying"),
+           QStringLiteral("hostTxBadgeTakesTransmitThenMakesTheSliceTx"),
+           QStringLiteral("hostTxBadgeOnAListenedSliceTakesTheSliceThenTransmit"),
+           QStringLiteral("hostTxBadgeTakeEndsWithNothingPending"),
+           QStringLiteral("hostTxBadgeOnAListenedSliceAsksOnlyWhatItMust")}}});
+    return arguments ? QTest::qExec(&test, *arguments) : 1;
+}
+
 #include "tst_desktop_station_window.moc"

@@ -53,6 +53,15 @@ warren@wpratt.com
 
 using namespace NereusSDR;
 
+// MinGW imports a static constexpr member of an exported class by address
+// when it is bound to a reference (QCOMPARE does), and the Core DLL never
+// exports one, so this test did not link on Windows. It reads these
+// copies by value instead.
+namespace {
+constexpr double kTxTSlewDownSecs = NereusSDR::WdspEngine::kTxTSlewDownSecs;
+constexpr double kTxTSlewUpSecs = NereusSDR::WdspEngine::kTxTSlewUpSecs;
+} // namespace
+
 // ---------------------------------------------------------------------------
 // Channel ID convention (Thetis cmaster.c / dsp.cs [v2.10.3.13]):
 //   RX channel 0: WDSP.id(0, 0) = 0 (rx0, subrx0)
@@ -86,12 +95,12 @@ private slots:
 
     void txTSlewUpIsPointZeroOne() {
         // From cmaster.c:187  — tslewup = 0.010 s (10 ms channel-level envelope)
-        QCOMPARE(WdspEngine::kTxTSlewUpSecs, 0.010);
+        QCOMPARE(kTxTSlewUpSecs, 0.010);
     }
 
     void txTSlewDownIsPointZeroOne() {
         // From cmaster.c:189  — tslewdown = 0.010 s (10 ms channel-level envelope)
-        QCOMPARE(WdspEngine::kTxTSlewDownSecs, 0.010);
+        QCOMPARE(kTxTSlewDownSecs, 0.010);
     }
 
     void txDspSampleRateIs96000() {

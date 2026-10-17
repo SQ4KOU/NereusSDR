@@ -128,6 +128,7 @@
 #include <QString>
 
 #include <functional>
+#include "core/NereusCoreExport.h"
 
 class QTimer;
 
@@ -136,7 +137,7 @@ namespace NereusSDR {
 class AppSettings;
 class DeviceStore;
 
-class PairingWindow : public QObject {
+class NEREUS_CORE_EXPORT PairingWindow : public QObject {
     Q_OBJECT
 
 public:

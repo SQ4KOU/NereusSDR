@@ -54,9 +54,9 @@ struct KeyedMeterOverlayTests {
             .init(name: "temperatureC", value: .f64(0))])))
         main.accessories.refresh()
         #expect(KeyedMeterReadings.sample(.ampPower, transmit: main.transmit, accessories: main.accessories,
-                                         meters: nil).readout == "0 W")
+                                         meters: nil).readout == "--")
         #expect(KeyedMeterReadings.sample(.ampSwr, transmit: main.transmit, accessories: main.accessories,
-                                         meters: nil).readout == "1.00:1")
+                                         meters: nil).readout == "--")
         #expect(KeyedMeterReadings.sample(.ampTemperature, transmit: main.transmit, accessories: main.accessories,
                                          meters: nil).readout == "0 °C")
         model.mirror.apply(.delta(.init(key: "rfkit", properties: [
@@ -120,4 +120,19 @@ struct KeyedMeterOverlayTests {
         await model.disconnect()
     }
 
+}
+
+@MainActor
+extension KeyedMeterOverlayTests {
+    @Test("Shared amplifier source and display readings")
+    func sharedAmplifierMeterRule() {
+        let main = TransmitMeterFixture.main(amplifierWatts: 2300)
+        let power = KeyedMeterReadings.sample(.rfPower, transmit: main.transmit, accessories: main.accessories, meters: nil)
+        #expect(power.value == 2300 && power.scale.max == 2000 && power.scale.redFrom == 1500)
+        #expect(power.readout == "2300 W")
+        let swr = KeyedMeterReadings.sample(.swr, transmit: main.transmit, accessories: main.accessories, meters: nil)
+        #expect(swr.readout == "1.12")
+        let standby = TransmitMeterFixture.main(operate: false, radioWatts: 98)
+        #expect(KeyedMeterReadings.sample(.rfPower, transmit: standby.transmit, accessories: standby.accessories, meters: nil).value == 98)
+    }
 }

@@ -52,6 +52,14 @@
 
 using namespace NereusSDR;
 
+// MinGW imports a static constexpr member of an exported class by address
+// when it is bound to a reference (QCOMPARE does), and the Core DLL never
+// exports one, so this test did not link on Windows. It reads these
+// copies by value instead.
+namespace {
+constexpr quint8 kTagControl = NereusSDR::RelayLeg::kTagControl;
+} // namespace
+
 namespace {
 
 const QString kSuite = QStringLiteral(NEREUS_SOURCE_DIR "/rendezvous/conformance/v1/relay");
@@ -301,7 +309,7 @@ private slots:
                     continue; // another connection's, or not the leg's to send
                 }
                 const auto tag = static_cast<quint8>(bytes.at(0));
-                if (tag == RelayLeg::kTagControl || tag == RelayLeg::kTagMedia) {
+                if (tag == kTagControl || tag == RelayLeg::kTagMedia) {
                     // The runner makes the leg send it: the agent writes the
                     // payload into the lane's socket.
                     agents[tag - 1].writeDatagram(bytes.mid(1), QHostAddress::LocalHost,
@@ -328,7 +336,7 @@ private slots:
                 if (tag == RelayLeg::kTagEnd) {
                     current->endSent = true;
                 }
-                if (tag == RelayLeg::kTagControl || tag == RelayLeg::kTagMedia) {
+                if (tag == kTagControl || tag == RelayLeg::kTagMedia) {
                     // The leg writes exactly the payload to that agent, and
                     // nothing reached either agent before it.
                     QUdpSocket& agent = agents[tag - 1];
@@ -428,7 +436,7 @@ private slots:
                             leg.lanePort(1));
         QTRY_COMPARE(current->received.size(), qsizetype(2));
         QCOMPARE(current->received.at(1).size(), RelayLeg::kMaxDatagramBytes + 1);
-        QCOMPARE(static_cast<quint8>(current->received.at(1).at(0)), RelayLeg::kTagControl);
+        QCOMPARE(static_cast<quint8>(current->received.at(1).at(0)), kTagControl);
 
         // A relay that takes the connection and never answers the
         // WebSocket upgrade: nothing can be written, so each lane keeps

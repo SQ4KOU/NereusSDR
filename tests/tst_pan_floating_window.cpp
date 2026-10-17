@@ -71,6 +71,7 @@ private slots:
         auto* w = new PanFloatingWindow(nullptr);
         w->adoptApplet(applet);
         QSignalSpy spy(w, &PanFloatingWindow::dockRequested);
+        QVERIFY(spy.isValid());
         w->requestDock();
         QCOMPARE(spy.count(), 1);
         QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("pan-floated"));

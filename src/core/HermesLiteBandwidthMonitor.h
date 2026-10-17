@@ -18,6 +18,10 @@
 //   2026-09-23 - R-R3-21: EP6 sequence error counter (NereusSDR addition)
 //                for Diagnostics > Connection Quality. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-14 - Publish cached telemetry with relaxed atomics for GUI and
+//                daemon readers. Post-port safety correction by J.J. Boyd
+//                (KG4VCF), AI-assisted via OpenAI Codex; upstream volatile
+//                rate caches do not synchronize cross-thread C++ access.
 // =================================================================
 
 // --- From bandwidth_monitor.h ---
@@ -129,10 +133,12 @@ namespace NereusSDR {
 //
 // Both recordEp6Bytes and recordEp2Bytes are called from the connection
 // thread; tick() is also called from the connection thread (watchdog).
-// All methods are therefore single-threaded in the current design — the
-// std::atomic members are a faithful port of the upstream LONG64 volatiles
-// and provide the same forward-progress guarantee without Windows-specific
-// primitives.
+// Cached readouts are also polled directly on the GUI/daemon thread.
+// Relaxed atomics publish each scalar independently; several getter calls
+// do not form one coherent snapshot and publish no other state.
+// tick() has one connection-thread writer; m_silentTicks is writer-only.
+// reset() requires that writer to be quiescent (before connection start or
+// after it has stopped), and destruction requires all callers to be quiescent.
 //
 // Source: mi0bot bandwidth_monitor.{h,c} [@c26a8a4]
 class NEREUS_CORE_EXPORT HermesLiteBandwidthMonitor : public QObject {
@@ -204,13 +210,13 @@ private:
 
     // Cached last-computed rates (updated by tick() / compute_bps()).
     // Source: mi0bot bandwidth_monitor.c:51-53 — static volatile double in/out_last_bps [@c26a8a4]
-    double m_inLastBps{0.0};
-    double m_outLastBps{0.0};
+    std::atomic<double> m_inLastBps{0.0};
+    std::atomic<double> m_outLastBps{0.0};
 
     // NereusSDR throttle state (no upstream equivalent).
-    bool m_throttled{false};
+    std::atomic<bool> m_throttled{false};
     int  m_silentTicks{0};
-    int  m_throttleEventCount{0};
+    std::atomic<int> m_throttleEventCount{0};
 
     // R-R3-21: EP6 sequence error count (see recordEp6SequenceError()).
     std::atomic<int> m_ep6SequenceErrors{0};
@@ -219,7 +225,7 @@ private:
     double computeBps(std::atomic<int64_t>& totalBytes,
                       std::atomic<int64_t>& lastBytes,
                       std::atomic<int64_t>& lastMs,
-                      double&               lastBps) const;
+                      std::atomic<double>&  lastBps) const;
 
     // Return current time in milliseconds since epoch (portable replacement for
     // upstream GetTickCount64).

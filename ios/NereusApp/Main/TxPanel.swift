@@ -84,7 +84,17 @@ struct TxPanel: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 9) {
             caption("RF")
-            LinearGauge(scale: .rfPower(meters?.rfPower), value: transmit.forwardWatts)
+            HStack(spacing: 6) {
+                LinearGauge(scale: .selectedPower(transmit.meterRule, meter: meters?.rfPower),
+                            value: transmit.meterRule.forwardW, readout: MeterReadout.power(transmit.meterRule.forwardW))
+                    .accessibilityIdentifier("txSelectedPower")
+                if transmit.meterRule.amplifying && (transmit.report.keyed || transmit.coreOnAir || transmit.ptt.transmitting) {
+                    Text("DRIVE " + MeterReadout.power(transmit.meterRule.driveW))
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(ChromeColours.textFaint)
+                        .accessibilityIdentifier("txDrivePower")
+                }
+            }
             TxSwrGauge(transmit: transmit, meters: meters)
             // Each radio's own range and readout, from the Core's catalogue
             // (on a Hermes Lite 2, drive in dB as its desktop shows it).
@@ -386,9 +396,7 @@ struct TxPanel: View {
 
     private var tunerGeniusReadouts: some View {
         let readings = accessories.tunerGeniusReadings
-        let amp = accessories.powerGenius
-        // MainWindow.cpp:9586-9610 scales for the present PGXL in OPERATE.
-        let amplifying = amp?.present == true && amp?.link.connected == true && amp?.operate == true
+        let amplifying = transmit.meterRule.amplifying
         // The control may be normalized or in dB; only its catalogue W readout is watts.
         let shown = transmit.powerControl.shown
         let radioWatts = shown?.unit == "W" ? shown?.max ?? 0 : 0
@@ -635,7 +643,7 @@ private struct TxSwrGauge: View {
             let now = SystemLinkClock().nowMilliseconds
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    LinearGauge(scale: .swr(meters?.swr), value: transmit.swr)
+                    LinearGauge(scale: .swr(meters?.swr), value: transmit.meterRule.swr, readout: MeterReadout.swr(transmit.meterRule.swr))
                     if warning != nil {
                         Button { details = true } label: {
                             Text("High SWR")
@@ -694,9 +702,9 @@ struct AntiVoxReasons: View {
 
 /// Compact wire-unit text; absent readings never masquerade as measured zero.
 enum TxAccessoryReadoutText {
-    static func power(_ value: Double?) -> String { value.map { String(format: "%.0f W", $0) } ?? "--" }
-    static func swr(_ value: Double?) -> String { value.map { String(format: "%.2f:1", $0) } ?? "--" }
-    static func temperature(_ value: Double?) -> String { value.map { String(format: "%.1f °C", $0) } ?? "--" }
+    static func power(_ value: Double?) -> String { MeterReadout.power(value) }
+    static func swr(_ value: Double?) -> String { MeterReadout.swr(value) }
+    static func temperature(_ value: Double?) -> String { MeterReadout.temperature(value) }
     static func relay(_ value: Int64?) -> String { value.map(String.init) ?? "--" }
 }
 

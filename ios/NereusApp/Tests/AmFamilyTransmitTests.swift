@@ -17,7 +17,10 @@ import UIKit
 /// spans both sides of the carrier. The modes the Core will not key are
 /// refused by it alone, with the code `bandPlan`, and the phone shows the
 /// Core's words as sent.
-@Suite("AM, SAM and DSB transmit", .serialized)
+///
+/// Each step waits on the change it needs and never on the clock: the time
+/// limit, which each test case gets, only ends one that never gets there.
+@Suite("AM, SAM and DSB transmit", .serialized, .timeLimit(.minutes(2)))
 @MainActor
 struct AmFamilyTransmitTests {
     /// The fake Core's slice A: 7.2364 MHz.
@@ -44,7 +47,7 @@ struct AmFamilyTransmitTests {
             .init(ordinal: 27, name: "panKey", value: .utf8("pan-0")),
         ])))
         transmit.tapPtt()
-        #expect(await settle(seconds: 5) { transmit.ptt.state.isKeyed })
+        #expect(await Eventually.holds { transmit.ptt.state.isKeyed })
         #expect(rig.microphone.starts == 1)
         #expect(rig.microphone.isRunning)
         #expect(rig.station.keyed)
@@ -53,12 +56,12 @@ struct AmFamilyTransmitTests {
         await rig.station.deliver(.delta(LinkMessage.Delta(key: "txState", properties: [
             .init(ordinal: 0, name: "keyed", value: .bool(true)),
         ])))
-        #expect(await settle(seconds: 5) { rig.model.main.band.transmit.keyedHere })
+        #expect(await Eventually.holds { rig.model.main.band.transmit.keyedHere })
         let keys = rig.station.messages.compactMap(TransmitScreenTests.invoke).filter { $0.verb == "tx.key" }
         #expect(keys.count == 3)
         // The whole passband either side of the carrier, out to the high
         // edge (2900 Hz), whatever the low edge.
-        #expect(await settle(seconds: 5) {
+        #expect(await Eventually.holds {
             transmit.txFilterHz == (Self.carrierHz - 2900)...(Self.carrierHz + 2900)
         })
         // Core holds the pan from the key rise. A local PTT must not draw its
@@ -66,14 +69,14 @@ struct AmFamilyTransmitTests {
         await rig.station.deliver(.delta(LinkMessage.Delta(key: "slice:0", properties: [
             .init(ordinal: 27, name: "panKey", value: .utf8("pan-1")),
         ])))
-        #expect(await settle(seconds: 5) { transmit.txFilterHz == nil })
+        #expect(await Eventually.holds { transmit.txFilterHz == nil })
         await rig.station.deliver(.delta(LinkMessage.Delta(key: "slice:0", properties: [
             .init(ordinal: 27, name: "panKey", value: .utf8("pan-0")),
         ])))
-        #expect(await settle(seconds: 5) { transmit.txFilterHz != nil })
+        #expect(await Eventually.holds { transmit.txFilterHz != nil })
 
         transmit.tapPtt()
-        #expect(await settle(seconds: 5) { transmit.ptt.state == .idle })
+        #expect(await Eventually.holds { transmit.ptt.state == .idle })
         await rig.station.deliver(.delta(LinkMessage.Delta(key: "txState", properties: [
             .init(ordinal: 0, name: "keyed", value: .bool(false)),
         ])))
@@ -87,10 +90,10 @@ struct AmFamilyTransmitTests {
         let rig = try await connected(mode: mode)
         let transmit = rig.transmit
         transmit.toggleTune()
-        #expect(await settle(seconds: 5) { transmit.ptt.state.isKeyed && transmit.ptt.tuning })
+        #expect(await Eventually.holds { transmit.ptt.state.isKeyed && transmit.ptt.tuning })
         #expect(rig.station.keyed)
         transmit.toggleTune()
-        #expect(await settle(seconds: 5) { transmit.ptt.state == .idle })
+        #expect(await Eventually.holds { transmit.ptt.state == .idle })
         #expect(!rig.station.keyed)
         await rig.model.disconnect()
     }
@@ -104,11 +107,11 @@ struct AmFamilyTransmitTests {
         rig.station.refuseNext("tx.key", reason: words, code: "bandPlan")
         transmit.tapPtt()
         let refusal = TxRefusalInfo(reason: words, code: "bandPlan")
-        #expect(await settle(seconds: 5) { transmit.ptt.state == .refused(refusal) })
+        #expect(await Eventually.holds { transmit.ptt.state == .refused(refusal) })
         #expect(TxNoticeCard.content(ptt: transmit.ptt, heldNote: nil) == .refusal(refusal))
         #expect(!transmit.ptt.transmitting)
         #expect(!rig.station.keyed)
-        #expect(await settle(seconds: 5) { !rig.microphone.isRunning })
+        #expect(await Eventually.holds { !rig.microphone.isRunning })
         #expect(transmit.txFilterHz == nil)
         await rig.model.disconnect()
     }
@@ -168,30 +171,19 @@ struct AmFamilyTransmitTests {
                    .init(ordinal: 17, name: "stopSerial", value: .i64(0))])))
         try await MainScreenShotTests.fill(station)
         await TransmitScreenTests.fillTransmit(station)
-        #expect(await settle(seconds: 5) { model.main.slices.catalog != nil })
+        #expect(await Eventually.holds { model.main.slices.catalog != nil })
         let id = try #require(model.main.slices.catalog?.modes.first { $0.label == mode }?.id)
         await station.deliver(.delta(LinkMessage.Delta(key: "slice:0", properties: [
             .init(ordinal: 2, name: "dspMode", value: .enumeration(Int64(id))),
             .init(ordinal: 3, name: "filterLow", value: .i64(-4000)),
             .init(ordinal: 4, name: "filterHigh", value: .i64(4000)),
         ])))
-        #expect(await settle(seconds: 5) {
+        #expect(await Eventually.holds {
             model.main.transmit.permitted && model.connection == .connected && model.main.transmit.microphoneLine
                 && model.main.modes.modeLabel == mode
                 && model.main.slices.entries.first(where: { $0.slice.id == 0 })?.modeLabel == mode
         })
         await audio.settle()
         return Rig(model: model, station: station, microphone: microphone)
-    }
-
-    private func settle(seconds: Double, _ condition: () -> Bool) async -> Bool {
-        let deadline = Date().addingTimeInterval(seconds)
-        while Date() < deadline {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-        return condition()
     }
 }

@@ -57,6 +57,15 @@
 //                bpfStateChanged, so a hold alone sends a peer without
 //                rxFilterLowPass no delta. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - setBandFiltersCombine: in Auto, slices on more than one
+//                band keep a chain filtered where the radio takes several
+//                band filters at once (the Anvelina Pro 3).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-11 - setCombineNote: what sharing the 6 m BPF/LNA costs the
+//                chain's slices, after the bands in reasonText.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Alex.cs header (lines 1-23) ===
@@ -170,13 +179,16 @@ public:
     /// Operator preference for BPF state on this ADC.
     enum class BpfMode {
         Auto,        ///< default: filter when single-band, bypass on multi-band
+                     ///< (every band's filter at once where they combine,
+                     ///< setBandFiltersCombine)
         ForceBand,   ///< always filter to TX-bound slice's band (warn OOB attenuation)
         ForceBypass  ///< always bypass BPF (operator wideband or noise hunting)
     };
 
     /// Effective BPF state (what's actually on the wire).
     enum class BpfEffective {
-        Filtered,         ///< BPF engaged at currentBpfBand
+        Filtered,         ///< BPF engaged at currentBpfBand (or, where the band
+                          ///< filters combine, at every band reasonText names)
         Bypass,           ///< BPF in bypass (no per-band rejection)
         WidebandLocked    ///< BPF bypassed due to wideband stream active on this ADC
     };
@@ -248,6 +260,25 @@ public:
     /// band-pass state did not move.
     void setLowPassHold(int adc, int sliceIndex, const QString& reason);
 
+    /// The radio's band filters combine (codec::alex::combinesRxBandFilters):
+    /// its board passes nothing in bypass and passes each band through its
+    /// own filter with several selected at once. In Auto, slices on more
+    /// than one band then leave this chain Filtered, with every band named,
+    /// and RadioModel sends all of their filters together. The operator's
+    /// Force bypass and a wideband view report the bypass as on any radio;
+    /// RadioModel sends that radio the five band filters for it
+    /// (codec::alex::receiveBypassSelection). Recomputes.
+    void setBandFiltersCombine(int adc, bool on);
+    bool bandFiltersCombine(int adc) const;
+
+    /// Where the band filters combine: what the combined selection costs
+    /// the chain's slices, in a few words ("6m LNA in: other bands read
+    /// low"), shown after the bands in reasonText while Auto holds more
+    /// than one selection. Empty when it costs nothing. RadioModel decides
+    /// it with the selection (codec::alex::combineRxBandSelections).
+    /// Recomputes.
+    void setCombineNote(int adc, const QString& note);
+
     /// Mark that a wideband stream is active on this ADC.
     /// Recomputes BPF (wideband forces effective=WidebandLocked).
     void setWidebandActive(int adc, bool on);
@@ -255,6 +286,9 @@ public:
     /// Phase 3F: called by RadioModel when the slice list on this ADC changes
     /// (slice add/remove/retune-cross-band). Drives the auto-mode recompute.
     /// Use Band::Count as the sentinel for "no slice in this position".
+    /// One entry per filter selection the slices need, named by its band:
+    /// slices that share a filter are one entry, and two entries are two
+    /// selections even when their bands are the same (WWV on 5 and 15 MHz).
     void notifySlicesOnAdc(int adc, const std::array<Band, 5>& slicesOnAdc);
 
     // ── Per-band antenna selection (1, 2, or 3) ──────────────────────────────
@@ -400,6 +434,8 @@ private:
     std::array<bool, 2> m_widebandActive {false, false};
     std::array<SwitchBypass, 2> m_switchBypass {SwitchBypass::None, SwitchBypass::None};
     std::array<QString, 2> m_switchBypassDetail;
+    std::array<bool, 2> m_bandFiltersCombine {false, false};
+    std::array<QString, 2> m_combineNote;
     // Phase 3F: slice band per ADC — sentinel Band::Count means "no slice in this slot".
     // Initialized in ctor so all slots start at Band::Count (not Band::Band160m = 0).
     std::array<std::array<Band, 5>, 2> m_slicesPerAdc;

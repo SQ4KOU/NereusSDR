@@ -19,6 +19,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-13  J.J. Boyd / KG4VCF  Export the applet's Qt signal
+//                addresses from the Windows GUI DLL. AI-assisted via
+//                OpenAI Codex.
 //   2026-05-27  J.J. Boyd / KG4VCF  Phase 3F Sub-Epic D Task 1.
 //                                    Per-pan container skeleton ported
 //                                    structurally from AetherSDR
@@ -58,9 +61,18 @@
 //                R-IOS-30): an empty pan offers Take a receiver after another
 //                device took this window's receiver; the TX pill offers Take
 //                transmit. AI-assisted via Anthropic Claude Code.
+//   2026-10-08  J.J. Boyd / KG4VCF  Workspace visual review Task 26 (JJ's
+//                ruling): the receiver flags stay on top of the corner
+//                badges; the badges' strip is masked out of the flags' area.
+//                AI-assisted via Anthropic Claude Code.
+//   2026-10-09  J.J. Boyd / KG4VCF  The floated pan's title bar names its
+//                own style rule, so its bottom line no longer repeats under
+//                the grip and title labels. AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 #pragma once
 
+#include "gui/NereusGuiExport.h"
 #include "gui/PanStatusText.h"
 
 #include <QWidget>
@@ -73,19 +85,21 @@ class QContextMenuEvent;
 class QLabel;
 class QPushButton;
 class QMenu;
+class QBoxLayout;
 
 namespace NereusSDR {
 
 class SpectrumWidget;
 class SliceModel;
 class SpectrumStatusOverlay;
+class ImdMeasurementPanel;
 
 /// Container for a single panadapter view: spectrum + waterfall (via SpectrumWidget)
 /// + associated slice overlays. AetherSDR overlay model: a pan picks one DDC for
 /// FFT, any slice whose freq falls within visible range overlays as a flag.
 /// See docs/architecture/2026-05-26-phase3f-multi-pan-multi-slice-design.md §3
 /// (Slice / Pan binding).
-class PanadapterApplet : public QWidget {
+class NEREUS_GUI_EXPORT PanadapterApplet : public QWidget {
     Q_OBJECT
     Q_PROPERTY(QString panId READ panId CONSTANT)
     Q_PROPERTY(int activeSliceIndex READ activeSliceIndex WRITE setActiveSliceIndex NOTIFY activeSliceChanged)
@@ -96,6 +110,8 @@ public:
 
     QString panId() const { return m_panId; }
     SpectrumWidget* spectrumWidget() const { return m_spectrum; }
+    ImdMeasurementPanel* imdRail() const { return m_imdRail; }
+    ImdMeasurementPanel* imdInspector() const { return m_imdInspector; }
 
     /// Show/hide this pan's own title strip, which exists only while the pan
     /// is popped out of the console.
@@ -270,6 +286,17 @@ protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
+    /// Workspace visual review Task 26 (JJ, 2026-10-08): the receiver flags
+    /// stay on top of the corner badges (CH, TX, WIDE) wherever they meet.
+    /// The badges' strip is a sibling over the whole SpectrumWidget, so no
+    /// raise() inside the pan can put a flag above it; instead the strip is
+    /// masked out of the area the flags show in
+    /// (SpectrumWidget::receiverFlagRegion). This is the one place the rule
+    /// lives. A mask does not depend on stacking order, so a later raise() of
+    /// the strip cannot undo it, and popups and flyouts keep their own order.
+    /// Re-run when the flags change and when the strip or the spectrum moves
+    /// or resizes (eventFilter).
+    void applyStatusOverlayMask();
     /// Build the right-click context menu: add-slice / float (Task B5, both
     /// carrying this applet's own panId()) then a separator then the
     /// pre-existing Extended-view toggle. Returns a heap-allocated QMenu*
@@ -283,6 +310,10 @@ private:
     /// for it beyond one hidden 18 px widget.
     void buildFloatTitleBar();
 
+    void refreshImdPresentation();
+    QBoxLayout* m_imdBodyLayout{nullptr};
+    ImdMeasurementPanel* m_imdRail{nullptr};
+    ImdMeasurementPanel* m_imdInspector{nullptr};
     QString                 m_panId;
     SpectrumWidget*         m_spectrum {nullptr};
     SpectrumStatusOverlay*  m_statusOverlay {nullptr};

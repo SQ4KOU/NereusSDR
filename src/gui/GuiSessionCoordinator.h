@@ -1,6 +1,7 @@
 // no-port-check: NereusSDR-original. R-R3-38 complete station-session ownership.
 #pragma once
 
+#include "gui/NereusGuiExport.h"
 #include "gui/StationStartupSelection.h"
 #include "gui/StationServiceManager.h"
 
@@ -17,7 +18,7 @@ struct RadioInfo;
 
 // Roles are immutable. Switching stations replaces the whole operating
 // window/model/session; ordinary reconnect stays inside the existing window.
-class GuiSessionCoordinator final : public QObject {
+class NEREUS_GUI_EXPORT GuiSessionCoordinator final : public QObject {
     Q_OBJECT
 public:
     explicit GuiSessionCoordinator(QObject* parent = nullptr);

@@ -13,6 +13,13 @@
 //   2026-09-30: the RADE decoder role (JJ's ruling of 2026-09-30: the
 //               least busy fast core, judged from the plan). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: the radio connection and spectrum roles, a receive worker
+//               sharing the later receivers' cores, and a transmit channel
+//               listening for VOX (tests added on 2026-10-10 and
+//               2026-10-11). Today: on equal cores the connection thread
+//               stays on the housekeeping cores, and while transmitting
+//               spectrum keeps off the transmit roles' cores. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -350,6 +357,568 @@ private slots:
         QCOMPARE(full.housekeeping, (QList<int>{0, 1, 2, 3}));
     }
 
+    // As measured on the Rock on 2026-10-10 with wide receivers: the radio
+    // connection thread shares the DSP thread's core, both raised, and the
+    // first receiver has its own; the fourth receiver shares the second
+    // and third receivers' cores, raised; the spectrum threads may use
+    // every fast core at normal priority and own none.
+    void rk3588sFourWideReceivers()
+    {
+        SysfsFixture f;
+        layOutRk3588s(f);
+        PlacementDemand d = demand({0, 1, 2, 3}, true);
+        d.connectionThread = true;
+        d.spectrumThreads = {1, 0};
+        const PlacementPlan plan = planThreadPlacement(f.read(), d);
+        QVERIFY(plan.active);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 0), 4);
+        QCOMPARE(plan.cpuFor(ThreadRole::DspThread), 5);
+        QVERIFY(plan.raisedFor(ThreadRole::DspThread));
+        QCOMPARE(plan.cpuFor(ThreadRole::ConnectionThread), 5);
+        QVERIFY(plan.raisedFor(ThreadRole::ConnectionThread));
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 1), 6);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 2), 7);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 3), -1);
+        QCOMPARE(plan.coresFor(ThreadRole::RxWorker, 3), (QList<int>{6, 7}));
+        QVERIFY(plan.raisedFor(ThreadRole::RxWorker, 3));
+        for (int bucket : {0, 1}) {
+            QCOMPARE(plan.cpuFor(ThreadRole::SpectrumThread, bucket), -1);
+            QCOMPARE(plan.coresFor(ThreadRole::SpectrumThread, bucket),
+                     (QList<int>{4, 5, 6, 7}));
+            QVERIFY(!plan.raisedFor(ThreadRole::SpectrumThread, bucket));
+        }
+        QCOMPARE(plan.housekeeping, (QList<int>{0, 1, 2, 3}));
+        QCOMPARE(plan.signalCores(), (QList<int>{4, 5, 6, 7}));
+        for (int cpu : {4, 5, 6, 7}) {
+            QVERIFY(plan.carriesSpectrum(cpu));
+        }
+        QVERIFY(!plan.carriesSpectrum(0));
+        QVERIFY(!plan.carriesSpectrum(-1));
+    }
+
+    // Spectrum threads are never held to one core: however many there are,
+    // and whatever else is running, each may use every fast core.
+    void spectrumThreadsUseEveryFastCore()
+    {
+        SysfsFixture f;
+        layOutRk3588s(f);
+        PlacementDemand one = demand({0}, true);
+        one.spectrumThreads = {0, 1, 2};
+        const PlacementPlan alone = planThreadPlacement(f.read(), one);
+        for (int bucket : {0, 1, 2}) {
+            QCOMPARE(alone.coresFor(ThreadRole::SpectrumThread, bucket),
+                     (QList<int>{4, 5, 6, 7}));
+        }
+        // They own no core, so they leave the housekeeping cores as they
+        // were and count for nothing when a RADE decoder picks a core.
+        QCOMPARE(alone.signalCores(), (QList<int>{4, 5}));
+        QCOMPARE(alone.housekeeping, (QList<int>{0, 1, 2, 3}));
+    }
+
+    // Where every core is equally fast the housekeeping cores are no
+    // slower and no raised thread runs on them, so spectrum threads and a
+    // receive worker without a core stay there. So does the connection
+    // thread: its move to the DSP thread's core was measured only where
+    // slower cores run housekeeping.
+    void equalCoresKeepSpectrumOnHousekeeping()
+    {
+        SysfsFixture f;
+        f.online("0-3");
+        for (int cpu = 0; cpu < 4; ++cpu) {
+            f.capacity(cpu, 1024);
+        }
+        f.policy(0, "0 1 2 3");
+        PlacementDemand d = demand({0, 1, 2}, true);
+        d.connectionThread = true;
+        d.spectrumThreads = {0, 1};
+        const PlacementPlan plan = planThreadPlacement(f.read(), d);
+        QVERIFY(plan.active);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 0), 3);
+        QCOMPARE(plan.cpuFor(ThreadRole::DspThread), 2);
+        QVERIFY(plan.raisedFor(ThreadRole::DspThread));
+        QCOMPARE(plan.cpuFor(ThreadRole::ConnectionThread), -1);
+        QVERIFY(plan.coresFor(ThreadRole::ConnectionThread).isEmpty());
+        QVERIFY(!plan.raisedFor(ThreadRole::ConnectionThread));
+        QCOMPARE(plan.housekeeping, (QList<int>{0, 1}));
+        for (int bucket : {0, 1}) {
+            QVERIFY(plan.coresFor(ThreadRole::SpectrumThread, bucket).isEmpty());
+        }
+        for (int channel : {1, 2}) {
+            QVERIFY(plan.coresFor(ThreadRole::RxWorker, channel).isEmpty());
+            QVERIFY(!plan.raisedFor(ThreadRole::RxWorker, channel));
+        }
+        QVERIFY(!plan.carriesSpectrum(3));
+
+        // Before the DSP thread starts it does not take that core either:
+        // the second receiver does.
+        PlacementDemand noDsp = demand({0, 1}, false);
+        noDsp.connectionThread = true;
+        const PlacementPlan early = planThreadPlacement(f.read(), noDsp);
+        QCOMPARE(early.cpuFor(ThreadRole::RxWorker, 1), 2);
+        QCOMPARE(early.cpuFor(ThreadRole::ConnectionThread), -1);
+        QVERIFY(early.coresFor(ThreadRole::ConnectionThread).isEmpty());
+        QVERIFY(!early.raisedFor(ThreadRole::ConnectionThread));
+
+        // A RADE decoder still finds a core with no connection thread on
+        // any of them.
+        PlacementDemand rade = d;
+        rade.radeDecoders = {0};
+        const PlacementPlan radePlan = planThreadPlacement(f.read(), rade);
+        QCOMPARE(radePlan.cpuFor(ThreadRole::RadeDecoder, 0), 3);
+    }
+
+    // G-06: while transmitting the transmit roles hold the later fast
+    // cores. The spectrum threads keep off those cores and use the other
+    // fast cores at normal priority; the DSP and connection threads keep
+    // their core; and the second receiver, with no later receiver's core
+    // to share, runs on the housekeeping cores at normal priority.
+    void transmitTakesTheLaterReceiversCores()
+    {
+        SysfsFixture f;
+        layOutRk3588s(f);
+        PlacementDemand d = demand({0, 1}, true, true, true);
+        d.connectionThread = true;
+        d.spectrumThreads = {0, 1};
+        const PlacementPlan plan = planThreadPlacement(f.read(), d);
+        QCOMPARE(plan.cpuFor(ThreadRole::TxWorker, 5), 6);
+        QCOMPARE(plan.cpuFor(ThreadRole::TxWorkerThread), 7);
+        QVERIFY(plan.raisedFor(ThreadRole::TxWorker, 5));
+        QVERIFY(plan.raisedFor(ThreadRole::TxWorkerThread));
+        for (int bucket : {0, 1}) {
+            QCOMPARE(plan.coresFor(ThreadRole::SpectrumThread, bucket),
+                     (QList<int>{4, 5}));
+            QVERIFY(!plan.raisedFor(ThreadRole::SpectrumThread, bucket));
+        }
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 0), 4);
+        QCOMPARE(plan.cpuFor(ThreadRole::DspThread), 5);
+        QCOMPARE(plan.cpuFor(ThreadRole::ConnectionThread), 5);
+        QVERIFY(plan.coresFor(ThreadRole::RxWorker, 1).isEmpty());
+        QVERIFY(!plan.raisedFor(ThreadRole::RxWorker, 1));
+    }
+
+    // Two fast cores, both held by the transmit roles while keyed: no fast
+    // core is left for spectrum, so it runs on the housekeeping cores, as
+    // on equal cores.
+    void keyedSpectrumWithNoFastCoreLeft()
+    {
+        SysfsFixture f;
+        f.online("0-3");
+        f.capacity(0, 405);
+        f.capacity(1, 405);
+        f.capacity(2, 1024);
+        f.capacity(3, 1024);
+        f.policy(0, "0 1");
+        f.policy(2, "2 3");
+        PlacementDemand d = demand({}, false, true, true);
+        d.spectrumThreads = {0};
+        const PlacementPlan plan = planThreadPlacement(f.read(), d);
+        QVERIFY(plan.active);
+        QCOMPARE(plan.cpuFor(ThreadRole::TxWorker, 5), 2);
+        QCOMPARE(plan.cpuFor(ThreadRole::TxWorkerThread), 3);
+        QVERIFY(plan.coresFor(ThreadRole::SpectrumThread, 0).isEmpty());
+        QVERIFY(!plan.carriesSpectrum(2));
+        QCOMPARE(plan.housekeeping, (QList<int>{0, 1}));
+    }
+
+    // VOX on, nothing on the air: the transmit channel runs so VOX can hear
+    // the microphone, and it takes no core from a receiver. With four wide
+    // receivers the transmit worker shares the later receivers' cores like
+    // a receiver without one, and the pump and the I/Q sender run with
+    // everything else.
+    void voxListeningTakesNoCoreFromAReceiver()
+    {
+        SysfsFixture f;
+        layOutRk3588s(f);
+        PlacementDemand d = demand({0, 1, 2, 3}, true, true, true);
+        d.txListening = true;
+        d.txIqSender = true;
+        d.connectionThread = true;
+        d.spectrumThreads = {0, 1};
+        const PlacementPlan plan = planThreadPlacement(f.read(), d);
+        QVERIFY(plan.active);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 0), 4);
+        QCOMPARE(plan.cpuFor(ThreadRole::DspThread), 5);
+        QCOMPARE(plan.cpuFor(ThreadRole::ConnectionThread), 5);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 1), 6);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 2), 7);
+        QCOMPARE(plan.coresFor(ThreadRole::RxWorker, 3), (QList<int>{6, 7}));
+        QVERIFY(plan.raisedFor(ThreadRole::RxWorker, 3));
+        QCOMPARE(plan.cpuFor(ThreadRole::TxWorker, 5), -1);
+        QCOMPARE(plan.coresFor(ThreadRole::TxWorker, 5), (QList<int>{6, 7}));
+        QVERIFY(plan.raisedFor(ThreadRole::TxWorker, 5));
+        QVERIFY(plan.coresFor(ThreadRole::TxWorkerThread).isEmpty());
+        QVERIFY(!plan.raisedFor(ThreadRole::TxWorkerThread));
+        QVERIFY(plan.coresFor(ThreadRole::TxIqSender).isEmpty());
+        QVERIFY(!plan.raisedFor(ThreadRole::TxIqSender));
+        for (int bucket : {0, 1}) {
+            QCOMPARE(plan.coresFor(ThreadRole::SpectrumThread, bucket),
+                     (QList<int>{4, 5, 6, 7}));
+        }
+
+        // The same receivers keyed (G-06): the transmit roles go first.
+        d.txListening = false;
+        const PlacementPlan keyed = planThreadPlacement(f.read(), d);
+        QCOMPARE(keyed.cpuFor(ThreadRole::TxWorker, 5), 6);
+        QCOMPARE(keyed.cpuFor(ThreadRole::TxWorkerThread), 7);
+        QVERIFY(keyed.coresFor(ThreadRole::RxWorker, 1).isEmpty());
+        for (int bucket : {0, 1}) {
+            QCOMPARE(keyed.coresFor(ThreadRole::SpectrumThread, bucket),
+                     (QList<int>{4, 5}));
+        }
+    }
+
+    // VOX on with cores to spare: the transmit roles take the ones the
+    // receivers leave, in their usual order, each raised on its own.
+    void voxListeningTakesTheCoresReceiversLeave()
+    {
+        SysfsFixture f;
+        layOutRk3588s(f);
+        const CpuTopology rk = f.read();
+        PlacementDemand one = demand({0}, true, true, true);
+        one.txListening = true;
+        one.txIqSender = true;
+        one.spectrumThreads = {0};
+        const PlacementPlan onePlan = planThreadPlacement(rk, one);
+        QCOMPARE(onePlan.cpuFor(ThreadRole::RxWorker, 0), 4);
+        QCOMPARE(onePlan.cpuFor(ThreadRole::DspThread), 5);
+        QCOMPARE(onePlan.cpuFor(ThreadRole::TxWorker, 5), 6);
+        QCOMPARE(onePlan.cpuFor(ThreadRole::TxWorkerThread), 7);
+        QVERIFY(onePlan.raisedFor(ThreadRole::TxWorker, 5));
+        QVERIFY(onePlan.coresFor(ThreadRole::TxIqSender).isEmpty());
+        // Listening, spectrum still uses every fast core, the transmit
+        // roles' cores too; it keeps off them only while transmitting.
+        QCOMPARE(onePlan.coresFor(ThreadRole::SpectrumThread, 0),
+                 (QList<int>{4, 5, 6, 7}));
+        one.txListening = false;
+        QCOMPARE(planThreadPlacement(rk, one).coresFor(ThreadRole::SpectrumThread, 0),
+                 (QList<int>{4, 5}));
+
+        PlacementDemand two = demand({0, 1}, true, true, true);
+        two.txListening = true;
+        const PlacementPlan twoPlan = planThreadPlacement(rk, two);
+        QCOMPARE(twoPlan.cpuFor(ThreadRole::RxWorker, 1), 6);
+        QCOMPARE(twoPlan.cpuFor(ThreadRole::TxWorker, 5), 7);
+        QVERIFY(twoPlan.raisedFor(ThreadRole::TxWorker, 5));
+        QVERIFY(twoPlan.coresFor(ThreadRole::TxWorkerThread).isEmpty());
+        QVERIFY(!twoPlan.raisedFor(ThreadRole::TxWorkerThread));
+
+        // Eight equal cores reserve six: receivers first, then transmit.
+        SysfsFixture equal;
+        equal.online("0-7");
+        PlacementDemand three = demand({0, 1, 2}, true, true, true);
+        three.txListening = true;
+        three.txIqSender = true;
+        const PlacementPlan equalPlan = planThreadPlacement(equal.read(), three);
+        QCOMPARE(equalPlan.cpuFor(ThreadRole::RxWorker, 0), 7);
+        QCOMPARE(equalPlan.cpuFor(ThreadRole::DspThread), 6);
+        QCOMPARE(equalPlan.cpuFor(ThreadRole::RxWorker, 1), 5);
+        QCOMPARE(equalPlan.cpuFor(ThreadRole::RxWorker, 2), 4);
+        QCOMPARE(equalPlan.cpuFor(ThreadRole::TxWorker, 5), 3);
+        QCOMPARE(equalPlan.cpuFor(ThreadRole::TxWorkerThread), 2);
+        // Equal cores: one left without a core runs with everything else,
+        // which costs it nothing but the priority.
+        QVERIFY(equalPlan.coresFor(ThreadRole::TxIqSender).isEmpty());
+    }
+
+    // A transmit worker that is not running is not in the plan, listening
+    // or not.
+    void voxListeningNeedsARunningTransmitChannel()
+    {
+        SysfsFixture f;
+        layOutRk3588s(f);
+        PlacementDemand d = demand({0, 1, 2}, true);
+        d.txListening = true;
+        const PlacementPlan plan = planThreadPlacement(f.read(), d);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 1), 6);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 2), 7);
+        QVERIFY(plan.coresFor(ThreadRole::TxWorker, 5).isEmpty());
+    }
+
+    // One slice keyed: its receiver stops. The DSP and connection threads
+    // share the first core, both raised, and the transmit roles keep theirs
+    // (G-06).
+    void connectionThreadSharesTheDspCoreWhileKeyed()
+    {
+        SysfsFixture f;
+        layOutRk3588s(f);
+        PlacementDemand d = demand({}, true, true, true);
+        d.txIqSender = true;
+        d.connectionThread = true;
+        const PlacementPlan plan = planThreadPlacement(f.read(), d);
+        QCOMPARE(plan.cpuFor(ThreadRole::DspThread), 4);
+        QCOMPARE(plan.cpuFor(ThreadRole::ConnectionThread), 4);
+        QVERIFY(plan.raisedFor(ThreadRole::DspThread));
+        QVERIFY(plan.raisedFor(ThreadRole::ConnectionThread));
+        QCOMPARE(plan.cpuFor(ThreadRole::TxWorker), 5);
+        QCOMPARE(plan.cpuFor(ThreadRole::TxWorkerThread), 6);
+        QCOMPARE(plan.cpuFor(ThreadRole::TxIqSender), 7);
+    }
+
+    // Before the DSP thread starts, the connection thread has the second
+    // core to itself, and keeps it when the DSP thread joins.
+    void connectionThreadTakesTheDspCoreAlone()
+    {
+        SysfsFixture f;
+        layOutRk3588s(f);
+        PlacementDemand d = demand({0, 1}, false);
+        d.connectionThread = true;
+        const PlacementPlan plan = planThreadPlacement(f.read(), d);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 0), 4);
+        QCOMPARE(plan.cpuFor(ThreadRole::ConnectionThread), 5);
+        QVERIFY(plan.raisedFor(ThreadRole::ConnectionThread));
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 1), 6);
+    }
+
+    // A RADE decoder leaves the connection thread's core alone while
+    // another fast core has no decoder.
+    void radeDecodersTakeTheConnectionCoreLast()
+    {
+        SysfsFixture f;
+        layOutRk3588s(f);
+        PlacementDemand d = demand({0, 1, 2}, true);
+        d.connectionThread = true;
+        d.spectrumThreads = {0, 1};
+        d.radeDecoders = {0, 1, 2, 3};
+        const PlacementPlan plan = planThreadPlacement(f.read(), d);
+        QCOMPARE(plan.cpuFor(ThreadRole::ConnectionThread), 5);
+        QList<int> cores;
+        for (int channel = 0; channel < 4; ++channel) {
+            cores.append(plan.cpuFor(ThreadRole::RadeDecoder, channel));
+        }
+        QCOMPARE(cores.indexOf(5), 3);
+    }
+
+    // With one core set aside the first receiver takes it, and the DSP and
+    // connection threads have none, as before the connection role.
+    void connectionThreadFollowsTheDspThread()
+    {
+        SysfsFixture f;
+        f.online("0-1");
+        PlacementDemand d = demand({0}, true);
+        d.connectionThread = true;
+        d.spectrumThreads = {0};
+        const PlacementPlan plan = planThreadPlacement(f.read(), d);
+        QVERIFY(plan.active);
+        QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 0), 1);
+        QCOMPARE(plan.cpuFor(ThreadRole::DspThread), -1);
+        QCOMPARE(plan.cpuFor(ThreadRole::ConnectionThread), -1);
+        QVERIFY(!plan.raisedFor(ThreadRole::ConnectionThread));
+        QVERIFY(plan.coresFor(ThreadRole::SpectrumThread, 0).isEmpty());
+    }
+
+    // The registry puts the connection thread on the DSP thread's core,
+    // raised, as it registers, and lets the spectrum threads use every
+    // fast core at normal priority. When transmit takes a later receiver's
+    // core the connection thread stays where it is and the spectrum
+    // threads leave that core.
+    void connectionThreadIsRaisedAndSpectrumThreadsMoveFreely()
+    {
+        SysfsFixture f;
+        layOutRk3588s(f);
+        QList<Call> calls;
+        qint64 current = 1;
+        ThreadPlacement placement;
+        startRockReceivingTwoPans(placement, f, calls, current);
+        current = 300;
+        placement.registerCurrentThread(ThreadRole::ConnectionThread);
+        current = 400;
+        placement.registerCurrentThread(ThreadRole::SpectrumThread, 0);
+        current = 401;
+        placement.registerCurrentThread(ThreadRole::SpectrumThread, 1);
+        const QList<int> fast{4, 5, 6, 7};
+        QCOMPARE(lastCpus(calls, 300), QList<int>{5});
+        QCOMPARE(lastNice(calls, 300), kDspNice);
+        // The DSP thread stays where it was, still raised.
+        QCOMPARE(lastCpus(calls, 200), QList<int>{5});
+        QCOMPARE(lastNice(calls, 200), kDspNice);
+        for (qint64 tid : {qint64{400}, qint64{401}}) {
+            QCOMPARE(lastCpus(calls, tid), fast);
+            QCOMPARE(lastNice(calls, tid), 0);
+        }
+        for (const Call& c : std::as_const(calls)) {
+            if (c.kind == Call::Nice && c.threadId >= 400) {
+                QCOMPARE(c.nice, 0);
+            }
+        }
+        // The receive workers keep their cores.
+        QCOMPARE(lastCpus(calls, 101), QList<int>{4});
+        QCOMPARE(lastCpus(calls, 102), QList<int>{6});
+        const PlacementPlan applied = placement.appliedPlan();
+        QCOMPARE(applied.cpuFor(ThreadRole::ConnectionThread), 5);
+        QVERIFY(applied.raisedFor(ThreadRole::ConnectionThread));
+        QCOMPARE(applied.coresFor(ThreadRole::SpectrumThread, 0), fast);
+        QVERIFY(!applied.raisedFor(ThreadRole::SpectrumThread, 0));
+        QVERIFY(applied.carriesSpectrum(4));
+
+        // Keyed: the transmit worker takes 6, so the second receiver moves
+        // to 7 and the spectrum threads leave 6. Nothing else moves.
+        const int movesBefore = affinityCalls(calls);
+        placement.setChannelActive(ThreadRole::TxWorker, 5, true);
+        QCOMPARE(lastCpus(calls, 102), QList<int>{7});
+        QCOMPARE(affinityCalls(calls), movesBefore + 3);
+        const QList<int> keyedSpectrum{4, 5, 7};
+        QCOMPARE(lastCpus(calls, 400), keyedSpectrum);
+        QCOMPARE(lastCpus(calls, 401), keyedSpectrum);
+        QCOMPARE(lastNice(calls, 400), 0);
+        QCOMPARE(lastCpus(calls, 300), QList<int>{5});
+
+        // A spectrum thread that ends is forgotten.
+        current = 401;
+        placement.deregisterCurrentThread();
+        QVERIFY(placement.currentPlan().coresFor(ThreadRole::SpectrumThread, 1).isEmpty());
+    }
+
+    // A fourth wide receiver on the Rock shares the second and third
+    // receivers' cores, raised like them, and goes to the housekeeping
+    // cores at normal priority when those receivers lose their cores.
+    void receiverWithoutACoreSharesTheLaterReceivers()
+    {
+        SysfsFixture f;
+        layOutRk3588s(f);
+        QList<Call> calls;
+        qint64 current = 1;
+        ThreadPlacement placement;
+        placement.start(f.read(), demand({0, 1, 2, 3}, true),
+                        std::make_unique<RecordingApi>(&calls, &current), true);
+        current = 300;
+        placement.registerCurrentThread(ThreadRole::ConnectionThread);
+        current = 200;
+        placement.registerCurrentThread(ThreadRole::DspThread);
+        for (int channel = 0; channel < 4; ++channel) {
+            current = 101 + channel;
+            placement.onWdspThreadStarted(kWdspThreadRxMain, channel);
+            placement.setChannelActive(ThreadRole::RxWorker, channel, true);
+        }
+        QCOMPARE(lastCpus(calls, 101), QList<int>{4});
+        QCOMPARE(lastCpus(calls, 200), QList<int>{5});
+        QCOMPARE(lastCpus(calls, 300), QList<int>{5});
+        QCOMPARE(lastCpus(calls, 102), QList<int>{6});
+        QCOMPARE(lastCpus(calls, 103), QList<int>{7});
+        QCOMPARE(lastCpus(calls, 104), (QList<int>{6, 7}));
+        QCOMPARE(lastNice(calls, 104), kDspNice);
+        const PlacementPlan applied = placement.appliedPlan();
+        QCOMPARE(applied.coresFor(ThreadRole::RxWorker, 3), (QList<int>{6, 7}));
+        QVERIFY(applied.raisedFor(ThreadRole::RxWorker, 3));
+
+        // Keyed (G-06): the transmit worker and pump take 6 and 7, and the
+        // three later receivers have no fast core between them.
+        current = 105;
+        placement.onWdspThreadStarted(kWdspThreadTxMain, 5);
+        current = 301;
+        placement.registerCurrentThread(ThreadRole::TxWorkerThread);
+        placement.setChannelActive(ThreadRole::TxWorker, 5, true);
+        const QList<int> hk{0, 1, 2, 3};
+        for (qint64 tid : {qint64{102}, qint64{103}, qint64{104}}) {
+            QCOMPARE(lastCpus(calls, tid), hk);
+            QCOMPARE(lastNice(calls, tid), 0);
+        }
+        QCOMPARE(lastCpus(calls, 300), QList<int>{5});
+        QCOMPARE(lastNice(calls, 300), kDspNice);
+    }
+
+    // VOX on with three receivers on the Rock: the receivers keep 4, 6 and
+    // 7 through every receive period, the transmit worker shares 6 and 7,
+    // and the transmit roles take 6 and 7 only while keyed.
+    void voxListeningHoldsNoCoreBetweenTransmissions()
+    {
+        SysfsFixture f;
+        layOutRk3588s(f);
+        QList<Call> calls;
+        qint64 current = 1;
+        ThreadPlacement placement;
+        placement.start(f.read(), demand({0, 1, 2}, true),
+                        std::make_unique<RecordingApi>(&calls, &current), true);
+        current = 300;
+        placement.registerCurrentThread(ThreadRole::ConnectionThread);
+        current = 200;
+        placement.registerCurrentThread(ThreadRole::DspThread);
+        for (int channel = 0; channel < 3; ++channel) {
+            current = 101 + channel;
+            placement.onWdspThreadStarted(kWdspThreadRxMain, channel);
+            placement.setChannelActive(ThreadRole::RxWorker, channel, true);
+        }
+        current = 105;
+        placement.onWdspThreadStarted(kWdspThreadTxMain, 5);
+        current = 301;
+        placement.registerCurrentThread(ThreadRole::TxWorkerThread);
+        const QList<int> hk{0, 1, 2, 3};
+
+        const auto expectListening = [&]() {
+            QCOMPARE(lastCpus(calls, 101), QList<int>{4});
+            QCOMPARE(lastCpus(calls, 102), QList<int>{6});
+            QCOMPARE(lastCpus(calls, 103), QList<int>{7});
+            QCOMPARE(lastNice(calls, 102), kDspNice);
+            QCOMPARE(lastCpus(calls, 105), (QList<int>{6, 7}));
+            QCOMPARE(lastNice(calls, 105), kDspNice);
+            QCOMPARE(lastCpus(calls, 301), hk);
+            QCOMPARE(niceOf(calls, 301), 0);
+            QCOMPARE(lastCpus(calls, 200), QList<int>{5});
+            QCOMPARE(lastCpus(calls, 300), QList<int>{5});
+        };
+        placement.setTransmitUse(5, TransmitUse::Listening);
+        expectListening();
+        QVERIFY(placement.currentPlan().raisedFor(ThreadRole::TxWorker, 5));
+
+        // Keyed with the receivers still running (G-06).
+        placement.setTransmitUse(5, TransmitUse::Transmitting);
+        QCOMPARE(lastCpus(calls, 105), QList<int>{6});
+        QCOMPARE(lastNice(calls, 105), kDspNice);
+        QCOMPARE(lastCpus(calls, 301), QList<int>{7});
+        QCOMPARE(lastNice(calls, 301), kDspNice);
+        QCOMPARE(lastCpus(calls, 102), hk);
+        QCOMPARE(lastNice(calls, 102), 0);
+        QCOMPARE(lastCpus(calls, 103), hk);
+
+        // Unkeyed with VOX still on: the receivers have their cores back.
+        placement.setTransmitUse(5, TransmitUse::Listening);
+        expectListening();
+
+        // A channel reported running the older way is transmitting.
+        placement.setChannelActive(ThreadRole::TxWorker, 5, true);
+        QCOMPARE(lastCpus(calls, 105), QList<int>{6});
+        QCOMPARE(lastCpus(calls, 102), hk);
+
+        // VOX off: the transmit worker runs with everything else.
+        placement.setTransmitUse(5, TransmitUse::Stopped);
+        QCOMPARE(lastCpus(calls, 105), hk);
+        QCOMPARE(lastNice(calls, 105), 0);
+        QCOMPARE(lastCpus(calls, 102), QList<int>{6});
+        QCOMPARE(lastCpus(calls, 103), QList<int>{7});
+        QVERIFY(placement.currentPlan().coresFor(ThreadRole::TxWorker, 5).isEmpty());
+
+        // Asked again for what it has, nothing moves and the plan stands.
+        const quint64 revision = placement.planRevision();
+        const int moves = affinityCalls(calls);
+        placement.setTransmitUse(5, TransmitUse::Stopped);
+        QCOMPARE(placement.planRevision(), revision);
+        QCOMPARE(affinityCalls(calls), moves);
+    }
+
+    // Where the system refuses raised priority, the plan in force says so:
+    // the display load governor then counts a receiver whose core a
+    // spectrum thread may use.
+    void appliedPlanIsRaisedOnlyWhereTheSystemAllowsIt()
+    {
+        SysfsFixture f;
+        layOutRk3588s(f);
+        QList<Call> calls;
+        qint64 current = 1;
+        ThreadPlacement placement;
+        placement.start(f.read(), demand({0}, true),
+                        std::make_unique<RecordingApi>(&calls, &current), false);
+        current = 101;
+        placement.onWdspThreadStarted(kWdspThreadRxMain, 0);
+        placement.setChannelActive(ThreadRole::RxWorker, 0, true);
+        current = 200;
+        placement.registerCurrentThread(ThreadRole::DspThread);
+        QVERIFY(placement.currentPlan().raisedFor(ThreadRole::RxWorker, 0));
+        const PlacementPlan applied = placement.appliedPlan();
+        QCOMPARE(applied.cpuFor(ThreadRole::RxWorker, 0), 4);
+        QVERIFY(!applied.raisedFor(ThreadRole::RxWorker, 0));
+        QVERIFY(!applied.raisedFor(ThreadRole::DspThread));
+        QCOMPARE(niceCalls(calls), 0);
+    }
+
     // G-06: the three transmit roles, in order, come before every receive
     // worker after the first. Eight equal cores reserve six (N-2).
     void transmitRolesComeBeforeFurtherReceivers()
@@ -368,6 +937,9 @@ private slots:
         QCOMPARE(plan.cpuFor(ThreadRole::TxIqSender), 3);
         QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 1), 2);
         QCOMPARE(plan.cpuFor(ThreadRole::RxWorker, 2), -1);
+        // Equal cores: the housekeeping cores are no slower, so it does
+        // not crowd the second receiver's core.
+        QVERIFY(plan.coresFor(ThreadRole::RxWorker, 2).isEmpty());
     }
 
     void raspberryPiReservesTheTopTwoCores()

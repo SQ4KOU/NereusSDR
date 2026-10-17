@@ -90,6 +90,14 @@ warren@wpratt.com
 
 using namespace NereusSDR;
 
+// MinGW imports a static constexpr member of an exported class by address
+// when it is bound to a reference (QCOMPARE does), and the Core DLL never
+// exports one, so this test did not link on Windows. It reads these
+// copies by value instead.
+namespace {
+constexpr float kMeterUninitialisedSentinel = NereusSDR::TxChannel::kMeterUninitialisedSentinel;
+} // namespace
+
 class TestTxChannelMeters : public QObject {
     Q_OBJECT
 
@@ -104,7 +112,7 @@ private slots:
         // The sentinel must be exactly -999.0f, not an approximation.
         // This is the contract between TxChannel and UI code: a reading of
         // exactly -999.0f means "WDSP channel not initialised", not "no signal".
-        QCOMPARE(TxChannel::kMeterUninitialisedSentinel, -999.0f);
+        QCOMPARE(kMeterUninitialisedSentinel, -999.0f);
     }
 
     // ── getTxMicMeter() — uninitialised channel ────────────────────────────────
@@ -122,7 +130,7 @@ private slots:
         TxChannel ch(kChannelId);
         // txa[kChannelId].rsmpin.p == nullptr in unit-test builds;
         // null-guard must fire and return kMeterUninitialisedSentinel.
-        QCOMPARE(ch.getTxMicMeter(), TxChannel::kMeterUninitialisedSentinel);
+        QCOMPARE(ch.getTxMicMeter(), kMeterUninitialisedSentinel);
     }
 
     void getTxMicMeter_uninitialised_returnsMinus999()
@@ -140,7 +148,7 @@ private slots:
     void getAlcMeter_uninitialised_returnsSentinel()
     {
         TxChannel ch(kChannelId);
-        QCOMPARE(ch.getAlcMeter(), TxChannel::kMeterUninitialisedSentinel);
+        QCOMPARE(ch.getAlcMeter(), kMeterUninitialisedSentinel);
     }
 
     void getAlcMeter_uninitialised_returnsMinus999()
@@ -194,16 +202,16 @@ private slots:
         // Deferred meters return 0.0f, NOT the -999 sentinel.
         // UI code must handle both values differently.
         TxChannel ch(kChannelId);
-        QVERIFY(ch.getEqMeter()   != TxChannel::kMeterUninitialisedSentinel);
-        QVERIFY(ch.getLvlrMeter() != TxChannel::kMeterUninitialisedSentinel);
-        QVERIFY(ch.getCfcMeter()  != TxChannel::kMeterUninitialisedSentinel);
-        QVERIFY(ch.getCompMeter() != TxChannel::kMeterUninitialisedSentinel);
+        QVERIFY(ch.getEqMeter()   != kMeterUninitialisedSentinel);
+        QVERIFY(ch.getLvlrMeter() != kMeterUninitialisedSentinel);
+        QVERIFY(ch.getCfcMeter()  != kMeterUninitialisedSentinel);
+        QVERIFY(ch.getCompMeter() != kMeterUninitialisedSentinel);
     }
 
     void activeMeter_sentinelDoesNotEqualZero()
     {
         // The sentinel (-999.0f) is distinct from the deferred-meter value (0.0f).
-        QVERIFY(TxChannel::kMeterUninitialisedSentinel != 0.0f);
+        QVERIFY(kMeterUninitialisedSentinel != 0.0f);
     }
 };
 

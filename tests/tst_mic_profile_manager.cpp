@@ -32,6 +32,19 @@ static QString profileKey(const QString& mac, const QString& name, const QString
     return QStringLiteral("hardware/%1/tx/profile/%2/%3").arg(mac, name, field);
 }
 
+// Two-tone is one Setup value, not profile content: Thetis TX profiles carry
+// no two-tone fields (database.cs:4299 AddTXProfileTable [v2.10.3.15]).
+static const QStringList kTwoToneKeys = {
+    QStringLiteral("TwoToneFreq1"),
+    QStringLiteral("TwoToneFreq2"),
+    QStringLiteral("TwoToneLevel"),
+    QStringLiteral("TwoTonePower"),
+    QStringLiteral("TwoToneFreq2Delay"),
+    QStringLiteral("TwoToneInvert"),
+    QStringLiteral("TwoTonePulsed"),
+    QStringLiteral("TwoToneDrivePowerOrigin"),
+};
+
 static QString activeKey(const QString& mac)
 {
     return QStringLiteral("hardware/%1/tx/profile/active").arg(mac);
@@ -303,17 +316,19 @@ private slots:
         QCOMPARE(defs.value("MicGain").toString(), QStringLiteral("-6"));
         QCOMPARE(defs.value("Mic_Input_Boost").toString(), QStringLiteral("True"));
         QCOMPARE(defs.value("VOX_HangTime").toString(), QStringLiteral("500"));
-        QCOMPARE(defs.value("TwoToneFreq1").toString(), QStringLiteral("700"));
-        QCOMPARE(defs.value("TwoToneDrivePowerOrigin").toString(),
-                 QStringLiteral("DriveSlider"));
-        // 106 keys total: 22 mic/VOX/MON/two-tone (3M-1c, was 23 — dropped
-        // AntiVox_Source_VAX in 3M-3a-iv Option A refactor) + 27 EQ/Lev/ALC
+        for (const QString& key : kTwoToneKeys) {
+            QVERIFY2(!defs.contains(key), qPrintable(key));
+        }
+        // 100 keys total: 15 mic/VOX/MON (3M-1c, less AntiVox_Source_VAX
+        // dropped in the 3M-3a-iv Option A refactor and the eight two-tone
+        // keys that left profiles on 2026-10-09) + 27 EQ/Lev/ALC
         // (3M-3a-i G) + 1 TXParaEQData (3M-3a-ii follow-up Batch 6) +
         // 41 CFC/CPDR/CESSB/PhRot (3M-3a-ii G) +
         // 2 FilterLow/FilterHigh (Plan 4 Cluster A D1) +
         // 2 line_in_gain/user_dig_out (P1 full-parity Task 2.4) +
-        // 11 DEXP envelope/ratios/look-ahead/SCF (3M-3a-iii Tasks 7-10).
-        QCOMPARE(defs.size(), 108);
+        // 11 DEXP envelope/ratios/look-ahead/SCF (3M-3a-iii Tasks 7-10) +
+        // 1 EQUseLegacy (R-R3-49 parity Task 4).
+        QCOMPARE(defs.size(), 100);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -549,22 +564,10 @@ private slots:
                  QStringLiteral("0.75"));
         QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "Mic_Source")).toString(),
                  QStringLiteral("Radio"));
-        QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "TwoToneFreq1")).toString(),
-                 QStringLiteral("800"));
-        QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "TwoToneFreq2")).toString(),
-                 QStringLiteral("2100"));
-        QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "TwoToneLevel")).toString(),
-                 QStringLiteral("-12.5"));
-        QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "TwoTonePower")).toString(),
-                 QStringLiteral("75"));
-        QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "TwoToneFreq2Delay")).toString(),
-                 QStringLiteral("250"));
-        QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "TwoToneInvert")).toString(),
-                 QStringLiteral("False"));
-        QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "TwoTonePulsed")).toString(),
-                 QStringLiteral("True"));
-        QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "TwoToneDrivePowerOrigin")).toString(),
-                 QStringLiteral("Fixed"));
+        // A profile save writes no two-tone key.
+        for (const QString& key : kTwoToneKeys) {
+            QVERIFY2(!s.contains(profileKey(kMacA, "MyProfile", key)), qPrintable(key));
+        }
 
         // Profile list now contains Default + 20 factory profiles +
         // RADE (3R K1) + MyProfile = 23.

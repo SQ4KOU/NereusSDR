@@ -189,6 +189,9 @@
 //                applied (Thetis DisablePA and hf_tr_relay,
 //                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-10-15 - RemoteRigctld/ is OperatorLocal: a remote window's own
+//                rigctld. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -391,6 +394,9 @@ const Rule kPrefixes[] = {
     // "RemoteVax/<core>/Slice<N>/Channel"). This computer's VAX, kept per
     // Core; never the Core's own Slice<N>/VaxChannel.
     { "RemoteVax/", SettingsScope::OperatorLocal },
+    // 2026-10-15: a remote window's own rigctld (RemoteRigctlServer),
+    // listening on this computer for its programs.
+    { "RemoteRigctld/", SettingsScope::OperatorLocal },
 
     // PGXL / TGXL / RF2K-S: physically attached to the station (the
     // amplifier/tuner sits at the radio site, not on an operator's
@@ -499,6 +505,12 @@ const Rule kWholeKeys[] = {
     { "DisplayFftWindow", SettingsScope::Station },
     { "DisplayHzPerBinTarget", SettingsScope::Station },
     { "DisplaySpectrumFps", SettingsScope::Station },
+    // The FFT sizing mode (Auto, HzPerBin, Fixed) and the last Hz/bin
+    // target chosen (design D38, D39): which control sets the size every
+    // window's and the phone's FFT runs, so they sit beside the size and
+    // the target they choose between (ControlRanges.h).
+    { "DisplayFftSizingMode", SettingsScope::Station },
+    { "DisplayHzPerBinLastTarget", SettingsScope::Station },
 
     // TX-side WDSP analyzer configuration. TxAnalyzer owns the detector,
     // averaging, normalization, FFT geometry and window applied before TX

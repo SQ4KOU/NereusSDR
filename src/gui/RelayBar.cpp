@@ -16,6 +16,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - JJ's option B: fit small workspace text to the approved
+//                 11 logical-pixel floor. J.J. Boyd (KG4VCF), AI-assisted
+//                 via OpenAI Codex. Classic geometry and colors retained.
 //   2026-05-18  Extracted RelayBar widget from AetherSDR
 //                 src/gui/HGauge.h (inner class) into standalone
 //                 NereusSDR widget by J.J. Boyd (KG4VCF), with
@@ -24,6 +27,7 @@
 
 #include "RelayBar.h"
 #include "StyleConstants.h"
+#include "gui/styles/WorkspacePreview.h"
 
 #include <QPainter>
 #include <QWheelEvent>
@@ -95,26 +99,29 @@ void RelayBar::paintEvent(QPaintEvent*)
 
     // Label
     QFont f = font();
-    f.setPixelSize(10);
+    f.setPixelSize(WorkspacePreview::readableTextPixelSize(10));
     f.setBold(true);
     p.setFont(f);
-    p.setPen(QColor(Style::kTextPrimary));
+    // Workspace preview: roleColour() returns the legacy colour with the
+    // switch off.
+    using WorkspacePreview::roleColour;
+    p.setPen(roleColour(QColor(Style::kTextPrimary), "text"));
     const QFontMetrics fmLabel(f);
     p.drawText(0, barY + barH / 2 + fmLabel.ascent() / 2, m_label);
 
     // Bar background
-    p.fillRect(barX, barY, barW, barH, QColor(Style::kPanelBg));
-    p.setPen(QColor("#203040"));
+    p.fillRect(barX, barY, barW, barH, roleColour(QColor(Style::kPanelBg), "panel"));
+    p.setPen(roleColour(QColor("#203040"), "border-subtle"));
     p.drawRect(barX, barY, barW - 1, barH - 1);
 
     // Filled portion
     float frac = qBound(0.0f, m_value / 255.0f, 1.0f);
     int fillW = static_cast<int>(frac * (barW - 2));
     if (fillW > 0)
-        p.fillRect(barX + 1, barY + 1, fillW, barH - 2, QColor(Style::kAccent));
+        p.fillRect(barX + 1, barY + 1, fillW, barH - 2, roleColour(QColor(Style::kAccent), "accent"));
 
     // Value text
-    p.setPen(QColor(Style::kTextPrimary));
+    p.setPen(roleColour(QColor(Style::kTextPrimary), "text"));
     const QString valText = QString::number(m_value);
     const QFontMetrics fm(f);
     p.drawText(w - valueW, barY + barH / 2 + fm.ascent() / 2, valText);

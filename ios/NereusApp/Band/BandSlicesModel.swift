@@ -1,5 +1,6 @@
 // NereusSDR for iOS: this device's slices on one band, read from the mirror, and the touches that tune them
 // SPDX-License-Identifier: GPL-3.0-or-later WITH AdditionRef-NereusSDR-AppStore-permission
+// 2026-10-12: J.J. Boyd (KG4VCF), V2 opt-in/authority gate; AI-assisted via OpenAI Codex.
 
 import Combine
 import Foundation
@@ -388,6 +389,7 @@ final class BandSlicesModel: ObservableObject {
 
     /// One write of the slice's mode (`dspMode`, the catalogue's `modes` id).
     func setMode(_ mode: Int, sliceId: Int) {
+        guard catalog?.offeredModes.contains(where: { $0.id == mode }) == true else { return }
         writeDirect("dspMode", .enumeration(Int64(mode)), sliceId: sliceId)
     }
 
@@ -1201,12 +1203,13 @@ final class BandSlicesModel: ObservableObject {
             }
             let mode = Int(object["dspMode"]?.number ?? -1)
             let modes = catalog?.modes ?? []
-            let modeLabel = modes.first(where: { $0.id == mode })?.label ?? ""
+            let description = catalog?.modeDescription(mode)
+            let modeLabel = description?.label ?? ""
             let slice = BandSlice(id: id, frequencyHz: shown[id] ?? frequency,
                                   filterLowHz: object["filterLow"]?.number ?? 0,
                                   filterHighHz: object["filterHigh"]?.number ?? 0,
                                   colour: BandSlice.colour(forIndex: id, in: catalog?.sliceColours ?? []),
-                                  lowerSideband: BandSlice.isLowerSideband(mode: mode, in: modes),
+                                  lowerSideband: description.map { $0.sideband == .lower } ?? BandSlice.isLowerSideband(mode: mode, in: modes),
                                   txSlice: object["txSlice"]?.flag ?? false)
             next.append(Entry(slice: slice, rxAntenna: object["rxAntenna"]?.text ?? "",
                               txAntenna: object["txAntenna"]?.text ?? "",

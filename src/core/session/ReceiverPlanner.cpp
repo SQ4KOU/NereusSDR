@@ -22,6 +22,11 @@
 //               listeners, named to a device that shares slices. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-10-12: devicesHoldingReceivers() in place of
+//               namesHoldingReceivers(), which left out the Core's own
+//               position on a Core no desktop hosts and left a gap for a
+//               device with no name. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/ReceiverPlanner.h"
@@ -388,9 +393,9 @@ bool ReceiverPlanner::anotherDeviceHoldsAReceiver(const QByteArray& requester) c
     return false;
 }
 
-QStringList ReceiverPlanner::namesHoldingReceivers(const QByteArray& requester) const
+QList<QByteArray> ReceiverPlanner::devicesHoldingReceivers(const QByteArray& requester) const
 {
-    QStringList names;
+    QList<QByteArray> devices;
     for (const int id : m_model.sliceOwnership()->liveSlices()) {
         const SliceModel* slice = m_model.sliceById(id);
         const QByteArray subject = subjectOf(id);
@@ -398,12 +403,11 @@ QStringList ReceiverPlanner::namesHoldingReceivers(const QByteArray& requester) 
             || subject == requester) {
             continue;
         }
-        const DeviceInfo info = m_describe(subject);
-        if (info.known && !names.contains(info.name)) {
-            names.append(info.name);
+        if (!devices.contains(subject)) {
+            devices.append(subject);
         }
     }
-    return names;
+    return devices;
 }
 
 // ── JSON ─────────────────────────────────────────────────────────────────

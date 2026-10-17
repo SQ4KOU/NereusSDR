@@ -53,6 +53,15 @@ public:
     void retunePan(const QString&);
     // Read-only test seam; production reads the model's local MOX controller.
     void setLocalKeyedQueryForTest(std::function<bool()> query);
+    struct PanStatus {
+        bool requestedEnabled{false};
+        bool active{false};
+        bool paused{false};
+        bool sourceAvailable{false};
+    };
+    std::optional<PanStatus> statusForPan(const QString& panId) const;
+signals:
+    void panStatusChanged(const QString& panId);
 private:
     struct Entry;
     QHash<QString, QSharedPointer<Entry>> m_entries;

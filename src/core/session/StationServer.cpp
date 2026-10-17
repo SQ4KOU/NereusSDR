@@ -1,6 +1,44 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-10-12: The radio's second firmware number: firmwareBeta for a
+//               minor-11 peer that declared firmwareBeta 1
+//               (RadioModel::firmwareBetaVersion). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-12 — J.J. Boyd (KG4VCF), gate experimental RADE V2 opt-in;
+//                AI-assisted implementation via OpenAI Codex.
+//   2026-10-11: R-DISP-RETUNE (third wave): spectrumPictureVersion 1 for a
+//               minor-11 peer that declared spectrumPicture 1, media on.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09: Core speaker: radio's coreSpeakerVolume, coreSpeakerMuted,
+//               coreSpeakerDevice, coreSpeakerDevices, coreSpeakerState and
+//               coreSpeakerDetails go only to a peer that declared
+//               coreSpeaker 1, on a Core that has its own speaker
+//               (RadioModel::coreSpeakerHost); that peer alone is sent
+//               coreSpeakerVersion 1 (before coreBuildInfo), and a write of
+//               one from any other peer is refused (native audio plan Task
+//               21, R-AUD-25, R-AUD-28). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-10-09: An accepted remote transmit setting, notch flag or radio
+//               speaker write schedules the Core's coalesced settings save.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09: A clamped remote write that changed a saveable value
+//               (a radio speaker volume above the maximum) schedules the
+//               save too. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-09: The schema version comment names v10. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-06: Setup description version 25 (Audio > Outputs' radio
+//               speaker rows, TX Input titled Microphone) is the cap
+//               (R-SPK-23). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-06: Radio speaker: radio's radioSpeakerVolume,
+//               radioSpeakerMuted, speakerAmplifierMode,
+//               radioSpeakerAvailability and speakerAmplifierAvailable go
+//               only to a peer that declared radioSpeaker 1, which is sent
+//               radioSpeakerVersion 1 (before coreBuildInfo); a write of
+//               one from any other peer is refused (R-SPK-13, R-SPK-14).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-10-04: Resume retained automatic PureSignal intent after the
 //               first successful media admission, preserving retirement.
 //               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
@@ -134,6 +172,22 @@
 //               transmit and keys as the radio's own PTT does (ruling
 //               8.9). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-10-15: remote transmit cut off the main thread:
+//               the cut guard armed with the key, fed keepalives on
+//               main and "tx" receipts off main, its cut posted to
+//               onTransmitCutOffMain. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
+//   2026-10-15: review fix wave: the cut's main-thread handling waits one
+//               event-loop turn and re-checks the key, so a release read in
+//               that turn records no link loss; a server destroyed with a
+//               cut still set clears it. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
+//   2026-10-15: re-review wording: the one-turn deferral comment says why a
+//               queued call is enough. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-10-16: the cut guard's measured silence goes to tripQuiet, so
+//               its stop never reports 400 ms for a longer silence. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -966,6 +1020,30 @@
 //               watchdog's stop, the heartbeat and a connection's end.
 //               Logging only. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-10-07: CAT setup from a connected desktop: the `stationCat` object,
+//               stationCatVersion, the four CAT commands' gate and the
+//               `catLog` stream, only for a peer that declared stationCat.
+//               J.J. Boyd (KG4VCF). AI tooling: Claude Code.
+//   2026-10-08: Rotor control plan Task 4b: remoteRotorControlVersion 1,
+//               the read-only `rotor` object and the seven rotor verbs,
+//               admitted as the accessory settings verbs are. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08: Rotor control plan Task 4c: remoteRotorControlVersion's
+//               comment names the desktop running its own radio. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08: Final review I3: refreshRotorPorts admitted with the other
+//               rotor verbs. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-10: txReadingsVersion 4: the six transmit peak readings. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-12: each slice access entry names the holder of the receiver
+//               its slice is on (receiverHolderDeviceId). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-12: sliceHolderWords() gives its words for the start of a
+//               sentence too, and the notice of a take of control names
+//               the taker through it: on a Core no desktop hosts the
+//               Core's own position was named with nothing. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1023,7 +1101,9 @@
 #include "core/SliceOwnership.h"
 #include "core/MoxController.h"
 #include "core/safety/BandPlanGuard.h"
+#include "core/safety/RemoteTxCutGuard.h"
 #include "core/safety/RemoteTxWatchdog.h"
+#include "core/safety/TransmitCutLine.h"
 #include "core/session/TxWatchServer.h"
 #include "core/safety/TransmitHolder.h"
 #include "core/safety/StationSliceFreeze.h"
@@ -1069,8 +1149,12 @@
 #include "models/RfKitModel.h"
 #include "models/SpotModel.h"
 #include "models/StationTciModel.h"
+#include "models/StationCatModel.h"
+#include "core/cat/CatService.h"
+#include "core/cat/StationCatController.h"
 #include "models/AccessoryDataModel.h"
 #include "models/AccessorySettingsModel.h"
+#include "models/RotorModel.h"
 #include "models/TunerModel.h"
 #include "core/setup/SetupDescriptionService.h"
 #include "core/PaCalProfile.h"
@@ -1099,8 +1183,18 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <mutex>
 
 namespace NereusSDR {
+
+// Remote transmit cut off the main thread: what the guard's cut reaches,
+// under `mutex` (the guard's thread reads it; the main thread sets it and
+// clears it before the server goes).
+struct StationServer::TxCutTarget {
+    std::mutex mutex;
+    StationServer* server = nullptr;
+    std::shared_ptr<TransmitCutLine> line;
+};
 
 struct StationServer::PendingRelayWatch {
     QPointer<DataChannelTransport> transport;
@@ -1290,6 +1384,20 @@ bool isStationTciMessage(const SessionMessage& message)
             && message.className == "StationTciModel");
 }
 
+// CAT setup from a connected desktop (stationCatVersion 1): the Core's CAT,
+// read-only, only for a peer at kRadioIdentitySessionProtocolMinor whose
+// hello declared stationCat 1, on a Core that runs CAT. Its log is the
+// `catLog` record stream, under the same gate.
+constexpr const char* kStationCatKey = "stationCat";
+constexpr const char* kCatLogStream = "catLog";
+
+bool isStationCatMessage(const SessionMessage& message)
+{
+    return message.objectKey == kStationCatKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "StationCatModel");
+}
+
 // R-IOS-25 / R-R3-49 (parity Task 19, recordStreamVersion 1): the Core's
 // spot sources, read-only, for a peer at kRadioIdentitySessionProtocolMinor
 // on a Core with a local radio model.
@@ -1335,6 +1443,26 @@ bool isAccessoryDataMessage(const SessionMessage& message)
 // kRadioIdentitySessionProtocolMinor on a Core that owns its accessories.
 constexpr const char* kAccessorySettingsKey = "accessorySettings";
 
+// Rotor control plan Task 4b (remoteRotorControlVersion 1): the Core's
+// antenna rotor, read-only, for a peer at kRadioIdentitySessionProtocolMinor
+// on a Core that owns a rotor connection.
+constexpr const char* kRotorKey = "rotor";
+
+bool isRotorMessage(const SessionMessage& message)
+{
+    return message.objectKey == kRotorKey
+        || (message.kind == SessionMessageKind::Schema && message.className == "RotorModel");
+}
+
+// Rotor control plan Task 4b: the rotor verbs (remote rotor control v1,
+// "Commands"); refreshRotorPorts came with final review I3.
+bool isRotorVerb(const QByteArray& verb)
+{
+    return verb == "setRotorTarget" || verb == "turnRotorToCall" || verb == "stopRotor"
+        || verb == "nudgeRotor" || verb == "configureRotor" || verb == "disconnectRotor"
+        || verb == "setRotorPresets" || verb == "refreshRotorPorts";
+}
+
 // iPhone app Task 13 (R-IOS-08, deviceAdminVersion 1): the Core's paired
 // devices and label, read-only, for a device at
 // kRadioIdentitySessionProtocolMinor whose hello declares deviceAuth. Any
@@ -1377,6 +1505,12 @@ bool isDevicesSettingsKey(const QString& key)
 constexpr const char* kCatalogKey = "catalog";
 
 constexpr const char* kSetupDescriptionKey = "setup";
+// The highest Setup description version the Core sends (29: the accepted
+// eight Display pages and scoped picture controls; 28: Display's FFT
+// sizing rows and the averaging times from 1 ms; 27: Appearance's Trace
+// Color row beside Fill Color; 26: Display's Waterfall Defaults level gates
+// and the allOf form of enabledWhen).
+constexpr int kSetupDescriptionCap = 29;
 
 bool isSetupDescriptionMessage(const SessionMessage& message)
 {
@@ -1505,6 +1639,22 @@ constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
     // holding it (rxFilterLowPassVersion 1, shared-input filters ruling (d)).
     {"RadioModel", "radio", false, "rxFilter0LowPassReason", "rxFilterLowPass"},
     {"RadioModel", "radio", false, "rxFilter0LowPassSlice", "rxFilterLowPass"},
+    // The radio speaker at the Core: its RADIO level, mute and amplifier
+    // choice, and the two reports (radioSpeakerVersion 1, R-SPK-14).
+    {"RadioModel", "radio", false, "radioSpeakerVolume", "radioSpeaker"},
+    {"RadioModel", "radio", false, "radioSpeakerMuted", "radioSpeaker"},
+    {"RadioModel", "radio", false, "speakerAmplifierMode", "radioSpeaker"},
+    {"RadioModel", "radio", false, "radioSpeakerAvailability", "radioSpeaker"},
+    {"RadioModel", "radio", false, "speakerAmplifierAvailable", "radioSpeaker"},
+    // The Core's own speaker: level, mute, device, card list, state and
+    // details (coreSpeakerVersion 1, native audio plan Task 21), only from
+    // a Core that has one (StationServer::peerGetsCoreSpeaker).
+    {"RadioModel", "radio", false, "coreSpeakerVolume", "coreSpeaker"},
+    {"RadioModel", "radio", false, "coreSpeakerMuted", "coreSpeaker"},
+    {"RadioModel", "radio", false, "coreSpeakerDevice", "coreSpeaker"},
+    {"RadioModel", "radio", false, "coreSpeakerDevices", "coreSpeaker"},
+    {"RadioModel", "radio", false, "coreSpeakerState", "coreSpeaker"},
+    {"RadioModel", "radio", false, "coreSpeakerDetails", "coreSpeaker"},
     // The CFC dialog's band editor (transmitSettingsVersion 15).
     {"TransmitModel", "transmit", false, "cfcProfile", "cfcProfile"},
 };
@@ -1687,6 +1837,51 @@ bool isTransmitKeyingProperty(const QByteArray& name)
 // client, never runs on the station for a client's write.
 constexpr const char* kOutboundWriteReason =
     "The Core sets this itself; it cannot be changed from here.";
+
+// Radio speaker (R-SPK-14): why a write of radio's radio speaker properties
+// is refused from a peer that did not declare radioSpeaker 1. Such a peer
+// is never sent them, so only a misbehaving one gets here.
+constexpr const char* kRadioSpeakerWriteReason =
+    "Update this app to change the radio speaker on this Core.";
+
+// Core speaker (native audio plan Task 21): why a write of radio's Core
+// speaker properties is refused from a peer that is not sent them.
+constexpr const char* kCoreSpeakerWriteReason =
+    "Update this app to change the Core speaker on this Core.";
+
+bool isCoreSpeakerProperty(const QByteArray& name)
+{
+    return name == "coreSpeakerVolume" || name == "coreSpeakerMuted"
+        || name == "coreSpeakerDevice" || name == "coreSpeakerDevices"
+        || name == "coreSpeakerState" || name == "coreSpeakerDetails";
+}
+
+bool isRadioSpeakerProperty(const QByteArray& name)
+{
+    return name == "radioSpeakerVolume" || name == "radioSpeakerMuted"
+        || name == "speakerAmplifierMode" || name == "radioSpeakerAvailability"
+        || name == "speakerAmplifierAvailable";
+}
+
+// Two-tone plan Task 3: an accepted write whose model keeps it in the
+// in-memory AppSettings only (TransmitModel::persistOne,
+// NotchModel::persist, RadioModel::saveRadioSpeaker), with no save of its
+// own. The Core then schedules its coalesced settings save, the one a
+// slice edit uses, so the change reaches the file before the Core exits.
+// A keying property is not a setting and asks for none.
+bool acceptedWriteAsksForSave(const QByteArray& objectKey, const QByteArray& name)
+{
+    if (objectKey == QByteArray(kTransmitKey)) {
+        return !isTransmitKeyingProperty(name);
+    }
+    if (objectKey == "notches") {
+        return true;
+    }
+    if (objectKey == QByteArray(kRadioKey)) {
+        return isRadioSpeakerProperty(name);
+    }
+    return false;
+}
 
 // The tuner properties whose remote write reaches the tuner itself
 // (TunerModel::applyMirroredValue sends operate, bypass or antenna
@@ -2226,7 +2421,7 @@ QString peerNameForThisProcess()
 // Each side's own AppSettings schema version, read by the key name
 // AppSettings::ensureSettingsAtVersion() writes it under. Read rather than
 // hardcoded: the literal lives at exactly one place today (CoreInit.cpp's
-// ensureSettingsAtVersion(9) call), and duplicating it here would create a
+// ensureSettingsAtVersion(10) call), and duplicating it here would create a
 // second copy free to drift from the migrations that actually ran.
 qint32 settingsSchemaVersionOf(const AppSettings& settings)
 {
@@ -2385,8 +2580,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             if (m_txWatchdog) {
                 // Control logging lane: logged after, as it was watched.
                 const bool watched = m_txWatchdog->isWatching(deviceId);
-                m_txWatchdog->keepalive(deviceId, sequence, epoch,
-                                        RemoteTxWatchdog::Path::Auxiliary);
+                if (m_txWatchdog->keepalive(deviceId, sequence, epoch,
+                                            RemoteTxWatchdog::Path::Auxiliary)) {
+                    noteKeepaliveForCutGuard(deviceId, 0);
+                }
                 controlLogKeepalive(deviceId, ControlLog::KeepaliveChannel::TxWatch, 0, watched);
             }
         }, this);
@@ -2811,6 +3008,40 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     m_controlLog.watchdogStopped(deviceId, transport, info, linkClosed,
                                                  silentMs);
                 });
+        // Remote transmit cut off the main thread (2026-10-15): the guard
+        // judges the same 400 ms from the "tx" channel's messages at their
+        // receipt, on a thread of its own, so a held main thread still cuts
+        // a keyed remote device's transmit. Its cut, on its thread, only
+        // cuts the model's line and posts the rest here
+        // (onTransmitCutOffMain); it never waits on this thread.
+        m_txCutTarget = std::make_shared<TxCutTarget>();
+        m_txCutTarget->server = this;
+        m_txCutTarget->line = m_radioModel->transmitCutLine();
+        connect(m_radioModel, &QObject::destroyed, this, [this]() {
+            const std::lock_guard<std::mutex> lock(m_txCutTarget->mutex);
+            m_txCutTarget->line.reset();
+        });
+        {
+            const std::shared_ptr<TxCutTarget> target = m_txCutTarget;
+            m_txCutGuard = std::make_shared<RemoteTxCutGuard>(
+                [target](quint64 mediaEpoch, quint64 armSerial, qint64 silentMs) {
+                    const std::lock_guard<std::mutex> lock(target->mutex);
+                    if (target->line) {
+                        target->line->cut();
+                    }
+                    StationServer* const server = target->server;
+                    if (server != nullptr) {
+                        // Posted, never waited on. A post that has not run
+                        // when this object goes is dropped with it.
+                        QMetaObject::invokeMethod(
+                            server,
+                            [server, mediaEpoch, armSerial, silentMs]() {
+                                server->onTransmitCutOffMain(mediaEpoch, armSerial, silentMs);
+                            },
+                            Qt::QueuedConnection);
+                    }
+                });
+        }
         connect(m_radioModel, &RadioModel::keyedByChanged, this,
                 &StationServer::followKeyedForWatchdog);
 
@@ -3634,6 +3865,12 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         const SliceModel* slice = m_radioModel->sliceById(sliceId);
         fields.txSelected = slice != nullptr && slice->txSliceMarked();
         fields.onAir = sliceTransmitting(sliceId);
+        // Ruling 6.3: the receiver's C-Tune setting is its holder's, and a
+        // pin from anyone else is refused (handleReceiverCommand). Naming
+        // the holder here lets a window know that before it asks.
+        const QByteArray holder =
+            slice != nullptr ? ownership->anchorOf(slice->streamIndex()) : QByteArray();
+        fields.receiverHolderDeviceId = holder.isEmpty() ? QString() : wireIdOf(holder);
         return fields;
     }, this);
     connect(m_sliceAccessSet, &SliceAccessSet::accessCreated, this,
@@ -3864,8 +4101,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 const std::optional<qint64> waitUs = m_dispatchingTransport != nullptr
                     ? m_dispatchingTransport->deliveringMessageWaitUs()
                     : std::nullopt;
-                m_txWatchdog->keepalive(requester, sequence, epoch,
-                                        RemoteTxWatchdog::Path::Session);
+                if (m_txWatchdog->keepalive(requester, sequence, epoch,
+                                            RemoteTxWatchdog::Path::Session)) {
+                    noteKeepaliveForCutGuard(requester, 0);
+                }
                 controlLogKeepalive(requester, ControlLog::KeepaliveChannel::Control,
                                     waitUs.value_or(0) / 1000, watched);
             }
@@ -4045,6 +4284,30 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
 
 StationServer::~StationServer()
 {
+    // Remote transmit cut off the main thread: nothing the guard's cut
+    // reaches may go first. The cut lets go of this object and the line,
+    // then the guard stops and joins its thread. A receipt hook still
+    // holding the guard for a moment finds nothing to cut.
+    if (m_txCutTarget) {
+        const std::lock_guard<std::mutex> lock(m_txCutTarget->mutex);
+        m_txCutTarget->server = nullptr;
+        m_txCutTarget->line.reset();
+    }
+    m_txCutGuard.reset();
+    // Its thread has stopped, so no new cut can start. A cut whose post
+    // (onTransmitCutOffMain) or its turn after (finishTransmitCutOnMain)
+    // has not run goes with this object, and nothing else would clear the
+    // connection's cut: every later key would be refused on the wire while
+    // the model and the windows show MOX on. The model catches up here
+    // instead, with the watchdog's sentence.
+    if (m_radioModel && m_radioModel->connection() != nullptr
+        && m_radioModel->connection()->transmitCut()) {
+        const QString sentence = RemoteTxWatchdog::stopMessage(
+            m_txCutGuardDevice.isEmpty() ? QStringLiteral("a device")
+                                         : deviceNameForStop(m_txCutGuardDevice));
+        m_radioModel->catchUpTransmitCut(sentence);
+    }
+
     const bool canonical = m_radioModel && m_radioModel->m_diversityStationServer == this;
     if (canonical) { m_radioModel->m_diversityStationServer.clear(); }
 
@@ -5604,6 +5867,20 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                                      "apps from here."), {}));
             break;
         }
+        // CAT setup from a connected desktop: the Core's CAT, for a peer
+        // that declared stationCat (worded as the TCI server's settings).
+        if ((message.commandVerb == "setStationCatChannel"
+             || message.commandVerb == "setStationCatGlobal"
+             || message.commandVerb == "testStationCatCommand"
+             || message.commandVerb == "refreshStationCatDevices")
+            && !peerGetsStationCat(transport)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to set up CAT on this Core.")
+                    : QStringLiteral("This Core cannot set up its CAT from here."), {}));
+            break;
+        }
         // Parity Task 23: the station TCI server's options and apps came
         // with stationTciVersion 2.
         if ((message.commandVerb == "setStationTciOptions"
@@ -5631,6 +5908,20 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                     ? QStringLiteral("Update this app to change the station's amplifier and "
                                      "tuner settings on this Core.")
                     : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
+            break;
+        }
+        // Rotor control plan Task 4b: the rotor verbs came with
+        // remoteRotorControlVersion 1, in the same minor-11 block, and are
+        // admitted exactly as the accessory settings verbs above (Stop
+        // included). Not a shared setting: a turn asks no one.
+        if (isRotorVerb(message.commandVerb)
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || remoteRotorControlVersion() < 1)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to turn the rotor on this Core.")
+                    : IStationLink::rotorUnavailableReason(), {}));
             break;
         }
         if (isAccessoryTxVerb(message.commandVerb)
@@ -7469,6 +7760,14 @@ void StationServer::buildMirror()
     // R-R3-48 (stationTciVersion 1): the Core's station TCI server.
     // Sent only to a peer at minor 11 on a Core that runs one.
     m_mirror->watch(QByteArray(kStationTciKey), m_radioModel->stationTciModel());
+    // CAT setup from a connected desktop (stationCatVersion 1): the Core's
+    // CAT. Sent only to a peer that declared stationCat (sendToPeer). The
+    // Core's serial ports are read once here; a window reads them again
+    // with refreshStationCatDevices.
+    m_mirror->watch(QByteArray(kStationCatKey), m_radioModel->stationCatModel());
+    if (StationCatController* cat = m_radioModel->stationCatController()) {
+        cat->refreshDevices();
+    }
     // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory
     // records and settings. Sent only to a peer at minor 11 on a Core that
     // owns its accessories.
@@ -7477,6 +7776,9 @@ void StationServer::buildMirror()
     // 1): the amp's and tuner's own settings. Sent only to a peer at minor
     // 11 on a Core that owns its accessories.
     m_mirror->watch(QByteArray(kAccessorySettingsKey), m_radioModel->accessorySettingsModel());
+    // Rotor control plan Task 4b (remoteRotorControlVersion 1): the Core's
+    // rotor. Sent only to a peer at minor 11 on a Core that owns one.
+    m_mirror->watch(QByteArray(kRotorKey), m_radioModel->rotorModel());
     // iPhone app Task 13 (deviceAdminVersion 1): the Core's paired devices.
     // Sent only to a device at minor 11 that declares deviceAuth.
     m_mirror->watch(QByteArray(kDevicesKey), m_devicesFacade.get());
@@ -7749,6 +8051,9 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     } else if (message.objectKey == kStationTciKey) {
         // R-R3-48: the switch changes only through setStationTci.
         stepAttRefusal = StationTciModel::readOnlyReason();
+    } else if (message.objectKey == kStationCatKey) {
+        // The Core's CAT changes only through its four commands.
+        stepAttRefusal = StationCatModel::readOnlyReason();
     } else if (message.objectKey == kSpotSourcesKey) {
         // Parity Task 19: the spot sources change only through spots.*.
         stepAttRefusal = SpotSourceHost::readOnlyReason();
@@ -7759,6 +8064,9 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         // R-R3-47 / R-R3-22: the devices' own settings change only through
         // their commands, which the Core sends to the device.
         stepAttRefusal = AccessorySettingsModel::readOnlyReason();
+    } else if (message.objectKey == kRotorKey) {
+        // Rotor control plan Task 4b: changed only through the rotor verbs.
+        stepAttRefusal = RotorLink::RotorModel::readOnlyReason();
     }
     // TX rulings (JJ, 2026-09-30): the attenuator and preamp act on the
     // slice the writer is shown. On a slice it only listens to, which
@@ -7824,6 +8132,13 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         const auto known = previous.constFind(update.name);
         if (known == previous.cend() || known->kind != update.kind) {
             refusals.insert(update.name, QStringLiteral("The Core does not have this setting, or not in this form."));
+            continue;
+        }
+        if (message.objectKey.startsWith("slice:") && update.name == "dspMode"
+            && isRade2DspMode(static_cast<DSPMode>(update.value.toInt()))
+            && !m_radioModel->radeV2Enabled()) {
+            refusals.insert(update.name, QStringLiteral(
+                "Experimental RADE V2 is disabled. Start the Core with NEREUS_ENABLE_RADE_V2=1 to enable it."));
             continue;
         }
         if (message.objectKey.startsWith("slice:") && update.name == "diversityEnabled") {
@@ -7924,6 +8239,15 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         }
         if (radioWrite && update.name == "rfKitEnabled") {
             refusals.insert(update.name, QString::fromLatin1(kRfKitSwitchWriteReason));
+            continue;
+        }
+        if (radioWrite && isRadioSpeakerProperty(update.name)
+            && !peerGetsFeatureProperties(transport, QByteArrayLiteral("radioSpeaker"))) {
+            refusals.insert(update.name, QString::fromLatin1(kRadioSpeakerWriteReason));
+            continue;
+        }
+        if (radioWrite && isCoreSpeakerProperty(update.name) && !peerGetsCoreSpeaker(transport)) {
+            refusals.insert(update.name, QString::fromLatin1(kCoreSpeakerWriteReason));
             continue;
         }
         if (!negotiated && (message.objectKey == "pureSignalSettings"
@@ -8048,6 +8372,28 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     }
     if (adjust) {
         adjust(results);
+    }
+    // Two-tone plan Task 3: one save request per batch, only for a write
+    // that was taken; a refused one changed nothing to save. A write the
+    // setter clamped is not accepted but did change the value (a radio
+    // speaker volume above the maximum), so a saveable property whose
+    // settled value moved asks for the save too.
+    const auto settledChanged = [&previous](const MirrorUpdate& value) {
+        return !previous.contains(value.name)
+            || !sameSettledValue(previous.value(value.name).value, value.value);
+    };
+    if (!m_radioModel.isNull()
+        && (std::any_of(results.cbegin(), results.cend(),
+                        [&message](const SessionPropertyResult& r) {
+                            return r.accepted
+                                && acceptedWriteAsksForSave(message.objectKey, r.property);
+                        })
+            || std::any_of(settled.cbegin(), settled.cend(),
+                           [&message, &settledChanged](const MirrorUpdate& value) {
+                               return acceptedWriteAsksForSave(message.objectKey, value.name)
+                                   && settledChanged(value);
+                           }))) {
+        m_radioModel->requestSettingsSave();
     }
     if (answer && negotiated && message.writeId != 0) {
         send(transport, SessionMessages::propertyResult(message.objectKey, message.writeId, results));
@@ -9167,6 +9513,11 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             && (minor < kRadioIdentitySessionProtocolMinor || stationTciVersion() < 1)) {
             return;
         }
+        // CAT setup from a connected desktop: nor the Core's CAT to a peer
+        // that did not declare stationCat.
+        if (isStationCatMessage(message) && !peerGetsStationCat(transport)) {
+            return;
+        }
         // R-R3-47 / R-R3-22: nor the accessory records to an older app, or
         // from a Core that does not own its accessories.
         if (isAccessoryDataMessage(message)
@@ -9177,6 +9528,12 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
         if (isAccessorySettingsMessage(message)
             && (minor < kRadioIdentitySessionProtocolMinor
                 || (pgxlControlVersion() < 3 && tgxlControlVersion() < 1))) {
+            return;
+        }
+        // Rotor control plan Task 4b: nor the rotor to an older app, or from
+        // a Core that owns no rotor connection.
+        if (isRotorMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor || remoteRotorControlVersion() < 1)) {
             return;
         }
         // iPhone app Task 13: nor the devices object to anyone but a device
@@ -9236,8 +9593,11 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             // Duplicate is off. 22: DSP > Options' RX buffer sizes'
             // on-the-air lock. 23: Hardware > Calibration's Rx1 6m LNA row.
             // 24: Audio > TX Input's Line In Gain in 1.5 dB steps and the
-            // Saturn G2's Mic Tip-Ring row.
-            const int version = qMin(declared, 24);
+            // Saturn G2's Mic Tip-Ring row. 25: Audio > Outputs' radio
+            // speaker rows; TX Input titled Microphone. 26: Display >
+            // Waterfall Defaults' level rows grey out as the desktop page's
+            // do (the allOf form of enabledWhen).
+            const int version = qMin(declared, kSetupDescriptionCap);
             // Version 20: the transmit holder's own PA band stays live.
             const QByteArray deviceId = peerInfoFor(transport).deviceId;
             const bool holdsTransmit = m_transmitHolder && !deviceId.isEmpty()
@@ -9564,6 +9924,14 @@ bool StationServer::peerGetsFeatureProperties(SessionTransport* transport,
         && peerDeclares(transport, feature, 1);
 }
 
+bool StationServer::peerGetsCoreSpeaker(SessionTransport* transport) const
+{
+    // A desktop that hosts a station plays through its own window's
+    // speakers; only a Core has a Core speaker (DaemonApp).
+    return peerGetsFeatureProperties(transport, QByteArrayLiteral("coreSpeaker"))
+        && m_radioModel->coreSpeakerHost();
+}
+
 bool StationServer::peerGetsCoreAddresses(SessionTransport* transport) const
 {
     return peerGetsFeatureProperties(transport, QByteArrayLiteral("coreAddresses"))
@@ -9591,9 +9959,11 @@ bool StationServer::fitPeerOnlyProperties(SessionTransport* transport,
         }
     }
     for (const PeerOnlyProperty& entry : kPeerOnlyProperties) {
+        const QByteArray feature(entry.feature);
         const bool peerGetsIt = entry.deviceKeyOnly
             ? peerGetsCoreAddresses(transport)
-            : peerGetsFeatureProperties(transport, QByteArray(entry.feature));
+            : feature == "coreSpeaker" ? peerGetsCoreSpeaker(transport)
+                                       : peerGetsFeatureProperties(transport, feature);
         if (!peerOnlyPropertyApplies(entry, message) || peerGetsIt) {
             continue;
         }
@@ -9643,6 +10013,16 @@ bool StationServer::peerGetsStationTciSettings(SessionTransport* transport) cons
     return peer != m_peers.cend() && stationTciVersion() >= 2
         && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor
         && peerDeclares(transport, QByteArrayLiteral("stationTciSettings"), 1);
+}
+
+// ── The Core's CAT (CAT setup from a connected desktop) ────────────────
+
+bool StationServer::peerGetsStationCat(SessionTransport* transport) const
+{
+    const auto peer = m_peers.constFind(transport);
+    return peer != m_peers.cend() && stationCatVersion() >= 1
+        && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(transport, QByteArrayLiteral("stationCat"), 1);
 }
 
 bool StationServer::fitStationTciSettingsToPeer(SessionTransport* transport,
@@ -9805,7 +10185,7 @@ StationServer::SliceForms StationServer::sliceFormsFor(SessionTransport* transpo
     return forms;
 }
 
-QString StationServer::sliceHolderWords(const QByteArray& device) const
+QString StationServer::sliceHolderWords(const QByteArray& device, WordsPlace place) const
 {
     // Slice control plan Task 17: who holds a slice, in a refusal. The Core
     // only for a slice nobody holds or the station device holds; otherwise
@@ -9813,8 +10193,21 @@ QString StationServer::sliceHolderWords(const QByteArray& device) const
     // word for its kind when it has none, and "another device" when the
     // Core knows neither. kindWord reads an empty kind as a computer, so an
     // empty kind is checked first.
+    //
+    // The one place a sentence gets a device's words. A sentence that took
+    // the device's name alone had a gap where the name goes for a device
+    // with none: the Core's own position on a Core no desktop hosts, a
+    // device that gave no name, and a device the Core has forgotten. The
+    // Core's own words start a sentence with a capital; a name is never
+    // changed.
+    const auto own = [place](QString words) {
+        if (place == WordsPlace::SentenceStart) {
+            words[0] = words.at(0).toUpper();
+        }
+        return words;
+    };
     if (device.isEmpty()) {
-        return QStringLiteral("the Core");
+        return own(QStringLiteral("the Core"));
     }
     const std::optional<ConnectedDevicesFacade::DeviceWords> words =
         m_connectedDevices->describe(device);
@@ -9822,13 +10215,13 @@ QString StationServer::sliceHolderWords(const QByteArray& device) const
         return words->name;
     }
     if (device == SliceOwnership::stationDevice()) {
-        return QStringLiteral("the Core");
+        return own(QStringLiteral("the Core"));
     }
     if (words && !words->kind.isEmpty()) {
         const QString kind = DeviceSessionRegistry::kindWord(words->kind).toLower();
-        return QStringLiteral("a %1").arg(kind);
+        return own(QStringLiteral("a %1").arg(kind));
     }
-    return QStringLiteral("another device");
+    return own(QStringLiteral("another device"));
 }
 
 QString StationServer::ownedElsewhereReason(int sliceId) const
@@ -9958,6 +10351,148 @@ void StationServer::followKeyedForWatchdog()
         m_txWatchdog->setKeyed(keyedBy.deviceId, true,
                                keyedBy.trigger == QByteArrayLiteral("vox") ? 0 : keyedBy.epoch);
     }
+    // Remote transmit cut off the main thread: the guard is armed for the
+    // remote key on the air, with that device's media session (0 without
+    // one: then it never judges), and armed afresh for each new key; no
+    // remote key disarms it. A media replacement mid-key keeps the
+    // session's epoch (DaemonMediaController::handleReplace hands the
+    // replacement peer m_epoch), so the guard keeps hearing it. A media
+    // session that starts after the key re-arms nothing until the key
+    // changes: the guard then never judges this key (epoch 0) or judges
+    // the older session's, which fails safe (a cut, never a missed cut);
+    // the watchdog still watches the key.
+    if (m_txCutGuard) {
+        if (remoteKey) {
+            const quint64 mediaEpoch = mediaEpochOfDevice(keyedBy.deviceId);
+            if (keyedBy.deviceId != m_txCutGuardDevice || keyedBy.epoch != m_txCutGuardKeyEpoch
+                || mediaEpoch != m_txCutGuardMediaEpoch) {
+                m_txCutGuardDevice = keyedBy.deviceId;
+                m_txCutGuardKeyEpoch = keyedBy.epoch;
+                m_txCutGuardMediaEpoch = mediaEpoch;
+                m_txCutGuard->arm(mediaEpoch);
+            }
+        } else if (!m_txCutGuardDevice.isEmpty()) {
+            m_txCutGuardDevice.clear();
+            m_txCutGuardKeyEpoch = 0;
+            m_txCutGuardMediaEpoch = 0;
+            m_txCutGuard->disarm();
+        }
+    }
+}
+
+quint64 StationServer::mediaEpochOfDevice(const QByteArray& deviceId) const
+{
+    quint64 newest = 0;
+    if (deviceId.isEmpty()) {
+        return newest;
+    }
+    for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
+        if (it->authenticated && it->mediaEpoch != 0 && it->sessionDeviceId == deviceId) {
+            newest = std::max(newest, it->mediaEpoch);
+        }
+    }
+    return newest;
+}
+
+void StationServer::noteKeepaliveForCutGuard(const QByteArray& deviceId, qint64 ageUs)
+{
+    if (!m_txCutGuard || deviceId.isEmpty() || deviceId != m_txCutGuardDevice) {
+        return;
+    }
+    m_txCutGuard->heardOnMain(RemoteTxCutGuard::Clock::now()
+                              - std::chrono::microseconds(std::max<qint64>(0, ageUs)));
+}
+
+std::function<void(std::chrono::steady_clock::time_point)>
+StationServer::txChannelReceiptHook(quint64 mediaEpoch) const
+{
+    if (!m_txCutGuard) {
+        return {};
+    }
+    const std::weak_ptr<RemoteTxCutGuard> weak = m_txCutGuard;
+    const std::shared_ptr<std::atomic<std::chrono::steady_clock::rep>> stamp =
+        m_lastTxChannelReceipt;
+    return [weak, stamp, mediaEpoch](std::chrono::steady_clock::time_point receivedAt) {
+        stamp->store(receivedAt.time_since_epoch().count(), std::memory_order_relaxed);
+        if (const std::shared_ptr<RemoteTxCutGuard> guard = weak.lock()) {
+            guard->heardOffMain(mediaEpoch, receivedAt);
+        }
+    };
+}
+
+std::chrono::steady_clock::time_point StationServer::lastTxChannelReceiptForTest() const
+{
+    return std::chrono::steady_clock::time_point(
+        std::chrono::steady_clock::duration(m_lastTxChannelReceipt->load(std::memory_order_relaxed)));
+}
+
+void StationServer::onTransmitCutOffMain(quint64 mediaEpoch, quint64 armSerial, qint64 silentMs)
+{
+    // The radio is already off the air (the cut ran on the guard's thread),
+    // so the model may learn one event-loop turn later. A release the
+    // device sent as its keepalives stopped rides the session link, which
+    // only this thread reads; after a stall it can still wait behind this
+    // post. QTimer::singleShot(0, this, ...) posts a queued call (Qt 6.11
+    // qtimer.cpp:368-389), so the rest of the cut runs one event-loop pass
+    // later. Qt runs a call posted during a pass only in the next pass
+    // (qcoreapplication.cpp:1795, 1834-1835), and QWebSocket reads its
+    // socket directly on readyRead (qwebsocket_p.cpp:678), so a release
+    // that reached the Core during the stall is read before this runs and
+    // the key it ended is not recorded as a lost link.
+    QTimer::singleShot(0, this, [this, mediaEpoch, armSerial, silentMs]() {
+        finishTransmitCutOnMain(mediaEpoch, armSerial, silentMs);
+    });
+}
+
+void StationServer::finishTransmitCutOnMain(quint64 mediaEpoch, quint64 armSerial,
+                                            qint64 silentMs)
+{
+    // The device the cut was for: the armed one while its media session is
+    // the cut's, otherwise whoever that media session is.
+    const QByteArray deviceId = mediaEpoch != 0 && mediaEpoch == m_txCutGuardMediaEpoch
+        ? m_txCutGuardDevice
+        : mediaSessionDevice(mediaEpoch);
+    const QString deviceHex = deviceId.isEmpty() ? QStringLiteral("(no device)")
+                                                 : QString::fromLatin1(deviceId.toHex());
+    if (!m_radioModel) {
+        qCWarning(lcStation).noquote()
+            << QStringLiteral("Transmit cut off the main thread for %1 after %2 ms: no radio "
+                              "model to catch up")
+                   .arg(deviceHex)
+                   .arg(silentMs);
+        return;
+    }
+    const bool current = m_txCutGuard && armSerial == m_txCutGuard->armSerial();
+    const bool keyedByDevice = !deviceId.isEmpty() && m_radioModel->keyedBy().deviceId == deviceId;
+    const bool watched = !deviceId.isEmpty() && m_txWatchdog && m_txWatchdog->isWatching(deviceId);
+    qCWarning(lcStation).noquote()
+        << QStringLiteral("Transmit cut off the main thread: no \"tx\" message from %1 for %2 ms "
+                          "(arm %3, %4)")
+               .arg(deviceHex)
+               .arg(silentMs)
+               .arg(armSerial)
+               .arg(current ? (keyedByDevice ? QStringLiteral("still keyed")
+                                             : QStringLiteral("no longer keyed"))
+                            : QStringLiteral("an earlier key"));
+    // The watchdog's own stop, once: it trips the device as a quiet link
+    // (VOX that device armed off, the stop recorded, StopAllTx) and no
+    // longer watches it, so its own check for the same silence, due while
+    // the main thread was held, finds nothing. When the watchdog tripped
+    // first, it is not watching and nothing more is stopped or recorded.
+    // When the device's release was read in the turn this waited, the key
+    // ended normally: no longer keyed by it, nothing is recorded.
+    if (current && keyedByDevice && watched) {
+        m_txWatchdog->tripQuiet(deviceId, silentMs);
+    }
+    // Always: the model and the radio agree, and the connection's cut is
+    // cleared so the next key reaches the radio. With nothing keyed (the
+    // key ended normally, or the watchdog's stop ran) the catch-up stops
+    // nothing. A stale cut (an earlier arm's) still catches up a key that
+    // slipped in after it: the wire already refused that key while the
+    // cut was set, so stopping it makes the model agree with the radio.
+    const QString sentence = RemoteTxWatchdog::stopMessage(
+        deviceId.isEmpty() ? QStringLiteral("a device") : deviceNameForStop(deviceId));
+    m_radioModel->catchUpTransmitCut(sentence);
 }
 
 void StationServer::disarmVoxArmedBy(const QByteArray& deviceId, const char* why)
@@ -10002,8 +10537,10 @@ void StationServer::txChannelMessage(quint64 mediaEpoch, const QByteArray& messa
     }
     // Control logging lane: logged after, as it was watched.
     const bool watched = m_txWatchdog->isWatching(deviceId);
-    m_txWatchdog->keepalive(deviceId, sequence, epoch, RemoteTxWatchdog::Path::TxChannel,
-                            std::max<qint64>(0, heldUs) / 1000);
+    if (m_txWatchdog->keepalive(deviceId, sequence, epoch, RemoteTxWatchdog::Path::TxChannel,
+                                std::max<qint64>(0, heldUs) / 1000)) {
+        noteKeepaliveForCutGuard(deviceId, std::max<qint64>(0, heldUs));
+    }
     controlLogKeepalive(deviceId, ControlLog::KeepaliveChannel::MediaTx,
                         std::max<qint64>(0, heldUs) / 1000, watched);
 }
@@ -10991,7 +11528,7 @@ void StationServer::tellControlTaken(int sliceId, const QByteArray& former,
          static_cast<qint64>(ownership->controlRevision(sliceId))},
     }};
     notice.reason = QStringLiteral("%1 took control of slice %2. You are still listening.")
-                        .arg(planDevice(taker).name, letter);
+                        .arg(sliceHolderWords(taker, WordsPlace::SentenceStart), letter);
     tellDevice(notice, taker);
 }
 
@@ -11162,7 +11699,12 @@ QList<QPair<SessionTransport*, DisplayBudgetShare>> StationServer::splitDisplayB
     QList<SessionTransport*> sharing;
     for (quint64 epoch : mediaSessionEpochs()) {
         SessionTransport* transport = mediaSessionFor(epoch);
-        const Peer& peer = m_peers.find(transport).value();
+        // The iterator is named so GCC 13's -Wdangling-reference does not
+        // take the Peer& for a reference into a temporary: value() refers
+        // into m_peers, which this const function never changes, and
+        // mediaSessionFor() found transport there, so the lookup never misses.
+        const auto it = m_peers.constFind(transport);
+        const Peer& peer = it.value();
         if (!m_mediaEnabled || peer.agreedMinor < kMediaSessionProtocolMinor
             || !displayBudgetTotalFor(transport)) {
             continue;
@@ -12522,6 +13064,20 @@ bool StationServer::txMonitorAudioAvailable(quint64 epoch) const
         && txMonitorAudioVersion() >= 1;
 }
 
+int StationServer::waveformVersion() const
+{
+    return m_mediaEnabled && m_radioModel && m_radioModel->role() != RadioModel::Role::Remote
+        && m_radioModel->radeWaveformModel() ? 1 : 0;
+}
+
+bool StationServer::waveformAvailable(quint64 epoch) const
+{
+    const auto peer = m_peers.constFind(mediaSessionFor(epoch));
+    return mediaAvailable(epoch) && peer != m_peers.cend()
+        && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peer->features.value(QByteArrayLiteral("waveform")) >= 1 && waveformVersion() >= 1;
+}
+
 int StationServer::remoteIqVersion() const
 {
     return m_mediaEnabled && m_radioModel && m_radioModel->role() != RadioModel::Role::Remote
@@ -12544,6 +13100,17 @@ bool StationServer::txDisplayAvailable(quint64 epoch) const
     return mediaAvailable(epoch) && it != m_peers.cend()
         && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
         && txDisplayVersion() >= 1;
+}
+
+bool StationServer::spectrumPictureAvailable(quint64 epoch) const
+{
+    // The value rides on the grant shape of the context, which every peer
+    // at minor 11 has.
+    SessionTransport* session = mediaSessionFor(epoch);
+    const auto it = m_peers.constFind(session);
+    return mediaAvailable(epoch) && it != m_peers.cend()
+        && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(session, QByteArrayLiteral("spectrumPicture"), 1);
 }
 
 bool StationServer::miniDisplayAvailable(quint64 epoch) const
@@ -12787,6 +13354,17 @@ int StationServer::stationTciVersion() const
     return m_recordStreams.find(QStringLiteral("tciClients")) != m_recordStreams.end() ? 2 : 1;
 }
 
+int StationServer::stationCatVersion() const
+{
+    // CAT setup from a connected desktop: 1 on a Core that runs CAT (its
+    // publisher) and keeps record streams, which carry the `catLog`.
+    if (m_radioModel.isNull() || m_radioModel->stationCatController() == nullptr) {
+        return 0;
+    }
+    return m_recordStreams.find(QString::fromLatin1(kCatLogStream)) != m_recordStreams.end()
+        ? 1 : 0;
+}
+
 int StationServer::accessoryDataVersion() const
 {
     return accessoryStatusVersion() >= 1 && !m_radioModel.isNull()
@@ -12795,6 +13373,18 @@ int StationServer::accessoryDataVersion() const
         // Task 10). 3: its average response time (rfkitRttAvgMs), group B
         // fix wave (M7).
         ? 3 : 0;
+}
+
+int StationServer::remoteRotorControlVersion() const
+{
+    // Rotor control plan Task 4b: 1 on a Core that owns a rotor connection,
+    // 0 otherwise. nereusd always does (enableStationAccessoryIdentity makes
+    // it); Task 4c: so does a desktop running its own radio, whose hosted
+    // Core serves its phones (GuiSessionCoordinator calls
+    // enableStationAccessoryIdentity for every window in the Local role,
+    // since 2026-10-11 with that window's Tuner Genius, Power Genius and
+    // RF-Kit).
+    return !m_radioModel.isNull() && m_radioModel->stationRotorController() != nullptr ? 1 : 0;
 }
 
 int StationServer::radioHardwareVersion() const
@@ -12976,6 +13566,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // R-R3-47 / R-R3-22: the Core's accessory records and settings.
             caps.accessoryDataVersion = accessoryDataVersion();
             caps.accessoryTxVersion = accessoryTxVersion();
+            // Rotor control plan Task 4b: the Core's rotor.
+            caps.remoteRotorControlVersion = remoteRotorControlVersion();
             // A radio-bound row needs the complete existing antenna path,
             // an Alex board, and an exactly named connected radio.
             const QString currentMac = m_radioModel->currentRadioMac();
@@ -13020,7 +13612,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 24) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")),
+                       kSetupDescriptionCap) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.
@@ -13055,6 +13648,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // controlChannelVersion.
             caps.txMonitorAudioVersion = media ? txMonitorAudioVersion() : 0;
             caps.remoteIqVersion = media ? remoteIqVersion() : 0;
+            caps.waveformVersion = media && peerDeclares(transport, QByteArrayLiteral("waveform"), 1)
+                ? waveformVersion() : 0;
             // R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20): the
             // Core's FreeDV Reporter, appended after txMonitorAudioVersion.
             caps.stationFreedvVersion = stationFreedvVersion();
@@ -13103,12 +13698,45 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // property (fitPeerOnlyProperties).
             caps.radeReasonVersion =
                 peerGetsFeatureProperties(transport, QByteArrayLiteral("radeReason")) ? 1 : 0;
+            // CAT setup from a connected desktop: the Core's CAT, for a peer
+            // that declared stationCat 1 (after radeReasonVersion and before
+            // coreBuildInfo on the wire).
+            caps.stationCatVersion = peerGetsStationCat(transport) ? 1 : 0;
+            // Radio speaker (R-SPK-14): radio's RADIO level, mute,
+            // amplifier choice and reports, for a peer that declared
+            // radioSpeaker 1 (after stationCatVersion and before
+            // coreBuildInfo on the wire), the same test that sends it the
+            // properties (fitPeerOnlyProperties).
+            caps.radioSpeakerVersion =
+                peerGetsFeatureProperties(transport, QByteArrayLiteral("radioSpeaker")) ? 1 : 0;
+            // Core speaker (native audio plan Task 21): radio's six Core
+            // speaker properties, for a peer that declared coreSpeaker 1 on a
+            // Core with its own speaker (after radioSpeakerVersion and before
+            // coreBuildInfo on the wire), the same test that sends it the
+            // properties (fitPeerOnlyProperties).
+            caps.coreSpeakerVersion = peerGetsCoreSpeaker(transport) ? 1 : 0;
             // R-IOS-13 / R-R3-49: the AM Mod Monitor's readings, appended
             // after remoteIqVersion by StationCapabilities::toUpdates().
             caps.txModMonitorVersion = txModMonitorVersion();
             // Optional and last: old peers retain their exact descriptor.
             caps.miniDisplayVersion = media && peerDeclares(
                 transport, QByteArrayLiteral("miniDisplay"), 1) ? 1 : 0;
+            // R-DISP-RETUNE: likewise optional, for a minor-11 peer that
+            // declared spectrumPicture 1 (after coreSpeakerVersion and before
+            // coreBuildInfo on the wire); old peers retain their exact
+            // descriptor.
+            caps.spectrumPictureVersion = caps.radioIdentityEntries && media
+                && peerDeclares(transport, QByteArrayLiteral("spectrumPicture"), 1) ? 1 : 0;
+            // The radio's second firmware number, beside firmwareVersion
+            // (the first alone): likewise optional, for a minor-11 peer that
+            // declared firmwareBeta 1 (after spectrumPictureVersion and
+            // before coreBuildInfo on the wire); old peers retain their exact
+            // descriptor. The model gives 0 unless its record is the radio
+            // whose version is sent above.
+            if (peerDeclares(transport, QByteArrayLiteral("firmwareBeta"), 1)) {
+                caps.firmwareBetaEntry = true;
+                caps.firmwareBetaVersion = m_radioModel->firmwareBetaVersion();
+            }
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.
@@ -13387,6 +14015,24 @@ void StationServer::setUpRecordStreams()
                 &StationServer::publishStationTciClients);
         publishStationTciClients();
     }
+    // CAT setup from a connected desktop (stationCatVersion 1): every CAT
+    // exchange the Core logs, newest kept up to the log window's own limit.
+    if (m_radioModel->stationCatController() != nullptr && m_radioModel->catService() != nullptr) {
+        const QString name = QString::fromLatin1(kCatLogStream);
+        auto stream = std::make_unique<RecordStream>(name, StationCatModel::kLogCapacity);
+        RecordStream* catLog = stream.get();
+        m_recordStreams.emplace(name, std::move(stream));
+        connect(m_radioModel->catService(), &CatService::messageLogged, this,
+                [this, catLog](int channel, bool inbound, const QByteArray& bytes) {
+            catLog->upsert(QString::number(++m_catLogLineId),
+                           QJsonObject{{QStringLiteral("channel"), channel},
+                                       {QStringLiteral("inbound"), inbound},
+                                       {QStringLiteral("text"), QString::fromLatin1(bytes)},
+                                       {QStringLiteral("time"),
+                                        QDateTime::currentMSecsSinceEpoch()}});
+            scheduleRecordFlush();
+        });
+    }
     connect(m_radioModel->spotSourceHost(), &SpotSourceHost::consoleLine, this,
             [this](const QString& source, const QString& line) {
         const auto it = m_recordStreams.find(SpotSourceHost::consoleStream(source));
@@ -13494,6 +14140,12 @@ void StationServer::handleRecordsCommand(SessionTransport* transport, const Sess
         answer(false, coreLog
                    ? IStationLink::supportBundleUnavailableReason()
                    : QStringLiteral("This Core does not send its spots or console lines."));
+        return;
+    }
+    // CAT setup from a connected desktop: the Core's CAT log only to a peer
+    // that declared stationCat, worded as its CAT commands' refusal.
+    if (streamName == QLatin1String(kCatLogStream) && !peerGetsStationCat(transport)) {
+        answer(false, QStringLiteral("This Core cannot set up its CAT from here."));
         return;
     }
     const auto it = m_recordStreams.find(streamName);
@@ -13627,11 +14279,13 @@ int StationServer::txReadingsVersion() const
     // stream, which a Core without record streams does not keep. Version 2
     // adds the Core-scaled PA values from that local radio's raw samples;
     // version 3 (A9) the seven stage readings the container meters show,
-    // read from that radio's transmit channel with the other meters.
+    // read from that radio's transmit channel with the other meters;
+    // version 4 the six peak readings those meters' bars show as their main
+    // value, read the same way.
     return !m_radioModel.isNull() && m_radioModel->role() != RadioModel::Role::Remote
             && m_recordStreams.find(QString::fromLatin1(TransmitState::kCfcStream))
             != m_recordStreams.end()
-        ? 3
+        ? 4
         : 0;
 }
 

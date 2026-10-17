@@ -335,6 +335,9 @@ public actor MediaControlClient {
         /// when it declared none: its subscribes may carry the transmit
         /// window (and at 3 `duplex`), and its contexts carry `transmit`.
         var txDisplayDeclared: Int?
+        /// This connection's `start` declared `spectrumPictureVersion`, so
+        /// its spectrum contexts carry `pictureGeneration`.
+        var spectrumPictureDeclared = false
         /// This connection's `start` declared `txMonitorAudioVersion`, so
         /// it may carry `monitor-audio`.
         var txMonitorDeclared = false
@@ -1004,6 +1007,12 @@ public actor MediaControlClient {
             started.txDisplayDeclared = declared
             payload["txDisplayVersion"] = .number(Double(declared))
         }
+        // R-DISP-RETUNE: a client the Core told spectrumPictureVersion adds
+        // it, and each spectrum context then states the picture it continues.
+        if gates.spectrumPicture {
+            started.spectrumPictureDeclared = true
+            payload["spectrumPictureVersion"] = .number(1)
+        }
         // A client the Core told txMonitorAudioVersion adds it, and may
         // then ask where the transmit monitor goes (`monitor-audio`).
         if gates.txMonitorAudio {
@@ -1273,6 +1282,7 @@ public actor MediaControlClient {
         candidate.audioProfileSent = current.audioProfileSent
         candidate.audioBitrateSent = current.audioBitrateSent
         candidate.txDisplayDeclared = current.txDisplayDeclared
+        candidate.spectrumPictureDeclared = current.spectrumPictureDeclared
         candidate.txMonitorDeclared = current.txMonitorDeclared
         if current.microphoneSsrc != nil {
             candidate.microphoneSsrc = Self.microphoneSsrc(forConnection: id)
@@ -2255,7 +2265,8 @@ public actor MediaControlClient {
               var endpoint = endpoints[UInt32(rawId)],
               let context = MediaControlDecoder.context(payload, wideband: endpoint.widebandNegotiated,
                                                         grant: gates.spectrumGrant,
-                                                        transmit: (media?.txDisplayDeclared ?? 0) >= 1),
+                                                        transmit: (media?.txDisplayDeclared ?? 0) >= 1,
+                                                        picture: media?.spectrumPictureDeclared ?? false),
               Self.sent(context.revision, first: endpoint.firstRevision, latest: endpoint.subscription.revision),
               endpoint.context.map({ held in
                   held.revision == context.revision
@@ -2264,13 +2275,56 @@ public actor MediaControlClient {
               }) ?? true else {
             return
         }
+        // R-DISP-HOLD: a context for the picture the endpoint already shows
+        // (the Core renewed it for a new dBm range or frame rate and kept
+        // what it had measured) keeps the last extras. Extras of another
+        // picture belong to the context they were decoded against.
+        let samePicture = endpoint.context.map { Self.samePicture($0, context) } ?? false
+        // R-DISP-RETUNE: the Core states the picture a context continues,
+        // and that one value decides. A context of the picture held carried
+        // on at the Core: its noise floor and waterfall levels are kept.
+        // The peak hold and the blobs are held per trace sample, so they are
+        // kept only where every sample still lies where it did (the same
+        // picture); moved, the Core emptied them and they go. A context of
+        // another picture drops everything, whatever its numbers.
+        //
+        // A Core that states no picture (nil here) is read by the rule
+        // before this one: the same picture keeps its extras and anything
+        // else, a move included, drops them. The app does not guess.
+        let carriedOn: Bool? = context.pictureGeneration.map { $0 == endpoint.context?.pictureGeneration }
         endpoint.context = context
         endpoint.decoder = DisplayFrameDecoder()
-        // Extras belong to the context they were decoded against.
-        endpoint.extras = nil
+        if carriedOn ?? samePicture {
+            if !samePicture, let held = endpoint.extras {
+                endpoint.extras = DisplayExtras(
+                    endpointId: held.endpointId, contextGeneration: held.contextGeneration,
+                    encoderSequence: held.encoderSequence, peakBlobs: nil, peakHoldDbm: nil,
+                    noiseFloorDbm: held.noiseFloorDbm, waterfallLevels: held.waterfallLevels,
+                    noiseFloorFastAttack: held.noiseFloorFastAttack)
+            }
+        } else {
+            endpoint.extras = nil
+        }
         endpoints[context.endpointId] = endpoint
         eventSink.yield(.context(context))
         await requestKeyframe(endpointId: context.endpointId)
+    }
+
+    /// Whether two contexts of an endpoint show the same picture: the same
+    /// receiver and source geometry (stream, centre, sample rate, the FFT
+    /// size the Core runs), the same view to the Hz, the same sample counts
+    /// and wide row, and both receive or both transmit. Only the dBm range,
+    /// the frame rate and the frames per line may differ.
+    static func samePicture(_ held: MediaControlEvent.DisplayContext,
+                            _ next: MediaControlEvent.DisplayContext) -> Bool {
+        held.endpointId == next.endpointId && held.sourceStream == next.sourceStream
+            && held.sourceCentreHz == next.sourceCentreHz && held.sampleRateHz == next.sampleRateHz
+            && held.centreHz == next.centreHz && held.spanHz == next.spanHz
+            && held.wideCentreHz == next.wideCentreHz && held.wideSpanHz == next.wideSpanHz
+            && held.traceSamples == next.traceSamples && held.waterfallSamples == next.waterfallSamples
+            && held.wideSamples == next.wideSamples && held.wideband == next.wideband
+            && held.grant?.grantedFftSize == next.grant?.grantedFftSize
+            && (held.transmit ?? false) == (next.transmit ?? false)
     }
 
     private func display(_ datagram: Data, connection id: String) async {

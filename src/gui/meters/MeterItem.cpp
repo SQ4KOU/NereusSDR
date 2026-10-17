@@ -8,6 +8,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-12 - Shared accessory display readings and independent legal
+//                 marker / display scale by J.J. Boyd (KG4VCF),
+//                 AI-assisted via OpenAI Codex.
 //   2026-10-04 — Selected RX source identity and RX-only presentation reset by
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-10-02 — Composite reading/replay/cadence contracts by J.J. Boyd
@@ -31,6 +34,12 @@
 //                 telemetry bindings treat the sentinel as no reading
 //                 (isHardwareTelemetryBinding). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - Workspace preview data colours (JJ's decision B):
+//                 NeedleItem's default background reads
+//                 WorkspacePreview::dataBackground(), the role of the
+//                 container around its meter or the user's colour for that
+//                 container. Ink unchanged. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -124,7 +133,16 @@ mw0lge@grange-lane.co.uk
 
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
+// Modification history (NereusSDR):
+//   2026-10-12 - Apply the approved workspace-only 11 px text minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-12 - Keep overflowing regular scale endpoint glyphs within the
+//                 meter canvas in both looks, preserving ticks and fonts.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
+#include "core/ControlRanges.h"
 #include "MeterItem.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "MeterPoller.h"  // MeterBinding namespace
 
 #include <QPainter>
@@ -286,13 +304,18 @@ void MeterItem::resetRxSource()
 
 void MeterItem::setPowerScale(int watts)
 {
-    if (watts <= 0) { return; }
-    const double red = watts;
-    const double top = red * 1.2;
+    setPowerScale(watts, watts * ControlRanges::kRfPowerGaugeHeadroom);
+}
+
+void MeterItem::setPowerScale(int limitWatts, double topWatts)
+{
+    if (limitWatts <= 0 || topWatts <= 0.0) { return; }
+    const double red = limitWatts;
+    const double top = topWatts;
     if (objectName() == QStringLiteral("PowerBar")) {
         if (BarItem* bar = qobject_cast<BarItem*>(this)) { bar->setRange(0.0, top); bar->setRedThreshold(red); }
     } else if (objectName() == QStringLiteral("PowerScale")) {
-        if (ScaleItem* scale = qobject_cast<ScaleItem*>(this)) { scale->setRange(0.0, top); scale->setMajorTicks(watts <= 10 ? 5 : 7); }
+        if (ScaleItem* scale = qobject_cast<ScaleItem*>(this)) { scale->setRange(0.0, top); scale->setMajorTicks(limitWatts <= 10 || (limitWatts == 1500 && top == 2000.0) ? 5 : 7); }
     }
 }
 
@@ -709,9 +732,9 @@ void BarItem::paint(QPainter& p, int widgetW, int widgetH)
     // show a slot where the peak text lives.  NereusSDR (R-R3-13): with
     // no reading ShowValue renders "--" too.
     if (m_showValue || m_showPeakValue) {
-        QFont font = p.font();
+        QFont font = WorkspacePreview::readableFont(p.font(), p.device());
         const int fontPx = qMax(9, rect.height() / 3);
-        font.setPixelSize(fontPx);
+        font.setPixelSize(WorkspacePreview::readableTextPixelSize(fontPx));
         font.setBold(true);
         p.setFont(font);
         const QFontMetrics fm(font);
@@ -1015,8 +1038,8 @@ void ScaleItem::paint(QPainter& p, int widgetW, int widgetH)
         const QString title = readingName(m_bindingId);
         if (!title.isEmpty()) {
             const int titleHeight = qMax(8, rect.height() / 3);
-            QFont titleFont = p.font();
-            titleFont.setPixelSize(titleHeight);
+            QFont titleFont = WorkspacePreview::readableFont(p.font(), p.device());
+            titleFont.setPixelSize(WorkspacePreview::readableTextPixelSize(titleHeight));
             titleFont.setBold(true);
             p.setFont(titleFont);
             p.setPen(m_titleColour);
@@ -1073,8 +1096,8 @@ void ScaleItem::paint(QPainter& p, int widgetW, int widgetH)
 
         // Pick a font for the per-tick labels.
         const int dynFontPx = qMax(m_fontSize, rect.height() / 4);
-        QFont font = p.font();
-        font.setPixelSize(dynFontPx);
+        QFont font = WorkspacePreview::readableFont(p.font(), p.device());
+        font.setPixelSize(WorkspacePreview::readableTextPixelSize(dynFontPx));
         p.setFont(font);
         const QFontMetrics fm(font);
 
@@ -1153,8 +1176,8 @@ void ScaleItem::paint(QPainter& p, int widgetW, int widgetH)
     const int pixH = rect.height();
     const int dynFontSize = qMax(m_fontSize, pixH / 3);
 
-    QFont font = p.font();
-    font.setPixelSize(dynFontSize);
+    QFont font = WorkspacePreview::readableFont(p.font(), p.device());
+    font.setPixelSize(WorkspacePreview::readableTextPixelSize(dynFontSize));
     p.setFont(font);
 
     if (m_orientation == Orientation::Horizontal) {
@@ -1171,7 +1194,21 @@ void ScaleItem::paint(QPainter& p, int widgetW, int widgetH)
             p.setPen(m_labelColor);
             const QFontMetrics fm(font);
             const int labelW = fm.horizontalAdvance(label);
-            p.drawText(x - labelW / 2, rect.top() + rect.height() / 3 + fm.ascent(), label);
+            int labelX = x - labelW / 2;
+            if (i == 0 || i == m_majorTicks - 1) {
+                // Endpoint ticks stay at their calibrated position. Move only
+                // an overflowing endpoint's glyphs; interior labels keep their
+                // original centering and the font remains exactly the same.
+                const QFontMetricsF inkMetrics(font, p.device());
+                const QRectF ink = inkMetrics.tightBoundingRect(label);
+                if (i == 0 && labelX + ink.left() < 0) {
+                    labelX = static_cast<int>(std::ceil(-ink.left()));
+                }
+                if (i == m_majorTicks - 1 && labelX + ink.right() > widgetW) {
+                    labelX = static_cast<int>(std::floor(widgetW - ink.right()));
+                }
+            }
+            p.drawText(labelX, rect.top() + rect.height() / 3 + fm.ascent(), label);
 
             // Minor ticks (between major ticks, except after last major)
             if (i < m_majorTicks - 1 && m_minorTicks > 0) {
@@ -1356,22 +1393,23 @@ void TextItem::paint(QPainter& p, int widgetW, int widgetH)
     // Dynamic pixel-based font sizing (matches NeedleItem pattern).
     // Scale with rect height, m_fontSize is the minimum floor.
     const int pixH = rect.height();
-    int dynFontSize = qMax(m_fontSize, static_cast<int>(pixH * 0.7f));
+    const int minimumFontSize = WorkspacePreview::readableTextPixelSize(m_fontSize);
+    int dynFontSize = qMax(minimumFontSize, static_cast<int>(pixH * 0.7f));
 
-    QFont font = p.font();
+    QFont font = WorkspacePreview::readableFont(p.font(), p.device());
     font.setBold(m_bold);
 
     const QString text = displayText();
 
     // Shrink font if text overflows rect width
-    font.setPixelSize(dynFontSize);
-    while (dynFontSize > m_fontSize) {
+    font.setPixelSize(WorkspacePreview::readableTextPixelSize(dynFontSize));
+    while (dynFontSize > minimumFontSize) {
         const QFontMetrics fm(font);
         if (fm.horizontalAdvance(text) <= rect.width()) {
             break;
         }
         --dynFontSize;
-        font.setPixelSize(dynFontSize);
+        font.setPixelSize(WorkspacePreview::readableTextPixelSize(dynFontSize));
     }
 
     p.setFont(font);
@@ -1661,7 +1699,7 @@ void NeedleItem::paintBackground(QPainter& p, int widgetW, int widgetH)
     const float ph = static_cast<float>(rect.height());
 
     // Background fill — from AetherSDR SMeterWidget.cpp line 197
-    p.fillRect(rect, QColor(0x0f, 0x0f, 0x1a));
+    p.fillRect(rect, WorkspacePreview::dataBackground(QColor(0x0f, 0x0f, 0x1a), "panel", parent()));
 
     // From AetherSDR: cx = width*0.5, radius = width*0.85
     // cy = height + radius - height*0.65
@@ -1889,9 +1927,9 @@ void NeedleItem::paintOverlayStatic(QPainter& p, int widgetW, int widgetH)
     const float pivotY = rect.top() + ph + 6.0f;
 
     // From AetherSDR: tick font = max(10, height/10) px, bold
-    QFont tickFont = p.font();
+    QFont tickFont = WorkspacePreview::readableFont(p.font(), p.device());
     const int tickFontSize = qMax(10, static_cast<int>(ph) / 10);
-    tickFont.setPixelSize(tickFontSize);
+    tickFont.setPixelSize(WorkspacePreview::readableTextPixelSize(tickFontSize));
     tickFont.setBold(true);
     p.setFont(tickFont);
     const QFontMetrics tfm(tickFont);
@@ -1936,9 +1974,9 @@ void NeedleItem::paintOverlayStatic(QPainter& p, int widgetW, int widgetH)
     }
 
     // From AetherSDR: source label centered, max(9, h/14) px, non-bold, #8090a0
-    QFont srcFont = p.font();
+    QFont srcFont = WorkspacePreview::readableFont(p.font(), p.device());
     const int srcFontSize = qMax(9, static_cast<int>(ph) / 14);
-    srcFont.setPixelSize(srcFontSize);
+    srcFont.setPixelSize(WorkspacePreview::readableTextPixelSize(srcFontSize));
     srcFont.setBold(false);
     p.setFont(srcFont);
     p.setPen(QColor(0x80, 0x90, 0xa0));
@@ -1962,15 +2000,15 @@ void NeedleItem::paintOverlayDynamic(QPainter& p, int widgetW, int widgetH)
 
     // Compute source label baseline for vertical positioning
     const int srcFontSize = qMax(9, static_cast<int>(ph) / 14);
-    QFont srcFont = p.font();
-    srcFont.setPixelSize(srcFontSize);
+    QFont srcFont = WorkspacePreview::readableFont(p.font(), p.device());
+    srcFont.setPixelSize(WorkspacePreview::readableTextPixelSize(srcFontSize));
     const QFontMetrics srcFm(srcFont);
     const float topY = rect.top() + srcFm.height() + 2.0f;
 
     // From AetherSDR: value font = max(13, h/8) px, bold
-    QFont valFont = p.font();
+    QFont valFont = WorkspacePreview::readableFont(p.font(), p.device());
     const int valFontSize = qMax(13, static_cast<int>(ph) / 8);
-    valFont.setPixelSize(valFontSize);
+    valFont.setPixelSize(WorkspacePreview::readableTextPixelSize(valFontSize));
     valFont.setBold(true);
     p.setFont(valFont);
     const QFontMetrics valFm(valFont);

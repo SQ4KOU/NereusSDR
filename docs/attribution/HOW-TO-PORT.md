@@ -161,7 +161,9 @@ Moved from CLAUDE.md. Before reading any upstream source file, state:
     ```
     grep -l "<nereussdr-path>" docs/attribution/THETIS-PROVENANCE.md
     ```
-   For freedv-gui ports, also check `docs/attribution/FREEDV-GUI-PROVENANCE.md`.
+   For freedv-gui ports, also check `docs/attribution/FREEDV-GUI-PROVENANCE.md`;
+   for Longpath ports, `docs/attribution/LONGPATH-PROVENANCE.md` (cite as
+   `// From Longpath <path>:<line> [@shortsha]`, pinned `551576e`).
    If the file is not registered, the port is a **new attribution event**.
 4. **Plan**: if (3) returned nothing, add the verbatim upstream header AND a
    PROVENANCE row in the same commit that introduces the ported logic.
@@ -208,10 +210,20 @@ same line, place it on the nearest equivalent line with a note:
 
 **Mechanical enforcement:** `scripts/verify-inline-tag-preservation.py` runs
 in the pre-commit hook chain and in CI. For every `// From Thetis X:N [@sha]`
-cite in the diff, it opens `../Thetis/X` (or `../mi0bot-Thetis/X`) at line N,
+cite in the diff, it opens `X` at line N in the tree the cite names,
 extracts any author tag within ±5 source lines, and fails the commit if a
 corresponding tag is not present within ±10 port lines. If it fires,
 re-insert the verbatim tag exactly as it appears upstream.
+
+The tree comes from the cite's stamp, never from whatever `../Thetis`
+happens to hold: `[v2.10.3.15]` or `[@3759d09]` opens
+`../Thetis-v2.10.3.15/`; `[v2.10.3.13]` or `[@501e3f5]` opens
+`../Thetis-v2.10.3.13/` (501e3f5, the pin before v2.10.3.15); a cite with no
+stamp, or a stamp for a release with no clone here, also opens
+`../Thetis-v2.10.3.13/`, because such cites were written against that old
+pin. SHA stamps match on prefix, so `[@501e3f51]` routes like `[@501e3f5]`.
+mi0bot cites open `../mi0bot-Thetis/`. A missing tree is reported as
+upstream-not-found; the check never falls back to a different tree.
 
 **Corpus drift:** after re-syncing Thetis (`git -C ../Thetis pull`), run
 `python3 scripts/discover-thetis-author-tags.py` to refresh the corpus. CI's
@@ -233,6 +245,11 @@ committed corpus.
 │   └── protocol2.cs  Protocol 2 specific handling
 └── wdsp/             WDSP C source: channel.c, RXA.c, TXA.c, ...
 ```
+
+Per-release ramdor clones beside `../Thetis/`, used by the tag check:
+`../Thetis-v2.10.3.15/` (3759d09, the current pin) and `../Thetis-v2.10.3.13/`
+(501e3f5, the previous pin). Override with `NEREUS_THETIS_V21015_DIR` and
+`NEREUS_THETIS_V21013_DIR`.
 
 piHPSDR: `../pihpsdr/`. deskHPSDR: `../deskhpsdr/`. TAPR firmware: `../TAPR-OpenHPSDR-Firmware/`.
 

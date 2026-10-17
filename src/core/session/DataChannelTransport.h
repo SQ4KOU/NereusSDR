@@ -79,11 +79,15 @@
 //   2026-10-01: Control logging lane: linkDiagnostics() and
 //               deliveringMessageWaitUs(), for the Core's log only. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-15: setAnswererOpenDelayForTest(), a Core slow to see its own
+//               end open. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/media/IMediaTransport.h"
+#include "core/NereusCoreExport.h"
 
 #include <QByteArray>
 #include <QElapsedTimer>
@@ -158,7 +162,7 @@ public:
     };
 };
 
-class DataChannelTransport : public SessionTransport {
+class NEREUS_CORE_EXPORT DataChannelTransport : public SessionTransport {
     Q_OBJECT
 
 public:
@@ -273,6 +277,9 @@ public:
     using SelectedPathOverride =
         std::function<std::optional<MediaIcePath>(const DataChannelTransport*)>;
     static void setSelectedPathOverrideForTest(SelectedPathOverride override);
+    /// Test seam: an answering end reports opened() this long after its
+    /// channel opens, as a busy Core does (0: at once).
+    static void setAnswererOpenDelayForTest(int ms);
     /// Test seam: whether the object a lingering close's deadline timers
     /// live on exists. The application's teardown deletes it; one left
     /// after an application has gone is a leak.
@@ -422,6 +429,8 @@ private:
     std::shared_ptr<Bridge> m_bridge;
     bool m_started = false;
     bool m_open = false;
+    bool m_openDelayed = false; ///< setAnswererOpenDelayForTest() waited once
+    bool m_openDelayElapsed = false; ///< and that wait is over
     bool m_closing = false;
     bool m_closedEmitted = false;
     bool m_remoteDescriptionAccepted = false;

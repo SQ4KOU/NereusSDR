@@ -306,7 +306,13 @@ changes to satisfy another's request. When the last neighbour leaves, an
 endpoint held to a neighbour's size is granted its own. The engine runs at
 the highest frame rate its endpoints ask for, and each endpoint keeps its own
 cadence, so a rate change alone renews no endpoint. Pixels are granted as
-min(requested, visible source bins, 4096). Incompatible window choices are
+min(requested, visible source bins, 4096). The visible source bins are those
+the crop holds wherever it lies over them: a span of n bins touches
+ceil(n) + 1 with its low edge on a bin edge and one more anywhere else, and
+is granted ceil(n) + 1, so a tune that moves the crop a fraction of a bin
+changes no sample count and the picture moves instead of starting again
+(R-DISP-RETUNE). A crop that runs past the source's edge is granted the bins
+it has there. Incompatible window choices are
 refused. A global
 window change unsubscribes all old-window endpoints before requesting any
 replacement, so shared sources can adopt the new window.
@@ -420,6 +426,70 @@ source bins than the requested pixels). A minor 8 or older peer receives
 the 19- or 20-field context unchanged, and each side accepts only the shape
 it negotiated. Both sides use one codec, `RemoteSpectrumContext`. The GUI
 shows a plain status line on the pan while the grant is limited.
+
+#### The picture a context continues
+
+(R-DISP-RETUNE.) At agreed session minor 11, a GUI hello that declares
+`spectrumPicture: 1` receives capability `spectrumPictureVersion: 1` when
+media is available. The capability is omitted for a peer that did not
+declare the feature. A media `start` may then declare
+`spectrumPictureVersion: 1`; another value, or a declaration without that
+capability, is refused. Every spectrum `context` sent on that media
+connection then carries one more field on the grant shape, after
+`transmit` when that is present:
+
+```text
+pictureGeneration
+```
+
+`pictureGeneration` is a whole number from 1 to 4294967295. It names the
+picture the context's frames continue: it is the `contextGeneration` of
+the context at which the Core last started the endpoint's planes (its
+averaged trace and waterfall row). The Core sets it where it starts the
+planes, so it is its own record of what it did, not a comparison a client
+could repeat:
+
+- A first context, a context after the endpoint lost its source or was
+  dropped for the transmit display, and a context whose request the planes
+  could not carry on through (another span, sample count, FFT size,
+  detector or averaging, another receiver) start the planes:
+  `pictureGeneration` equals that context's own `contextGeneration`.
+- A context for the same picture (a new dBm range or frame rate), and a
+  context for that picture moved in frequency (a retune under the pan, or
+  the view moved at the same asked span) carry the planes on:
+  `pictureGeneration` is the value of the context before it.
+- A plane that holds its maximum (`averageMode` -1) cannot be moved, so a
+  move of one starts the planes.
+- A transmit display context (`transmit` true) is not the endpoint's
+  receive planes; each states its own `contextGeneration`.
+
+A client that negotiated the value decides by it alone. A context whose
+`pictureGeneration` equals that of the picture it shows carries that
+picture on: what it has drawn stays until the new context's keyframe, and
+the Core's noise floor and waterfall levels stay in use. With the same
+frequencies and sample counts as well, what the client holds per pixel
+(peak hold, peak blobs) stays too; otherwise that is emptied, since each
+pixel now shows another frequency. Any other value is a new picture, and
+the client empties what it measured for the old one.
+
+Such a client also draws what it is sent. A context for an endpoint it
+still shows, of the picture it shows and with a newer `contextGeneration`
+than the one it draws, is taken for drawing even when it answers an
+earlier `revision` than the client's latest request, or the client's
+request has changed since: its frames are drawn at the frequencies the
+context states. The client's request bookkeeping is not moved by it, and
+the newer request is sent as before. A context of another picture that
+answers an earlier request is ignored, as is any context after the
+endpoint was unsubscribed, rebound to another receiver, or moved to
+another stream. This is what lets a pan draw frames while it is moved
+faster than the link answers.
+
+A peer that did not declare the value receives exactly the context it
+parses today, and a client on a Core that states no picture keeps the
+earlier rule: a context that differs from the one it shows only in its dBm
+range or frame rate is the same picture, and everything else is a new one.
+`tst_daemon_display_retune`, `tst_remote_spectrum_context` and
+`tst_remote_display_hold` hold this.
 
 Core configures this from the first actual frame of the current source
 generation, then sends it before encoded display. Exact sample counts clamp

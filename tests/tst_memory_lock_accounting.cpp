@@ -2,6 +2,8 @@
 // tests/tst_memory_lock_accounting.cpp  (NereusSDR-native)
 // =================================================================
 // 2026-07-27  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude.
+// 2026-10-15  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude:
+//             working-set sizing for VirtualLock on Windows.
 //
 // Regression coverage for the MemoryLock stat accounting.
 //
@@ -23,7 +25,13 @@
 
 #include "core/MemoryLock.h"
 
+#include <cstdint>
+#include <limits>
 #include <vector>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 using namespace NereusSDR;
 
@@ -133,6 +141,91 @@ private slots:
         QCOMPARE(after.bytesLocked, before.bytesLocked);
         QCOMPARE(after.regionsLocked, before.regionsLocked);
     }
+
+    // Windows caps the pages a process can lock at its minimum working
+    // set (VirtualLock remarks, Microsoft Learn), so a lock raises both
+    // working-set bounds by the locked size first.
+    void workingSetForLockGrowsBothBoundsByTheLockedSize()
+    {
+        const detail::WorkingSetLimits current{204800, 1413120};
+        const detail::WorkingSetLimits want =
+            detail::workingSetForLock(current, 528384);
+        QCOMPARE(want.minimum, std::size_t{204800 + 528384});
+        QCOMPARE(want.maximum, std::size_t{1413120 + 528384});
+    }
+
+    void workingSetForLockSaturatesInsteadOfWrapping()
+    {
+        constexpr std::size_t kMax = std::numeric_limits<std::size_t>::max();
+        const detail::WorkingSetLimits want =
+            detail::workingSetForLock({kMax - 10, kMax - 5}, 4096);
+        QCOMPARE(want.minimum, kMax);
+        QCOMPARE(want.maximum, kMax);
+    }
+
+    // Unlock hands back exactly what the lock added, so an FFT resize
+    // that locks and unlocks over and over does not ratchet the
+    // working set upward.
+    void workingSetForUnlockReversesTheLock()
+    {
+        const detail::WorkingSetLimits current{204800, 1413120};
+        const detail::WorkingSetLimits raised =
+            detail::workingSetForLock(current, 1052672);
+        const detail::WorkingSetLimits back =
+            detail::workingSetForUnlock(raised, 1052672);
+        QCOMPARE(back.minimum, current.minimum);
+        QCOMPARE(back.maximum, current.maximum);
+    }
+
+    // Someone else lowered the limits between our lock and unlock: the
+    // shrink stops at zero instead of wrapping, and the maximum never
+    // drops below the minimum.
+    void workingSetForUnlockNeverWrapsOrInverts()
+    {
+        const detail::WorkingSetLimits back =
+            detail::workingSetForUnlock({4096, 1413120}, 528384);
+        QCOMPARE(back.minimum, std::size_t{0});
+        QCOMPARE(back.maximum, std::size_t{1413120 - 528384});
+
+        const detail::WorkingSetLimits pinned =
+            detail::workingSetForUnlock({2000000, 600000}, 528384);
+        QVERIFY(pinned.maximum >= pinned.minimum);
+    }
+
+#ifdef Q_OS_WIN
+    // The STRIX failure (2026-10-15): nereusd logged GetLastError 1453
+    // (ERROR_WORKING_SET_QUOTA) locking 528384-byte FFT buffers, because
+    // a process starts with a 50-page minimum working set and nothing
+    // raised it.  A region well past that default must now lock, the
+    // minimum must grow while it is held, and unlock must put it back.
+    void windowsLockBeyondDefaultMinimumWorkingSetSucceeds()
+    {
+        std::vector<float> buf(1024 * 1024, 0.0f); // 4 MiB
+        const std::size_t bytes = buf.size() * sizeof(float);
+
+        SIZE_T minBefore = 0;
+        SIZE_T maxBefore = 0;
+        QVERIFY(GetProcessWorkingSetSize(GetCurrentProcess(), &minBefore,
+                                         &maxBefore));
+
+        QVERIFY(lockMemory(buf.data(), bytes, "tst_memory_lock_win_quota"));
+
+        SIZE_T minHeld = 0;
+        SIZE_T maxHeld = 0;
+        QVERIFY(GetProcessWorkingSetSize(GetCurrentProcess(), &minHeld,
+                                         &maxHeld));
+        QVERIFY(minHeld >= minBefore + bytes);
+
+        unlockMemory(buf.data(), bytes);
+
+        SIZE_T minAfter = 0;
+        SIZE_T maxAfter = 0;
+        QVERIFY(GetProcessWorkingSetSize(GetCurrentProcess(), &minAfter,
+                                         &maxAfter));
+        QCOMPARE(minAfter, minBefore);
+        QCOMPARE(maxAfter, maxBefore);
+    }
+#endif
 };
 
 QTEST_MAIN(TstMemoryLockAccounting)

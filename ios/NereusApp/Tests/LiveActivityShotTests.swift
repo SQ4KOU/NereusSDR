@@ -346,3 +346,16 @@ struct LiveActivityShotTests {
         }
     }
 }
+
+@MainActor
+extension LiveActivityShotTests {
+    @Test("Amplifier power and SWR stay complete in the Live Activity words")
+    func amplifierMeterWords() throws {
+        #expect(ActivityWords.telemetry(watts: 2300, swr: 1.12) == "Fwd 2300 W \u{00B7} SWR 1.12")
+        #expect(ActivityWords.telemetry(watts: nil, swr: nil) == "Fwd -- \u{00B7} SWR --")
+        var state = Self.keyed
+        state.forwardWatts = 1236
+        state.swr = 1.12
+        _ = try render("meter-live-activity-operate", ActivityCard(state: state), size: CGSize(width: 402, height: 240))
+    }
+}

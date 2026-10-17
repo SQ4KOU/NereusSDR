@@ -1,12 +1,13 @@
 #pragma once
 // no-port-check: NereusSDR-original draft content property adapter.
 #include "ContainerContentRegistry.h"
+#include "gui/NereusGuiExport.h"
 #include <functional>
 #include <memory>
 class QLabel;
 namespace NereusSDR {
 class MeterItem;
-class ContentPropertyEditor : public QWidget {
+class NEREUS_GUI_EXPORT ContentPropertyEditor : public QWidget {
     Q_OBJECT
 public:
     explicit ContentPropertyEditor(ContainerContentRegistry& registry, QWidget* parent=nullptr);
@@ -21,6 +22,8 @@ signals:
     void entryEdited(const ContentEntry& entry);
 private:
     QWidget* control(const QString& key, const QJsonValue& value, int channel=-1);
+    // Workspace preview: a control for a declared ContentProperty.
+    QWidget* declaredControl(const ContentProperty& property, QWidget* parent);
     void captureRenderer();
     void publish();
     QJsonValue effectiveProperty(const QString& key, int channel) const;

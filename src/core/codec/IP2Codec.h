@@ -17,6 +17,9 @@
 //
 // NereusSDR-original. Independently implemented from IP1Codec.h interface.
 // No Thetis port; no PROVENANCE row.
+// Modification history (NereusSDR):
+//   2026-10-14 - Correct the command-header contract. J.J. Boyd (KG4VCF),
+//                 AI-assisted via OpenAI Codex.
 // =================================================================
 
 #pragma once
@@ -35,9 +38,10 @@ public:
 
     // Each composer fills the buffer with the post-Phase-B byte layout.
     // Buffers are caller-allocated and zero-initialized by the caller.
-    // Sequence numbers (bytes 0-3 of each packet) are NOT stamped here —
-    // the caller (P2RadioConnection::sendCmd*) stamps them just before
-    // UDP transmission so they remain monotonic across retransmits.
+    // Command sequence fields (bytes 0-3) remain zero: TAPR openHPSDR
+    // Ethernet Protocol v4.4, General p20 / DDC p26 / DUC p29 / High
+    // Priority p34 [@e7c6584]. Composers fill payload only; callers keep
+    // headers zero in both construction helpers and composition snapshots.
     virtual void composeCmdGeneral     (const CodecContext& ctx, quint8 buf[60])   const = 0;
     virtual void composeCmdHighPriority(const CodecContext& ctx, quint8 buf[1444]) const = 0;
     virtual void composeCmdRx          (const CodecContext& ctx, quint8 buf[1444]) const = 0;

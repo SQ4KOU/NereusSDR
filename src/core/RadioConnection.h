@@ -39,6 +39,7 @@
 #include <atomic>
 #include <array>
 #include <memory>
+#include <mutex>
 #include <optional>
 
 namespace NereusSDR {
@@ -153,6 +154,28 @@ public:
     // Factory — creates the appropriate subclass based on RadioInfo::protocol.
     static std::unique_ptr<RadioConnection> create(const RadioInfo& info);
 
+    /// The receive buffer both protocols ask for on the socket the radio
+    /// sends to (applySocketBufferSizes in P1RadioConnection.cpp and
+    /// P2RadioConnection.cpp): 4 MB, raised from Thetis's 0xfa000 after the
+    /// 2026-05-26 bench. The system may grant less. On Linux the limit is
+    /// net.core.rmem_max, and the Core's packages and install scripts raise
+    /// it to this figure (packaging/nereusd-receive-buffer.conf, which
+    /// tests/release/test_core_receive_buffer_limit.py holds to it).
+    static constexpr int kRadioSocketReceiveBufferBytes = 0x400000;
+    /// The receive buffer the system granted, from the size a socket
+    /// reports. Linux doubles a request to leave room for its own
+    /// bookkeeping and reports the doubled figure (socket(7), SO_RCVBUF), so
+    /// there a full grant of N reads 2N and a request held at
+    /// net.core.rmem_max reads twice that limit.
+    static constexpr int grantedReceiveBufferBytes(int reportedBytes) noexcept
+    {
+#ifdef Q_OS_LINUX
+        return reportedBytes / 2;
+#else
+        return reportedBytes;
+#endif
+    }
+
     // State (atomic for cross-thread reads from main thread)
     ConnectionState state() const { return m_state.load(); }
     bool isConnected() const { return m_state.load() == ConnectionState::Connected; }
@@ -185,6 +208,10 @@ public:
 
     // Hooks the protocol implementations call on each successful packet.
     // Public so subclasses (P1/P2) and tests can drive the counter.
+    // The connection thread records and the main thread reads the rates
+    // (the ▲▼ readouts, the diagnostics dialog), so both take
+    // m_byteSamplesMutex, held only to append, prune and sum. Never called
+    // from an audio callback.
     void recordBytesSent(qint64 n);
     void recordBytesReceived(qint64 n);
 
@@ -554,6 +581,9 @@ public slots:
         sw.hpfBypass     = m_alexHpfBypass;
         sw.disable6mLnaOnRx = m_disable6mLnaOnRx;
         sw.disable6mLnaOnTx = m_disable6mLnaOnTx;
+        // What HPF Bypass sends on the radio in use: 0x20, or on the radio
+        // whose bypass passes nothing the five band filters.
+        sw.receiveBypass = codec::alex::receiveBypassSelection(m_hardwareProfile.model);
         return sw;
     }
 
@@ -599,6 +629,20 @@ public slots:
     /// (netInterface.c:1522 prn->tx[i].pa = 0).
     virtual void setPaDisabled(bool disabled) { m_paDisabled = disabled; }
     bool paDisabled() const noexcept { return m_paDisabled; }
+
+    /// The radio's speaker amplifier (R-SPK-09, R-SPK-15). Three inputs to
+    /// speakerAmplifierOff (SpeakerAmplifier.h): the amplifier mode (0
+    /// Normal, 1 Off while transmitting, 2 Always off), the radio speaker's
+    /// mute, and whether a side tone is expected (true while CW or Tune).
+    /// RadioModel hands them over; safe to call before the connection runs.
+    /// Only Protocol 2 radios with HardwareProfile::hasAudioAmplifier put
+    /// them on the wire (high-priority byte 1400 bit 1); the base stores.
+    virtual void setSpeakerAmplifierMode(int mode) { m_speakerAmplifierMode = mode; }
+    int speakerAmplifierMode() const noexcept { return m_speakerAmplifierMode; }
+    virtual void setRadioSpeakerMuted(bool muted) { m_radioSpeakerMuted = muted; }
+    bool radioSpeakerMuted() const noexcept { return m_radioSpeakerMuted; }
+    virtual void setSidetoneExpected(bool expected) { m_sidetoneExpected = expected; }
+    bool sidetoneExpected() const noexcept { return m_sidetoneExpected; }
 
     /// The Alex tab's receive filter rows (Setup > Hardware > Alex-1 and
     /// Alex-2 Filters): each row's edges and per-row bypass for the
@@ -886,6 +930,32 @@ public slots:
 
     bool isWatchdogEnabled() const noexcept { return m_watchdogEnabled; }
 
+public:
+    // --- Transmit cut (2026-10-15) ---
+    // A remote device keyed through the Core whose link goes quiet is cut
+    // off the main thread when that thread stalls (RemoteTxCutGuard, through
+    // TransmitCutLine). cutTransmit() may be called from any thread and
+    // never blocks: the first call sets the latch and queues
+    // applyTransmitCut() onto this object's thread; later calls add nothing
+    // until clearTransmitCut(). While the latch is set, P1 and P2 refuse
+    // setMox(true) and every point that puts the MOX/PTT bit or TX I/Q on
+    // the wire reads it as unkeyed. setMox(false) never clears it.
+    void cutTransmit();
+    bool transmitCut() const noexcept { return m_transmitCut.load(std::memory_order_acquire); }
+
+public slots:
+    // This object's thread; queued from the main thread's catch-up
+    // (RadioModel::catchUpTransmitCut), after the setMox(false) its stop
+    // posted.
+    void clearTransmitCut();
+
+protected:
+    // This object's thread. The default unkeys as the emergency stop does:
+    // setMox(false); setTrxRelay(false). P1 then puts bank 0 on its next
+    // frame and drops queued TX I/Q; P2 sends its high-priority packet at
+    // once and keeps re-sending MOX off for its grace window.
+    virtual void applyTransmitCut();
+
 signals:
     // --- Telemetry ---
     // Emitted when a C&C round-trip completes. rttMs is the elapsed time
@@ -922,6 +992,10 @@ signals:
     // The TitleBar activity LED throttles this to ≤10 Hz visible refresh —
     // the emitter fires at the full frame rate; throttling is the receiver's job.
     // Design doc §4.1.
+    // 2026-10-14: both protocols now emit it once per socket read, not per
+    // frame (P2 once per drain, P1 once per onReadyRead call of up to
+    // kMaxEp6DatagramsPerRead datagrams). It is an activity tick, not a
+    // frame count.
     void frameReceived();
 
     // Emitted when connectToRadio() fails to reach the Connected state.
@@ -1035,8 +1109,17 @@ signals:
     // ADC overflow detected.
     void adcOverflow(int adc);
 
-    // Mic-jack PTT input from the radio hardware, decoded from the status
-    // frame on every frame receipt.  Emitted unconditionally each frame;
+    // Mic-jack PTT input from the radio hardware, decoded from status.
+    // P2 emits on every High-Priority packet. P1 emits when an EP6 packet
+    // contains at least one ordinary status subframe. For an HL2 packet made
+    // entirely of I2C responses, the I2C branch emits no PTT update.
+    // 2026-10-14, P1 at P2's rate: P1 emits a change of level in the EP6
+    // packet where it first appears (never delayed), and repeats the
+    // current level at each status tick (every 1 ms while keyed, every
+    // 200 ms idle; P1RadioConnection::kStatusIntervalIdleMs), on a packet
+    // with an ordinary status subframe. The repeat is what P2's
+    // High-Priority packets give: MoxController keys a PTT held through a
+    // TX inhibit, PA trip or receive only on the next call after it clears.
     // MoxController::onMicPttFromRadio() is idempotent on repeated same-state
     // calls (setPttMode(Mic) is a no-op when mode unchanged; setMox(x) only
     // advances the state machine when x differs from m_mox).
@@ -1045,8 +1128,9 @@ signals:
     // in setupMoxController() (H.5).  The MoxController drives MOX state when
     // mic-jack PTT changes state.
     //
-    // P1 source: C0 byte (ControlBytesIn[0]) bit 0 of each EP6 sub-frame.
-    //   Cite: Thetis networkproto1.c:329 [v2.10.3.13]:
+    // P1 source: C0 byte (ControlBytesIn[0]) bit 0 of each ordinary EP6
+    // subframe; I2C response subframes (C0 bit 7) do not update PTT.
+    //   Cite: mi0bot-Thetis networkproto1.c:478-496 [@c26a8a4]:
     //     prn->ptt_in = ControlBytesIn[0] & 0x1;
     //   + console.cs:25426 [v2.10.3.13]:
     //     bool mic_ptt = (dotdashptt & 0x01) != 0; // PTT from radio
@@ -1118,6 +1202,8 @@ private:
     bool m_radioAudioFlowing{false};
 
     struct ByteSample { qint64 ms; qint64 bytes; };
+    // Guards m_txSamples and m_rxSamples (recordBytes*, *ByteRate).
+    mutable std::mutex m_byteSamplesMutex;
     mutable QList<ByteSample> m_txSamples;
     mutable QList<ByteSample> m_rxSamples;
 
@@ -1131,8 +1217,9 @@ private:
     // publishAlexLpfBits: what was last reported. -1 = nothing yet.
     mutable int m_publishedLpfBits{-1};
 
-    // Ping RTT state. Zero means no outstanding ping.
-    qint64 m_pingSentMs{0};
+    // Ping RTT state. Zero means no outstanding ping. Atomic: P1 notes its
+    // pings on the EP2 sender thread, and receives them on its own.
+    std::atomic<qint64> m_pingSentMs{0};
     int m_lastPingRttMs{-1};
     QElapsedTimer m_lastPingRttAge;
 
@@ -1151,6 +1238,8 @@ private:
     // Initialised to -1 so the first call always emits.
     std::atomic<float> m_lastSupplyVolts{-1.0f};
     std::atomic<float> m_lastUserAdc0Volts{-1.0f};
+    // The transmit cut latch (cutTransmit / clearTransmitCut).
+    std::atomic<bool> m_transmitCut{false};
 
 protected:
     // Radio codec (2026-09-30): the consumer side of pushRadioAudio, on one
@@ -1373,6 +1462,13 @@ protected:
     // "Disable HF PA" (setPaDisabled), Thetis prn->tx[0].pa. Written and read
     // on the connection thread.
     bool m_paDisabled{false};
+
+    // The speaker amplifier inputs (setSpeakerAmplifierMode,
+    // setRadioSpeakerMuted, setSidetoneExpected). Written and read on the
+    // connection thread.
+    int  m_speakerAmplifierMode{0};
+    bool m_radioSpeakerMuted{false};
+    bool m_sidetoneExpected{false};
 
     // The Alex tab's receive filter rows (setAlexHpfEdges), Thetis's
     // shipped values until RadioModel hands the saved ones. Written and read

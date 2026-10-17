@@ -9,6 +9,9 @@
 // swagger and live probe, firmware G200C267). No real amplifier, radio or
 // Core is contacted.
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
+// 2026-10-11: a desktop window that runs its own radio shares its RF-Kit at
+// the typed address, with no device name asked for. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -173,6 +176,38 @@ private slots:
         QTest::qWait(300);
         QCOMPARE(amp.requests.size(), seen);   // nothing more is asked
         QCOMPARE(amp.count(QStringLiteral("GET /info")), 1);
+    }
+
+    // 2026-10-11: a desktop window running its own radio shares its RF-Kit.
+    // Its link is used as that window always used it: whatever answers
+    // /info at the typed address counts as connected, by whatever name. The
+    // window's own Connect and Disconnect go through the one controller.
+    void desktopSharesTheRfKitAtTheTypedAddress()
+    {
+        FakeAmp amp;
+        // The reply the Core's own check refuses (refusesAnotherDevice...).
+        amp.info = R"({"device":"PowerGeniusXL","software_version":{"GUI":1,"controller":2}})";
+        RadioModel model;
+        model.enableStationAccessoryIdentity(StationAccessoryAdmission::TypedAddress);
+        RadioInfo radio;
+        radio.macAddress = QStringLiteral("aa:bb:cc:dd:ee:82");
+        model.setLastRadioInfoForTest(radio);
+        model.setConnectionStateForTest(ConnectionState::Connected);
+        QVERIFY(model.stationAccessoryIdentityEnabled());
+        QVERIFY(!model.rfKitConnection()->identityAdmissionRequired());
+        RfKitModel* rfKit = model.rfKitModel();
+
+        model.connectRfKitFromWindow(QStringLiteral("127.0.0.1"), amp.serverPort());
+        QCOMPARE(rfKit->connectionPhase(), Phase::Connecting);
+        QTRY_COMPARE_WITH_TIMEOUT(rfKit->connectionPhase(), Phase::Connected, 3000);
+        QVERIFY(model.rfKitConnection()->isConnected());
+        QCOMPARE(rfKit->configuredHost(), QStringLiteral("127.0.0.1"));
+        QCOMPARE(rfKit->configuredPort(), int(amp.serverPort()));
+
+        model.disconnectRfKitFromWindow();
+        QVERIFY(!model.rfKitConnection()->isConnected());
+        QVERIFY(rfKit->connectionPhase() == Phase::Disconnected
+                || rfKit->connectionPhase() == Phase::Disabled);
     }
 
     // M2 (R-R3-47): a reply with no device is a failed answer, retried; it

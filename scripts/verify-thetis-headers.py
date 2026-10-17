@@ -6,7 +6,7 @@ Originally this script covered only Thetis-derived files listed in
 ``docs/attribution/THETIS-PROVENANCE.md``. Pass 7 (2026-04-18, Compliance
 Plan T7) extended coverage to two additional lineage kinds:
 
-  * ``aethersdr`` — files in Bucket A of
+  * ``aethersdr`` — files in Buckets A and C of
     ``docs/attribution/aethersdr-reconciliation.md`` (genuine AetherSDR
     derivations). AetherSDR has no per-file copyright headers, so the
     check is for the project-level attribution we require in the port
@@ -62,7 +62,8 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from header_block import HEADER_WINDOW, header_text  # noqa: E402
+from header_block import HEADER_WINDOW, header_text, uses_exact_tcp_notice, CAT_TCP_PROJECT_LICENSE  # noqa: E402
+from aethersdr_lineage import aethersdr_derivative_paths  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 PROVENANCE = REPO / "docs" / "attribution" / "THETIS-PROVENANCE.md"
@@ -181,43 +182,9 @@ def parse_provenance(text: str):
 
 
 def parse_aethersdr_bucket_a(text: str):
-    """Extract file paths from Bucket A of aethersdr-reconciliation.md.
-
-    Bucket A is delimited by "## Bucket A" ... "## Bucket B". Within,
-    per-topic tables list NereusSDR files in the first column.
-    Returns a list of relative paths.
-    """
-    in_bucket_a = False
-    paths = []
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line.startswith("## Bucket A"):
-            in_bucket_a = True
-            continue
-        if line.startswith("## Bucket "):
-            in_bucket_a = False
-            continue
-        if not in_bucket_a:
-            continue
-        if not line.startswith("|") or line.startswith("|---"):
-            continue
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        if len(cells) < 2:
-            continue
-        candidate = cells[0].replace("`", "")
-        if not candidate.startswith(("src/", "tests/")):
-            continue
-        if (REPO / candidate).is_file():
-            paths.append(candidate)
-    # De-dupe while preserving order
-    seen = set()
-    out = []
-    for p in paths:
-        if p in seen:
-            continue
-        seen.add(p)
-        out.append(p)
-    return out
+    """Legacy API name: return existing Bucket A/C derivative paths."""
+    return [path for path in aethersdr_derivative_paths(text)
+            if (REPO / path).is_file()]
 
 
 def list_wdsp_sources():
@@ -234,15 +201,48 @@ def list_wdsp_sources():
     return out
 
 
-def check_required_markers(path: Path, markers):
+CAT_SHARED_HEADER_PATHS = {
+    "resources/cat/CATStructs.xml",
+    "resources/cat/CommandContracts.json",
+    "tests/data/cat/requests.json",
+    "tests/data/cat/compatibility.csv",
+}
+CAT_XML_NO_HEADER = (
+    "Upstream source has no top-of-file GPL header — project-level LICENSE applies"
+)
+
+
+def cat_shared_header_path(path: Path) -> Optional[str]:
+    try:
+        relative = path.relative_to(REPO).as_posix()
+    except ValueError:
+        return None
+    return relative if relative in CAT_SHARED_HEADER_PATHS else None
+
+
+
+def check_required_markers(path: Path, markers, source_cell: Optional[str] = None):
     head = attribution_header_text(path)
+    try:
+        relative = path.relative_to(REPO).as_posix()
+    except ValueError:
+        relative = ""
+    if markers == MARKERS_BY_KIND["thetis"] and uses_exact_tcp_notice(relative, head, source_cell):
+        markers = [m for m in markers if m != "Copyright (C)"] + [CAT_TCP_PROJECT_LICENSE]
+    if (cat_shared_header_path(path) == "resources/cat/CATStructs.xml"
+            and markers == MARKERS_BY_KIND["thetis"]):
+        # The exact upstream XML has no header. Never invent copyright:
+        # require the documented project licence notice in its named sidecar.
+        markers = [m for m in markers if m != "Copyright (C)"] + [CAT_XML_NO_HEADER]
+        head = " ".join(head.split())
     return [m for m in markers if m not in head]
 
 
 def attribution_header_text(path: Path) -> str:
-    """JSON Setup resources share a verbatim upstream header in HEADERS.md."""
-    if (path.suffix == ".json" and path.parent.name == "setup"
-            and path.parent.parent.name == "resources"):
+    """Setup JSON and explicitly allowlisted CAT data use named sidecars."""
+    if (cat_shared_header_path(path) or
+            (path.suffix == ".json" and path.parent.name == "setup"
+             and path.parent.parent.name == "resources")):
         headers = path.parent / "HEADERS.md"
         if not headers.is_file():
             return ""
@@ -318,7 +318,7 @@ def verify_thetis_kind():
     for rel, source_cell in rows:
         path = REPO / rel
         problems = []
-        missing = check_required_markers(path, markers)
+        missing = check_required_markers(path, markers, source_cell)
         if missing:
             problems.append(f"missing-markers: {', '.join(missing)}")
         orphan = check_orphan_pair(rel, listed)
@@ -342,7 +342,7 @@ def verify_aethersdr_kind():
         return None
     paths = parse_aethersdr_bucket_a(AETHERSDR_RECONCILIATION.read_text())
     if not paths:
-        print("ERROR: no Bucket A rows parsed from aethersdr-reconciliation.md",
+        print("ERROR: no Bucket A/C rows parsed from aethersdr-reconciliation.md",
               file=sys.stderr)
         return None
     markers = MARKERS_BY_KIND["aethersdr"]

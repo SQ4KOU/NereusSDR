@@ -23,6 +23,8 @@
 //                 to Phase 3M. Pipe paths: /tmp/aethersdr-dax-* →
 //                 /tmp/nereussdr-vax-*. Sample rate/format: 24 kHz mono int16
 //                 → 48 kHz stereo float32 (spec §8.1).
+//   2026-10-14: Protect each VAX role with a generation ownership receipt.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 
 #include "LinuxPipeBus.h"
@@ -33,6 +35,7 @@
 #include <QProcess>
 
 #ifdef Q_OS_LINUX
+#include "LinuxPipeOwnership.h"
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -42,7 +45,7 @@
 #include <cerrno>
 #include <cmath>
 #include <cstring>
-#include <mutex>
+
 
 namespace NereusSDR {
 
@@ -79,20 +82,29 @@ const char* pipePathForRole(LinuxPipeBus::Role role) {
 // QByteArray on timeout or non-zero exit. Works with both PulseAudio and
 // PipeWire-via-pipewire-pulse — pactl is the stable interface on both.
 // Ported verbatim structure from AetherSDR PipeWireAudioBridge::runPactl().
-static QByteArray runPactl(const QStringList& args)
+struct PactlResult {
+    QByteArray output;
+    bool neverStarted{false};
+};
+
+static PactlResult runPactl(const QStringList& args)
 {
     QProcess proc;
     proc.start(QStringLiteral("pactl"), args);
+    if (!proc.waitForStarted(1000)) {
+        qCWarning(lcAudio) << "LinuxPipeBus: pactl did not start:" << proc.errorString();
+        return {{}, proc.error() == QProcess::FailedToStart};
+    }
     if (!proc.waitForFinished(5000)) {
         qCWarning(lcAudio) << "LinuxPipeBus: pactl timed out:" << args;
         return {};
     }
-    if (proc.exitCode() != 0) {
+    if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
         qCWarning(lcAudio) << "LinuxPipeBus: pactl failed:"
                            << proc.readAllStandardError().trimmed();
         return {};
     }
-    return proc.readAllStandardOutput().trimmed();
+    return {proc.readAllStandardOutput().trimmed(), false};
 }
 
 // ── Stale-module cleanup ──────────────────────────────────────────────────────
@@ -104,34 +116,10 @@ static QByteArray runPactl(const QStringList& args)
 // Runs ONCE per process, gated by a std::once_flag, so that creating multiple
 // LinuxPipeBus instances (one per Role) doesn't re-run the scan and
 // accidentally unload sibling buses' just-loaded modules.
-static void doCleanupStaleModules()
-{
-    QProcess proc;
-    proc.start(QStringLiteral("pactl"), {QStringLiteral("list"), QStringLiteral("modules"), QStringLiteral("short")});
-    if (!proc.waitForFinished(3000)) {
-        return;
-    }
-
-    const QByteArray output = proc.readAllStandardOutput();
-    for (const auto& line : output.split('\n')) {
-        if (line.contains("nereussdr-")) {
-            const auto parts = line.split('\t');
-            if (!parts.isEmpty()) {
-                QProcess::execute(QStringLiteral("pactl"),
-                                  {QStringLiteral("unload-module"),
-                                   QString::fromUtf8(parts[0].trimmed())});
-            }
-        }
-    }
-}
-
-static std::once_flag gStaleCleanupOnce;
-
+// [original inline comment from LinuxPipeBus.cpp:107-134]
+// The former once-per-process implementation has been replaced by per-role
+// ownership; the historical comments above describe the unsafe original.
 // Exposed as a private call from open() — call_once ensures it runs at most once.
-static void cleanupStaleModulesOnce()
-{
-    std::call_once(gStaleCleanupOnce, doCleanupStaleModules);
-}
 
 } // namespace
 
@@ -173,25 +161,31 @@ bool LinuxPipeBus::open(const AudioFormat& format) {
         return false;
     }
 
+    // [original inline comment from LinuxPipeBus.cpp:176-185]
     // Stale-module cleanup runs once per process before the first module load.
     // Using std::call_once so sibling bus instances don't re-run the scan
     // and accidentally clobber each other's freshly-loaded modules.
-    cleanupStaleModulesOnce();
-
     // Remove any leftover FIFO from a previous session.
-    ::unlink(m_pipePath);
-
     // Create the named FIFO that the pactl module will read from (RX)
     // or write to (TX).
-    if (::mkfifo(m_pipePath, 0666) != 0) {
-        m_err = QStringLiteral("mkfifo(%1) failed: errno=%2")
-                    .arg(QString::fromUtf8(m_pipePath)).arg(errno);
-        qCWarning(lcAudio) << "LinuxPipeBus:" << m_err;
+    // These comments describe the former global cleanup/precreated FIFO.
+    // Admission now precedes every resource action; the server creates the
+    // FIFO in a private generation directory (PulseAudio v17 pipe-source).
+    m_ownership = std::make_unique<LinuxPipeOwnership>(static_cast<int>(m_role));
+    if (!m_ownership->begin()) {
+        m_err = m_ownership->errorString();
+        m_ownership.reset();
         return false;
     }
+    m_generationPath = m_ownership->pipePath();
+    m_pipePath = m_generationPath.constData();
 
     // Load the appropriate pactl module. The module index returned on stdout
     // is what we need to unload in close().
+    QString fileValue = QString::fromLocal8Bit(m_pipePath);
+    fileValue.replace('\\', QStringLiteral("\\\\"));
+    fileValue.replace('"', QStringLiteral("\\\""));
+    const QString fileArgument = QStringLiteral("file=\"%1\"").arg(fileValue);
     QStringList pactlArgs;
     if (isProducer()) {
         // Role::Vax1..4 — pipe-source: NereusSDR writes, apps (WSJT-X etc.) read.
@@ -201,7 +195,7 @@ bool LinuxPipeBus::open(const AudioFormat& format) {
         pactlArgs = {
             QStringLiteral("load-module"),
             QStringLiteral("module-pipe-source"),
-            QStringLiteral("file=%1").arg(QString::fromUtf8(m_pipePath)),
+            fileArgument,
             QStringLiteral("source_name=%1").arg(sourceName),
             QStringLiteral("source_properties=device.description=\"%1\"").arg(sourceDesc),
             QStringLiteral("format=float32le"),
@@ -215,7 +209,7 @@ bool LinuxPipeBus::open(const AudioFormat& format) {
         pactlArgs = {
             QStringLiteral("load-module"),
             QStringLiteral("module-pipe-sink"),
-            QStringLiteral("file=%1").arg(QString::fromUtf8(m_pipePath)),
+            fileArgument,
             QStringLiteral("sink_name=nereussdr-vax-tx"),
             QStringLiteral("sink_properties=device.description=\"NereusSDR TX\""),
             QStringLiteral("format=float32le"),
@@ -225,12 +219,27 @@ bool LinuxPipeBus::open(const AudioFormat& format) {
         };
     }
 
-    const QByteArray modIdxBytes = runPactl(pactlArgs);
+    if (!m_ownership->markLoadAttempt()) {
+        m_err = m_ownership->errorString();
+        close();
+        return false;
+    }
+    const PactlResult load = runPactl(pactlArgs);
+    if (load.neverStarted && !m_ownership->cancelUnstartedLoad()) {
+        qCWarning(lcAudio) << m_ownership->errorString();
+    }
+    const QByteArray modIdxBytes = load.output;
     if (modIdxBytes.isEmpty()) {
         m_err = QStringLiteral("pactl load-module failed for %1")
                     .arg(QString::fromUtf8(m_pipePath));
         qCWarning(lcAudio) << "LinuxPipeBus:" << m_err;
-        ::unlink(m_pipePath);
+        close();
+        return false;
+    }
+
+    if (!m_ownership->captureFifo()) {
+        m_err = m_ownership->errorString();
+        close();
         return false;
     }
 
@@ -244,7 +253,13 @@ bool LinuxPipeBus::open(const AudioFormat& format) {
                     .arg(QString::fromUtf8(modIdxBytes))
                     .arg(QString::fromUtf8(m_pipePath));
         qCWarning(lcAudio) << "LinuxPipeBus:" << m_err;
-        ::unlink(m_pipePath);
+        close();
+        return false;
+    }
+
+    if (!m_ownership->confirmModule(modIdx)) {
+        m_err = m_ownership->errorString();
+        close();
         return false;
     }
 
@@ -256,13 +271,18 @@ bool LinuxPipeBus::open(const AudioFormat& format) {
         ? (O_WRONLY | O_NONBLOCK)
         : (O_RDONLY | O_NONBLOCK);
 
-    const int fd = ::open(m_pipePath, flags);
+    const int fd = ::open(m_pipePath, flags | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) {
         m_err = QStringLiteral("open(%1) failed: errno=%2")
                     .arg(QString::fromUtf8(m_pipePath)).arg(errno);
         qCWarning(lcAudio) << "LinuxPipeBus:" << m_err;
-        runPactl({QStringLiteral("unload-module"), QString::number(modIdx)});
-        ::unlink(m_pipePath);
+        close();
+        return false;
+    }
+    if (!m_ownership->acceptFd(fd)) {
+        ::close(fd);
+        m_err = m_ownership->errorString();
+        close();
         return false;
     }
 
@@ -288,14 +308,23 @@ void LinuxPipeBus::close() {
         ::close(m_pipeFd);
         m_pipeFd = -1;
     }
-    if (m_moduleLoaded) {
-        runPactl({QStringLiteral("unload-module"), QString::number(m_moduleIndex)});
-        m_moduleLoaded = false;
-        m_moduleIndex  = 0;
+    if (m_ownership) {
+        if (!m_ownership->cleanup()) {
+            qCWarning(lcAudio) << "LinuxPipeBus cleanup preserved unresolved generation:"
+                               << m_ownership->errorString();
+            // Fds are closed and this bus will never use the generation again.
+            // Persist that fact before releasing the claim, allowing a later
+            // owner to retry only this proven-retired generation.
+            if (!m_ownership->retire()) {
+                qCWarning(lcAudio) << "LinuxPipeBus could not persist generation retirement:"
+                                   << m_ownership->errorString();
+            }
+        }
+        // Release the role claim only after all cleanup has finished.
+        m_ownership.reset();
     }
-    if (m_open) {
-        ::unlink(m_pipePath);
-    }
+    m_moduleLoaded = false;
+    m_moduleIndex = 0;
 #endif
     m_open = false;
     m_rxLevel.store(0.0f, std::memory_order_release);

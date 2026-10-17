@@ -1,5 +1,8 @@
 // no-port-check: NereusSDR-original.
 // 2026-10-02 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+// Modification history (NereusSDR):
+// 2026-10-13 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex:
+// Pin stale/current deadline ordering and callback replacement with deterministic regressions.
 #include <QtTest>
 #include <algorithm>
 #include <QTemporaryDir>
@@ -93,6 +96,7 @@ struct RenameHarness {
     bool sameCoreActive = false;
     bool borrow = false;
     int constructed = 0;
+    std::function<void()> beforeAuthorityCheck;
     QPointer<StationClient> temporary;
     std::unique_ptr<CoreRenameController> helper;
     bool init(bool useBorrow = false) {
@@ -106,7 +110,11 @@ struct RenameHarness {
         if (useBorrow) { peer.attach(borrowed); }
         helper = std::make_unique<CoreRenameController>(store, [this](const QByteArray&) {
             return CoreRenameController::Snapshot{borrow ? &borrowed : nullptr, sameCoreActive, generation, peer.device->fingerprint()};
-        }, peer.device, [this](const CoreRenameController::Request& r) { return r.epoch == authorityEpoch; }, nullptr,
+        }, peer.device, [this](const CoreRenameController::Request& r) {
+            const auto before = beforeAuthorityCheck;
+            if (before) { before(); }
+            return r.epoch == authorityEpoch;
+        }, nullptr,
         [this] {
             ++constructed;
             auto client = std::make_unique<StationClient>(nullptr, nullptr, nullptr, LinkVersion::supportedMajors(), StationClient::SessionPurpose::RenameOnly);
@@ -280,11 +288,121 @@ private slots:
     }
     void forgetRecreateRetiresLateResult() {
         RenameHarness f; QVERIFY(f.init(true)); QTRY_VERIFY_WITH_TIMEOUT(f.borrowed.deviceAdminAvailable(), 1000);
-        f.peer.commandHandler = [&](const SessionMessage& m) { QVERIFY(f.store.remove(f.target.id)); QVERIFY(f.store.upsert(f.target)); f.answer(m); };
+        const auto request = f.request();
+        bool handlerRan = false;
+        quint64 recreatedIncarnation = 0;
+        f.peer.synchronousHandler = [&](StationClient& client, const SessionMessage& m) {
+            if (m.commandVerb != "station.rename") { return; }
+            handlerRan = true;
+            QVERIFY(f.store.remove(f.target.id));
+            QVERIFY(f.store.upsert(f.target));
+            recreatedIncarnation = f.store.targetIncarnation(f.target.id);
+            emit client.commandResponse(SessionMessages::commandResult(m.commandVerb, m.commandId, true, {}, {}));
+        };
         QSignalSpy result(f.helper.get(), &CoreRenameController::finished);
-        f.helper->rename(f.request()); QTRY_COMPARE_WITH_TIMEOUT(result.count(), 1, 1000);
+        f.helper->rename(request);
+        QVERIFY(handlerRan);
+        QVERIFY(recreatedIncarnation != 0);
+        QVERIFY(recreatedIncarnation != request.incarnation);
+        QCOMPARE(f.store.targetIncarnation(request.targetId), recreatedIncarnation);
+        QVERIFY(f.helper->pending());
+        QVERIFY(result.isEmpty());
+        QTRY_COMPARE_WITH_TIMEOUT(result.count(), 1, 1000);
         QCOMPARE(qvariant_cast<CoreRenameController::Outcome>(result.first().at(1)), CoreRenameController::Outcome::StaleTarget);
         QVERIFY(!f.store.target(f.target.id)->lastKnownCoreName); QVERIFY(f.borrowed.isHandshakeComplete());
+        QVERIFY(f.borrowed.signedInWithDeviceKey());
+        QCOMPARE(f.count("station.rename"), 1);
+        QCoreApplication::processEvents();
+        QCOMPARE(result.count(), 1);
+    }
+    void commandDeadlineBeforeQueuedResult_data() {
+        QTest::addColumn<bool>("recreateTarget");
+        QTest::addColumn<CoreRenameController::Outcome>("expectedOutcome");
+        QTest::newRow("stale-target") << true << CoreRenameController::Outcome::StaleTarget;
+        QTest::newRow("current-target") << false << CoreRenameController::Outcome::UnknownOutcome;
+    }
+    void commandDeadlineBeforeQueuedResult() {
+        QFETCH(bool, recreateTarget);
+        QFETCH(CoreRenameController::Outcome, expectedOutcome);
+        RenameHarness f; QVERIFY(f.init(true)); QTRY_VERIFY_WITH_TIMEOUT(f.borrowed.deviceAdminAvailable(), 1000);
+        const auto request = f.request();
+        bool handlerRan = false;
+        quint64 recreatedIncarnation = 0;
+        f.peer.synchronousHandler = [&](StationClient& client, const SessionMessage& m) {
+            if (m.commandVerb != "station.rename") { return; }
+            handlerRan = true;
+            if (recreateTarget) {
+                QVERIFY(f.store.remove(f.target.id));
+                QVERIFY(f.store.upsert(f.target));
+                recreatedIncarnation = f.store.targetIncarnation(f.target.id);
+            }
+            emit client.commandResponse(SessionMessages::commandResult(m.commandVerb, m.commandId, true, {}, {}));
+        };
+        QSignalSpy result(f.helper.get(), &CoreRenameController::finished);
+        f.helper->rename(request);
+        QVERIFY(handlerRan);
+        if (recreateTarget) {
+            QVERIFY(recreatedIncarnation != 0);
+            QVERIFY(recreatedIncarnation != request.incarnation);
+            QCOMPARE(f.store.targetIncarnation(request.targetId), recreatedIncarnation);
+        } else {
+            QCOMPARE(f.store.targetIncarnation(request.targetId), request.incarnation);
+        }
+        QVERIFY(f.helper->pending());
+        QVERIFY(result.isEmpty());
+        QCOMPARE(f.count("station.rename"), 1);
+        // Force the real deadline handler before the queued answer validates its lease.
+        QVERIFY(QMetaObject::invokeMethod(f.helper.get(), "deadlineExpired", Qt::DirectConnection));
+        QVERIFY(!f.helper->pending());
+        QVERIFY(result.isEmpty());
+        QTRY_COMPARE_WITH_TIMEOUT(result.count(), 1, 1000);
+        QCoreApplication::processEvents();
+        QCOMPARE(result.count(), 1);
+        QCOMPARE(qvariant_cast<CoreRenameController::Request>(result.first().at(0)), request);
+        QVERIFY(!f.store.target(f.target.id)->lastKnownCoreName);
+        QVERIFY(f.borrowed.isHandshakeComplete());
+        QVERIFY(f.borrowed.signedInWithDeviceKey());
+        QCOMPARE(f.count("station.rename"), 1);
+        QCOMPARE(f.count("session.leave"), 0);
+        QCOMPARE(qvariant_cast<CoreRenameController::Outcome>(result.first().at(1)), expectedOutcome);
+    }
+    void commandDeadlineAuthorityCallbackCannotFinishReplacement() {
+        RenameHarness f; QVERIFY(f.init(true)); QTRY_VERIFY_WITH_TIMEOUT(f.borrowed.deviceAdminAvailable(), 1000);
+        const auto original = f.request();
+        const auto replacement = f.request(2);
+        QSignalSpy result(f.helper.get(), &CoreRenameController::finished);
+        f.helper->rename(original);
+        QVERIFY(f.helper->pending());
+        QVERIFY(result.isEmpty());
+        QCOMPARE(f.count("station.rename"), 1);
+        bool reentered = false;
+        f.beforeAuthorityCheck = [&] {
+            reentered = true;
+            f.beforeAuthorityCheck = {};
+            f.helper->cancel();
+            f.helper->rename(replacement);
+        };
+        // The old deadline must retire only its captured operation after a callback replaces it.
+        QVERIFY(QMetaObject::invokeMethod(f.helper.get(), "deadlineExpired", Qt::DirectConnection));
+        QVERIFY(reentered);
+        QVERIFY(f.helper->pending());
+        QVERIFY(result.isEmpty());
+        QCOMPARE(f.count("station.rename"), 2);
+        f.beforeAuthorityCheck = {};
+        f.helper->cancel();
+        QTRY_COMPARE_WITH_TIMEOUT(result.count(), 2, 1000);
+        QCoreApplication::processEvents();
+        QCOMPARE(result.count(), 2);
+        QCOMPARE(qvariant_cast<CoreRenameController::Request>(result.at(0).at(0)), original);
+        QCOMPARE(qvariant_cast<CoreRenameController::Outcome>(result.at(0).at(1)), CoreRenameController::Outcome::Cancelled);
+        QCOMPARE(qvariant_cast<CoreRenameController::Request>(result.at(1).at(0)), replacement);
+        QCOMPARE(qvariant_cast<CoreRenameController::Outcome>(result.at(1).at(1)), CoreRenameController::Outcome::Cancelled);
+        QVERIFY(!f.helper->pending());
+        QVERIFY(!f.store.target(f.target.id)->lastKnownCoreName);
+        QVERIFY(f.borrowed.isHandshakeComplete());
+        QVERIFY(f.borrowed.signedInWithDeviceKey());
+        QCOMPARE(f.count("station.rename"), 2);
+        QCOMPARE(f.count("session.leave"), 0);
     }
     void cancelledResultCannotReachReplacementAuthority() {
         RenameHarness f; QVERIFY(f.init(true)); QTRY_VERIFY_WITH_TIMEOUT(f.borrowed.deviceAdminAvailable(), 1000);

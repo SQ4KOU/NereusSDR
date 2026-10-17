@@ -3,6 +3,7 @@
 
 import CoreGraphics
 import Foundation
+import ImageIO
 import Metal
 import NereusMedia
 import NereusModels
@@ -23,6 +24,11 @@ import os
 /// The shaders ship as source and compile when the renderer is made, so
 /// building needs no Metal toolchain.
 public final class BandRenderer {
+    /// Existing native amateur identity boundaries within this view.
+    public static func bandEdgeHz(in coverage: BandCoverage) -> [Double] {
+        DisplayBandEdges.frequencies(in: coverage)
+    }
+
     public enum SetupError: Error, Equatable {
         case noDevice
         case shaderSourceMissing
@@ -255,6 +261,11 @@ public final class BandRenderer {
         var colour: SIMD4<Float>
     }
 
+    private var backgroundImageKey: String?
+    private var backgroundImage: CGImage?
+    private var backgroundTextureKey: String?
+    private var backgroundTexture: (any MTLTexture)?
+
     private struct RectUniforms {
         var rect: SIMD4<Float>
         var viewport: SIMD2<Float>
@@ -415,7 +426,14 @@ public final class BandRenderer {
         underVertices.removeAll(keepingCapacity: true)
         Self.addRect(layout.frequencyScale, Self.scaleBackground, to: &underVertices)
         Self.addSplitHandle(layout: layout, scale: overlays.scale, to: &underVertices)
+        if settings.backgroundEnabled && stacked == nil {
+            let colour = BandPalette.rgbaWithAlpha(settings.backgroundColour, fallback: Self.background)
+            Self.addRect(layout.spectrum, colour, to: &underVertices)
+        }
         drawColour(underVertices, slot: ring * 2, encoder: encoder, viewport: &viewport)
+        if settings.backgroundEnabled && stacked == nil {
+            drawBackground(settings, rect: layout.spectrum, encoder: encoder, viewport: viewport)
+        }
         drawWaterfall(history, rect: layout.waterfall, view: BandCoverage(centerHz: overlays.centerHz, spanHz: overlays.spanHz),
                       lookBack: overlays.lookBackLines, encoder: encoder, viewport: viewport)
         if let (overlay, stackGeometry) = stacked, let stack {
@@ -445,6 +463,15 @@ public final class BandRenderer {
                 gridKey = key
             }
             over.append(contentsOf: gridVertices)
+        }
+        if flat {
+            let edgeColour = BandPalette.rgbaWithAlpha(settings.bandEdgeColour)
+            let view = BandCoverage(centerHz: overlays.centerHz, spanHz: overlays.spanHz)
+            for frequency in Self.bandEdgeHz(in: view) {
+                Self.addRect(CGRect(x: geometry.x(forHz: frequency), y: layout.spectrum.minY,
+                                    width: max(1, overlays.scale), height: layout.spectrum.height),
+                             edgeColour, to: &over)
+            }
         }
         if flat, let hold = overlays.peakHold, hold.count > 1 {
             addPeakHold(hold, coverage: overlays.frameCoverage, geometry: geometry, settings: settings,
@@ -606,6 +633,8 @@ public final class BandRenderer {
                                scale: scale, bold: true)
             let value = valueTexture(key)
             // Its text starts right of the marker, its top above the marker's.
+            // Accepted HTML: Text Position is kept but unused; the number
+            // stays beside its box for fresh and existing clients alike.
             let origin = CGPoint(x: left + marker + Double(Self.noiseFloorValueRightPoints * scale) - Double(value.textLeft),
                                  y: y - marker - Double(Self.noiseFloorValueUpPoints * scale) - Double(value.textTop))
             valuesDrawn.append((key, Self.clampOrigin(origin, size: value.size, within: layout, geometry: geometry)))
@@ -807,7 +836,7 @@ public final class BandRenderer {
             let y = geometry.y(forDbm: level).rounded(.down)
             Self.addRect(CGRect(x: 0, y: y, width: geometry.size.width, height: width), horizontal, to: &vertices)
         }
-        let ticks = geometry.frequencyTicks(minimumSpacing: Double(Self.frequencyLabelSpacingPoints * scale))
+        let ticks = geometry.frequencyTicks(minimumSpacing: Double(Self.frequencyLabelSpacingPoints * scale), forcedStepHz: Double(settings.frequencyGridSpacingHz))
         let height = Double(layout.spectrum.height)
         for hz in ticks.ticks {
             let x = geometry.x(forHz: hz).rounded(.down)
@@ -900,7 +929,7 @@ public final class BandRenderer {
             SIMD2<Float>(Float(Self.x(sample: index, of: hold.count, coverage: coverage, geometry: geometry)),
                          Float(Self.traceY(hold[index], geometry)))
         }
-        var colour = BandPalette.rgba(settings.traceColour) ?? SIMD4(0.13, 0.83, 0.93, 1)
+        var colour = BandPalette.rgba(settings.traceLineColourDrawn) ?? SIMD4(0.13, 0.83, 0.93, 1)
         colour.w = Self.peakHoldTraceAlpha
         let width = Float(max(scale, settings.traceWidthPixels(scale: scale) * Self.classicHoldWidthShare))
         Self.addDashedPolyline(points, width: width, dash: width, gap: width * Float(Self.classicHoldGapWidths),
@@ -962,7 +991,11 @@ public final class BandRenderer {
             points.insert(SIMD2(Float(low), first.y), at: 0)
             points.append(SIMD2(Float(high), last.y))
         }
+        // The fill keeps the fill's colour; the line takes its own once one
+        // is chosen, and the fill's until then (the desktop's Trace Color
+        // and Fill Color, SpectrumWidget::traceColor()).
         let colour = BandPalette.rgba(settings.traceColour) ?? SIMD4(0.13, 0.83, 0.93, 1)
+        let lineColour = BandPalette.rgba(settings.traceLineColourDrawn) ?? colour
         if settings.traceFill {
             let bottom = Float(geometry.size.height)
             let fill = Self.fillAlpha(settings)
@@ -989,7 +1022,7 @@ public final class BandRenderer {
                 vertices.append(ColourVertex(position: SIMD2(a.x, bottom), colour: foot))
             }
         }
-        Self.addPolyline(points, width: Float(settings.traceWidthPixels(scale: scale)), colour: colour, to: &vertices)
+        Self.addPolyline(points, width: Float(settings.traceWidthPixels(scale: scale)), colour: lineColour, to: &vertices)
     }
 
     // MARK: Labels
@@ -1064,14 +1097,14 @@ public final class BandRenderer {
         if scaleRect.width > 0, scaleRect.height > 0, alignment != .off {
             let alignmentNumber = Double(FrequencyLabelAlignment.allCases.firstIndex(of: alignment) ?? 0)
             let key = LabelKey(rect: scaleRect, scale: scale,
-                               numbers: [geometry.centerHz, geometry.spanHz, alignmentNumber]
+                               numbers: [geometry.centerHz, geometry.spanHz, alignmentNumber, Double(settings.frequencyGridSpacingHz), Double(settings.frequencyScaleFontPoints)]
                                    + textColour.indices.map { Double(textColour[$0]) })
             sets["b-scale"] = LabelSet(key: key) {
-                let ticks = geometry.frequencyTicks(minimumSpacing: Double(Self.frequencyLabelSpacingPoints * scale))
+                let ticks = geometry.frequencyTicks(minimumSpacing: Double(Self.frequencyLabelSpacingPoints * scale), forcedStepHz: Double(settings.frequencyGridSpacingHz))
                 return ticks.ticks.compactMap { hz -> BandLabels.Item? in
                     let text = BandGeometry.frequencyLabel(hz: hz, stepHz: ticks.stepHz)
                     let x = CGFloat(geometry.x(forHz: hz))
-                    let width = BandLabels.width(of: text, points: BandLayout.frequencyLabelPoints, scale: scale)
+                    let width = BandLabels.width(of: text, points: CGFloat(settings.frequencyScaleFontPoints), scale: scale)
                     let gap = 3 * scale
                     // Where the text starts and ends for its alignment on the tick.
                     let (start, labelAlignment, anchor): (CGFloat, BandLabels.Alignment, CGFloat)
@@ -1089,7 +1122,7 @@ public final class BandRenderer {
                         return nil
                     }
                     return BandLabels.Item(text: text, x: anchor, y: scaleRect.height / 2, alignment: labelAlignment,
-                                           colour: textColour, points: BandLayout.frequencyLabelPoints)
+                                           colour: textColour, points: CGFloat(settings.frequencyScaleFontPoints))
                 }
             }
         }
@@ -1207,6 +1240,62 @@ public final class BandRenderer {
             encoder.setFragmentTexture(texture, index: 0)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         }
+    }
+
+    // Native background fill -> picture -> grid -> trace ordering follows
+    // SpectrumWidget::paintSpectrumBackground; aspect fill stays in device pixels.
+    private func drawBackground(_ settings: BandDisplaySettings, rect: CGRect,
+                                encoder: any MTLRenderCommandEncoder, viewport: SIMD2<Float>) {
+        let path = settings.backgroundImagePath
+        guard !path.isEmpty, rect.width > 0, rect.height > 0 else { return }
+        if backgroundImageKey != path {
+            backgroundImageKey = path
+            backgroundTextureKey = nil
+            backgroundImage = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil)
+                .flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+        }
+        guard let image = backgroundImage else { return }
+        let width = max(1, Int(rect.width.rounded()))
+        let height = max(1, Int(rect.height.rounded()))
+        let key = "\(path)|\(width)|\(height)|\(settings.backgroundOpacityPercent)"
+        if backgroundTextureKey != key {
+            backgroundTextureKey = key
+            backgroundTexture = nil
+            var bytes = [UInt8](repeating: 0, count: width * height * 4)
+            let info = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+            bytes.withUnsafeMutableBytes { raw in
+                guard let context = CGContext(data: raw.baseAddress, width: width, height: height,
+                    bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: info) else { return }
+                context.interpolationQuality = .high
+                context.translateBy(x: 0, y: CGFloat(height))
+                context.scaleBy(x: 1, y: -1)
+                // Desktop BG Opacity fades the picture:80 means20% picture.
+                context.setAlpha(CGFloat(1 - Double(min(max(settings.backgroundOpacityPercent, 0), 100)) / 100))
+                let factor = max(CGFloat(width) / CGFloat(image.width), CGFloat(height) / CGFloat(image.height))
+                let drawn = CGSize(width: CGFloat(image.width) * factor, height: CGFloat(image.height) * factor)
+                context.draw(image, in: CGRect(x: (CGFloat(width) - drawn.width) / 2,
+                    y: (CGFloat(height) - drawn.height) / 2, width: drawn.width, height: drawn.height))
+            }
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+                width: width, height: height, mipmapped: false)
+            descriptor.usage = .shaderRead
+            if let texture = device.makeTexture(descriptor: descriptor) {
+                bytes.withUnsafeBytes { raw in
+                    if let address = raw.baseAddress {
+                        texture.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0,
+                                        withBytes: address, bytesPerRow: width * 4)
+                    }
+                }
+                backgroundTexture = texture
+            }
+        }
+        guard let texture = backgroundTexture else { return }
+        var uniforms = RectUniforms(rect: Self.vector(rect), viewport: viewport)
+        encoder.setRenderPipelineState(labelPipeline)
+        encoder.setVertexBytes(&uniforms, length: MemoryLayout<RectUniforms>.stride, index: 0)
+        encoder.setFragmentTexture(texture, index: 0)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     }
 
     // MARK: The waterfall
@@ -1367,11 +1456,11 @@ public final class BandRenderer {
         var uploadAll = false
         if stackGeneration != stack.layoutGeneration || stackTexture?.width != stack.columns
             || stackTexture?.height != stack.capacity {
-            let rows = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float, width: stack.columns,
+            let rows = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rg32Float, width: stack.columns,
                                                                 height: stack.capacity, mipmapped: false)
             rows.usage = .shaderRead
             stackTexture = device.makeTexture(descriptor: rows)
-            let windows = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rg32Float, width: 1,
+            let windows = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba32Float, width: 1,
                                                                    height: stack.capacity, mipmapped: false)
             windows.usage = .shaderRead
             stackWindows = device.makeTexture(descriptor: windows)
@@ -1385,24 +1474,25 @@ public final class BandRenderer {
         let fresh = uploadAll ? UInt64(stack.count) : min(stack.rowsAppended &- uploadedRows, UInt64(stack.capacity))
         for age in 0..<Int(min(fresh, UInt64(stack.count))) {
             let row = stack.storageRow(age: age)
-            var window = SIMD2<Float>(0, 0)
+            var window = SIMD4<Float>(0, 0, 0, 0)
             if let coverage = stack.window(storageRow: row), coverage.spanHz > 0 {
-                window = SIMD2(Float(coverage.lowHz - stackReferenceHz), Float(coverage.spanHz))
+                window = SIMD4(Float(coverage.lowHz - stackReferenceHz), Float(coverage.spanHz),
+                    stack.quiet(age: age) ?? 0, stack.quiet(age: age) == nil ? 0 : 1)
             }
             if uploadAll {
                 // A texture made this frame: no frame in flight reads it.
-                Array(stack.storageLine(row)).withUnsafeBytes { raw in
+                stack.packedStorageLine(row).withUnsafeBytes { raw in
                     if let base = raw.baseAddress {
                         texture.replace(region: MTLRegionMake2D(0, row, stack.columns, 1), mipmapLevel: 0,
-                                        withBytes: base, bytesPerRow: stack.columns * MemoryLayout<Float>.stride)
+                                        withBytes: base, bytesPerRow: stack.columns * 2 * MemoryLayout<Float>.stride)
                     }
                 }
                 stackWindows?.replace(region: MTLRegionMake2D(0, row, 1, 1), mipmapLevel: 0, withBytes: &window,
-                                      bytesPerRow: MemoryLayout<SIMD2<Float>>.stride)
+                                      bytesPerRow: MemoryLayout<SIMD4<Float>>.stride)
             } else {
                 // A row a frame still in flight may be drawing: the copy goes
                 // through this frame's command buffer, after those frames.
-                stack.storageLine(row).withUnsafeBytes { raw in
+                stack.packedStorageLine(row).withUnsafeBytes { raw in
                     rowUploads.add(raw, to: texture, row: row, width: stack.columns, device: device)
                 }
                 if let stackWindows {

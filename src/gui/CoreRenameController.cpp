@@ -1,5 +1,8 @@
 // no-port-check: NereusSDR-original.
 // 2026-10-02 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+// Modification history (NereusSDR):
+// 2026-10-13 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex:
+// Validate the captured rename lease at the command deadline and guard callback retirement.
 #include "gui/CoreRenameController.h"
 #include "gui/GuiConnectionController.h"
 #include "gui/RemoteConnectionController.h"
@@ -21,13 +24,22 @@ CoreRenameController::CoreRenameController(CoreTargetStore& store, SessionSource
       m_authority(std::move(authority)), m_factory(std::move(factory)), m_starter(std::move(starter)), m_limits(limits)
 {
     m_timer.setSingleShot(true);
-    connect(&m_timer, &QTimer::timeout, this, [this] {
-        if (!m_operation) { return; }
-        if (m_operation->accepted) { acceptedName(); }
-        else if (m_operation->commandId != 0) {
-            finish(Outcome::UnknownOutcome, {}, QStringLiteral("The Core did not answer. The rename may have happened; it was not sent again."));
-        } else { finish(Outcome::TimedOut, {}, QStringLiteral("The Core did not finish signing in for rename.")); }
-    });
+    connect(&m_timer, &QTimer::timeout, this, &CoreRenameController::deadlineExpired);
+}
+void CoreRenameController::deadlineExpired() {
+    if (!m_operation) { return; }
+    if (m_operation->accepted) { acceptedName(); }
+    else if (m_operation->commandId != 0) {
+        const Operation operation = *m_operation;
+        const QPointer<CoreRenameController> self(this);
+        const bool currentLease = current(operation, false);
+        if (!self || operation.generation != m_generation) { return; }
+        if (!currentLease) {
+            finish(Outcome::StaleTarget, {}, QStringLiteral("The saved Core or desktop session changed."));
+            return;
+        }
+        finish(Outcome::UnknownOutcome, {}, QStringLiteral("The Core did not answer. The rename may have happened; it was not sent again."));
+    } else { finish(Outcome::TimedOut, {}, QStringLiteral("The Core did not finish signing in for rename.")); }
 }
 CoreRenameController::~CoreRenameController() {
     // QObject destroys children after derived members; disconnect retirement observers first.

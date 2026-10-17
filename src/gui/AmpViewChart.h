@@ -13,22 +13,35 @@
 //                 Claude Code.  NereusSDR-original Qt6 widget.
 //   2026-09-22 — Accept owning PS3 curves with independent coordinates and
 //                 series visibility; J.J. Boyd (KG4VCF), OpenAI Codex.
+//   2026-10-13 — Linked plots and cursor; J.J. Boyd (KG4VCF), OpenAI Codex.
 // =================================================================
 
 #pragma once
 
 #include "core/dsp/Ps3Snapshot.h"
+#include "gui/NereusGuiExport.h"
 
 #include <QStringList>
 #include <QWidget>
 
 #include <array>
+#include <optional>
 
 class QPaintEvent;
+class QKeyEvent;
+class QMouseEvent;
 
 namespace NereusSDR {
 
-class AmpViewChart final : public QWidget {
+struct AmpViewCursorReadout {
+    double inputMagnitude{0.0};
+    std::optional<double> magnitudeAmp;
+    std::optional<double> magnitudeCorrection;
+    std::optional<double> phaseAmp;
+    std::optional<double> phaseCorrection;
+};
+
+class NEREUS_GUI_EXPORT AmpViewChart final : public QWidget {
     Q_OBJECT
 
 public:
@@ -62,6 +75,9 @@ public:
     bool seriesVisible(Series series) const noexcept;
     int seriesCount() const noexcept { return static_cast<int>(Series::Count); }
     QStringList seriesNames() const;
+    AmpViewCursorReadout readoutAt(double inputMagnitude) const;
+    void setSelectedInput(double inputMagnitude);
+    double selectedInput() const noexcept { return m_selectedInput; }
 
     double magYMin() const noexcept { return 0.0; }
     double magYMax() const noexcept { return m_showGain ? 2.0 : 1.0; }
@@ -71,15 +87,28 @@ public:
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
     QSize sizeHint() const override { return QSize(564, 340); }
 
 private:
+    QRectF plotBounds() const;
+    void selectAtX(double x);
+signals:
+    void selectedInputChanged(double inputMagnitude);
+
+private:
     Ps3PlotData m_plot;
+    std::vector<Ps3PlotPoint> m_measuredMagnitudeLookup;
+    std::vector<Ps3PlotPoint> m_measuredGainLookup;
+    std::vector<Ps3PlotPoint> m_measuredPhaseLookup;
     std::array<bool, static_cast<std::size_t>(Series::Count)> m_visible{
         true, true, true, true, true};
     bool m_showGain{false};
     bool m_phaseZoom{false};
     bool m_lowRes{true};
+    double m_selectedInput{0.5};
 };
 
 } // namespace NereusSDR

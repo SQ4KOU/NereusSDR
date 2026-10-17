@@ -14,6 +14,7 @@ namespace NereusSDR {
 
 class RadioModel;
 class StationServer;
+class StepAttenuatorController;
 
 class DesktopStationController final : public QObject {
     Q_OBJECT
@@ -101,6 +102,10 @@ private:
     StationHostOptions m_options;
     std::unique_ptr<StationHost> m_host;
     StationHost* m_startingHost{nullptr}; // owned by start() until that call returns
+    // The window's step attenuator controller, while this Core is the one
+    // that turned its save-shortly-after on. Set only while m_host is set;
+    // the window owns the controller, so it can go away first.
+    QPointer<StepAttenuatorController> m_savingStepAtt;
     std::optional<TakeQuestion> m_question;
     quint64 m_intentGeneration{0};
     quint64 m_nextQuestionId{0};

@@ -62,7 +62,22 @@ never put those values in the shared image artifact.
 
 The image stage installs `avahi-daemon`, the sample `/etc/nereusd.conf`, and
 enables the existing `nereusd.service` with `DynamicUser=yes`, plus a drop-in
-that adds the `dialout` group so serial accessories can be opened. A one-time
+that adds the `dialout` group so serial accessories can be opened and one
+that adds the `audio` group so sound cards can be opened
+(`/etc/systemd/system/nereusd.service.d/serial.conf` and `audio.conf`). The
+package itself also ships the audio grant, as
+`/usr/lib/systemd/system/nereusd.service.d/audio.conf`, so a plain install of
+the `.deb` on any board can open a sound card; `verify-package.sh` checks for
+it. The image's file under `/etc` has the same name and content and takes
+precedence. The package does not ship the serial grant. It also ships
+`/usr/lib/sysctl.d/10-nereusd.conf`, which raises the network receive buffer
+limit (`net.core.rmem_max`) to the 4 MB the Core asks for on the socket its
+radio sends to. In an image that takes effect from the first boot: the
+package's install step changes the limit in force only on a running system,
+never inside an image build. `verify-package.sh` checks for the file and
+the helper that applies it; "The system setting the Core's installer
+changes" in the top-level `README.md` says what it is and how to undo it.
+A one-time
 service sets the hostname `nereus-station` before the daemon starts. Avahi
 publishes `nereus-station.local`; the station's own Bonjour advertisement is
 handled by `nereusd`. With `radio_mac` empty, the daemon uses the sole visible

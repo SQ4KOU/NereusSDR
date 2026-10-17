@@ -333,9 +333,24 @@ struct FakeStationTests {
         }
     }
 
+    /// Each wait hides the code through its last millisecond and shows it
+    /// at the deadline. Hashing and task scheduling never move this clock.
+    private static func expectPairingWait(_ station: FakeStation, clock: ManualLinkClock,
+                                          milliseconds: Int, code: String) async throws {
+        await clock.advance(by: Int64(milliseconds - 1))
+        let hiddenBeforeDeadline = station.pairingCode.isEmpty
+        #expect(hiddenBeforeDeadline)
+        let during = try await pairWrongly(station, code: code)
+        #expect(during == .refused(reason: FakeStation.waitingReason, retryAfter: .milliseconds(1)))
+        await clock.advance(by: 1)
+        let shownAtDeadline = !station.pairingCode.isEmpty
+        try #require(shownAtDeadline)
+    }
+
     @Test("burned codes wait 5, 10, 20 and 40 seconds, and the fifth closes pairing")
     func burnedCodesWaitLongerEachTime() async throws {
-        let station = try FakeStation(fixture: "session-device-sign-in", requiresPairing: true)
+        let clock = ManualLinkClock()
+        let station = try FakeStation(fixture: "session-device-sign-in", requiresPairing: true, pairingClock: clock)
         let reason = FakeStation.wrongCodeReason
         // Results are taken apart from the expectations, so no failure prints a code.
         let first = station.pairingCode
@@ -351,13 +366,14 @@ struct FakeStationTests {
         }
         #expect(words == FakeStation.waitingReason)
         #expect(retryAfter > .zero && retryAfter <= .milliseconds(5000))
+        try await Self.expectPairingWait(station, clock: clock, milliseconds: 5000, code: first)
 
         for wait in [10_000, 20_000, 40_000] {
-            station.endPairingWait()
-            let burned = try await Self.pairWrongly(station, code: station.pairingCode)
+            let code = station.pairingCode
+            let burned = try await Self.pairWrongly(station, code: code)
             #expect(burned == .wrongCode(retryAfter: .milliseconds(wait), reason: reason))
+            try await Self.expectPairingWait(station, clock: clock, milliseconds: wait, code: code)
         }
-        station.endPairingWait()
         let fifth = station.pairingCode
         let burnedFifth = try await Self.pairWrongly(station, code: fifth)
         #expect(burnedFifth == .wrongCode(retryAfter: .zero, reason: reason))
@@ -434,7 +450,11 @@ struct FakeStationTests {
 
     @Test("step 1 takes the code for one exchange, and a connection that ends after it burns the code")
     func stepOneTakesTheCode() async throws {
-        let station = try FakeStation(fixture: "session-device-sign-in", requiresPairing: true)
+        // This test ends the burned-code wait explicitly below. Keep its
+        // five-second deadline independent of Argon2 work and CI load.
+        let pairingClock = ManualLinkClock()
+        let station = try FakeStation(fixture: "session-device-sign-in", requiresPairing: true,
+                                      pairingClock: pairingClock)
         let code = station.pairingCode
         let holder = try await HandPairing(station)
         let other = try await HandPairing(station)

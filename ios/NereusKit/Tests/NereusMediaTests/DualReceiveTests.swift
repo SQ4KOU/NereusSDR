@@ -544,7 +544,10 @@ import Testing
         #expect(await rig.client.connectionId == newId)
     }
 
-    @Test func oldFailureBeforeAckRestartsBothWhileDrainingOldFailureDoesNot() async throws {
+    // The wait for the restart has no deadline of its own; the time limit
+    // only ends a test whose client never restarts.
+    @Test(.timeLimit(.minutes(1)))
+    func oldFailureBeforeAckRestartsBothWhileDrainingOldFailureDoesNot() async throws {
         let rig = try MediaControlClientTests.Rig()
         await rig.open(minor: 11, capabilities: Self.replaceFeatures)
         try await rig.connect()
@@ -554,7 +557,9 @@ import Testing
                                              connectDeadline: .seconds(5), safeToReplace: { true })
         let failedCandidate = try #require(rig.recorder.peers.last)
         old.become(.failed)
-        #expect(await rig.recorder.settle { old.isClosed && failedCandidate.isClosed && rig.recorder.peers.count == 3 })
+        // The restart starts from a task of its own, so it comes when the
+        // computer gets to it.
+        #expect(await rig.recorder.holds { old.isClosed && failedCandidate.isClosed && rig.recorder.peers.count == 3 })
         #expect(await rig.client.connectionId != oldId)
 
         let fresh = try #require(rig.recorder.peers.last)

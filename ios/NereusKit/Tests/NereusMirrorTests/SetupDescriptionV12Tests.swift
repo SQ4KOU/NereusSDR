@@ -11,9 +11,16 @@ import Testing
 /// on a phone key, `perBand` and `confirm`.
 @Suite struct SetupDescriptionV12Tests {
     static func resource(_ category: String) throws -> [String: Any] {
+        let resource = category == "display" ? "legacy/display-v28"
+            : category == "appearance" ? "legacy/appearance-v27" : category
         let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .appendingPathComponent("../../../../resources/setup/\(category).json").standardizedFileURL
-        return try #require(JSONSerialization.jsonObject(with: Data(contentsOf: source)) as? [String: Any])
+            .appendingPathComponent("../../../../resources/setup/\(resource).json").standardizedFileURL
+        let root = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: source)) as? [String: Any])
+        // The Core's Display file is at 28 (SetupDescriptionV28Tests) and
+        // its Appearance file at 27 (SetupDescriptionV27Tests); a phone
+        // below 26 is sent their version 12 forms, which these read.
+        return category == "display" ? DisplayV12Fixture.document(root)
+            : category == "appearance" ? AppearanceV12Fixture.document(root) : root
     }
 
     static func parse(_ root: [String: Any]) throws -> SetupDescription {
@@ -27,6 +34,24 @@ import Testing
 
     /// Every control of the Core's file with `id`, wrapped in a one-row document at `version`.
     static func single(_ raw: [String: Any], category: String, version: Int = 12) throws -> SetupDescription.Control {
+        if version == 29 {
+            var document = try SetupDescriptionV29Tests.document(category)
+            var pages = try #require(document["pages"] as? [[String: Any]])
+            let id = try #require(raw["id"] as? String)
+            for p in pages.indices {
+                var sections = try #require(pages[p]["sections"] as? [[String: Any]])
+                for s in sections.indices {
+                    var rows = try #require(sections[s]["controls"] as? [[String: Any]])
+                    if let index = rows.firstIndex(where: { $0["id"] as? String == id }) {
+                        rows[index] = raw
+                    }
+                    sections[s]["controls"] = rows
+                }
+                pages[p]["sections"] = sections
+            }
+            document["pages"] = pages
+            return try #require(controls(try parse(document)).first { $0.id == id })
+        }
         let root: [String: Any] = ["version": version,
             "category": ["id": category, "title": category, "where": "mixed"],
             "pages": [["id": "\(category).test", "title": "Test", "where": "phone",
@@ -164,10 +189,10 @@ import Testing
         #expect(try Self.single(other, category: "display", version: 12).metadataIssue != nil)
     }
 
-    @Test func versionTwentyFourIsTheHighestAndOlderVersionsStillParse() throws {
-        #expect(SetupDescription.highestVersion == 24)
+    @Test func aDocumentAboveTheHighestIsRefusedAndOlderVersionsStillParse() throws {
+        #expect(SetupDescription.highestVersion == 29)
         var root = try Self.resource("display")
-        root["version"] = 25
+        root["version"] = 30
         #expect(throws: SetupDescription.ParseError.self) { try Self.parse(root) }
         var raw = Self.rawControls(try Self.resource("display")).first { $0["id"] as? String == "display.gridScales.showGrid" }!
         raw["requiresDescriptionVersion"] = 13

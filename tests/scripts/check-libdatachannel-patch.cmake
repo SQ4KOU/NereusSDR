@@ -12,7 +12,11 @@
 #
 #   cmake -DREPO=<source dir> -DPC_CPP=<libdatachannel src/peerconnection.cpp>
 #         -DDTLS_CPP=<libdatachannel src/impl/dtlstransport.cpp>
-#         -DWORK=<scratch dir> -P check-libdatachannel-patch.cmake
+#         -DWORK=<scratch dir> [-DGENERATOR=<generator> -DMAKE_PROGRAM=<tool>]
+#         -P check-libdatachannel-patch.cmake
+#
+# GENERATOR and MAKE_PROGRAM are the outer build's. Without them CMake picks
+# its platform default, which on Windows is NMake and may not be installed.
 #
 # It configures tests/cmake/libdatachannel-patch over copies of the pinned
 # files and checks that both library targets compile both patched copies,
@@ -28,6 +32,9 @@
 #               Claude Code.
 #   2026-09-27: the DTLS MTU change too (DTLS_CPP). J.J. Boyd (KG4VCF),
 #               with AI-assisted implementation via Anthropic Claude Code.
+#   2026-10-15: configures with the outer build's generator and make
+#               program (GENERATOR, MAKE_PROGRAM). J.J. Boyd (KG4VCF), with
+#               AI-assisted implementation via Anthropic Claude Code.
 # =================================================================
 foreach(_required IN ITEMS REPO PC_CPP DTLS_CPP WORK)
     if(NOT DEFINED ${_required})
@@ -43,9 +50,16 @@ file(COPY "${REPO}/tests/cmake/libdatachannel-patch/datachannel/CMakeLists.txt"
      DESTINATION "${WORK}/datachannel")
 
 set(_build "${WORK}/build")
+set(_generator_args)
+if(GENERATOR)
+    list(APPEND _generator_args -G "${GENERATOR}")
+endif()
+if(MAKE_PROGRAM)
+    list(APPEND _generator_args "-DCMAKE_MAKE_PROGRAM=${MAKE_PROGRAM}")
+endif()
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -S "${REPO}/tests/cmake/libdatachannel-patch"
-            -B "${_build}" "-DREPO=${REPO}" "-DDC_DIR=${WORK}/datachannel"
+            -B "${_build}" ${_generator_args} "-DREPO=${REPO}" "-DDC_DIR=${WORK}/datachannel"
     RESULT_VARIABLE _result
     OUTPUT_VARIABLE _out
     ERROR_VARIABLE _err)

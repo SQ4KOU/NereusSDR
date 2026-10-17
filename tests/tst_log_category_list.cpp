@@ -15,6 +15,8 @@
 //   2026-09-30 - rxFilter0LowPassReason and rxFilter0LowPassSlice are
 //                 declared last. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-10-11 - CAT is the list's last row. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -56,6 +58,11 @@ private slots:
                  QStringLiteral("Discovery"));
         QCOMPARE(list.at(1).toObject().value(QStringLiteral("label")).toString(),
                  QStringLiteral("Connection"));
+        // CAT has a row, so its port and PTT input lines can be turned up.
+        QCOMPARE(list.last().toObject().value(QStringLiteral("id")).toString(),
+                 QStringLiteral("nereus.cat"));
+        QCOMPARE(list.last().toObject().value(QStringLiteral("label")).toString(),
+                 QStringLiteral("CAT"));
     }
 
     void radioCarriesItConstant()
@@ -79,7 +86,9 @@ private slots:
         QCOMPARE(meta.indexOfProperty("rxFilter0LowPassSlice"), index + 9);
         QCOMPARE(meta.indexOfProperty("diversityState"), index + 10);
         QCOMPARE(meta.indexOfProperty("diversityState") - meta.propertyOffset(), 37);
-        QCOMPARE(index, meta.propertyCount() - 11);
+        // Later features append after diversityState (the radio speaker at
+        // ordinals 38 to 42) without moving any of these.
+        QCOMPARE(meta.indexOfProperty("radioSpeakerVolume") - meta.propertyOffset(), 38);
         RadioModel model;
         QCOMPARE(model.logCategoryList(), LogManager::instance().categoryListJson());
     }

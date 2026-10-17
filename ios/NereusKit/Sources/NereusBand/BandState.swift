@@ -28,6 +28,23 @@ public struct BandState: Equatable, Sendable {
     /// The waterfall's Color Gain and Black Level, applied to each line's
     /// levels as it is coloured; the pan's settings set it.
     public var levelAdjustment: WaterfallHistory.Adjustment = .none
+    public var waterfallBlanking = false {
+        didSet { if !waterfallBlanking { blanker.reset() } }
+    }
+    public var waterfallBlankingThresholdDb = 6
+    public var transmittingWaterfall = false
+    private var blanker = WaterfallBlanker()
+    public var stackRowDivider = 0
+    /// Visible waterfall geometry, independent of retained rewind capacity.
+    public var stackVisibleWaterfallRows = 0
+    private var stackFold = StackTraceFold()
+    /// Native Match is round(visible/96), clamped1...64; explicit1...10
+    /// keeps its selected cadence (SpectrumWidget.cpp:5533–5548).
+    public var effectiveStackRowDivider: Int {
+        if stackRowDivider > 0 { return min(stackRowDivider, 10) }
+        return min(max(Int((Double(max(0, stackVisibleWaterfallRows)) / Double(StackedTrace.visibleRows)).rounded()), 1), 64)
+    }
+
     /// The phone sets the waterfall's levels itself (Use spectrum min/max):
     /// the manual levels given colour each line, whatever the Core sent.
     public var phoneSetsLevels = false
@@ -55,6 +72,7 @@ public struct BandState: Equatable, Sendable {
         didSet {
             if !stacksRows {
                 stack.clear()
+                stackFold.clear()
             }
         }
     }
@@ -68,6 +86,11 @@ public struct BandState: Equatable, Sendable {
             && lhs.levelAdjustment == rhs.levelAdjustment && lhs.phoneSetsLevels == rhs.phoneSetsLevels
             && lhs.waterfallHeld == rhs.waterfallHeld && lhs.peakHold == rhs.peakHold
             && lhs.contexts == rhs.contexts && lhs.pending == rhs.pending && lhs.pendingExtras == rhs.pendingExtras
+            && lhs.blanker == rhs.blanker && lhs.waterfallBlanking == rhs.waterfallBlanking
+            && lhs.waterfallBlankingThresholdDb == rhs.waterfallBlankingThresholdDb
+            && lhs.transmittingWaterfall == rhs.transmittingWaterfall
+            && lhs.stackRowDivider == rhs.stackRowDivider && lhs.stackFold == rhs.stackFold
+            && lhs.stackVisibleWaterfallRows == rhs.stackVisibleWaterfallRows
             && lhs.stack == rhs.stack && lhs.stacksRows == rhs.stacksRows && lhs.wideContexts == rhs.wideContexts
     }
 
@@ -135,12 +158,26 @@ public struct BandState: Equatable, Sendable {
                            addsLine: false)
         } else {
             let now = clock()
-            history.append(frame: waiting, extras: pendingExtras, manualLevels: manualLevels, coverage: coverage,
+            let waterfall = waiting.waterfallAdvance
+                ? blanker.filtered(waiting.waterfallDbm, enabled: waterfallBlanking,
+                    transmitting: transmittingWaterfall, thresholdDb: waterfallBlankingThresholdDb)
+                : waiting.waterfallDbm
+            let painted = DisplayFrame(endpointId: waiting.endpointId, contextGeneration: waiting.contextGeneration,
+                encoderSequence: waiting.encoderSequence, producerTimestamp: waiting.producerTimestamp,
+                isKeyframe: waiting.isKeyframe, waterfallAdvance: waiting.waterfallAdvance,
+                minDbm: waiting.minDbm, maxDbm: waiting.maxDbm, traceDbm: waiting.traceDbm,
+                waterfallDbm: waterfall, wideDbm: waiting.wideDbm)
+            history.append(frame: painted, extras: pendingExtras, manualLevels: manualLevels, coverage: coverage,
                            adjustment: levelAdjustment, phoneLevels: phoneSetsLevels, time: now)
-            if stacksRows {
-                // The stack moves with the waterfall, and stops with it.
-                stack.append(frame: waiting, coverage: coverage, wide: wideContexts[waiting.contextGeneration],
-                             time: now)
+            if stacksRows && waiting.waterfallAdvance {
+                // Every advancing tick contributes its exact and wide
+                // peaks; only a complete capture enters the painted history.
+                let wide = wideContexts[waiting.contextGeneration]
+                if let folded = stackFold.append(waiting, coverage: coverage, wide: wide,
+                    transmitting: transmittingWaterfall, divider: effectiveStackRowDivider) {
+                    stack.append(frame: folded, coverage: coverage,
+                                 wide: transmittingWaterfall ? nil : wide, time: now)
+                }
             }
         }
         holdPeaks(waiting)
@@ -155,6 +192,7 @@ public struct BandState: Equatable, Sendable {
     /// Retires a frame waiting for extras when its media or endpoint ends.
     /// The already committed picture and waterfall remain visible.
     public mutating func discardPending() {
+        stackFold.clear()
         pending = nil
         pendingExtras = nil
     }
@@ -184,12 +222,19 @@ public struct BandState: Equatable, Sendable {
         history.resize(capacity: lines)
     }
 
+    /// A changed local level mode/endpoint must not reuse its prior Core pair.
+    /// Painted history remains in its original colours and frequencies.
+    public mutating func forgetWaterfallLevels() {
+        history.forgetLevels()
+    }
+
     /// At a key and an unkey on this band: the peak hold starts afresh and
     /// the waterfall's held levels are forgotten, so nothing blends from
     /// the receiver into the transmit display or back (the desktop clears
     /// its averaging and resets its waterfall AGC at both edges). The
     /// waterfall's lines stay.
     public mutating func resetSmoothing() {
+        stackFold.clear()
         peakHold = nil
         history.forgetLevels()
     }
@@ -197,6 +242,8 @@ public struct BandState: Equatable, Sendable {
     /// Starts over: a new session or a new endpoint.
     public mutating func clear() {
         history.clear()
+        blanker.reset()
+        stackFold.clear()
         stack.clear()
         frame = nil
         peakHold = nil

@@ -24,6 +24,7 @@
 // =================================================================
 
 #include "ResetSlider.h"
+#include "gui/styles/WorkspacePreview.h"
 #include <QPainter>
 #include <QPaintEvent>
 
@@ -46,7 +47,7 @@ protected:
         int cx = width() / 2;
         int cy = height() / 2;
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor("#608090"));
+        p.setBrush(WorkspacePreview::roleColour(QColor("#608090"), "text-scale"));
         p.drawEllipse(QPointF(cx, cy), 2.5, 2.5);
     }
 };

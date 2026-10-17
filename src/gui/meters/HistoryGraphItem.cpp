@@ -67,6 +67,11 @@ mw0lge@grange-lane.co.uk
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+// Modification history (NereusSDR):
+//   2026-10-12 - Apply the approved workspace-only 11 px text minimum.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+
+#include "gui/styles/WorkspacePreview.h"
 #include "HistoryGraphItem.h"
 #include "ResponsiveText.h"
 
@@ -270,7 +275,7 @@ void HistoryGraphItem::paintGrid(QPainter& p, const QRect& rect)
 
     QFont labelFont;
     const double scale=objectTextScale(rect,{260,120});
-    labelFont.setPixelSize(qMax(1,qRound(9*scale)));
+    labelFont.setPixelSize(WorkspacePreview::readableTextPixelSize(qMax(1,qRound(9*scale))));
     p.setFont(labelFont);
     p.setPen(QColor(0x80, 0x90, 0xa0));
 
@@ -287,7 +292,10 @@ void HistoryGraphItem::paintGrid(QPainter& p, const QRect& rect)
             const float labelVal = yMax - fraction * (yMax - yMin);
             const QString labelText = QString::number(static_cast<double>(labelVal), 'f', 1);
             p.setPen(QColor(0x80, 0x90, 0xa0));
-            QRectF textRect(rect.left()+2*scale,y-8*scale,40*scale,12*scale);
+            const QFontMetricsF metrics(labelFont,p.device());
+            const double textWidth=WorkspacePreview::enabled() ? qMax(40*scale,metrics.horizontalAdvance(labelText)+2) : 40*scale;
+            const double textHeight=WorkspacePreview::enabled() ? qMax(12*scale,metrics.height()) : 12*scale;
+            QRectF textRect(rect.left()+2*scale,y-8*scale,textWidth,textHeight);
             if(textRect.top()<rect.top()) { textRect.moveTop(rect.top()); }
             if(textRect.bottom()>rect.bottom()) { textRect.moveBottom(rect.bottom()); }
             drawObjectText(p,textRect,labelText,9*scale,Qt::AlignLeft|Qt::AlignVCenter);

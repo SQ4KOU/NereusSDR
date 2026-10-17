@@ -158,3 +158,21 @@ struct SMeterFaceShotTests {
         return UInt32(bytes[0]) << 16 | UInt32(bytes[1]) << 8 | UInt32(bytes[2])
     }
 }
+
+@MainActor
+extension SMeterFaceShotTests {
+    @Test("Approved meter source pictures")
+    func approvedMeterSourcePictures() async throws {
+        for state in TransmitMeterPictures.states {
+            let main = TransmitMeterFixture.main(operate: state.operate, keyed: state.keyed, radioWatts: state.watts)
+            #expect(main.sMeter.display.transmitting == state.keyed)
+            if state.keyed { #expect(main.sMeter.display.right == (state.operate ? "1236 W" : "98 W")) }
+            try await TransmitMeterPictures.capture(AnalogSMeter(model: main.sMeter), name: "meter-ipad-" + state.name,
+                size: CGSize(width: 600, height: 322), ready: {
+                    try #require(await ShotWait.until {
+                        main.sMeter.meters != nil && main.sMeter.needle.settled(on: main.sMeter.display.needle)
+                    }, "The actual analog needle must reach its reported value before the picture")
+                })
+        }
+    }
+}

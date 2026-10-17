@@ -54,6 +54,7 @@
 // =================================================================
 #pragma once
 
+#include "gui/NereusGuiExport.h"
 #include <QPointer>
 #include <QWidget>
 #include <QString>
@@ -68,7 +69,7 @@ class PanadapterApplet;
 /// Ported structurally from AetherSDR src/gui/PanFloatingWindow.{h,cpp}
 /// [@0cd4559]. The applet is reparented under this window's layout, so
 /// destroying the window destroys the applet.
-class PanFloatingWindow : public QWidget {
+class NEREUS_GUI_EXPORT PanFloatingWindow : public QWidget {
     Q_OBJECT
 public:
     /// `parent` should be the main window. Qt::Window still makes this a

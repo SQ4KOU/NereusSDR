@@ -9,9 +9,13 @@
 // 2026-09-25: R-R3-49 (parity Task 9): showSavedEndpoint, a window's saved
 // address shown on the amplifier object without dialling. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-10-11: StationAccessoryAdmission: a desktop window that shares its
+// accessories uses the device at the typed address, as it did before.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #pragma once
 
 #include "core/PgxlConnection.h"
+#include "core/StationAccessoryAdmission.h"
 #include "models/AmplifierModel.h"
 #include "core/StationNetwork.h"
 #include "core/StationDeviceSettings.h"
@@ -45,7 +49,9 @@ public:
     static QString expectedProduct() { return QStringLiteral("PowerGeniusXL"); }
 
     StationPgxlController(PgxlConnection* connection, AmplifierModel* model,
-                          QObject* parent = nullptr);
+                          QObject* parent = nullptr,
+                          StationAccessoryAdmission admission
+                              = StationAccessoryAdmission::Identified);
     ~StationPgxlController() override;
 
     /// A radio's saved address becomes the current scope: every socket and
@@ -95,5 +101,6 @@ private:
     quint64 m_attempt{0};
     quint64 m_generation{0};
     bool m_running{false};
+    StationAccessoryAdmission m_admission{StationAccessoryAdmission::Identified};
 };
 } // namespace NereusSDR

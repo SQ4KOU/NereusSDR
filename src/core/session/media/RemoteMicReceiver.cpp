@@ -595,8 +595,9 @@ void RemoteMicFeed::endBlock()
 }
 
 RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double downstreamQueuedMs,
-                                             bool holdSplices)
+                                             bool holdSplices, Observation* observation)
 {
+    if (observation) { *observation = {}; }
     const quint64 change = m_change.load(std::memory_order_acquire);
     if (change != m_seenChange) {
         // A change of use: drop what was written before it and start the
@@ -641,6 +642,7 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
         m_prevWindowLateMaxUs = -1;
         m_openUnderrun = -1;
         m_seenChange = change;
+        m_observerSyntheticFrames = 0;
         const bool inUse = m_inUseForPump.load(std::memory_order_acquire);
         if (inUse) {
             // A new over: its figures start here (the last over's stay
@@ -671,6 +673,7 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
         m_statsOverflows.store(0, std::memory_order_relaxed);
         m_statsChanges.store(change, std::memory_order_relaxed);
     }
+    if (observation) { observation->changeGeneration = m_seenChange; }
     if (!m_inUseForPump.load(std::memory_order_acquire)) {
         discardAllInput();
         takeArrivals(false);
@@ -750,6 +753,10 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
         if (mayShed && !spliced && m_insertBudget >= kPumpBlock && canSplice()) {
             std::fill(m_stereoScratch.begin(), m_stereoScratch.end(), 0.0f);
             m_matcher->push(m_stereoScratch.data(), kPumpBlock);
+            // Observer metadata only: all output queued through this insert
+            // is conservatively invalid, including any residual next block.
+            m_observerSyntheticFrames = std::max(m_observerSyntheticFrames,
+                m_matcher->stats().ringFillFrames);
             m_insertBudget -= kPumpBlock;
             m_overInserted += kPumpBlock;
             m_silentRunFrames += kPumpBlock;
@@ -785,15 +792,20 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
         m_statsStarted.store(false, std::memory_order_relaxed);
         openUnderrun();
     }
-    if (!m_matcher->takeInto(m_stereoScratch.data(), kPumpBlock)) {
+    const bool completePcm = m_matcherFill >= kPumpBlock && m_observerSyntheticFrames == 0;
+    const bool taken = m_matcher->takeInto(m_stereoScratch.data(), kPumpBlock);
+    if (!taken) {
         std::fill(dst, dst + frames, 0.0f);
     } else {
         for (int i = 0; i < kPumpBlock; ++i) {
             dst[i] = m_stereoScratch[static_cast<size_t>(2 * i)];
         }
     }
+    m_observerSyntheticFrames = std::max(0, m_observerSyntheticFrames - kPumpBlock);
     m_matcherFill = m_matcher->stats().ringFillFrames;
     endBlock();
+    if (observation && completePcm && taken && m_change.load(std::memory_order_acquire) == change
+        && m_inUseForPump.load(std::memory_order_acquire)) { observation->validFrames = frames; }
     return Pull::Audio;
 }
 

@@ -23,10 +23,13 @@ final class BandModel: ObservableObject {
         didSet {
             if endpointId != oldValue {
                 lastBinGrant = nil
+                gridTracker.retireClarityFloor()
+                state.forgetWaterfallLevels()
                 state.discardPending()
                 contextRevisions.removeAll()
                 contextOrder.removeAll()
                 retiredFrameSerial = state.committedSerial
+                applyToState()
             }
         }
     }
@@ -50,6 +53,11 @@ final class BandModel: ObservableObject {
     @Published var settings: BandDisplaySettings {
         didSet {
             state.expectsExtras = (settings.extrasRequest(gates: gates)?.sections ?? 0) != 0
+            if settings.waterfallLevelMode != oldValue.waterfallLevelMode
+                || settings.scaleBand != oldValue.scaleBand {
+                gridTracker.retireClarityFloor()
+                state.forgetWaterfallLevels()
+            }
             if settings.gridFollowsNoiseFloor != oldValue.gridFollowsNoiseFloor
                 || settings.scaleBand != oldValue.scaleBand || settings.scaleTopDbm != oldValue.scaleTopDbm
                 || settings.scaleBottomDbm != oldValue.scaleBottomDbm {
@@ -238,7 +246,7 @@ final class BandModel: ObservableObject {
         guard !state.waterfallHeld, let newest = state.stack.newestTime else {
             return 0
         }
-        return min(max((now - newest) / secondsPerLine, 0), 1)
+        return min(max((now - newest) / (secondsPerLine * Double(state.effectiveStackRowDivider)), 0), 1)
     }
     /// The grid's minimum following the noise floor (``GridFloorTracker``):
     /// what it sets is drawn, never kept.
@@ -405,15 +413,37 @@ final class BandModel: ObservableObject {
         applyToState()
     }
 
+    /// Effective RX/TX drawing numbers in this current endpoint's context.
+    /// Pending Clarity is explicitly unavailable despite its painted fallback.
+    var effectiveWaterfallLevels: WaterfallHistory.Levels? {
+        if transmitOverlay {
+            return WaterfallHistory.Levels(lowDbm: Float(settings.txWaterfallLowDbm),
+                highDbm: Float(max(settings.txWaterfallHighDbm, settings.txWaterfallLowDbm + 1)))
+        }
+        let drawn = drawnSettings
+        if drawn.waterfallLevelMode == .clarity && gridTracker.clarityFloorDbm == nil { return nil }
+        let base = drawn.waterfallLevelMode == .manual || drawn.waterfallLevelMode == .scale
+            ? drawn.phoneLevels : (state.history.heldLevels ?? drawn.manualLevels)
+        var adjustment = drawn.waterfallAdjustment
+        adjustment.clarityFloorDbm = gridTracker.clarityFloorDbm.map(Float.init)
+        return base.adjusted(by: adjustment)
+    }
+
     /// The settings the band's state follows between frames.
     private func applyToState() {
         let drawn = drawnSettings
-        state.levelAdjustment = drawn.waterfallAdjustment
-        // While keyed on this band the transmit levels colour each line.
-        state.phoneSetsLevels = drawn.useSpectrumMinMax || transmitOverlay
+        state.levelAdjustment = transmitOverlay ? .none : drawn.waterfallAdjustment
+        state.levelAdjustment.clarityFloorDbm = gridTracker.clarityFloorDbm.map(Float.init)
+        // Manual/Scale and TX use local values, never a stale prior Core pair.
+        state.phoneSetsLevels = drawn.waterfallLevelMode == .scale
+            || drawn.waterfallLevelMode == .manual || transmitOverlay
         state.waterfallHeld = keyed && settings.waterfallStopOnTx
         state.peakHoldDelayMs = settings.peakHold ? settings.peakHoldDelayMs : nil
         // The rows are kept while 3D is chosen on a Core that offers it.
+        state.waterfallBlanking = settings.waterfallBlanking
+        state.waterfallBlankingThresholdDb = settings.waterfallBlankingThresholdDb
+        state.transmittingWaterfall = transmitOverlay
+        state.stackRowDivider = settings.threeDSpeed
         state.stacksRows = settings.spectrumView == .stacked && stackOffered
     }
 
@@ -562,8 +592,12 @@ final class BandModel: ObservableObject {
             changed()
         case .noiseFloor(let floor) where floor.endpointId == endpointId:
             // The Core's full-source floor, Clarity's estimate, for the grid.
+            guard floor.floorDbm.isFinite,
+                  contextRevisions[floor.contextGeneration] == floor.revision else { return }
             gridTracker.noteClarityFloor(floor.floorDbm, at: clock())
+            applyToState()
             trackGrid()
+            changed()
         case .displayExtras(let extras) where extras.endpointId == endpointId:
             if let floor = extras.noiseFloorDbm, floor.isFinite {
                 // The 3D surface stands on the floor without the NF shift.
@@ -690,6 +724,7 @@ final class BandModel: ObservableObject {
         let layout = BandLayout(size: size, scale: scale, settings: shownSettings)
         state.resizeWaterfall(lines: Self.waterfallCapacity(size: size, scale: scale, settings: shownSettings))
         visibleLines = layout.waterfallLines
+        state.stackVisibleWaterfallRows = visibleLines
         state.commit(manualLevels: drawnSettings.phoneLevels)
         moveMarks()
         let pixels = BandGeometry.requestedPixels(forWidthPixels: Double(size.width))

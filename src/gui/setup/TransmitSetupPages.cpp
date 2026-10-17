@@ -208,9 +208,19 @@
 //                Processor's AM-SQ / DEXP row shows DEXP's state (it read
 //                "off" whatever DEXP was). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-10-09 - D25: the DEXP/VOX groups stack in reading order when the
+//                window is too narrow for the two columns
+//                (SetupFit::FitGrid). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-10-10 - Workspace look only: a speech chain stage that is off
+//                shows its dot in the inactive text colour (status lights
+//                by meaning, D21). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 #include "TransmitSetupPages.h"
+#include "gui/setup/SetupFit.h"
 #include "gui/StyleConstants.h"
+#include "gui/styles/WorkspacePreview.h"
 #include "core/AppSettings.h"
 #include "core/MicProfileManager.h"
 #include "models/RadioModel.h"
@@ -304,8 +314,6 @@ void PowerPage::buildUI()
     //   - grpTXFilter (TX filter cutoff)
     //   - chkTXExpert (Expert mode unlock)
     // Source: Thetis setup.designer.cs:46313-46339 tpTransmit [v2.10.3.13]
-
-    contentLayout()->addStretch();
 }
 
 // ---------------------------------------------------------------------------
@@ -521,7 +529,7 @@ void PowerPage::buildPowerGroup()
     }
     pwrForm->addRow(QString(), m_chkForceAttWhenPsOff);
 
-    contentLayout()->addWidget(pwrGroup);
+    addContent(pwrGroup);
 }
 
 // ---------------------------------------------------------------------------
@@ -712,7 +720,7 @@ void PowerPage::buildTuneGroup()
         });
     }
 
-    contentLayout()->addWidget(m_grpPATune);
+    addContent(m_grpPATune);
 }
 
 // Issue #175 Task 8 — flip the udTXTunePower enabled state so it tracks
@@ -962,7 +970,7 @@ void PowerPage::buildSwrProtectionGroup()
     });
     layout->addRow(QString(), m_chkWindBackPowerSWR);
 
-    contentLayout()->addWidget(group);
+    addContent(group);
 }
 
 // Task 10 — External TX Inhibit
@@ -1019,7 +1027,7 @@ void PowerPage::buildExternalTxInhibitGroup()
     });
     layout->addWidget(m_chkTXInhibitReverse);
 
-    contentLayout()->addWidget(group);
+    addContent(group);
 }
 
 // Issue #175 Wave 1: dropped Block TX on RX antennas group from PowerPage.
@@ -1063,7 +1071,7 @@ void PowerPage::buildHfPaGroup()
     });
     layout->addWidget(m_chkHFTRRelay);
 
-    contentLayout()->addWidget(group);
+    addContent(group);
 }
 
 // "Disable HF PA" is disabled with its reason, never hidden: in a remote
@@ -1119,9 +1127,7 @@ void TxProfilesPage::buildUI()
         "QLabel { color: #b0c0d0; font-style: italic; "
         " background: #1a2a3a; border: 1px solid #203040; "
         " border-radius: 3px; padding: 12px; }"));
-    contentLayout()->addWidget(info);
-
-    contentLayout()->addStretch();
+    addContent(info);
 }
 
 // ---------------------------------------------------------------------------
@@ -1145,7 +1151,11 @@ constexpr QChar kHollowCircle = QChar(0x25CB);  // ○
 //   alc  → cyan         (#00b4d8)  for the "always-on" callout
 QString dotStyleFor(bool on)
 {
-    const QString colour = on ? QStringLiteral("#20e070") : QStringLiteral("#607080");
+    // Workspace look (status lights by meaning, D21, settled 2026-10-10):
+    // on is the decided ok through the colour table's row; off is the
+    // inactive text colour, which the scale grey #607080 does not name.
+    const QString colour = on ? QStringLiteral("#20e070")
+                              : WorkspacePreview::roleColourName("#607080", "text-inactive");
     return QStringLiteral("QLabel { color: %1; font-size: 14px; font-weight: bold; }").arg(colour);
 }
 
@@ -1724,7 +1734,11 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // Top-justified by inserting the QGridLayout BEFORE the auto-trailing
     // stretch added in SetupPage::init() (SetupPage.cpp:90).  See the
     // insertLayout block at the bottom of the buildUI for the mechanism.
-    auto* row = new QGridLayout;
+    //
+    // D25: and stacked, big box first, when the window is too narrow for the
+    // two columns (SetupFit::FitGrid).
+    auto* row = new SetupFit::FitGrid;
+    row->setObjectName(QStringLiteral("dexpVoxGrid"));
     row->setSpacing(12);
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1892,7 +1906,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     dexpVoxLay->addStretch();
 
     // VOX/DEXP big box — column 0, spans both rows (row=0, col=0, rowSpan=2, colSpan=1).
-    row->addWidget(dexpVoxGrp, 0, 0, 2, 1);
+    row->addFitWidget(dexpVoxGrp, 0, 0, 2, 1, 0);
 
     // ══════════════════════════════════════════════════════════════════════════
     // ── Group 2: Audio LookAhead ─────────────────────────────────────────────
@@ -1936,7 +1950,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
 
     // Audio LookAhead small box — column 1, row 0 (top-right cell).
     // AlignTop keeps the box from stretching vertically inside its grid cell.
-    row->addWidget(lookAheadGrp, 0, 1, Qt::AlignTop);
+    row->addFitWidget(lookAheadGrp, 0, 1, 1, 1, 1, Qt::AlignTop);
 
     // ══════════════════════════════════════════════════════════════════════════
     // ── Group 3: Side-Channel Trigger Filter ─────────────────────────────────
@@ -1994,7 +2008,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
 
     // Side-Channel Trigger Filter small box — column 1, row 1 (bottom-right cell).
     // AlignTop keeps the box from stretching vertically inside its grid cell.
-    row->addWidget(scfGrp, 1, 1, Qt::AlignTop);
+    row->addFitWidget(scfGrp, 1, 1, 1, 1, 2, Qt::AlignTop);
 
     // Top-justify the grid: insert the QGridLayout BEFORE the auto-trailing
     // stretch added by SetupPage::init() (SetupPage.cpp:90 [m_contentLayout

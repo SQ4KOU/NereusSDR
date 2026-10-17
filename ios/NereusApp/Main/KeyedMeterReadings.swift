@@ -43,7 +43,9 @@ struct KeyedMeterSample {
         guard let value else { return "--" }
         switch unit {
         case "dB": return TxStage.readout(value)
-        case "": return String(format: "%.2f:1", value)
+        case "": return MeterReadout.swr(value)
+        case "W": return MeterReadout.power(value)
+        case "°C": return MeterReadout.temperature(value)
         default: return String(format: "%.0f %@", value, unit)
         }
     }
@@ -107,11 +109,11 @@ enum KeyedMeterReadings {
         }
         switch meter {
         case .rfPower:
-            return KeyedMeterSample(name: meter.name, value: transmit.keyedForwardWatts, unit: "W",
-                scale: .rfPower(meters?.rfPower), reason: transmit.keyedForwardWatts == nil ? "The Core has no radio readings right now." : nil)
+            return KeyedMeterSample(name: meter.name, value: transmit.meterRule.forwardW, unit: "W",
+                scale: .selectedPower(transmit.meterRule, meter: meters?.rfPower), reason: transmit.meterRule.forwardW == nil ? "The Core has no radio readings right now." : nil)
         case .swr:
-            return KeyedMeterSample(name: meter.name, value: transmit.keyedSwr, unit: "", scale: .swr(meters?.swr),
-                minimum: 1, reason: transmit.keyedSwr == nil ? "The Core has no radio readings right now." : nil)
+            return KeyedMeterSample(name: meter.name, value: transmit.meterRule.swr, unit: "", scale: .swr(meters?.swr),
+                minimum: 1, reason: transmit.meterRule.swr == nil ? "The Core has no radio readings right now." : nil)
         case .mic:
             return KeyedMeterSample(name: meter.name, value: transmit.keyedMicLevelDb, unit: "dB", scale: .micLevel,
                 minimum: nil, reason: transmit.keyedMicLevelDb == nil ? (noRadioReadings ? "The Core has no radio readings right now." : "The Core has no microphone reading right now.") : nil)
@@ -129,8 +131,7 @@ enum KeyedMeterReadings {
             let value = unavailable ? nil : accessories.tunerGeniusReadings.forwardW
             let shown = transmit.powerControl.shown
             let watts = shown?.unit == "W" ? shown?.max ?? 0 : 0
-            let amplifying = pgxl ? accessories.powerGenius?.operate == true && available.amp.isAvailable
-                : accessories.rfKit?.operate == true && available.amp.isAvailable
+            let amplifying = transmit.meterRule.amplifying
             return KeyedMeterSample(name: "TGXL power", value: value, unit: "W",
                 scale: TxAccessoryMeterScale.tunerPower(maxWatts: watts, amplifying: amplifying),
                 reason: reason ?? (value == nil ? "TGXL has no power reading right now." : nil))
