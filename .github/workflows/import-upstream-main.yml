@@ -1,4 +1,4 @@
-name: One-time upstream main import (SQ4KOU backup-safe)
+name: One-time upstream main snapshot (SQ4KOU backup-safe)
 on:
   push:
     branches: [upstream-import-20261018]
@@ -8,23 +8,24 @@ permissions:
 jobs:
   import-upstream:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
-      - name: Copy exact upstream main history and files to dedicated branch
+      - name: Import upstream main source files except workflow definitions
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo "::group::Clone boydsoftprez/NereusSDR main"
-          git clone --no-tags --single-branch --branch main https://github.com/boydsoftprez/NereusSDR.git upstream
+          git clone --depth=1 --no-tags --single-branch --branch main https://github.com/boydsoftprez/NereusSDR.git upstream
           actual="$(git -C upstream rev-parse HEAD)"
           expected="0dccef066ef1ed8f49f342ef97a3ff15bb4b0cbd"
-          echo "Source SHA: $actual"
-          test "$actual" = "$expected" || { echo "Upstream moved since validation, refusing inconsistent import"; exit 1; }
-          echo "Source tree: $(git -C upstream rev-parse HEAD^{tree})"
-          echo "::endgroup::"
-          echo "::group::Push to SQ4KOU/NereusSDR/upstream-main-20261018"
+          test "$actual" = "$expected" || { echo "Unexpected upstream version: $actual"; exit 1; }
+          echo "Original upstream tree: $(git -C upstream rev-parse HEAD^{tree})"
+          git -C upstream checkout --orphan imported-main-snapshot
+          rm -rf upstream/.github/workflows
+          git -C upstream add -A
+          test -z "$(git -C upstream ls-files '.github/workflows/*')" || { echo "Workflow exclusion failed"; exit 1; }
+          git -C upstream -c user.name='GitHub Actions' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "Import boydsoftprez/NereusSDR main $expected (workflows restored separately)"
+          echo "Files copied (non-workflow): $(git -C upstream ls-files | wc -l)"
           git -C upstream -c credential.helper= push "https://x-access-token:${GH_TOKEN}@github.com/SQ4KOU/NereusSDR.git" HEAD:refs/heads/upstream-main-20261018
-          echo "::endgroup::"
-          echo "Imported exact upstream commit $actual without touching SQ4KOU main."
+          echo "Snapshot imported. Workflow files to be restored through connector."
