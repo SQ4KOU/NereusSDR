@@ -1,0 +1,108 @@
+name: "CodeQL"
+
+# Every push to main and once a week, not on pull requests (CI speed round,
+# 2026-10-16, approved by J.J. Boyd): CodeQL is not a required check, and on
+# every pull request it took a full Linux build's worth of runner time
+# beside the build jobs that are.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-24.04
+    permissions:
+      security-events: write
+    env:
+      NEREUS_DEPENDENCY_ARCHIVE_DIR: ${{ github.workspace }}/.nereus-deps
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["cpp"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        # System libs only. Qt itself comes from install-qt-action below
+        # so CodeQL matches ci.yml + release.yml (Qt 6.8.*). Apt qt6-*
+        # on ubuntu-24.04 ships Qt 6.4.2, which is too old for
+        # QRhiWidget and used to force -DNEREUS_GPU_SPECTRUM=OFF here;
+        # aligning Qt versions across all three workflows removes that
+        # workaround and stops CodeQL drifting from CI behavior.
+        #
+        # libssl-dev added fix round 3 minor C (Remote Daemon R2, Task
+        # 17): the one Linux configure site the reviewer found still
+        # missing it after fix round 1's Important 1 point 2 pass over
+        # CLAUDE.md, ci.yml, release.yml and the CI Dockerfile. Benign
+        # today only because ubuntu-24.04 happens to preinstall OpenSSL
+        # 3.0.13; CLAUDE.md records that the ORIGINAL Qt6::WebSockets
+        # REQUIRED flip this whole finding is modelled on needed two
+        # follow-up PRs specifically to keep this exact workflow green,
+        # so closing the gap now rather than waiting for it to bite.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config g++ \
+            libgl1-mesa-dev libfftw3-dev \
+            libasound2-dev libjack-jackd2-dev \
+            libpipewire-0.3-dev libpulse-dev \
+            libssl-dev
+
+      # The pinned dependency downloads, as ci.yml's build job takes them
+      # (see "Dependency downloads" there): main's cache, anything missing
+      # fetched with retries and checked (SHA-256, pinned commit), and the
+      # git repositories sent to the verified mirrors. Main's CodeQL runs
+      # at a0b381e79 and 4066a86b6 (2026-10-17) failed on a 504 from
+      # gitlab.xiph.org cloning rnnoise. ci.yml saves the cache; not here.
+      - name: Restore dependency downloads
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.nereus-deps
+          key: nereus-deps-${{ runner.os }}-${{ hashFiles('cmake/NereusDependencyArchives.cmake', 'cmake/FetchDependencyArchives.cmake') }}
+          restore-keys: |
+            nereus-deps-${{ runner.os }}-
+
+      - name: Fetch dependency downloads
+        run: |
+          mirrors="$RUNNER_TEMP/nereus-git-mirrors.gitconfig"
+          cmake -DNEREUS_DEPENDENCY_ARCHIVE_DIR="$NEREUS_DEPENDENCY_ARCHIVE_DIR" \
+                -DNEREUS_GIT_MIRROR_CONFIG="$mirrors" \
+                -P cmake/FetchDependencyArchives.cmake
+          git config --global --add include.path "$mirrors"
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          # Qt 6.8+ folds qtsvg into qtbase; not listable as a module.
+          modules: 'qtmultimedia qtshadertools qtwebsockets qtserialport'
+          cache: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Build
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build -j$(nproc)
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
