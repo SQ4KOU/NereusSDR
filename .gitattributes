@@ -1,0 +1,12 @@
+third_party/** linguist-vendored
+docs/** linguist-documentation
+resources/bandplans/** linguist-data
+# Vendor patches are applied byte-for-byte with `git apply` against LF
+# upstream sources (cmake/NereusRemoteMedia.cmake). A CRLF checkout
+# (core.autocrlf=true on the Windows runner) would add a carriage return to
+# every context line and the configure would stop: "patch failed:
+# src/agent.c:157". Never convert their line endings.
+*.patch -text
+# The Steinberg ASIO SDK is vendored byte for byte from its release archive
+# (CRLF line endings included); never convert it.
+third_party/asiosdk/** -text

@@ -1,0 +1,93 @@
+#pragma once
+
+#include <QLoggingCategory>
+#include <QObject>
+#include <QString>
+#include <QList>
+
+namespace NereusSDR {
+
+// Logging categories for NereusSDR.
+// Usage: qCDebug(lcDiscovery) << "message";
+//
+// lcApp: application-level lifecycle messages (startup, shutdown, config)
+// shared by both binaries. Added in R1 Task 9 for src/server_main.cpp
+// (nereusd) and src/core/daemon/DaemonConfig.cpp; not wired into
+// LogManager's category list below, which drives the GUI's per-category
+// debug-log toggle in src/gui/SupportDialog.cpp -- nereusd has no such UI,
+// and adding a row there for a category the GUI itself does not otherwise
+// use is a UX change this task did not need to make.
+Q_DECLARE_LOGGING_CATEGORY(lcApp)
+Q_DECLARE_LOGGING_CATEGORY(lcDiscovery)
+Q_DECLARE_LOGGING_CATEGORY(lcConnection)
+Q_DECLARE_LOGGING_CATEGORY(lcProtocol)
+Q_DECLARE_LOGGING_CATEGORY(lcReceiver)
+Q_DECLARE_LOGGING_CATEGORY(lcAudio)
+Q_DECLARE_LOGGING_CATEGORY(lcDsp)
+Q_DECLARE_LOGGING_CATEGORY(lcSpectrum)
+Q_DECLARE_LOGGING_CATEGORY(lcContainer)
+Q_DECLARE_LOGGING_CATEGORY(lcMeter)
+Q_DECLARE_LOGGING_CATEGORY(lcMmio)
+Q_DECLARE_LOGGING_CATEGORY(lcCat)
+Q_DECLARE_LOGGING_CATEGORY(lcTci)
+Q_DECLARE_LOGGING_CATEGORY(lcSpots)
+
+// Runtime-manageable logging category metadata.
+struct LogCategoryInfo {
+    QString id;            // e.g. "nereus.connection"
+    QString label;         // e.g. "Connection"
+    QString description;   // e.g. "TCP/UDP command channel, protocol framing"
+    bool enabled{false};   // runtime toggle state
+};
+
+// Manages logging categories with runtime enable/disable, persistence,
+// and log file queries. Singleton.
+class LogManager : public QObject {
+    Q_OBJECT
+
+public:
+    static LogManager& instance();
+
+    // --- Category Management ---
+    QList<LogCategoryInfo> categories() const { return m_categories; }
+    bool isEnabled(const QString& id) const;
+    void setEnabled(const QString& id, bool on);
+    void setAllEnabled(bool on);
+    /// Remote-window parity Task 22 (R-R3-49): the enabled categories' ids
+    /// in the Support dialog's order, joined by commas (the Core's
+    /// `logCategories`, and what `support.setLogCategories` carries).
+    QString enabledList() const;
+    /// Turns on exactly the listed categories and off every other one; ids
+    /// this process does not keep are ignored.
+    void setEnabledList(const QStringList& ids);
+    /// Phone wire batch (logCategoryListVersion 1): every category the
+    /// Support dialog lists, in its order, with the label its checkbox
+    /// shows: compact JSON {"categories":[{"id":..,"label":..},..]} (the
+    /// Core's radio.logCategoryList).
+    QString categoryListJson() const;
+
+    // --- Log File ---
+    QString logFilePath() const;
+    QString logDirPath() const;
+    qint64 logFileSize() const;
+    void clearLog();
+
+    // --- Persistence ---
+    void saveSettings();
+    void loadSettings();
+
+signals:
+    void categoryChanged(const QString& id, bool enabled);
+
+private:
+    LogManager();
+    ~LogManager() override = default;
+    LogManager(const LogManager&) = delete;
+    LogManager& operator=(const LogManager&) = delete;
+
+    void applyFilterRules();
+
+    QList<LogCategoryInfo> m_categories;
+};
+
+} // namespace NereusSDR

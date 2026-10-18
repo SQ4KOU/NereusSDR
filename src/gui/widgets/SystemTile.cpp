@@ -1,0 +1,170 @@
+// no-port-check: NereusSDR-original. No upstream port.
+
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "gui/widgets/SystemTile.h"
+
+// The notifier class is PaTempUnitNotifier, but it lives in PaTempUnit.h
+// alongside the PaTempUnit enum. There is no PaTempUnitNotifier.h.
+#include "core/PaTempUnit.h"
+#include "gui/widgets/MetricLabel.h"
+
+#include <QLabel>
+#include <QMouseEvent>
+#include <QStringList>
+#include <QVBoxLayout>
+
+namespace NereusSDR {
+
+SystemTile::SystemTile(QWidget* parent)
+    : QWidget(parent)
+{
+    auto* vbox = new QVBoxLayout(this);
+    vbox->setContentsMargins(0, 0, 0, 0);
+    vbox->setSpacing(0);
+
+    m_paRow = new MetricLabel(QStringLiteral("PA"), QString(), this);
+    m_paRow->setVisible(false);
+    vbox->addWidget(m_paRow);
+
+    m_cpuRow = new MetricLabel(QStringLiteral("CPU"), QStringLiteral("—"), this);
+    vbox->addWidget(m_cpuRow);
+
+    // MetricLabel's child QLabels would otherwise eat the press before it
+    // reaches mousePressEvent. Same treatment the old PA-T row needed.
+    for (QLabel* child : findChildren<QLabel*>()) {
+        child->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    }
+}
+
+void SystemTile::setPaVolts(double volts)
+{
+    m_volts    = volts;
+    m_hasVolts = true;
+    refreshPaRow();
+}
+
+void SystemTile::clearPaVolts()
+{
+    m_hasVolts = false;
+    refreshPaRow();
+}
+
+void SystemTile::setPaTempCelsius(double celsius)
+{
+    m_celsius = celsius;
+    m_hasTemp = true;
+    refreshPaRow();
+}
+
+void SystemTile::clearPaTemp()
+{
+    m_hasTemp = false;
+    refreshPaRow();
+}
+
+void SystemTile::setCpuPercent(double percent)
+{
+    m_cpuRow->setValue(QString::asprintf("%.0f%%", percent));
+}
+
+void SystemTile::setCpuRow(const CpuRowCycler::Row& row)
+{
+    m_cpuRow->setLabel(row.label);
+    m_cpuRow->setValue(QString::asprintf("%.0f%%", row.percent));
+    m_cpuRow->setToolTip(row.toolTip);
+    if (m_cpuWarning != row.warning) {
+        m_cpuWarning = row.warning;
+        m_cpuRow->setWarning(row.warning);
+    }
+}
+
+QString SystemTile::cpuRowLabel() const
+{
+    return m_cpuRow->label();
+}
+
+QString SystemTile::cpuRowToolTip() const
+{
+    return m_cpuRow->toolTip();
+}
+
+QString SystemTile::cpuRowStyleSheet() const
+{
+    return m_cpuRow->valueStyleSheet();
+}
+
+void SystemTile::setPaLabel(const QString& label)
+{
+    m_paRow->setLabel(label);
+}
+
+QString SystemTile::paLabel() const
+{
+    return m_paRow->label();
+}
+
+QString SystemTile::paRowText() const
+{
+    return m_paRow->value();
+}
+
+QString SystemTile::cpuRowText() const
+{
+    return m_cpuRow->value();
+}
+
+void SystemTile::refreshPaRow()
+{
+    if (!hasPaRow()) {
+        m_paRow->setValue(QString());
+        m_paRow->setVisible(false);
+        setCursor(Qt::ArrowCursor);
+        setToolTip(QString());
+        return;
+    }
+
+    QString text;
+    if (m_hasVolts) {
+        text = QString::asprintf("%.1fV", m_volts);
+    }
+    if (m_hasTemp) {
+        // Both readings share row one rather than evicting CPU (design §4.3).
+        if (!text.isEmpty()) {
+            text += QLatin1Char(' ');
+        }
+        text += PaTempUnitNotifier::format(m_celsius);
+    }
+    m_paRow->setValue(text);
+    m_paRow->setVisible(true);
+
+    setCursor(m_hasTemp ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    QStringList tip;
+    if (!m_paSourceNote.isEmpty()) {
+        tip << m_paSourceNote;
+    }
+    if (m_hasTemp) {
+        tip << tr("Click to toggle °C / °F");
+    }
+    setToolTip(tip.join(QLatin1Char('\n')));
+}
+
+void SystemTile::setPaSourceNote(const QString& note)
+{
+    if (m_paSourceNote == note) {
+        return;
+    }
+    m_paSourceNote = note;
+    refreshPaRow();
+}
+
+void SystemTile::mousePressEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton && m_hasTemp) {
+        emit paTempClicked();
+        event->accept();
+        return;
+    }
+    QWidget::mousePressEvent(event);
+}
+
+} // namespace NereusSDR

@@ -1,0 +1,16 @@
+# HL2 P1 discovery reply — fw 72 (0x48), free (0x02), MAC aa:bb:cc:11:22:33
+# Verified against:
+#   docs/protocols/openhpsdr-protocol1-capture-reference.md §2.2
+#   mi0bot clsRadioDiscovery.cs:1145-1195 (parseDiscoveryReply P1 branch)
+#
+# Byte layout (P1 reply = 60 bytes total):
+#   [0-1]  EF FE  — P1 sync / frame marker
+#   [2]    02     — status: 02 = available (clsRadioDiscovery.cs:1158)
+#   [3-8]  AA BB CC 11 22 33  — MAC (Array.Copy data,3,mac,0,6 — cs:1161)
+#   [9]    48     — CodeVersion = 72 decimal (cs:1185)
+#   [10]   06     — board: 06 → HermesLite (mapP1DeviceType cs:1239)
+#   [11-59] 00*49 — unused / zero pad
+EFFE02AABBCC11223348060000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+000000000000000000000000

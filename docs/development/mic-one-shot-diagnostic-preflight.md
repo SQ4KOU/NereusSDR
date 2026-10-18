@@ -1,0 +1,17 @@
+# Microphone one-shot diagnostic preflight
+
+Use this check **before proposing or arming** a one-shot Mac microphone diagnostic. The person coordinating a normal rollout owns it; the person operating the diagnostic repeats the gate immediately before the one allowed observation. A previously frozen startup cut is useful history, but it does not establish the current stage of a still-running helper.
+
+## Why this gate exists
+
+Candidate C's first bounded cut ended at `PreparingPermission` at 08:31:39 EDT. The same helper logged `Microphone permission answered: granted` at 08:39:55, reached `Ready`, and produced first samples. A later permission-stage sampling window at 10:01–10:04 correctly returned `NOT_STARTED`, because the relevant stage had passed. The older cut and unchanged PID were insufficient to justify that specific one-shot diagnostic at approval time. The attempt was spent without a stack. The owner's private Candidate C approved-attempt report and fixed raw log cut retain the evidence.
+
+## Coordinator gate before requesting a decision
+
+1. Bind the exact runtime receipt: source/product identity, GUI and helper PIDs, parent, UID, start times, executable paths and hashes, plus the ordinary stderr path. A name-only process search or a System Settings display-name row is not a binding.
+2. Make **one bounded, read-only snapshot** of the latest allowed ordinary stderr. Open without following symlinks, require a regular file, fix the byte count at open, and do not chase appended EOF. Use the diagnostic reader's existing limits (8 MiB total, 20,000 lines, 8,192 bytes per line) or stricter ones. Record size, last timestamp and SHA256. If the source is replaced/truncated, exceeds the bound, or cannot be read, stop and report an unknown stage; do not substitute a protected Preferences or TCC database read.
+3. Read the snapshot in order for the exact helper PID and generation. For a permission-stage diagnostic, require the parent Send/Open and helper `PreparingPermission`, then check **all later records** for permission answer, `Opening`, `Ready`, `Failed`, `Closed`, helper exit, superseding generation or helper native entry. A later canceling marker makes this diagnostic ineligible. Do not count GUI native queries as helper progress. If the snapshot shows `Ready` or first samples, report that progress instead of proposing a permission stack.
+4. Rebind the live GUI/helper identity read-only. If either process changed, disappeared, or no longer matches the receipt, stop. The log stage is last-observed evidence, not a live stack; say so in the decision request. State exactly what one sample could distinguish and that it suspends the target briefly.
+5. Only then seek the current user's decision for a named, bounded window and exact one-observation tool. No older approval carries forward. Immediately before invoking, repeat the bounded log-stage and identity gate; the tool's own full log drain and final guards are additional protection, not a replacement for coordinator preflight. If the stage changes between approval and invocation, stop without a sample and report the changed evidence. Never restart, toggle, change permission, choose an alternate PID or retry merely to recreate eligibility.
+
+This preflight selects the right diagnostic stage; it does not diagnose why permission or native enumeration was slow. A stack result requires manual frame review before a causal claim, and a `NOT_STARTED` receipt is not a microphone cure or failure verdict.

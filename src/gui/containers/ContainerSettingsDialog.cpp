@@ -1,0 +1,2712 @@
+// =================================================================
+// src/gui/containers/ContainerSettingsDialog.cpp  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis sources:
+//   Project Files/Source/Console/setup.cs, original licence from Thetis source is included below
+//   Project Files/Source/Console/MeterManager.cs, original licence from Thetis source is included below
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-10-11 - Workspace preview only: Apply commits through the
+//                 container manager, so a placement chosen here records or
+//                 clears the container's home as Pop Out and Return do.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - Workspace preview only: the header choice is shown or
+//                 hidden, without the hover choice. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-10-11 - Workspace preview only: no Lock checkbox. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - Duplicate always gives a shown, floating copy next to the
+//                 original (ContainerManager::showDuplicate). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - The container Slice combo writes through
+//                 ContainerSourceAdapter::writeContainerSource, shared with
+//                 the workspace header's source menu. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-10-04 — Separate compact object actions within their editor panes by
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-04 — Reset Qt 6.11 Cocoa popup accessibility cache before
+//                 draft dropdown refresh by J.J. Boyd (KG4VCF),
+//                 AI-assisted via OpenAI Codex.
+//   2026-10-03 — Compact independent control creation geometry by
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-03 — Explicit readable dropdown selection by J.J. Boyd
+//                 (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-03 — New-copy return homes and retained unsupported preferences by
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-03 — Plain meter-data-source tooltip by J.J. Boyd (KG4VCF),
+//                 AI-assisted via OpenAI Codex.
+//   2026-10-02 — Effective contextual draft properties and portable settings by
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-02 — Draft-only edits and inert cached previews by J.J. Boyd
+//                 (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-02 — Atomic container arrangement and reserved chrome by J.J. Boyd
+//                 (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-02 — Mixed container ownership, persistence and source routing by
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code.
+//   2026-09-24 - R-R3-49: the Voice Rec/Play control is not offered or
+//                 listed until the voice recorder is built; one already in a
+//                 container is kept. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the Discord control, its factory entries and its
+//                 editor are removed. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-21: the container's slice choice lists slices A to D
+//                 (a saved RX1 / RX2 reads as slice A / B), and the item
+//                 editor opens for the button boxes and the VFO display (its
+//                 tags match what they save). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
+//   2026-10-15  J.J. Boyd (KG4VCF): rows change after a real model reset
+//               (resetItemsBeforeRowChange), so accessibility cannot read a
+//               deleted cell. AI-assisted via Anthropic Claude Code.
+// =================================================================
+
+//=================================================================
+// setup.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Continual modifications Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//=================================================================
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+/*  MeterManager.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2020-2026 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+#include "ContainerSettingsDialog.h"
+#include "gui/QtCocoaAccessibleTableCache.h"
+#include "gui/styles/WorkspacePreview.h"
+#include "ContainerControlCatalog.h"
+#include "ContainerContentRegistry.h"
+#include "ContainerManager.h"
+#include "ContainerContentHost.h"
+#include "ContainerSourceAdapter.h"
+#include "ContainerWorkspaceStore.h"
+#include "MmioEndpointsDialog.h"
+
+// Phase 3G-6 block 4 — per-item property editors
+#include "meter_property_editors/BaseItemEditor.h"
+#include "meter_property_editors/BarItemEditor.h"
+#include "meter_property_editors/SolidColourItemEditor.h"
+#include "meter_property_editors/SpacerItemEditor.h"
+#include "meter_property_editors/FadeCoverItemEditor.h"
+#include "meter_property_editors/ImageItemEditor.h"
+#include "meter_property_editors/ScaleItemEditor.h"
+#include "meter_property_editors/NeedleItemEditor.h"
+#include "meter_property_editors/NeedleScalePwrItemEditor.h"
+#include "meter_property_editors/TextItemEditor.h"
+#include "meter_property_editors/TextOverlayItemEditor.h"
+#include "meter_property_editors/SignalTextItemEditor.h"
+#include "meter_property_editors/LedItemEditor.h"
+#include "meter_property_editors/HistoryGraphItemEditor.h"
+#include "meter_property_editors/MagicEyeItemEditor.h"
+#include "meter_property_editors/DialItemEditor.h"
+#include "meter_property_editors/WebImageItemEditor.h"
+#include "meter_property_editors/FilterDisplayItemEditor.h"
+#include "meter_property_editors/RotatorItemEditor.h"
+#include "meter_property_editors/ClockItemEditor.h"
+#include "meter_property_editors/VfoDisplayItemEditor.h"
+#include "meter_property_editors/ClickBoxItemEditor.h"
+#include "meter_property_editors/DataOutItemEditor.h"
+#include "meter_property_editors/BandButtonItemEditor.h"
+#include "meter_property_editors/ModeButtonItemEditor.h"
+#include "meter_property_editors/FilterButtonItemEditor.h"
+#include "meter_property_editors/AntennaButtonItemEditor.h"
+#include "meter_property_editors/TuneStepButtonItemEditor.h"
+#include "meter_property_editors/OtherButtonItemEditor.h"
+#include "meter_property_editors/VoiceRecordPlayItemEditor.h"
+#include "ContainerWidget.h"
+#include "../meters/MeterWidget.h"
+#include "../meters/MeterItem.h"
+#include "../meters/ItemGroup.h"
+
+// Core meter item types (MeterItem.h defines: BarItem, SolidColourItem, ImageItem,
+//                                               ScaleItem, TextItem, NeedleItem)
+// Phase 3G-4 passive item types
+#include "../meters/SpacerItem.h"
+#include "../meters/FadeCoverItem.h"
+#include "../meters/LEDItem.h"
+#include "../meters/HistoryGraphItem.h"
+#include "../meters/MagicEyeItem.h"
+#include "../meters/NeedleScalePwrItem.h"
+#include "../meters/SignalTextItem.h"
+#include "../meters/DialItem.h"
+#include "../meters/TextOverlayItem.h"
+#include "../meters/WebImageItem.h"
+#include "../meters/FilterDisplayItem.h"
+#include "../meters/RotatorItem.h"
+// Phase 3G-5 interactive item types
+#include "../meters/BandButtonItem.h"
+#include "../meters/ModeButtonItem.h"
+#include "../meters/FilterButtonItem.h"
+#include "../meters/AntennaButtonItem.h"
+#include "../meters/TuneStepButtonItem.h"
+#include "../meters/OtherButtonItem.h"
+#include "../meters/VoiceRecordPlayItem.h"
+#include "../UnbuiltFeatures.h"
+#include "../meters/VfoDisplayItem.h"
+#include "../meters/ClockItem.h"
+#include "../meters/ClickBoxItem.h"
+#include "../meters/DataOutItem.h"
+
+#include "ContainerEditSession.h"
+#include "ContentPropertyEditor.h"
+#include "ContainerDocumentCodec.h"
+#include "ContainerArrangeController.h"
+#include "ContainerPreviewWidget.h"
+#include "../ComboStyle.h"
+#include "LegacyContainerImporter.h"
+#include <QAccessible>
+#include <QSignalBlocker>
+#include <QScrollArea>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QSplitter>
+#include <QListWidget>
+#include <QStackedWidget>
+#include <QLineEdit>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QAbstractItemView>
+#include <QStyledItemDelegate>
+#include <QPushButton>
+#include <QLabel>
+#include <QFileDialog>
+#include <QSaveFile>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QFile>
+#include <QTextStream>
+#include <QFrame>
+#include <QColorDialog>
+#include <QColor>
+#include <QMap>
+#include <QMenu>
+#include <QStringList>
+#include <QDoubleSpinBox>
+#include <QSpinBox>
+#include <QMessageBox>
+#include <QClipboard>
+#include <QApplication>
+
+namespace NereusSDR {
+
+// ---------------------------------------------------------------------------
+// Style helpers (scoped to this translation unit)
+// ---------------------------------------------------------------------------
+namespace {
+
+constexpr const char* kBtnStyle =
+    "QPushButton {"
+    "  background: #1a2a3a;"
+    "  color: #c8d8e8;"
+    "  border: 1px solid #205070;"
+    "  border-radius: 3px;"
+    "  padding: 4px 8px;"
+    "}"
+    "QPushButton:hover { background: #203040; }";
+
+constexpr const char* kOkBtnStyle =
+    "QPushButton {"
+    "  background: #00b4d8;"
+    "  color: #0f0f1a;"
+    "  border: 1px solid #00d4f8;"
+    "  border-radius: 3px;"
+    "  padding: 4px 8px;"
+    "  font-weight: bold;"
+    "}"
+    "QPushButton:hover { background: #00c8e8; }";
+
+constexpr const char* kEditStyle =
+    "background: #0a0a18;"
+    "color: #c8d8e8;"
+    "border: 1px solid #1e2e3e;"
+    "border-radius: 3px;"
+    "padding: 2px 4px;";
+
+constexpr const char* kListStyle =
+    "QListWidget {"
+    "  background: #0a0a18;"
+    "  color: #c8d8e8;"
+    "  border: 1px solid #203040;"
+    "}"
+    "QListWidget::item:selected {"
+    "  background: #00b4d8;"
+    "  color: #0f0f1a;"
+    "}";
+
+constexpr const char* kLabelStyle =
+    "color: #8090a0; font-size: 12px;";
+
+constexpr const char* kSectionHeaderStyle =
+    "color: #8aa8c0; font-weight: bold; font-size: 12px;";
+
+QPushButton* makeBtn(const QString& text, QWidget* parent)
+{
+    QPushButton* btn = new QPushButton(text, parent);
+    btn->setStyleSheet(kBtnStyle);
+    btn->setAutoDefault(false);
+    btn->setDefault(false);
+    return btn;
+}
+
+QPushButton* makeObjectAction(const QString& text, QWidget* parent)
+{
+    QPushButton* button = makeBtn(text, parent);
+    button->setStyleSheet(QString::fromLatin1(kBtnStyle)
+                         + QStringLiteral("QPushButton { padding: 3px 6px; }"));
+    return button;
+}
+
+void styleSelectorPopups(QWidget* parent)
+{
+    for (QComboBox* combo : parent->findChildren<QComboBox*>()) {
+        QAbstractItemView* view = combo->view();
+        // A native combo menu delegate can cover the highlight with its
+        // inherited dark frame background. Paint through the item view so
+        // its explicit selection colors apply in every focus state.
+        combo->setItemDelegate(new QStyledItemDelegate(combo));
+        view->setStyleSheet(
+            "QAbstractItemView { background: #0a0a18; color: #c8d8e8;"
+            "  border: 1px solid #205070;"
+            "  selection-background-color: #00b4d8; selection-color: #0f0f1a; }"
+            "QAbstractItemView::item:selected {"
+            "  background-color: #00b4d8; color: #0f0f1a; }");
+    }
+}
+
+} // anonymous namespace
+
+// ---------------------------------------------------------------------------
+// Constructor / Destructor
+// ---------------------------------------------------------------------------
+
+ContainerSettingsDialog::ContainerSettingsDialog(ContainerWidget* container,
+                                                 QWidget* parent,
+                                                 ContainerManager* manager)
+    : QDialog(parent)
+    , m_container(container)
+    , m_manager(manager)
+{
+    // Window title uses the first 8 chars of the container ID
+    const QString shortId = m_container ? m_container->id().left(8) : QStringLiteral("????????");
+    setWindowTitle(QStringLiteral("Container Settings \u2014 ") + shortId);
+
+    // Phase 3G-6 block 4b: grown defaults so the Properties column
+    // has usable vertical and horizontal room for the type-specific
+    // editors landed in block 4. Users can still resize smaller, but
+    // the opening size shows the typical editor comfortably.
+    setMinimumSize(960, 600);
+    resize(1200, 900);
+    setSizeGripEnabled(true);
+
+    if (m_manager && m_manager->workspaceStore()) {
+        // Workspace preview: Apply commits through the manager, as the
+        // arrange controller does, so a placement chosen here records or
+        // clears the container's home. With the look off the session
+        // commits to the store, as it always has.
+        ContainerEditSession::Commit commit;
+        if (WorkspacePreview::enabled()) {
+            commit = [manager = m_manager](const WorkspaceDocument& document, quint64 expectedRevision) {
+                return manager ? manager->commitWorkspace(document, expectedRevision)
+                               : CommitResult{CommitStatus::Invalid, expectedRevision,
+                                              QStringLiteral("No container manager")};
+            };
+        }
+        m_editSession=std::make_unique<ContainerEditSession>(*m_manager->workspaceStore(), std::move(commit));
+        m_selectedId=m_container ? m_container->id() : m_editSession->draft().mainContainerId;
+    }
+    buildLayout();
+    if (m_editSession) { loadCurrentDraft(); }
+
+    // Phase 3G-6 block 3 commit 14: snapshot the current container
+    // state so Cancel can fully revert the in-progress edits. Must
+    // happen AFTER buildLayout so populateItemList has already
+    // captured items into m_workingItems from the live MeterWidget.
+    takeSnapshot();
+    styleSelectorPopups(this);
+
+    // Workspace preview: the scoped stylesheet pass runs each time the
+    // dialog is shown (preview scaffolding; nothing with the switch off).
+    WorkspacePreview::themeOnShow(this);
+}
+
+ContainerSettingsDialog::~ContainerSettingsDialog()
+{
+    qDeleteAll(m_workingItems);
+}
+
+// ---------------------------------------------------------------------------
+// Layout construction
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::buildLayout()
+{
+    QVBoxLayout* root = new QVBoxLayout(this);
+    root->setContentsMargins(8, 8, 8, 8);
+    root->setSpacing(6);
+
+    // Dark dialog background
+    setStyleSheet("QDialog { background: #0f0f1a; color: #c8d8e8; }");
+
+    // --- Container-level properties bar (top) ---
+    buildContainerPropertiesSection(root);
+
+    // --- Three-panel splitter ---
+    m_splitter = new QSplitter(Qt::Horizontal, this);
+    m_splitter->setChildrenCollapsible(false);
+    m_splitter->setStyleSheet(
+        "QSplitter::handle { background: #203040; width: 3px; }");
+
+    // Phase 3G-6 block 3 commit 12: Thetis 3-column layout.
+    // Left = Available (catalog), center = In-use, right = Properties.
+    QWidget* availWrapper = new QWidget(m_splitter);
+    buildAvailablePanel(availWrapper);
+    m_splitter->addWidget(availWrapper);
+
+    QWidget* inUseWrapper = new QWidget(m_splitter);
+    buildInUsePanel(inUseWrapper);
+    m_splitter->addWidget(inUseWrapper);
+
+    QWidget* propsWrapper = new QWidget(m_splitter);
+    buildPropertiesPanel(propsWrapper);
+    m_splitter->addWidget(propsWrapper);
+
+    // Phase 3G-6 block 4b: Properties column gets the lion's share
+    // because it houses 20+ form rows per editor; Available and
+    // In-use are content-sized catalogs that don't grow much.
+    m_splitter->setStretchFactor(0, 0);
+    m_splitter->setStretchFactor(1, 0);
+    m_splitter->setStretchFactor(2, 1);
+    m_splitter->setSizes({200, 200, 700});
+
+    root->addWidget(m_splitter, 1);
+    if (m_editSession && m_manager->previewPoller()) {
+        auto* label=new QLabel(tr("Live preview — edits remain in the draft until Apply"),this);
+        label->setStyleSheet(kSectionHeaderStyle); root->addWidget(label);
+        auto* scroll=new QScrollArea(this); scroll->setWidgetResizable(true); scroll->setMinimumHeight(260);
+        m_preview=new ContainerPreviewWidget(*m_manager->contentRegistry(),*m_manager->previewPoller());
+        connect(m_preview,&ContainerPreviewWidget::freeCanvasRectEdited,this,[this](const QString& id,const QRectF& rect){
+            auto draft=m_editSession->draft();
+            for(auto& c:draft.containers) {if(c.id!=m_selectedId || c.locked) {continue;}for(auto& entry:c.contents) {if(entry.id==id) {entry.setFreeCanvasRect(rect);}}}
+            m_editSession->setDraft(draft);if(m_contentEditor) {m_contentEditor->updateFreeCanvasRect(id,rect);}updateDraftStatus();
+        });
+        connect(m_preview,&ContainerPreviewWidget::freeCanvasGeometryRestored,this,[this](const ContentEntry& restored){
+            auto draft=m_editSession->draft();
+            for(auto& c:draft.containers) {if(c.id!=m_selectedId) {continue;}for(auto& entry:c.contents) {if(entry.id==restored.id) {if(restored.extensions.contains("freeCanvasRect")) {entry.extensions["freeCanvasRect"]=restored.extensions.value("freeCanvasRect");}else {entry.extensions.remove("freeCanvasRect");}}}}
+            m_editSession->setDraft(draft);onItemSelectionChanged();updateDraftStatus();
+        });
+        connect(m_preview,&ContainerPreviewWidget::entrySelected,this,[this](const QString& id){
+            for(const auto& c:m_editSession->draft().containers) {if(c.id==m_selectedId) {for(int i=0;i<c.contents.size();++i) {if(c.contents[i].id==id) {m_itemList->setCurrentRow(i);return;}}}}
+        });
+        connect(m_preview,&ContainerPreviewWidget::presentationRequested,m_manager,&ContainerManager::previewPresentationRequested);
+        scroll->setWidget(m_preview); root->addWidget(scroll,1);
+    }
+    if (m_editSession) {
+        m_draftStatus=new QLabel(this);m_draftStatus->setObjectName("containerDraftStatus");root->addWidget(m_draftStatus);
+        m_transactionStatus=new QLabel(this); m_transactionStatus->setWordWrap(true); root->addWidget(m_transactionStatus);
+        auto* reload=makeBtn(tr("Reload conflicting containers"),this); root->addWidget(reload);
+        connect(reload,&QPushButton::clicked,this,[this]{
+            saveCurrentDraft(); m_editSession->reloadContainers(m_editSession->conflictingContainers());
+            refreshDraftDropdown(); loadCurrentDraft(); m_transactionStatus->setText(tr("Conflicting drafts reloaded; other edits retained."));
+        });
+    }
+
+    // --- Button bar (bottom) ---
+    buildButtonBar();
+    if (m_editSession) {
+        m_btnPreset->hide();m_btnCopySettings->hide();m_btnPasteSettings->hide();
+        m_highlightCheck->setEnabled(false);m_highlightCheck->setToolTip(tr("Highlight is a live arrangement aid; drafts use the preview."));
+        m_btnMmio->setEnabled(false); m_btnMmio->setToolTip(tr("Edit meter data sources in application settings."));
+        for (auto* edit : findChildren<QLineEdit*>()) { connect(edit,&QLineEdit::textChanged,this,[this]{ updatePreview(); }); }
+        for (auto* check : findChildren<QCheckBox*>()) { connect(check,&QCheckBox::toggled,this,[this]{ updatePreview(); }); }
+        connect(m_rxSourceCombo,qOverload<int>(&QComboBox::currentIndexChanged),this,[this]{ updatePreview(); });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3G-6 block 3 commit 12: Thetis 3-column layout
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::buildAvailablePanel(QWidget* parent)
+{
+    // Mirrors Thetis lstMetersAvailable (setup.cs:24522-24566). Commit 15
+    // adds RX / TX / Special category headers; for this commit the list
+    // is flat alphabetical.
+    QVBoxLayout* layout = new QVBoxLayout(parent);
+    layout->setContentsMargins(0, 0, 6, 0);
+    layout->setSpacing(6);
+
+    QLabel* header = new QLabel(QStringLiteral("Available"), parent);
+    header->setStyleSheet(kSectionHeaderStyle);
+    layout->addWidget(header);
+
+    m_availableList = new QListWidget(parent);
+    m_availableList->setObjectName("containerAvailableContents");
+    m_availableList->setStyleSheet(kListStyle);
+    layout->addWidget(m_availableList, 1);
+
+    QHBoxLayout* btnRow = new QHBoxLayout;
+    btnRow->setSpacing(3);
+    m_btnAddFromAvailable = makeObjectAction(QStringLiteral("Add \u2192"), parent);
+    m_btnAddFromAvailable->setToolTip(
+        QStringLiteral("Add the selected available item to the in-use list"));
+    btnRow->addStretch();
+    btnRow->addWidget(m_btnAddFromAvailable);
+    layout->addLayout(btnRow);
+
+    connect(m_btnAddFromAvailable, &QPushButton::clicked,
+            this, &ContainerSettingsDialog::onAddFromAvailable);
+    connect(m_availableList, &QListWidget::itemDoubleClicked, this,
+            [this](QListWidgetItem*) { onAddFromAvailable(); });
+
+    populateAvailableList();
+}
+
+void ContainerSettingsDialog::buildInUsePanel(QWidget* parent)
+{
+    QVBoxLayout* layout = new QVBoxLayout(parent);
+    layout->setContentsMargins(6, 0, 6, 0);
+    layout->setSpacing(6);
+
+    QLabel* header = new QLabel(QStringLiteral("Contents"), parent);
+    header->setStyleSheet(kSectionHeaderStyle);
+    layout->addWidget(header);
+
+    m_itemList = new QListWidget(parent);
+    m_itemList->setObjectName("containerDraftContents");
+    m_itemList->setStyleSheet(kListStyle);
+    layout->addWidget(m_itemList, 1);
+
+    connect(m_itemList, &QListWidget::currentRowChanged,
+            this, &ContainerSettingsDialog::onItemSelectionChanged);
+
+    // Action buttons row — the legacy + (popup) button is kept for
+    // parity with the old flow; it sits alongside the new Remove /
+    // Up / Down controls.
+    QHBoxLayout* btnRow = new QHBoxLayout;
+    btnRow->setSpacing(6);
+
+    m_btnAdd      = makeObjectAction(QStringLiteral("+"),           parent);
+    m_btnRemove   = makeObjectAction(QStringLiteral("\u2212"),      parent);
+    m_btnMoveUp   = makeObjectAction(QStringLiteral("\u25b2"),      parent);
+    m_btnMoveDown = makeObjectAction(QStringLiteral("\u25bc"),      parent);
+
+    m_btnAdd->setToolTip(QStringLiteral("Add item (popup)"));
+    m_btnRemove->setToolTip(QStringLiteral("Remove selected item"));
+    m_btnMoveUp->setToolTip(QStringLiteral("Move item up"));
+    m_btnMoveDown->setToolTip(QStringLiteral("Move item down"));
+
+    btnRow->addWidget(m_btnAdd);
+    btnRow->addWidget(m_btnRemove);
+    btnRow->addStretch();
+    btnRow->addWidget(m_btnMoveUp);
+    btnRow->addWidget(m_btnMoveDown);
+
+    layout->addLayout(btnRow);
+    if(m_editSession) {
+        m_btnAdd->hide();
+        auto* duplicate=makeObjectAction(tr("Duplicate object"),parent); duplicate->setObjectName("duplicateContent"); layout->addWidget(duplicate);
+        connect(duplicate,&QPushButton::clicked,this,[this]{
+            saveCurrentDraft(); auto d=m_editSession->draft();const int row=m_itemList->currentRow();
+            for(auto& c:d.containers) {if(c.id!=m_selectedId || row<0 || row>=c.contents.size()) {continue;}
+                if(c.contents[row].typeId.startsWith("applet:")) {m_transactionStatus->setText(tr("Singleton applets offer Move; they cannot be duplicated."));return;}
+                auto imported=ContainerDocumentCodec::importEntries(ContainerDocumentCodec::exportEntries({c.contents[row]}));
+                if(!imported.ok) {m_transactionStatus->setText(imported.error);return;}
+                auto e=imported.document.containers.first().contents.first();e.returnLocation.reset();e.name+=tr(" copy");c.contents.insert(row+1,e);break;
+            }
+            m_editSession->setDraft(d);loadCurrentDraft();m_itemList->setCurrentRow(row+1);
+        });
+        auto* move=makeObjectAction(tr("Move to container…"),parent);move->setObjectName("moveContent");layout->addWidget(move);
+        connect(move,&QPushButton::clicked,this,[this,move]{
+            saveCurrentDraft(); auto* menu=new QMenu(this);
+            for(const auto& c:m_editSession->draft().containers) {if(c.id==m_selectedId) {continue;} auto* action=menu->addAction(c.name); action->setEnabled(!c.locked);
+                connect(action,&QAction::triggered,this,[this,id=c.id]{auto d=m_editSession->draft(); ContentEntry e;const int row=m_itemList->currentRow();
+                    for(const auto& c:d.containers) {if(c.id==m_selectedId && row>=0 && row<c.contents.size()) {e=c.contents[row];break;}}
+                    if(e.id.isEmpty()) {return;}int insertion=0;for(const auto& c:d.containers) {if(c.id==id) {insertion=c.contents.size();}}
+                    const auto result=ContainerArrangeController::moveDraft(d,e.id,id,insertion);if(!result.ok) {m_transactionStatus->setText(result.error);return;}
+                    m_editSession->setDraft(d);loadCurrentDraft();
+                });
+            } menu->popup(move->mapToGlobal(QPoint(0,move->height())));
+        });
+    }
+
+    connect(m_btnAdd,      &QPushButton::clicked, this, &ContainerSettingsDialog::onAddItem);
+    connect(m_btnRemove,   &QPushButton::clicked, this, &ContainerSettingsDialog::onRemoveItem);
+    connect(m_btnMoveUp,   &QPushButton::clicked, this, &ContainerSettingsDialog::onMoveItemUp);
+    connect(m_btnMoveDown, &QPushButton::clicked, this, &ContainerSettingsDialog::onMoveItemDown);
+
+    populateItemList();
+}
+
+void ContainerSettingsDialog::buildPropertiesPanel(QWidget* parent)
+{
+    QVBoxLayout* layout = new QVBoxLayout(parent);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
+
+    QLabel* header = new QLabel(QStringLiteral("Properties"), parent);
+    header->setStyleSheet(kSectionHeaderStyle);
+    layout->addWidget(header);
+
+    m_propertyStack = new QStackedWidget(parent);
+    m_propertyStack->setStyleSheet(
+        "QStackedWidget { background: #0a0a18; border: 1px solid #203040; }");
+
+    // Page 0: empty placeholder
+    m_emptyPage = new QWidget(m_propertyStack);
+    QVBoxLayout* emptyLayout = new QVBoxLayout(m_emptyPage);
+    QLabel* emptyLabel = new QLabel(
+        QStringLiteral("Select an item to edit properties"), m_emptyPage);
+    emptyLabel->setStyleSheet(kLabelStyle);
+    emptyLabel->setAlignment(Qt::AlignCenter);
+    emptyLayout->addWidget(emptyLabel);
+    m_propertyStack->addWidget(m_emptyPage);
+
+    layout->addWidget(m_propertyStack, 1);
+
+    // Phase 3G-6 block 7 commit 2: Copy / Paste Settings buttons
+    // under the property stack. Mirrors Thetis's per-item clipboard
+    // affordance — copies the entire serialized item form, paste
+    // only enabled when clipboard's type tag matches the selected
+    // item's type.
+    QHBoxLayout* cpRow = new QHBoxLayout();
+    cpRow->setContentsMargins(0, 0, 0, 0);
+    cpRow->setSpacing(4);
+    m_btnCopySettings  = makeBtn(QStringLiteral("Copy settings"),  parent);
+    m_btnPasteSettings = makeBtn(QStringLiteral("Paste settings"), parent);
+    m_btnCopySettings->setEnabled(false);
+    m_btnPasteSettings->setEnabled(false);
+    cpRow->addWidget(m_btnCopySettings);
+    cpRow->addWidget(m_btnPasteSettings);
+    cpRow->addStretch();
+    layout->addLayout(cpRow);
+    connect(m_btnCopySettings,  &QPushButton::clicked,
+            this, &ContainerSettingsDialog::onCopyItemSettings);
+    connect(m_btnPasteSettings, &QPushButton::clicked,
+            this, &ContainerSettingsDialog::onPasteItemSettings);
+}
+
+// ---------------------------------------------------------------------------
+// Available list catalog and Add-from-available flow
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::populateAvailableList()
+{
+    if (m_editSession && m_manager) {
+        m_availableList->clear();
+        for(const auto& descriptor:m_manager->contentRegistry()->descriptors()) {
+            auto* row=new QListWidgetItem(descriptor.title+(descriptor.singleton?tr(" — Move"):QString()),m_availableList);
+            row->setData(Qt::UserRole,descriptor.typeId); row->setToolTip(descriptor.unavailableReason);
+            if(!descriptor.available) { row->setFlags(row->flags() & ~Qt::ItemIsEnabled); }
+        }
+        return;
+    }
+
+    if (!m_availableList) { return; }
+    m_availableList->clear();
+
+    // Phase 3G-6 block 3 commit 15: Thetis lstMetersAvailable
+    // categorization (setup.cs:24522-24566) — three sections, each
+    // alphabetical. Section headers are non-selectable disabled
+    // QListWidgetItems in a highlight color. Block 4 will revisit
+    // the per-entry mapping once the per-item editors are in place
+    // and we know exactly which default bindings each type ships
+    // with.
+    struct Entry { const char* tag; const char* label; };
+
+    // Phase E port of Thetis Setup → Appearance → Meters/Gadgets
+    // lstMetersAvailable left column. Each PRESET_* tag dispatches to
+    // a factory in ItemGroup that returns a full Thetis-parity bar
+    // row composition (SolidColour backdrop + BarItem with Line style
+    // + ScaleItem with ShowType red title). When the user double-
+    // clicks or presses the "Add →" button on one of these, the
+    // dispatch lands in appendPresetRow() which rescales the preset's
+    // 0..1 items into the next stack slot so rows naturally pile up
+    // in the container — matching how Thetis's "Add Container"
+    // right-arrow works in the Appearance dialog.
+    static const Entry kMeterRxItems[] = {
+        {"PRESET_SignalBar",    "Signal Strength Peak"},
+        {"PRESET_AvgSignalBar", "Signal Strength Avg"},
+        {"PRESET_MaxBinBar",    "Signal Max FFT Bin"},
+        {"PRESET_SignalText",   "Signal Strength Text"},
+        {"PRESET_AdcBar",       "ADC"},
+        {"PRESET_AdcMaxMag",    "Max ADC Magnitude"},
+        {"PRESET_AgcBar",       "AGC"},
+        {"PRESET_AgcGainBar",   "AGC Gain"},
+        {"PRESET_PbsnrBar",     "Estimated PBSNR"},
+    };
+    static const Entry kMeterTxItems[] = {
+        {"PRESET_Alc",          "ALC"},
+        {"PRESET_AlcGain",      "ALC Compression"},
+        {"PRESET_AlcGroup",     "ALC Group"},
+        {"PRESET_CfcBar",       "CFC Compression Average"},
+        {"PRESET_CfcGainBar",   "CFC Compression"},
+        {"PRESET_Comp",         "Compression"},
+        {"PRESET_Eq",           "EQ"},
+        {"PRESET_Leveler",      "Leveler"},
+        {"PRESET_LevelerGain",  "Leveler Gain"},
+        {"PRESET_Mic",          "Mic"},
+        // "Power", "Reverse Power", "SWR" are PowerSwr composite —
+        // deferred until a dedicated createPowerBarRowPreset ships.
+    };
+    // --- Raw building-block items (low-level MeterItem subclasses) ---
+    static const Entry kRxItems[] = {
+        {"NEEDLE",         "Needle Meter"},
+        {"SIGNALTEXT",     "Signal Text"},
+        {"TEXT",           "Text Readout"},
+    };
+    static const Entry kTxItems[] = {
+        {"BAR",            "Bar Meter"},
+        {"LED",            "LED"},
+        {"NEEDLESCALEPWR", "Needle Scale Power"},
+        {"SCALE",          "Scale"},
+    };
+    static const Entry kSpecialItems[] = {
+        {"CLICKBOX",       "Click Box"},
+        {"CLOCK",          "Clock"},
+        {"DATAOUT",        "Data Out"},
+        {"DIAL",           "Dial Meter"},
+        {"FADECOVER",      "Fade Cover"},
+        {"FILTERDISPLAY",  "Filter Display"},
+        {"HISTORY",        "History Graph"},
+        {"IMAGE",          "Image"},
+        {"MAGICEYE",       "Magic Eye"},
+        {"ROTATOR",        "Rotator"},
+        {"SOLID",          "Solid Color"},
+        {"SPACER",         "Spacer"},
+        {"TEXTOVERLAY",    "Text Overlay"},
+        {"VFODISPLAY",     "VFO Display"},
+        {"WEBIMAGE",       "Web Image"},
+    };
+
+    auto addHeader = [this](const QString& text) {
+        auto* h = new QListWidgetItem(text, m_availableList);
+        QFont f = h->font();
+        f.setBold(true);
+        h->setFont(f);
+        h->setForeground(WorkspacePreview::roleColour(QColor(0x8a, 0xa8, 0xc0), "title-text"));
+        h->setBackground(WorkspacePreview::roleColour(QColor(0x1a, 0x2a, 0x38), "titlebar-bottom"));
+        h->setFlags(Qt::NoItemFlags);   // non-selectable, non-enabled
+    };
+    auto addEntry = [this](const Entry& e) {
+        auto* item = new QListWidgetItem(
+            QStringLiteral("  ") + QString::fromLatin1(e.label),
+            m_availableList);
+        item->setData(Qt::UserRole, QString::fromLatin1(e.tag));
+    };
+
+    // High-level Thetis-style meter compositions first — these are
+    // what most users reach for when building a multimeter container.
+    addHeader(QStringLiteral("RX Meters (Thetis)"));
+    for (const auto& e : kMeterRxItems) { addEntry(e); }
+
+    addHeader(QStringLiteral("TX Meters (Thetis)"));
+    for (const auto& e : kMeterTxItems) { addEntry(e); }
+
+    // Raw building blocks below — for custom meter construction.
+    addHeader(QStringLiteral("RX items"));
+    for (const auto& e : kRxItems) { addEntry(e); }
+
+    addHeader(QStringLiteral("TX items"));
+    for (const auto& e : kTxItems) { addEntry(e); }
+
+    addHeader(QStringLiteral("Special"));
+    for (const auto& e : kSpecialItems) { addEntry(e); }
+}
+
+void ContainerSettingsDialog::onAddFromAvailable()
+{
+    if(m_editSession && m_availableList->currentItem()) {
+        addNewItem(m_availableList->currentItem()->data(Qt::UserRole).toString()); return;
+    }
+
+    if (!m_availableList) { return; }
+    QListWidgetItem* sel = m_availableList->currentItem();
+    if (!sel) { return; }
+    const QString tag = sel->data(Qt::UserRole).toString();
+    if (tag.isEmpty()) { return; }
+    // Phase E — PRESET_* tags map to full Thetis-parity meter row
+    // compositions rather than raw building-block items. Route to
+    // appendPresetRow() which rescales the factory's 0..1 preset
+    // into the next stack slot so rows pile up vertically.
+    if (tag.startsWith(QLatin1String("PRESET_"))) {
+        const QString presetName = tag.mid(7);   // strip "PRESET_"
+        appendPresetRow(presetName);
+        return;
+    }
+    addNewItem(tag);
+}
+
+void ContainerSettingsDialog::appendPresetRow(const QString& presetName)
+{
+    // Build the preset ItemGroup via the matching factory, then
+    // rescale its items (which occupy the preset's 0..1 local space)
+    // into a narrow horizontal slot at the current stack bottom. The
+    // result: each click adds one row beneath the previous one, up
+    // to ~10 rows before the stack clamps at y=0.9. Mirrors Thetis's
+    // Setup → Appearance → Meters/Gadgets right-arrow "Add to
+    // Container" flow.
+    ItemGroup* group = nullptr;
+
+    // Accepts both the short loadPresetByName names (Adc, Agc, Pbsnr,
+    // Cfc, CfcGain) AND the longer "*Bar" names used by the left
+    // "Meter Types" list entries (AdcBar, AgcBar, PbsnrBar, CfcBar,
+    // CfcGainBar). Both map to the same factory.
+    if      (presetName == QLatin1String("SignalBar"))    group = ItemGroup::createSignalBarPreset(this);
+    else if (presetName == QLatin1String("AvgSignalBar")) group = ItemGroup::createAvgSignalBarPreset(this);
+    else if (presetName == QLatin1String("MaxBinBar"))    group = ItemGroup::createMaxBinBarPreset(this);
+    else if (presetName == QLatin1String("SignalText"))   group = ItemGroup::createSignalTextPreset(0, this);
+    else if (presetName == QLatin1String("Adc") ||
+             presetName == QLatin1String("AdcBar"))       group = ItemGroup::createAdcBarPreset(this);
+    else if (presetName == QLatin1String("AdcMaxMag"))    group = ItemGroup::createAdcMaxMagPreset(this);
+    else if (presetName == QLatin1String("Agc") ||
+             presetName == QLatin1String("AgcBar"))       group = ItemGroup::createAgcBarPreset(this);
+    else if (presetName == QLatin1String("AgcGain") ||
+             presetName == QLatin1String("AgcGainBar"))   group = ItemGroup::createAgcGainBarPreset(this);
+    else if (presetName == QLatin1String("Pbsnr") ||
+             presetName == QLatin1String("PbsnrBar"))     group = ItemGroup::createPbsnrBarPreset(this);
+    else if (presetName == QLatin1String("Alc"))          group = ItemGroup::createAlcPreset(this);
+    else if (presetName == QLatin1String("AlcGain"))      group = ItemGroup::createAlcGainBarPreset(this);
+    else if (presetName == QLatin1String("AlcGroup"))     group = ItemGroup::createAlcGroupBarPreset(this);
+    else if (presetName == QLatin1String("Cfc") ||
+             presetName == QLatin1String("CfcBar"))       group = ItemGroup::createCfcBarPreset(this);
+    else if (presetName == QLatin1String("CfcGain") ||
+             presetName == QLatin1String("CfcGainBar"))   group = ItemGroup::createCfcGainBarPreset(this);
+    else if (presetName == QLatin1String("Comp"))         group = ItemGroup::createCompPreset(this);
+    else if (presetName == QLatin1String("Eq"))           group = ItemGroup::createEqBarPreset(this);
+    else if (presetName == QLatin1String("Leveler"))      group = ItemGroup::createLevelerBarPreset(this);
+    else if (presetName == QLatin1String("LevelerGain"))  group = ItemGroup::createLevelerGainBarPreset(this);
+    else if (presetName == QLatin1String("Mic"))          group = ItemGroup::createMicPreset(this);
+
+    if (!group) { return; }
+
+    // Thetis-parity stack layout with a NereusSDR pixel floor.
+    //
+    // Composite presets (ANAN MM, CrossNeedle, etc.) are authored
+    // at their Thetis-nominal normalized size directly by the
+    // factory — e.g. ANAN MM occupies y=0..0.441 per Thetis
+    // MeterManager.cs:22472 `Size=(1, 0.441)`. No compress step
+    // runs here; the composite's existing rect is left alone.
+    //
+    // Bar-row presets tag themselves with a stack slot index +
+    // within-slot 0..1 local rect snapshot. MeterWidget::
+    // reflowStackedItems() picks up every reflow and computes
+    //
+    //   slotHpx = max(0.05 * widgetH, 24 px)
+    //   bandTop = max(y + itemHeight) over composite items
+    //             (anything with itemHeight() > 0.30)
+    //
+    // then re-lays every stacked item. Thetis `_fHeight=0.05` from
+    // MeterManager.cs:21266 + a NereusSDR pixel floor so rows stay
+    // readable in tight containers. Rows past widgetH clip
+    // naturally at the container bottom — Thetis Default
+    // Multimeter parity.
+
+    // Next slot index = max existing stack slot + 1.
+    int nextSlot = 0;
+    for (const MeterItem* mi : m_workingItems) {
+        if (!mi) { continue; }
+        if (mi->stackSlot() >= nextSlot) {
+            nextSlot = mi->stackSlot() + 1;
+        }
+    }
+
+    for (MeterItem* src : group->items()) {
+        ContainerContentRegistry registry;
+        MeterItem* clone = registry.createMeterItem(registry.captureMeterItem(*src),nullptr,ContentRenderMode::Preview);
+        if (!clone) { continue; }
+        // Snapshot the preset factory's canonical within-slot 0..1
+        // layout so reflow can project it back out.
+        clone->setSlotLocalY(clone->y());
+        clone->setSlotLocalH(clone->itemHeight());
+        clone->setStackSlot(nextSlot);
+        if (src->hasMmioBinding()) {
+            clone->setMmioBinding(src->mmioGuid(), src->mmioVariable());
+        }
+        m_workingItems.append(clone);
+    }
+    delete group;
+
+    // Reflow immediately so the preview reflects the new stack
+    // layout at the current target-widget size. The widget's own
+    // resizeEvent keeps this in sync going forward.
+    if (MeterWidget* meter = findMeterWidget()) {
+        meter->reflowStackedItems();
+    }
+
+    refreshItemList();
+    if (!m_workingItems.isEmpty()) {
+        m_itemList->setCurrentRow(m_workingItems.size() - 1);
+    }
+    updatePreview();
+}
+
+// Phase 3G-6 block 3 commit 11: buildRightPanel / live preview deleted.
+// Commit 12 reintroduces a Properties column here under the Thetis
+// 3-column layout.
+
+void ContainerSettingsDialog::buildContainerPropertiesSection(QVBoxLayout* parentLayout)
+{
+    QFrame* bar = new QFrame(this);
+    bar->setFrameShape(QFrame::StyledPanel);
+    bar->setStyleSheet(
+        "QFrame { background: #111122; border: 1px solid #203040; border-radius: 4px; }");
+
+    // Phase 3G-6 block 3 commit 17: two-row layout. Row 1 holds the
+    // container-switch dropdown, title, bg, rx, and visibility
+    // controls. Row 2 holds the remaining container-level toggles
+    // plus the Duplicate / Delete actions on the right.
+    QVBoxLayout* outer = new QVBoxLayout(bar);
+    outer->setContentsMargins(8, 4, 8, 4);
+    outer->setSpacing(4);
+
+    QHBoxLayout* barLayout = new QHBoxLayout;
+    barLayout->setContentsMargins(0, 0, 0, 0);
+    barLayout->setSpacing(10);
+    outer->addLayout(barLayout);
+
+    // Phase 3G-6 block 3 commit 13: container-switch dropdown.
+    // Populated from ContainerManager::allContainers() when a manager
+    // is available. The switching behavior (auto-commit + new
+    // snapshot) lands in commit 14 alongside the snapshot/revert
+    // machinery; this commit just lays down the UI.
+    QLabel* contLabel = new QLabel(QStringLiteral("Container:"), bar);
+    contLabel->setStyleSheet(kLabelStyle);
+    m_containerDropdown = new QComboBox(bar);
+    m_containerDropdown->setObjectName("containerDraftSelection");
+    m_containerDropdown->setStyleSheet(
+        "QComboBox { background: #0a0a18; color: #c8d8e8;"
+        "  border: 1px solid #1e2e3e; border-radius: 3px; padding: 2px 4px;"
+        "  min-width: 160px; }"
+        "QComboBox QAbstractItemView { background: #0a0a18; color: #c8d8e8;"
+        "  border: 1px solid #205070; selection-background-color: #00b4d8; }");
+    if (m_manager) {
+        const QList<ContainerWidget*> all = m_manager->allContainers();
+        int activeIdx = -1;
+        for (ContainerWidget* c : all) {
+            const QString label = c->notes().isEmpty()
+                ? c->id().left(8)
+                : c->notes();
+            m_containerDropdown->addItem(label, c->id());
+            if (c == m_container) {
+                activeIdx = m_containerDropdown->count() - 1;
+            }
+        }
+        if (activeIdx >= 0) {
+            m_containerDropdown->setCurrentIndex(activeIdx);
+        }
+    } else if (m_container) {
+        // Legacy single-container path: show just the current container.
+        const QString label = m_container->notes().isEmpty()
+            ? m_container->id().left(8)
+            : m_container->notes();
+        m_containerDropdown->addItem(label, m_container->id());
+    }
+    // Phase 3G-6 block 7 commit 2: dropdown is fully active when a
+    // manager is available and there's more than one container.
+    m_containerDropdown->setEnabled(m_manager != nullptr
+                                    && m_containerDropdown->count() > 1);
+    if (m_manager) {
+        connect(m_containerDropdown,
+                qOverload<int>(&QComboBox::currentIndexChanged),
+                this,
+                &ContainerSettingsDialog::onContainerDropdownChanged);
+    }
+
+    barLayout->addWidget(contLabel);
+    barLayout->addWidget(m_containerDropdown);
+
+    // Title
+    QLabel* titleLabel = new QLabel(QStringLiteral("Title:"), bar);
+    titleLabel->setStyleSheet(kLabelStyle);
+    m_titleEdit = new QLineEdit(bar);
+    m_titleEdit->setObjectName("containerDraftTitle");
+    m_titleEdit->setStyleSheet(kEditStyle);
+    m_titleEdit->setPlaceholderText(QStringLiteral("Container title..."));
+    m_titleEdit->setFixedWidth(140);
+
+    // BG Color
+    QLabel* bgLabel = new QLabel(QStringLiteral("BG:"), bar);
+    bgLabel->setStyleSheet(kLabelStyle);
+    m_bgColorBtn = new QPushButton(QStringLiteral("  "), bar);m_bgColorBtn->setObjectName("containerBackground");
+    m_bgColorBtn->setStyleSheet(
+        "QPushButton { background: #0f0f1a; border: 1px solid #205070;"
+        "  border-radius: 3px; min-width: 32px; min-height: 18px; }"
+        "QPushButton:hover { border-color: #00b4d8; }");
+    m_bgColorBtn->setAutoDefault(false);
+    m_bgColorBtn->setDefault(false);
+    m_bgColorBtn->setToolTip(QStringLiteral("Choose background color"));
+    connect(m_bgColorBtn, &QPushButton::clicked, this, [this]() {
+        QColor initial(m_bgColorBtn->property("draftColor").toString());if(!initial.isValid()) {initial=QColor("#0f0f1a");}
+        QColor chosen = QColorDialog::getColor(initial, this,
+                                               QStringLiteral("Background Color"));
+        if (chosen.isValid()) {
+            m_bgColorBtn->setProperty("draftColor",chosen.name(QColor::HexArgb));
+            m_bgColorBtn->setStyleSheet(
+                QStringLiteral("QPushButton { background: %1; border: 1px solid #205070;"
+                                "  border-radius: 3px; min-width: 32px; min-height: 18px; }"
+                                "QPushButton:hover { border-color: #00b4d8; }").arg(chosen.name()));
+            updatePreview();
+        }
+    });
+
+    // Border
+    QLabel* borderLabel = new QLabel(QStringLiteral("Border:"), bar);
+    borderLabel->setStyleSheet(kLabelStyle);
+    m_borderCheck = new QCheckBox(bar);
+    m_borderCheck->setStyleSheet("QCheckBox { color: #c8d8e8; }");
+
+    // R-R3-21: the slice the container's controls act on, slices A to D.
+    // Saved as 1..4 (Thetis's RX field), so a layout saved as RX1 / RX2
+    // reads as slice A / B.
+    QLabel* rxLabel = new QLabel(QStringLiteral("Slice:"), bar);
+    rxLabel->setStyleSheet(kLabelStyle);
+    m_rxSourceCombo = new QComboBox(bar);
+    m_rxSourceCombo->setObjectName("containerRxSource");
+    for (int rx = 1; rx <= 4; ++rx) {
+        m_rxSourceCombo->addItem(ContainerWidget::sliceNameForRxSource(rx), rx);
+    }
+    m_rxSourceCombo->setStyleSheet(
+        "QComboBox { background: #0a0a18; color: #c8d8e8;"
+        "  border: 1px solid #1e2e3e; border-radius: 3px; padding: 2px 4px; }"
+        "QComboBox QAbstractItemView { background: #0a0a18; color: #c8d8e8;"
+        "  border: 1px solid #205070; selection-background-color: #00b4d8; }");
+    m_rxSourceCombo->setFixedWidth(76);
+
+    // Show on RX / TX
+    QLabel* showRxLabel = new QLabel(QStringLiteral("Show RX:"), bar);
+    showRxLabel->setStyleSheet(kLabelStyle);
+    m_showOnRxCheck = new QCheckBox(bar);
+    m_showOnRxCheck->setStyleSheet("QCheckBox { color: #c8d8e8; }");
+
+    QLabel* showTxLabel = new QLabel(QStringLiteral("Show TX:"), bar);
+    showTxLabel->setStyleSheet(kLabelStyle);
+    m_showOnTxCheck = new QCheckBox(bar);
+    m_showOnTxCheck->setStyleSheet("QCheckBox { color: #c8d8e8; }");
+
+    // Assemble bar
+    barLayout->addWidget(titleLabel);
+    barLayout->addWidget(m_titleEdit);
+    barLayout->addWidget(bgLabel);
+    barLayout->addWidget(m_bgColorBtn);
+    barLayout->addWidget(borderLabel);
+    barLayout->addWidget(m_borderCheck);
+    barLayout->addWidget(rxLabel);
+    barLayout->addWidget(m_rxSourceCombo);
+    barLayout->addWidget(showRxLabel);
+    barLayout->addWidget(m_showOnRxCheck);
+    barLayout->addWidget(showTxLabel);
+    barLayout->addWidget(m_showOnTxCheck);
+    barLayout->addStretch();
+
+    // Populate row 1 from container
+    if (m_container) {
+        m_titleEdit->setText(m_container->notes());
+        m_borderCheck->setChecked(m_container->hasBorder());
+        const int rxSrc = m_container->rxSource();
+        const int idx = m_rxSourceCombo->findData(rxSrc);
+        if (idx >= 0) {
+            m_rxSourceCombo->setCurrentIndex(idx);
+        }
+        m_showOnRxCheck->setChecked(m_container->showOnRx());
+        m_showOnTxCheck->setChecked(m_container->showOnTx());
+    }
+
+    // -------- Row 2: additional container-level controls --------
+    QHBoxLayout* row2 = new QHBoxLayout;
+    row2->setContentsMargins(0, 0, 0, 0);
+    row2->setSpacing(10);
+    outer->addLayout(row2);
+
+    auto makeCheck = [bar](const QString& label, bool initial) {
+        auto* cb = new QCheckBox(label, bar);
+        cb->setStyleSheet("QCheckBox { color: #c8d8e8; }");
+        cb->setChecked(initial);
+        return cb;
+    };
+
+    // The workspace look has no Lock setting: no checkbox there.
+    if (!WorkspacePreview::enabled()) {
+        m_lockCheck          = makeCheck(QStringLiteral("Lock"),
+                                         m_container && m_container->isLocked());
+    }
+    m_hideTitleCheck         = makeCheck(QStringLiteral("Hide title"),
+                                         m_container && !m_container->isTitleBarVisible());
+    m_minimisesCheck         = makeCheck(QStringLiteral("Minimizes"),
+                                         m_container && m_container->containerMinimises());
+    m_autoHeightCheck        = makeCheck(QStringLiteral("Auto height"),
+                                         m_container && m_container->autoHeight());
+    m_hidesWhenRxNotUsedCheck = makeCheck(QStringLiteral("Hide when RX unused"),
+                                         m_container && m_container->containerHidesWhenRxNotUsed());
+    m_minimisesCheck->setEnabled(false);
+    m_minimisesCheck->setToolTip(tr("Minimizing with the main window is unavailable. Saved values are retained."));
+    m_hidesWhenRxNotUsedCheck->setEnabled(false);
+    m_hidesWhenRxNotUsedCheck->setToolTip(tr("Hiding unused receivers is unavailable. Saved values are retained."));
+    m_highlightCheck         = makeCheck(QStringLiteral("Highlight"),
+                                         m_container && m_container->isHighlighted());
+
+    if (m_lockCheck) {
+        row2->addWidget(m_lockCheck);
+    }
+    if(m_editSession) {
+        m_hideTitleCheck->hide();
+        auto* modes=new QHBoxLayout;outer->addLayout(modes);
+        m_headerCombo=new QComboBox(bar); m_headerCombo->setObjectName("containerHeader");
+        if (WorkspacePreview::enabled()) {
+            // Workspace preview: a header is shown or hidden.
+            m_headerCombo->addItem(tr("Always visible"),int(HeaderMode::Shown)); m_headerCombo->addItem(tr("Hidden"),int(HeaderMode::Hidden));
+        } else {
+            m_headerCombo->addItem(tr("Always visible"),int(HeaderMode::Shown)); m_headerCombo->addItem(tr("Reveal on hover / focus"),int(HeaderMode::Reveal)); m_headerCombo->addItem(tr("Hidden — recovery menu"),int(HeaderMode::Hidden));
+        }
+        m_layoutCombo=new QComboBox(bar); m_layoutCombo->setObjectName("containerLayout"); m_layoutCombo->addItem(tr("Canvas"),int(ContentLayout::FreeCanvas)); m_layoutCombo->addItem(tr("Vertical stack"),int(ContentLayout::VerticalStack)); m_layoutCombo->addItem(tr("Saved legacy canvas"),int(ContentLayout::LegacyCanvas));
+        m_layoutCombo->setToolTip(tr("Canvas lets each object move and resize independently and scrolls to retain its logical size. Saved legacy canvas preserves imported normalized compositions."));
+        auto* canvasActions=new QHBoxLayout;outer->addLayout(canvasActions);
+        auto* seed=makeBtn(tr("Start from stacked layout"),bar);seed->setObjectName("seedFreeCanvas");canvasActions->addWidget(seed);
+        auto* savedPositions=makeBtn(tr("Use saved legacy positions"),bar);savedPositions->setObjectName("convertLegacyCanvas");canvasActions->addWidget(savedPositions);canvasActions->addStretch();
+        connect(seed,&QPushButton::clicked,this,[this]{
+            saveCurrentDraft();auto draft=m_editSession->draft();
+            for(auto& c:draft.containers) {if(c.id!=m_selectedId || c.locked || !m_preview) {continue;}auto stack=c;stack.layout=ContentLayout::VerticalStack;m_preview->setDocument(stack);c=m_preview->seededFromStack();}
+            m_editSession->setDraft(draft);loadCurrentDraft();
+        });
+        connect(savedPositions,&QPushButton::clicked,this,[this]{
+            saveCurrentDraft();auto draft=m_editSession->draft();
+            for(auto& c:draft.containers) {if(c.id==m_selectedId && !c.locked && m_preview) {m_preview->setDocument(c);c=m_preview->convertedLegacyPositions();}}
+            m_editSession->setDraft(draft);loadCurrentDraft();
+        });
+        m_placementCombo=new QComboBox(bar); m_placementCombo->setObjectName("containerPlacement"); m_placementCombo->addItem(tr("Panel"),int(DockMode::PanelDocked));m_placementCombo->addItem(tr("Overlay"),int(DockMode::OverlayDocked));m_placementCombo->addItem(tr("Floating"),int(DockMode::Floating));
+        modes->addWidget(new QLabel(tr("Header:"),bar));modes->addWidget(m_headerCombo);modes->addWidget(m_layoutCombo);modes->addWidget(m_placementCombo);
+        m_anchorCombo=new QComboBox(bar);m_anchorCombo->setObjectName("containerAnchor");
+        const QStringList anchors{tr("Left"),tr("Top left"),tr("Top"),tr("Top right"),tr("Right"),tr("Bottom right"),tr("Bottom"),tr("Bottom left")};
+        for(int i=0;i<anchors.size();++i) {m_anchorCombo->addItem(anchors[i],i);}modes->addWidget(m_anchorCombo);modes->addStretch();
+        for(auto* combo:{m_headerCombo,m_layoutCombo,m_placementCombo,m_anchorCombo}) {applyComboStyle(combo);connect(combo,qOverload<int>(&QComboBox::currentIndexChanged),this,[this]{updatePreview();});}
+    } else {row2->addWidget(m_hideTitleCheck);}
+    row2->addWidget(m_minimisesCheck);
+    row2->addWidget(m_autoHeightCheck);
+    row2->addWidget(m_hidesWhenRxNotUsedCheck);
+    row2->addWidget(m_highlightCheck);
+    row2->addStretch();
+
+    m_btnDuplicate = makeBtn(QStringLiteral("Duplicate"), bar);
+    m_btnDelete    = makeBtn(QStringLiteral("Delete"),    bar);
+    m_btnDelete->setStyleSheet(
+        "QPushButton { background: #401010; color: #ffb0b0; border: 1px solid #802020;"
+        "  border-radius: 3px; padding: 2px 8px; }"
+        "QPushButton:hover { background: #602020; }");
+    if(m_editSession) {
+        auto* create=makeBtn(tr("New"),bar);create->setObjectName("createContainer");row2->addWidget(create);
+        connect(create,&QPushButton::clicked,this,[this]{saveCurrentDraft();auto d=m_editSession->draft();ContainerDocument c;c.id=QUuid::createUuid().toString(QUuid::WithoutBraces);c.name=tr("New container");c.layout=ContentLayout::VerticalStack;d.containers.append(c);m_editSession->setDraft(d);selectDraftContainer(c.id);});
+        m_btnDelete->setText(tr("Remove / return contents"));
+    }
+    row2->addWidget(m_btnDuplicate);
+    row2->addWidget(m_btnDelete);
+
+    // Highlight is the only one that takes effect immediately — it's
+    // a pure runtime UI affordance showing the user which container
+    // is being edited. The others latch into the container on Apply
+    // / OK via applyToContainer (live-edit push machinery is block
+    // 4 territory).
+    if (m_container && !m_editSession) {
+        m_container->setHighlighted(m_highlightCheck->isChecked());
+    }
+    connect(m_highlightCheck, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_container && !m_editSession) { m_container->setHighlighted(on); }
+        updatePreview();
+    });
+
+    connect(m_btnDuplicate, &QPushButton::clicked, this, [this]() {
+        if (m_editSession) {
+            saveCurrentDraft(); auto draft=m_editSession->draft();
+            for (const auto& original : draft.containers) {
+                if (original.id!=m_selectedId) { continue; }
+                for (const auto& entry : original.contents) {
+                    if (entry.typeId.startsWith("applet:")) { m_transactionStatus->setText(tr("Singleton applets cannot be duplicated.")); return; }
+                }
+                auto result=ContainerDocumentCodec::importContainer(ContainerDocumentCodec::exportContainer(original));
+                if(!result.ok) {m_transactionStatus->setText(result.error);return;}
+                auto copy=result.document.containers.first(); copy.name+=tr(" copy");
+                for(auto& entry:copy.contents) {entry.returnLocation.reset();}
+                // Always a shown, floating copy beside the original; Thetis
+                // keeps the original's state (see ContainerManager::showDuplicate).
+                m_manager->showDuplicate(copy, original);
+                draft.containers.append(copy); m_editSession->setDraft(draft); refreshDraftDropdown(); selectDraftContainer(copy.id); return;
+            }
+            return;
+        }
+        if (m_manager && m_container) {
+            ContainerWidget* dup = m_manager->duplicateContainer(m_container->id());
+            if (dup && m_containerDropdown) {
+                const QString label = dup->notes().isEmpty() ? dup->id().left(8) : dup->notes();
+                resetItemsBeforeRowChange(m_containerDropdown);
+                m_containerDropdown->addItem(label, dup->id());
+            }
+        }
+    });
+    connect(m_btnDelete, &QPushButton::clicked, this, [this]() {
+        if (m_editSession) {
+            saveCurrentDraft(); auto draft=m_editSession->draft();
+            if(m_selectedId==draft.mainContainerId) {m_transactionStatus->setText(tr("The main area is retained."));return;}
+            for(int i=0;i<draft.containers.size();++i) {if(draft.containers[i].id!=m_selectedId) {continue;}
+                if(draft.containers[i].locked) {m_transactionStatus->setText(tr("Arrangement is locked."));return;}
+                const auto result=ContainerArrangeController::returnBatch(draft,i,draft.containers[i].contents);
+                if(!result.ok) {m_transactionStatus->setText(result.error);return;}
+                draft.containers.removeAt(i); break;
+            }
+            m_editSession->setDraft(draft); m_selectedId=draft.mainContainerId; refreshDraftDropdown(); loadCurrentDraft(); return;
+        }
+        if (!m_manager || !m_container) { return; }
+        const QString id = m_container->id();
+        // Leaving the dialog open pointing at a freed container is a
+        // crash waiting to happen, so destroy + close together.
+        m_snapshotTaken = false;   // prevent revert-into-freed-container on reject
+        m_container = nullptr;
+        m_manager->destroyContainer(id);
+        reject();
+    });
+
+    parentLayout->addWidget(bar);
+}
+
+void ContainerSettingsDialog::buildButtonBar()
+{
+    QHBoxLayout* barLayout = new QHBoxLayout;
+    barLayout->setSpacing(6);
+
+    // Left cluster: Save / Load / Presets / Import / Export / MMIO
+    m_btnSave   = makeBtn(QStringLiteral("Save\u2026"),    this);
+    m_btnLoad   = makeBtn(QStringLiteral("Load\u2026"),    this);
+    m_btnPreset = makeBtn(QStringLiteral("Presets\u2026"), this);
+    m_btnImport = makeBtn(QStringLiteral("Import"),        this);
+    m_btnExport = makeBtn(QStringLiteral("Export"),        this);
+    m_btnMmio   = makeBtn(QStringLiteral("Meter Data Sources (MMIO)\u2026"), this);
+
+    barLayout->addWidget(m_btnSave);
+    barLayout->addWidget(m_btnLoad);
+    barLayout->addWidget(m_btnPreset);
+    barLayout->addWidget(m_btnImport);
+    barLayout->addWidget(m_btnExport);
+    barLayout->addWidget(m_btnMmio);
+    barLayout->addStretch();
+
+    // Right cluster: Apply / Cancel / OK
+    m_btnApply  = makeBtn(QStringLiteral("Apply"),  this);
+    m_btnCancel = makeBtn(QStringLiteral("Cancel"), this);
+
+    m_btnOk = new QPushButton(QStringLiteral("OK"), this);
+    m_btnOk->setStyleSheet(kOkBtnStyle);
+    m_btnOk->setAutoDefault(false);
+    m_btnOk->setDefault(false);
+
+    barLayout->addWidget(m_btnApply);
+    barLayout->addWidget(m_btnCancel);
+    barLayout->addWidget(m_btnOk);
+
+    // Wire buttons
+    connect(m_btnPreset, &QPushButton::clicked, this, &ContainerSettingsDialog::onLoadPreset);
+    connect(m_btnExport, &QPushButton::clicked, this, &ContainerSettingsDialog::onExport);
+    connect(m_btnImport, &QPushButton::clicked, this, &ContainerSettingsDialog::onImport);
+    connect(m_btnSave,   &QPushButton::clicked, this, &ContainerSettingsDialog::onSaveToFile);
+    connect(m_btnLoad,   &QPushButton::clicked, this, &ContainerSettingsDialog::onLoadFromFile);
+    connect(m_btnMmio,   &QPushButton::clicked, this, &ContainerSettingsDialog::onOpenMmioDialog);
+    connect(m_btnApply,  &QPushButton::clicked, this, &ContainerSettingsDialog::applyToContainer);
+    connect(m_btnCancel, &QPushButton::clicked, this, [this]() {
+        // Phase 3G-6 block 3 commit 14: Cancel reverts the container
+        // and its meter items to the snapshot captured on dialog
+        // open, then closes. Applied changes from Apply clicks are
+        // NOT reverted — that's intentional: Apply is a "commit"
+        // action and the snapshot is only a safety net for
+        // un-Applied edits.
+        revertFromSnapshot();
+        reject();
+    });
+    connect(m_btnOk,     &QPushButton::clicked, this, [this]() {
+        if (m_editSession) { if (applyDraft().status==CommitStatus::Saved) { accept(); } }
+        else { applyToContainer(); accept(); }
+    });
+
+    // Add bar to the root layout
+    QVBoxLayout* root = qobject_cast<QVBoxLayout*>(layout());
+    if (root) {
+        root->addLayout(barLayout);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slots
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::onItemSelectionChanged()
+{
+    if(m_editSession) {
+        if(!m_propertyStack) {return;}
+        if(m_currentTypeEditor) { m_propertyStack->removeWidget(m_currentTypeEditor); delete m_currentTypeEditor; m_currentTypeEditor=nullptr; m_contentEditor=nullptr; }
+        const int row=m_itemList->currentRow();
+        for(const auto& c:m_editSession->draft().containers) { if(c.id!=m_selectedId || row<0 || row>=c.contents.size()) {continue;}
+            const auto entry=c.contents[row];if(m_preview) {m_preview->selectEntry(entry.id);}
+            auto* scroll=new QScrollArea(m_propertyStack); scroll->setWidgetResizable(true);
+            m_contentEditor=new ContentPropertyEditor(*m_manager->contentRegistry()); m_contentEditor->setLayoutPolicy(c.layout); m_contentEditor->setGeometryLocked(c.locked); m_contentEditor->setContainerDefaults(c.config); if(m_preview && c.layout==ContentLayout::FreeCanvas) {m_contentEditor->setCanvasPresentation(m_preview->resolvedFreeCanvasRect(entry.id),m_preview->freeCanvasMinimum(entry.id));} m_contentEditor->setEntry(entry);
+            styleSelectorPopups(m_contentEditor);
+            scroll->setWidget(m_contentEditor); m_currentTypeEditor=scroll; m_propertyStack->addWidget(scroll); m_propertyStack->setCurrentWidget(scroll);
+            findChild<QPushButton*>("duplicateContent")->setEnabled(!entry.typeId.startsWith("applet:") && !c.locked);
+            m_btnRemove->setText(entry.typeId.startsWith("applet:")?tr("Return / hide view"):tr("Remove object"));
+            connect(m_contentEditor,&ContentPropertyEditor::entryEdited,this,[this](const ContentEntry& edited){
+                auto draft=m_editSession->draft();
+                for(auto& c:draft.containers) { for(auto& e:c.contents) {if(e.id==edited.id) {e=edited;}} }
+                m_editSession->setDraft(draft); const int row=m_itemList->currentRow();
+                if(row>=0) {m_itemList->item(row)->setText(edited.name);}
+                updatePreview();
+            });
+            return;
+        }
+        m_propertyStack->setCurrentWidget(m_emptyPage); return;
+    }
+
+    const int row = m_itemList->currentRow();
+
+    if (row < 0 || row >= m_workingItems.size()) {
+        m_propertyStack->setCurrentWidget(m_emptyPage);
+        updateCopyPasteButtonState();
+        return;
+    }
+    updateCopyPasteButtonState();
+
+    // Phase 3G-6 block 4: replace the legacy "common props + type
+    // editor" pair with a single BaseItemEditor subclass that
+    // handles everything for the selected item's type. The editor
+    // is built on demand and installed as a fresh page in the
+    // property stack.
+    if (m_currentTypeEditor) {
+        m_propertyStack->removeWidget(m_currentTypeEditor);
+        delete m_currentTypeEditor;
+        m_currentTypeEditor = nullptr;
+    }
+
+    QWidget* editor = buildTypeSpecificEditor(m_workingItems[row],this);
+    if (!editor) {
+        m_propertyStack->setCurrentWidget(m_emptyPage);
+        return;
+    }
+
+    styleSelectorPopups(editor);
+
+    // Phase 3G-6 block 4b: wrap every editor page in a QScrollArea
+    // so tall editors (NeedleItemEditor with 26+ rows + calibration
+    // table) don't get clipped by the bottom edge of the dialog.
+    // setWidgetResizable(true) makes the inner widget track the
+    // viewport width so the form rows don't squeeze horizontally.
+    auto* scroll = new QScrollArea(m_propertyStack);
+    scroll->setWidget(editor);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setStyleSheet(
+        "QScrollArea { background: #0a0a18; border: 1px solid #203040; }"
+        "QScrollArea > QWidget > QWidget { background: #0a0a18; }"
+        "QScrollBar:vertical {"
+        "  background: #0f0f1a; width: 10px; margin: 0;"
+        "}"
+        "QScrollBar::handle:vertical {"
+        "  background: #205070; border-radius: 4px; min-height: 24px;"
+        "}"
+        "QScrollBar::handle:vertical:hover { background: #00b4d8; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {"
+        "  height: 0;"
+        "}");
+
+    // Track the scroll area as the "current type editor" so the
+    // next selection change removes and deletes the whole wrapper
+    // (the inner editor is re-parented to the scroll area, so
+    // deleting the scroll area cleans up both).
+    m_currentTypeEditor = scroll;
+    m_propertyStack->addWidget(scroll);
+    m_propertyStack->setCurrentWidget(scroll);
+
+    // Item editors update the local draft and its inert presentation.
+    if (auto* base = qobject_cast<BaseItemEditor*>(editor)) {
+        connect(base, &BaseItemEditor::propertyChanged,
+                this, &ContainerSettingsDialog::updatePreview);
+    }
+}
+
+void ContainerSettingsDialog::onAddItem()
+{
+    // Styled popup menu with categorized sub-menus
+    auto* menu = new QMenu(this);
+    menu->setStyleSheet(
+        QStringLiteral("QMenu {"
+                       "  background: #1a2a3a;"
+                       "  color: #c8d8e8;"
+                       "  border: 1px solid #205070;"
+                       "}"
+                       "QMenu::item:selected {"
+                       "  background: #00b4d8;"
+                       "  color: #0f0f1a;"
+                       "}"
+                       "QMenu::separator {"
+                       "  background: #203040;"
+                       "  height: 1px;"
+                       "}"));
+
+    // --- Meters ---
+    QMenu* metersMenu = menu->addMenu(QStringLiteral("Meters"));
+    metersMenu->setStyleSheet(menu->styleSheet());
+    metersMenu->addAction(QStringLiteral("Bar Meter"),     this, [this]{ addNewItem(QStringLiteral("BAR")); });
+    metersMenu->addAction(QStringLiteral("Needle Meter"),  this, [this]{ addNewItem(QStringLiteral("NEEDLE")); });
+    metersMenu->addAction(QStringLiteral("Dial Meter"),    this, [this]{ addNewItem(QStringLiteral("DIAL")); });
+    metersMenu->addAction(QStringLiteral("History Graph"), this, [this]{ addNewItem(QStringLiteral("HISTORY")); });
+    metersMenu->addAction(QStringLiteral("Magic Eye"),     this, [this]{ addNewItem(QStringLiteral("MAGICEYE")); });
+    metersMenu->addAction(QStringLiteral("Signal Text"),   this, [this]{ addNewItem(QStringLiteral("SIGNALTEXT")); });
+    metersMenu->addAction(QStringLiteral("Power Scale"),   this, [this]{ addNewItem(QStringLiteral("NEEDLESCALEPWR")); });
+
+    // --- Indicators ---
+    QMenu* indicatorsMenu = menu->addMenu(QStringLiteral("Indicators"));
+    indicatorsMenu->setStyleSheet(menu->styleSheet());
+    indicatorsMenu->addAction(QStringLiteral("LED Indicator"), this, [this]{ addNewItem(QStringLiteral("LED")); });
+    indicatorsMenu->addAction(QStringLiteral("Text Readout"),  this, [this]{ addNewItem(QStringLiteral("TEXT")); });
+    indicatorsMenu->addAction(QStringLiteral("Clock"),         this, [this]{ addNewItem(QStringLiteral("CLOCK")); });
+    indicatorsMenu->addAction(QStringLiteral("Text Overlay"),  this, [this]{ addNewItem(QStringLiteral("TEXTOVERLAY")); });
+
+    // --- Controls ---
+    QMenu* controlsMenu = menu->addMenu(QStringLiteral("Controls"));
+    controlsMenu->setStyleSheet(menu->styleSheet());
+    controlsMenu->addAction(QStringLiteral("Band Buttons"),      this, [this]{ addNewItem(QStringLiteral("BANDBTNS")); });
+    controlsMenu->addAction(QStringLiteral("Mode Buttons"),      this, [this]{ addNewItem(QStringLiteral("MODEBTNS")); });
+    controlsMenu->addAction(QStringLiteral("Filter Buttons"),    this, [this]{ addNewItem(QStringLiteral("FILTERBTNS")); });
+    controlsMenu->addAction(QStringLiteral("Antenna Buttons"),   this, [this]{ addNewItem(QStringLiteral("ANTENNABTNS")); });
+    controlsMenu->addAction(QStringLiteral("Tune Step Buttons"), this, [this]{ addNewItem(QStringLiteral("TUNESTEPBTNS")); });
+    controlsMenu->addAction(QStringLiteral("Other Buttons"),     this, [this]{ addNewItem(QStringLiteral("OTHERBTNS")); });
+    QAction* voiceAction =
+        controlsMenu->addAction(QStringLiteral("Voice Rec/Play"), this,
+                                [this]{ addNewItem(QStringLiteral("VOICERECPLAY")); });
+    // R-R3-49: not offered until the voice recorder is built.
+    UnbuiltFeatures::hideUnlessBuilt(voiceAction, UnbuiltFeature::Voice);
+    controlsMenu->addAction(QStringLiteral("VFO Display"),       this, [this]{ addNewItem(QStringLiteral("VFO")); });
+
+    // --- Display ---
+    QMenu* displayMenu = menu->addMenu(QStringLiteral("Display"));
+    displayMenu->setStyleSheet(menu->styleSheet());
+    QAction* filterDisplayAction = displayMenu->addAction(QStringLiteral("Filter Display"), this, [this]{ addNewItem(QStringLiteral("FILTERDISPLAY")); });
+    UnbuiltFeatures::hideUnlessBuilt(filterDisplayAction, UnbuiltFeature::ContainerFilterDisplay);
+    displayMenu->addAction(QStringLiteral("Rotator"),        this, [this]{ addNewItem(QStringLiteral("ROTATOR")); });
+
+    // --- Layout ---
+    QMenu* layoutMenu = menu->addMenu(QStringLiteral("Layout"));
+    layoutMenu->setStyleSheet(menu->styleSheet());
+    layoutMenu->addAction(QStringLiteral("Solid Color"), this, [this]{ addNewItem(QStringLiteral("SOLID")); });
+    layoutMenu->addAction(QStringLiteral("Image"),       this, [this]{ addNewItem(QStringLiteral("IMAGE")); });
+    layoutMenu->addAction(QStringLiteral("Web Image"),   this, [this]{ addNewItem(QStringLiteral("WEBIMAGE")); });
+    layoutMenu->addAction(QStringLiteral("Spacer"),      this, [this]{ addNewItem(QStringLiteral("SPACER")); });
+    layoutMenu->addAction(QStringLiteral("Fade Cover"),  this, [this]{ addNewItem(QStringLiteral("FADECOVER")); });
+    QAction* clickBoxAction = layoutMenu->addAction(QStringLiteral("Click Box"), this, [this]{ addNewItem(QStringLiteral("CLICKBOX")); });
+    UnbuiltFeatures::hideUnlessBuilt(clickBoxAction, UnbuiltFeature::ContainerClickBox);
+    layoutMenu->addAction(QStringLiteral("Scale"),       this, [this]{ addNewItem(QStringLiteral("SCALE")); });
+
+    // --- Data ---
+    QMenu* dataMenu = menu->addMenu(QStringLiteral("Data"));
+    dataMenu->setStyleSheet(menu->styleSheet());
+    dataMenu->addAction(QStringLiteral("Data Output"), this, [this]{ addNewItem(QStringLiteral("DATAOUT")); });
+
+    menu->popup(m_btnAdd->mapToGlobal(QPoint(0, m_btnAdd->height())));
+}
+
+void ContainerSettingsDialog::onRemoveItem()
+{
+    if(m_editSession) {
+        saveCurrentDraft(); auto d=m_editSession->draft(); const int row=m_itemList->currentRow();
+        for(int i=0;i<d.containers.size();++i) {auto& c=d.containers[i]; if(c.id!=m_selectedId || row<0 || row>=c.contents.size()) {continue;}
+            if(c.locked) {m_transactionStatus->setText(tr("Arrangement is locked."));return;}
+            auto entry=c.contents.takeAt(row);
+            if(entry.typeId.startsWith("applet:")) {
+                entry.visible=false;
+                auto outcome=ContainerArrangeController::returnBatch(d,i,{entry});
+                if(!outcome.ok) {m_transactionStatus->setText(outcome.error);return;}
+            }
+            break;
+        }
+        m_editSession->setDraft(d); loadCurrentDraft(); return;
+    }
+
+    const int row = m_itemList->currentRow();
+    if (row < 0 || row >= m_workingItems.size()) {
+        return;
+    }
+
+    delete m_workingItems.takeAt(row);
+    refreshItemList();
+
+    // Select nearest remaining item
+    if (!m_workingItems.isEmpty()) {
+        const int newRow = qMin(row, m_workingItems.size() - 1);
+        m_itemList->setCurrentRow(newRow);
+    }
+
+    updatePreview();
+}
+
+void ContainerSettingsDialog::onMoveItemUp()
+{
+    if(m_editSession) {
+        saveCurrentDraft(); auto d=m_editSession->draft(); const int row=m_itemList->currentRow();
+        for(const auto& c:d.containers) {if(c.id==m_selectedId && row>=0 && row-1<c.contents.size() && row-1>=0) {
+            const auto result=ContainerArrangeController::moveDraft(d,c.contents[row].id,c.id,row-1);
+            if(!result.ok) {m_transactionStatus->setText(result.error);return;}break;
+        }}
+        m_editSession->setDraft(d); loadCurrentDraft(); m_itemList->setCurrentRow(row-1); return;
+    }
+
+    const int row = m_itemList->currentRow();
+    if (row <= 0) {
+        return;
+    }
+
+    m_workingItems.swapItemsAt(row, row - 1);
+    refreshItemList();
+    m_itemList->setCurrentRow(row - 1);
+    updatePreview();
+}
+
+void ContainerSettingsDialog::onMoveItemDown()
+{
+    if(m_editSession) {
+        saveCurrentDraft(); auto d=m_editSession->draft(); const int row=m_itemList->currentRow();
+        for(const auto& c:d.containers) {if(c.id==m_selectedId && row>=0 && row+1<c.contents.size() && row+1>=0) {
+            const auto result=ContainerArrangeController::moveDraft(d,c.contents[row].id,c.id,row+2);
+            if(!result.ok) {m_transactionStatus->setText(result.error);return;}break;
+        }}
+        m_editSession->setDraft(d); loadCurrentDraft(); m_itemList->setCurrentRow(row+1); return;
+    }
+
+    const int row = m_itemList->currentRow();
+    if (row < 0 || row >= m_workingItems.size() - 1) {
+        return;
+    }
+
+    m_workingItems.swapItemsAt(row, row + 1);
+    refreshItemList();
+    m_itemList->setCurrentRow(row + 1);
+    updatePreview();
+}
+
+// ---------------------------------------------------------------------------
+// addNewItem — create and insert a new item after the current selection
+// ---------------------------------------------------------------------------
+
+float ContainerSettingsDialog::nextStackYPos(const QVector<MeterItem*>& items)
+{
+    // Compute the next vertical-stack y-position. Skip items that
+    // span more than 70% of the container vertically — those are
+    // background / overlay-style items (ImageItem backgrounds, ANANMM
+    // full-container needles) and don't participate in the stack.
+    // Without this filter the next-position math would clamp every
+    // newly-added item at y=0.9 the moment a full-container item
+    // existed, piling new items on top of each other.
+    //
+    // Return the true bottom-of-stack (unclamped). The caller is
+    // responsible for checking whether there is enough room for a
+    // new row via `slotH = 0.95 - yPos`; an earlier version of this
+    // function clamped the return to 0.9 which caused the NEXT
+    // append to overlap the last row once the stack reached the
+    // bottom — `slotH` became `0.05` again instead of going negative,
+    // and the bail-out at the caller never triggered. Callers now
+    // see a monotonically increasing yPos and refuse the append
+    // cleanly when slotH drops below the threshold.
+    constexpr float kBackgroundSpanThreshold = 0.7f;
+    float yPos = 0.0f;
+    for (const MeterItem* item : items) {
+        if (!item) { continue; }
+        if (item->itemHeight() > kBackgroundSpanThreshold) {
+            continue;
+        }
+        const float bottom = item->y() + item->itemHeight();
+        if (bottom > yPos) {
+            yPos = bottom;
+        }
+    }
+    return yPos;
+}
+
+void ContainerSettingsDialog::addNewItem(const QString& typeTag)
+{
+    if(m_editSession) {
+        saveCurrentDraft(); auto draft=m_editSession->draft(); ContentEntry entry;
+        bool found=false;
+        if(typeTag.startsWith("applet:")) {
+            for(auto& c:draft.containers) { for(int i=0;i<c.contents.size();++i) {
+                if(c.contents[i].typeId==typeTag) { entry=c.contents[i]; found=true; break; }
+            } if(found) {break;} }
+        }
+        if(found) {
+            int index=0;for(const auto& c:draft.containers) {if(c.id==m_selectedId) {index=c.contents.size();}}
+            const auto result=ContainerArrangeController::moveDraft(draft,entry.id,m_selectedId,index);
+            if(!result.ok) {m_transactionStatus->setText(result.error);return;}
+            for(auto& c:draft.containers) {if(c.id==m_selectedId && c.layout==ContentLayout::FreeCanvas) {
+                double bottom=0;for(const auto& sibling:c.contents) {if(sibling.id!=entry.id) {if(auto rect=sibling.freeCanvasRect()) {bottom=qMax(bottom,rect->bottom());}}}
+                for(auto& moved:c.contents) {if(moved.id==entry.id && !moved.freeCanvasRect()) {moved.setFreeCanvasRect(QRectF(0,bottom+20,320,160));}}
+            }}
+            m_editSession->setDraft(draft);loadCurrentDraft();return;
+        }
+        entry=m_manager->contentRegistry()->makeEntry(typeTag);
+        for(auto& c:draft.containers) { if(c.id==m_selectedId) {if(c.locked) {m_transactionStatus->setText(tr("Arrangement is locked."));return;} c.contents.append(entry); if(c.layout==ContentLayout::FreeCanvas) {
+            double bottom=0;for(const auto& sibling:c.contents) {if(auto rect=sibling.freeCanvasRect()) {bottom=qMax(bottom,rect->bottom());}}
+            QSize initial(qMax(320,m_preview?m_preview->width():320),160);
+            if(typeTag.startsWith("control.")) {initial=singleContainerControlSize();}
+            c.contents.last().setFreeCanvasRect(QRectF(QPointF(0,bottom+20),QSizeF(initial)));
+        } else if(typeTag.startsWith("applet:")) {c.layout=ContentLayout::VerticalStack;} break; } }
+        m_editSession->setDraft(draft); loadCurrentDraft(); m_itemList->setCurrentRow(m_itemList->count()-1); return;
+    }
+
+    const float yPos = nextStackYPos(m_workingItems);
+
+    MeterItem* newItem = nullptr;
+
+    if (typeTag == QLatin1String("BAR")) {
+        auto* item = static_cast<BarItem*>(createDefaultItem(typeTag));
+        item->setRect(0.0f, yPos, 1.0f, 0.15f);
+        item->setRange(-140.0, 0.0);
+        item->setBindingId(0);
+        newItem = item;
+    } else if (typeTag == QLatin1String("NEEDLE")) {
+        auto* item = static_cast<NeedleItem*>(createDefaultItem(typeTag));
+        item->setRect(0.0f, yPos, 1.0f, 0.5f);
+        item->setBindingId(0);
+        newItem = item;
+    } else if (typeTag == QLatin1String("SOLID")) {
+        auto* item = static_cast<SolidColourItem*>(createDefaultItem(typeTag));
+        item->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+        item->setZOrder(-10);
+        newItem = item;
+    } else if (typeTag == QLatin1String("TEXT")) {
+        auto* item = static_cast<TextItem*>(createDefaultItem(typeTag));
+        item->setRect(0.0f, yPos, 1.0f, 0.1f);
+        item->setBindingId(0);
+        newItem = item;
+    } else if (typeTag == QLatin1String("SCALE")) {
+        auto* item = static_cast<ScaleItem*>(createDefaultItem(typeTag));
+        item->setRect(0.0f, yPos, 1.0f, 0.12f);
+        newItem = item;
+    } else if (typeTag == QLatin1String("IMAGE")) {
+        auto* item = static_cast<ImageItem*>(createDefaultItem(typeTag));
+        item->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+        item->setZOrder(-5);
+        newItem = item;
+    } else {
+        newItem = createDefaultItem(typeTag);
+        if (newItem) {
+            newItem->setRect(0.0f, yPos, 1.0f, 0.2f);
+        }
+    }
+
+    if (!newItem) {
+        return;
+    }
+
+    // Insert after current selection, or at end if nothing is selected
+    const int currentRow = m_itemList->currentRow();
+    const int insertAt = (currentRow >= 0) ? currentRow + 1 : m_workingItems.size();
+    m_workingItems.insert(insertAt, newItem);
+
+    refreshItemList();
+    m_itemList->setCurrentRow(insertAt);
+    updatePreview();
+}
+
+// ---------------------------------------------------------------------------
+// createDefaultItem — static factory for types not special-cased in addNewItem
+// ---------------------------------------------------------------------------
+
+MeterItem* ContainerSettingsDialog::createDefaultItem(const QString& typeTag)
+{
+    ContainerContentRegistry registry;
+    return registry.createMeterItem(registry.makeEntry(typeTag),nullptr,ContentRenderMode::Preview);
+}
+
+// ---------------------------------------------------------------------------
+// createItemFromSerialized — factory matching ItemGroup::deserialize() pattern
+// ---------------------------------------------------------------------------
+
+MeterItem* ContainerSettingsDialog::createItemFromSerialized(const QString& data)
+{
+    ContentEntry entry;
+    entry.typeId = data.section(QLatin1Char('|'),0,0);
+    entry.paintOrder = data.section(QLatin1Char('|'),6,6).toInt();
+    entry.config.insert(QStringLiteral("legacyRecord"),data);
+    return ContainerContentRegistry().createMeterItem(entry,nullptr,ContentRenderMode::Preview);
+}
+
+// ---------------------------------------------------------------------------
+// typeTagDisplayName — human-readable label for each type tag
+// ---------------------------------------------------------------------------
+
+QString ContainerSettingsDialog::typeTagDisplayName(const QString& tag)
+{
+    static const QMap<QString, QString> kDisplayNames = {
+        // Core types
+        { QStringLiteral("BAR"),           QStringLiteral("Bar Meter") },
+        { QStringLiteral("SOLID"),         QStringLiteral("Solid Color") },
+        { QStringLiteral("IMAGE"),         QStringLiteral("Image") },
+        { QStringLiteral("SCALE"),         QStringLiteral("Scale") },
+        { QStringLiteral("TEXT"),          QStringLiteral("Text Readout") },
+        { QStringLiteral("NEEDLE"),        QStringLiteral("Needle Meter") },
+        // Phase 3G-4 passive types
+        { QStringLiteral("SPACER"),        QStringLiteral("Spacer") },
+        { QStringLiteral("FADECOVER"),     QStringLiteral("Fade Cover") },
+        { QStringLiteral("LED"),           QStringLiteral("LED Indicator") },
+        { QStringLiteral("HISTORY"),       QStringLiteral("History Graph") },
+        { QStringLiteral("MAGICEYE"),      QStringLiteral("Magic Eye") },
+        { QStringLiteral("NEEDLESCALEPWR"),QStringLiteral("Needle Scale Power") },
+        { QStringLiteral("SIGNALTEXT"),    QStringLiteral("Signal Text") },
+        { QStringLiteral("DIAL"),          QStringLiteral("Dial") },
+        { QStringLiteral("TEXTOVERLAY"),   QStringLiteral("Text Overlay") },
+        { QStringLiteral("WEBIMAGE"),      QStringLiteral("Web Image") },
+        { QStringLiteral("FILTERDISPLAY"), QStringLiteral("Filter Display") },
+        { QStringLiteral("ROTATOR"),       QStringLiteral("Rotator") },
+        // Phase 3G-5 interactive types
+        { QStringLiteral("BANDBTNS"),      QStringLiteral("Band Buttons") },
+        { QStringLiteral("MODEBTNS"),      QStringLiteral("Mode Buttons") },
+        { QStringLiteral("FILTERBTNS"),    QStringLiteral("Filter Buttons") },
+        { QStringLiteral("ANTENNABTNS"),   QStringLiteral("Antenna Buttons") },
+        { QStringLiteral("TUNESTEPBTNS"),  QStringLiteral("Tune Step Buttons") },
+        { QStringLiteral("OTHERBTNS"),     QStringLiteral("Other Buttons") },
+        { QStringLiteral("VOICERECPLAY"),  QStringLiteral("Voice Rec/Play") },
+        { QStringLiteral("VFO"),           QStringLiteral("VFO Display") },
+        { QStringLiteral("CLOCK"),         QStringLiteral("Clock") },
+        { QStringLiteral("CLICKBOX"),      QStringLiteral("Click Box") },
+        { QStringLiteral("DATAOUT"),       QStringLiteral("Data Out") },
+    };
+
+    const auto it = kDisplayNames.constFind(tag);
+    if (it != kDisplayNames.constEnd()) {
+        return it.value();
+    }
+    return tag;  // fall back to raw tag if unknown
+}
+
+// ---------------------------------------------------------------------------
+// refreshItemList — rebuild the QListWidget from m_workingItems
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::refreshItemList()
+{
+    if(m_editSession) {
+        const QSignalBlocker blocker(m_itemList); m_itemList->clear();
+        for(const auto& c:m_editSession->draft().containers) { if(c.id!=m_selectedId) {continue;}
+            for(const auto& entry:c.contents) {
+                QString title=entry.name.isEmpty()?m_manager->contentRegistry()->makeEntry(entry.typeId).name:entry.name;
+                if(title.startsWith('{')) { title=m_manager->contentRegistry()->makeEntry(entry.typeId).name; }
+                QString reason=entry.extensions.value("unavailableReason").toString();
+                if(reason.isEmpty() && !m_manager->contentRegistry()->isAvailable(entry.typeId)) {reason=m_manager->contentRegistry()->unavailableReason(entry.typeId);}
+                auto* row=new QListWidgetItem(title+(reason.isEmpty()?QString():tr(" — unavailable")),m_itemList);
+                row->setData(Qt::UserRole,entry.id); row->setToolTip(reason);
+            }
+        }
+        return;
+    }
+
+    m_itemList->clear();
+    for (const MeterItem* item : m_workingItems) {
+        // Derive the type tag from serialize() (first pipe-delimited field)
+        const QString serialized = item->serialize();
+        const int pipeIdx = serialized.indexOf(QLatin1Char('|'));
+        const QString typeTag = (pipeIdx >= 0) ? serialized.left(pipeIdx) : serialized;
+
+        const QString displayName = typeTagDisplayName(typeTag);
+        const int bindingId = item->bindingId();
+
+        QString label = displayName;
+        if (bindingId >= 0) {
+            label += QStringLiteral(" [id:%1]").arg(bindingId);
+        }
+        m_itemList->addItem(label);
+        // R-R3-49: an item whose feature is not built yet stays in the
+        // container (and is saved with it) but is not listed.
+        if (!MeterWidget::itemFeatureBuilt(item)) {
+            m_itemList->item(m_itemList->count() - 1)->setHidden(true);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers (stubs / partial — filled in later tasks)
+// ---------------------------------------------------------------------------
+
+MeterWidget* ContainerSettingsDialog::findMeterWidget() const
+{
+    if (!m_container) {
+        return nullptr;
+    }
+
+    // Direct content: container holds a MeterWidget (floating containers, new containers)
+    MeterWidget* meter = qobject_cast<MeterWidget*>(m_container->content());
+    if (meter) {
+        return meter;
+    }
+
+    // Nested: Container #0 has an AppletPanelWidget with MeterWidget as header child.
+    // findChild traverses the widget tree to locate it.
+    QWidget* content = m_container->content();
+    if (content) {
+        meter = content->findChild<MeterWidget*>();
+    }
+    return meter;
+}
+
+void ContainerSettingsDialog::populateItemList()
+{
+    if (m_editSession) { if (m_hideTitleCheck) { loadCurrentDraft(); } return; }
+    qDeleteAll(m_workingItems);
+    m_workingItems.clear();
+
+    MeterWidget* meter = findMeterWidget();
+    if (!meter) {
+        return;
+    }
+
+    ContainerContentRegistry registry;
+    for (const MeterItem* live : meter->items()) {
+        if (MeterItem* clone = registry.createMeterItem(registry.captureMeterItem(*live),nullptr,ContentRenderMode::Preview)) {
+            m_workingItems.append(clone);
+        }
+    }
+
+    refreshItemList();
+    updatePreview();
+}
+
+void ContainerSettingsDialog::updatePreview()
+{
+    if (m_editSession && !m_loadingDraft) {
+        const auto oldLayout=m_preview?m_preview->document().layout:ContentLayout::LegacyCanvas;
+        saveCurrentDraft();updateDraftStatus();
+        if(m_preview) { for(const auto& c:m_editSession->draft().containers) { if(c.id==m_selectedId) { m_preview->setDocument(c); if(m_layoutCombo) {m_layoutCombo->setEnabled(!c.locked);}
+        for(const QString& action:{QString("seedFreeCanvas"),QString("convertLegacyCanvas")}) {if(auto* button=findChild<QPushButton*>(action)) {button->setEnabled(!c.locked);}}
+        if(m_contentEditor) {m_contentEditor->setGeometryLocked(c.locked);m_contentEditor->setContainerDefaults(c.config);if(oldLayout!=c.layout) {onItemSelectionChanged();}} break; } } }
+        return;
+    }
+    // Phase 3G-6 block 3 commit 11: live preview removed. In-place
+    // editing with snapshot/revert (commit 14) will push working-item
+    // changes directly to the target container's MeterWidget; until
+    // then this is a no-op so the existing ~30 callsites keep
+    // compiling without being rewritten one-by-one.
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3G-6 block 3 commits 18 + 19: footer buttons
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::onSaveToFile()
+{
+    if(m_editSession) {
+        const QString path=QFileDialog::getSaveFileName(this,tr("Save Container"),{},tr("NereusSDR Container (*.nscontainer)"));
+        if(path.isEmpty()) {return;} QSaveFile file(path);const auto bytes=exportPortableContainer();
+        if(!file.open(QIODevice::WriteOnly) || file.write(bytes)!=bytes.size() || !file.commit()) {m_transactionStatus->setText(tr("Could not save container file."));} return;
+    }
+
+    if (!m_container) { return; }
+    const QString path = QFileDialog::getSaveFileName(this,
+        QStringLiteral("Save Container"),
+        QString(),
+        QStringLiteral("NereusSDR Container (*.nscontainer);;All Files (*)"));
+    if (path.isEmpty()) { return; }
+
+    // Pipe-delimited container serialize + newline + MeterWidget
+    // serialized items, so the two halves round-trip together.
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        QMessageBox::warning(this, QStringLiteral("Save Failed"),
+            QStringLiteral("Could not open %1 for writing.").arg(path));
+        return;
+    }
+    QTextStream out(&f);
+    out << m_container->serialize() << '\n';
+    if (MeterWidget* meter = findMeterWidget()) {
+        out << meter->serializeItems();
+    }
+}
+
+void ContainerSettingsDialog::onLoadFromFile()
+{
+    if (!m_container && !m_editSession) { return; }
+    const QString path = QFileDialog::getOpenFileName(this,
+        QStringLiteral("Load Container"),
+        QString(),
+        QStringLiteral("NereusSDR Container (*.nscontainer);;All Files (*)"));
+    if (path.isEmpty()) { return; }
+
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, QStringLiteral("Load Failed"),
+            QStringLiteral("Could not open %1 for reading.").arg(path));
+        return;
+    }
+    if (m_editSession) {
+        importPortableContainer(f.readAll()); return;
+    }
+    QTextStream in(&f);
+    const QString containerLine = in.readLine();
+    const QString itemsPayload  = in.readAll();
+
+    if (!containerLine.isEmpty()) {
+        m_container->deserialize(containerLine);
+    }
+    if (MeterWidget* meter = findMeterWidget()) {
+        meter->deserializeItems(itemsPayload);
+        meter->update();
+    }
+    // Refresh dialog state from the newly-loaded container.
+    populateItemList();
+    m_container->update();
+}
+
+void ContainerSettingsDialog::onOpenMmioDialog()
+{
+    if (m_editSession) { return; }
+    // Phase 3G-6 block 5 phase 3: real MMIO endpoints dialog. The
+    // block 3 commit 18 stub is gone — this now opens the endpoint
+    // manager with live add/edit/remove backed by
+    // ExternalVariableEngine.
+    MmioEndpointsDialog dlg(this);
+    dlg.exec();
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3G-6 block 7 commit 2: container-dropdown auto-commit + switch
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::onContainerDropdownChanged(int index)
+{
+    if (m_editSession) { if(index>=0) { selectDraftContainer(m_containerDropdown->itemData(index).toString()); } return; }
+    if (!m_manager || index < 0) { return; }
+    if (!m_containerDropdown) { return; }
+
+    const QString newId = m_containerDropdown->itemData(index).toString();
+    if (newId.isEmpty()) { return; }
+
+    ContainerWidget* newContainer = m_manager->container(newId);
+    if (!newContainer || newContainer == m_container) { return; }
+
+    // Auto-commit current edits to the outgoing container so the
+    // user doesn't lose work just by switching the dropdown.
+    applyToContainer();
+
+    // Switch the dialog's bound container.
+    m_container = newContainer;
+
+    // Repopulate everything from the new container's state.
+    populateItemList();
+
+    // Reload the property bar checkboxes / spinners from the new
+    // container — the bar widgets are persistent, only their values
+    // come from m_container.
+    if (m_titleEdit) { m_titleEdit->setText(m_container->notes()); }
+    if (m_borderCheck) { m_borderCheck->setChecked(m_container->hasBorder()); }
+    if (m_rxSourceCombo) {
+        const int idx = m_rxSourceCombo->findData(m_container->rxSource());
+        if (idx >= 0) { m_rxSourceCombo->setCurrentIndex(idx); }
+    }
+    if (m_showOnRxCheck) { m_showOnRxCheck->setChecked(m_container->showOnRx()); }
+    if (m_showOnTxCheck) { m_showOnTxCheck->setChecked(m_container->showOnTx()); }
+    if (m_lockCheck) { m_lockCheck->setChecked(m_container->isLocked()); }
+    if (m_hideTitleCheck) { m_hideTitleCheck->setChecked(!m_container->isTitleBarVisible()); }
+    if (m_minimisesCheck) { m_minimisesCheck->setChecked(m_container->containerMinimises()); }
+    if (m_autoHeightCheck) { m_autoHeightCheck->setChecked(m_container->autoHeight()); }
+    if (m_hidesWhenRxNotUsedCheck) {
+        m_hidesWhenRxNotUsedCheck->setChecked(m_container->containerHidesWhenRxNotUsed());
+    }
+    if (m_highlightCheck) { m_highlightCheck->setChecked(m_container->isHighlighted()); }
+
+    // Take a fresh snapshot of the new container so Cancel reverts
+    // to its state-on-switch, not the original opening state.
+    takeSnapshot();
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3G-6 block 7 commit 2: copy/paste item settings clipboard
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::onCopyItemSettings()
+{
+    const int row = m_itemList ? m_itemList->currentRow() : -1;
+    if (row < 0 || row >= m_workingItems.size()) { return; }
+    MeterItem* item = m_workingItems[row];
+    if (!item) { return; }
+
+    m_clipboardSerialized = item->serialize();
+    const int pipeIdx = m_clipboardSerialized.indexOf(QLatin1Char('|'));
+    m_clipboardTypeTag = (pipeIdx >= 0)
+        ? m_clipboardSerialized.left(pipeIdx)
+        : m_clipboardSerialized;
+    updateCopyPasteButtonState();
+}
+
+void ContainerSettingsDialog::onPasteItemSettings()
+{
+    if (m_clipboardSerialized.isEmpty()) { return; }
+    const int row = m_itemList ? m_itemList->currentRow() : -1;
+    if (row < 0 || row >= m_workingItems.size()) { return; }
+    MeterItem* item = m_workingItems[row];
+    if (!item) { return; }
+
+    // Type-tag check: only allow paste between items of the same
+    // class so we don't try to deserialize NEEDLE bytes into a TEXT
+    // item. Matches Thetis paste-settings behavior.
+    const QString cur = item->serialize();
+    const int pipeIdx = cur.indexOf(QLatin1Char('|'));
+    const QString curTag = (pipeIdx >= 0) ? cur.left(pipeIdx) : cur;
+    if (curTag != m_clipboardTypeTag) { return; }
+
+    item->deserialize(m_clipboardSerialized);
+    if (m_editSession) { updatePreview(); } else { applyToContainer(); }
+
+    // Force the editor stack to rebuild so the property fields
+    // reload from the freshly-pasted item state.
+    onItemSelectionChanged();
+}
+
+void ContainerSettingsDialog::updateCopyPasteButtonState()
+{
+    const int row = m_itemList ? m_itemList->currentRow() : -1;
+    const bool haveSelection = (row >= 0 && row < m_workingItems.size());
+    if (m_btnCopySettings) {
+        m_btnCopySettings->setEnabled(haveSelection);
+    }
+    if (m_btnPasteSettings) {
+        bool typeMatches = false;
+        if (haveSelection && !m_clipboardTypeTag.isEmpty()) {
+            const QString cur = m_workingItems[row]->serialize();
+            const int pipeIdx = cur.indexOf(QLatin1Char('|'));
+            const QString curTag = (pipeIdx >= 0) ? cur.left(pipeIdx) : cur;
+            typeMatches = (curTag == m_clipboardTypeTag);
+        }
+        m_btnPasteSettings->setEnabled(typeMatches);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3G-6 block 3 commit 14: snapshot + revert
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::takeSnapshot()
+{
+    if (!m_container) {
+        m_snapshotTaken = false;
+        return;
+    }
+    m_containerSnapshot = m_container->serialize();
+    MeterWidget* meter = findMeterWidget();
+    m_itemsSnapshot = meter ? meter->serializeItems() : QString();
+    // Phase 3G-7: parallel snapshot of MMIO bindings (not in text snapshot).
+    m_mmioSnapshot.clear();
+    if (meter) {
+        for (MeterItem* item : meter->items()) {
+            if (item) {
+                m_mmioSnapshot.append({item->mmioGuid(), item->mmioVariable()});
+            } else {
+                m_mmioSnapshot.append({QUuid(), QString()});
+            }
+        }
+    }
+    m_snapshotTaken = true;
+}
+
+void ContainerSettingsDialog::revertFromSnapshot()
+{
+    if (m_manager && m_manager->workspaceStore()) { return; }
+    if (!m_snapshotTaken || !m_container) { return; }
+    m_container->deserialize(m_containerSnapshot);
+    if (MeterWidget* meter = findMeterWidget()) {
+        meter->deserializeItems(m_itemsSnapshot);
+        // Phase 3G-7: restore MMIO bindings the text snapshot couldn't carry.
+        const QVector<MeterItem*> liveItems = meter->items();
+        const int n = qMin(liveItems.size(), m_mmioSnapshot.size());
+        for (int i = 0; i < n; ++i) {
+            if (liveItems[i] && !m_mmioSnapshot[i].first.isNull()) {
+                liveItems[i]->setMmioBinding(
+                    m_mmioSnapshot[i].first,
+                    m_mmioSnapshot[i].second);
+            }
+        }
+        meter->update();
+    }
+    m_container->update();
+}
+
+void ContainerSettingsDialog::reject()
+{
+    if (m_editSession) { m_editSession->cancel(); } else { revertFromSnapshot(); }
+    QDialog::reject();
+}
+void ContainerSettingsDialog::refreshDraftDropdown()
+{
+    if (!m_editSession || !m_containerDropdown) { return; }
+    const QSignalBlocker blocker(m_containerDropdown);
+    resetItemsBeforeRowChange(m_containerDropdown);
+    m_containerDropdown->clear();
+    for (const auto& c : m_editSession->draft().containers) { m_containerDropdown->addItem(c.name.isEmpty()?c.id.left(8):c.name,c.id); }
+    m_containerDropdown->setCurrentIndex(m_containerDropdown->findData(m_selectedId));
+    m_containerDropdown->setEnabled(m_containerDropdown->count()>1);
+}
+void ContainerSettingsDialog::selectDraftContainer(const QString& id)
+{
+    if (!m_editSession || id.isEmpty() || id==m_selectedId) { return; }
+    saveCurrentDraft(); m_selectedId=id; m_container=m_manager ? m_manager->container(id) : nullptr;
+    loadCurrentDraft(); refreshDraftDropdown();
+}
+void ContainerSettingsDialog::refreshDraftView() { loadCurrentDraft(); refreshDraftDropdown(); }
+void ContainerSettingsDialog::loadCurrentDraft()
+{
+    if (!m_editSession || !m_titleEdit || !m_manager) { return; }
+    bool selected=false;
+    for(const auto& c:m_editSession->draft().containers) { if(c.id==m_selectedId) { selected=true; break; } }
+    if(!selected) { m_selectedId=m_editSession->draft().mainContainerId; }
+    m_container=m_manager->container(m_selectedId);
+    m_loadingDraft=true; qDeleteAll(m_workingItems); m_workingItems.clear();
+    for (const auto& c : m_editSession->draft().containers) {
+        if (c.id!=m_selectedId) { continue; }
+        m_bgColorBtn->setProperty("draftColor",c.config.value("backgroundColor").toString("#0f0f1a"));
+        m_bgColorBtn->setStyleSheet(QStringLiteral("background:%1; min-width:32px;").arg(m_bgColorBtn->property("draftColor").toString()));
+        m_titleEdit->setText(c.name); m_borderCheck->setChecked(c.config.value("border").toBool(true));
+        m_rxSourceCombo->setCurrentIndex(m_rxSourceCombo->findData(c.config.contains("sliceId") ? c.config.value("sliceId").toInt()+1 : c.config.value("rxSource").toInt(1)));
+        m_showOnRxCheck->setChecked(c.config.value("showOnRx").toBool(true));
+        m_showOnTxCheck->setChecked(c.config.value("showOnTx").toBool(true));
+        if(m_lockCheck) { m_lockCheck->setChecked(c.locked); }
+        for(const QString& action:{QString("seedFreeCanvas"),QString("convertLegacyCanvas")}) {if(auto* button=findChild<QPushButton*>(action)) {button->setEnabled(!c.locked);}}
+        if(m_layoutCombo) {m_layoutCombo->setEnabled(!c.locked);}
+        if(m_hideTitleCheck) { m_hideTitleCheck->setChecked(c.header==HeaderMode::Hidden); }
+        if(m_minimisesCheck) { m_minimisesCheck->setChecked(c.config.value("containerMinimises").toBool()); }
+        if(m_autoHeightCheck) { m_autoHeightCheck->setChecked(c.autoHeight); }
+        if(m_hidesWhenRxNotUsedCheck) { m_hidesWhenRxNotUsedCheck->setChecked(c.config.value("hidesWhenRxNotUsed").toBool()); }
+        if(m_highlightCheck) { m_highlightCheck->setChecked(c.config.value("highlight").toBool()); }
+        if(m_headerCombo) {
+            // Workspace preview: there is no Reveal item; it reads as Hidden.
+            const int headerIndex=m_headerCombo->findData(int(c.header));
+            m_headerCombo->setCurrentIndex(headerIndex>=0 ? headerIndex : m_headerCombo->findData(int(HeaderMode::Hidden)));
+        }
+        if(m_layoutCombo) {m_layoutCombo->setCurrentIndex(m_layoutCombo->findData(int(c.layout)));}
+        if(m_anchorCombo) {m_anchorCombo->setCurrentIndex(m_anchorCombo->findData(int(c.anchor)));}
+        if(m_placementCombo) {m_placementCombo->setCurrentIndex(m_placementCombo->findData(int(c.dockMode)));}
+        if(m_preview) { m_preview->setDocument(c); }
+        break;
+    }
+    refreshItemList(); m_loadingDraft=false; onItemSelectionChanged();updateDraftStatus();
+}
+void ContainerSettingsDialog::updateDraftStatus()
+{
+    if(!m_editSession || !m_draftStatus) {return;}
+    const bool pending=m_editSession->hasPendingChanges();
+    m_draftStatus->setText(pending?tr("Pending Apply — changes are only in this draft."):tr("No pending changes."));
+    if(pending && m_transactionStatus && m_transactionStatus->text()==tr("All drafts saved.")) {m_transactionStatus->clear();}
+}
+CommitResult ContainerSettingsDialog::applyDraft()
+{
+    if (!m_editSession || !m_manager || !m_manager->workspaceStore()) { return {CommitStatus::Invalid,0,tr("Workspace is unavailable")}; }
+    saveCurrentDraft(); const auto result=m_editSession->apply();
+    if (result.status==CommitStatus::Saved) {
+        // Manager projects the one Saved committed signal from this store.
+        m_container=m_manager->container(m_selectedId); loadCurrentDraft(); refreshDraftDropdown();
+    }
+    if(m_transactionStatus) { m_transactionStatus->setText(result.status==CommitStatus::Saved ? tr("All drafts saved.") : result.error); }
+    return result;
+}
+void ContainerSettingsDialog::saveCurrentDraft()
+{
+    if (m_loadingDraft || !m_editSession || !m_manager) { return; }
+    if (m_editSession) {
+        WorkspaceDocument document=m_editSession->draft();
+        for (auto& d : document.containers) {
+            if (d.id != m_selectedId) { continue; }
+            const auto setBool=[&](const QString& key,bool value,bool defaultValue=false) {
+                if(d.config.value(key).toBool(defaultValue)!=value) { d.config[key]=value; }
+            };
+            const QString background=m_bgColorBtn->property("draftColor").toString();
+            if(!background.isEmpty() && background!=d.config.value("backgroundColor").toString("#0f0f1a")) {d.config["backgroundColor"]=background;}
+            d.name=m_titleEdit->text(); setBool("border",m_borderCheck->isChecked(),true);
+            const int source=d.config.contains("sliceId") ? d.config.value("sliceId").toInt()+1 : d.config.value("rxSource").toInt(1);
+            if (m_rxSourceCombo->currentData().toInt()!=source) {
+                // The workspace header's source menu writes through the same call.
+                ContainerSourceAdapter::writeContainerSource(d.config,m_rxSourceCombo->currentData().toInt());
+            }
+            setBool("highlight",m_highlightCheck->isChecked());
+            setBool("showOnRx",m_showOnRxCheck->isChecked(),true); setBool("showOnTx",m_showOnTxCheck->isChecked(),true);
+            if (m_lockCheck) { d.locked=m_lockCheck->isChecked(); }
+            if (m_hideTitleCheck) {
+                if(m_hideTitleCheck->isChecked()) {d.header=HeaderMode::Hidden;}
+                else if(d.header==HeaderMode::Hidden) {d.header=HeaderMode::Shown;}
+            }
+            if (m_minimisesCheck && m_minimisesCheck->isEnabled()) { setBool("containerMinimises",m_minimisesCheck->isChecked()); }
+            if (m_autoHeightCheck) { d.autoHeight=m_autoHeightCheck->isChecked(); }
+            if (m_hidesWhenRxNotUsedCheck && m_hidesWhenRxNotUsedCheck->isEnabled()) { setBool("hidesWhenRxNotUsed",m_hidesWhenRxNotUsedCheck->isChecked()); }
+            if(m_headerCombo) {d.header=static_cast<HeaderMode>(m_headerCombo->currentData().toInt());}
+            if(m_layoutCombo) {
+                const auto desired=static_cast<ContentLayout>(m_layoutCombo->currentData().toInt());
+                if(!d.locked && desired!=d.layout) {
+                    bool saved=false;for(const auto& entry:d.contents) {if(entry.freeCanvasRect()) {saved=true;break;}}
+                    if(desired==ContentLayout::FreeCanvas && d.layout==ContentLayout::VerticalStack && !saved && m_preview) {m_preview->setDocument(d);d=m_preview->seededFromStack();}
+                    else {d.layout=desired;}
+                } else if(d.locked && desired!=d.layout) {const QSignalBlocker blocker(m_layoutCombo);m_layoutCombo->setCurrentIndex(m_layoutCombo->findData(int(d.layout)));}
+            }
+            if(m_anchorCombo) {d.anchor=static_cast<AxisLock>(m_anchorCombo->currentData().toInt());}
+            if(m_placementCombo) {d.dockMode=static_cast<DockMode>(m_placementCombo->currentData().toInt());}
+            break;
+        }
+        m_editSession->setDraft(document);
+    }
+}
+void ContainerSettingsDialog::applyToContainer()
+{
+    if (m_editSession) { applyDraft(); return; }
+    if (!m_container) { return; }
+
+    // Apply container-level properties
+    m_container->setNotes(m_titleEdit->text());
+    m_container->setBorder(m_borderCheck->isChecked());
+    m_container->setBackgroundColor(QColor(m_bgColorBtn->property("draftColor").toString()));
+
+    const int rxData = m_rxSourceCombo->currentData().toInt();
+    m_container->setRxSource(rxData);
+
+    m_container->setShowOnRx(m_showOnRxCheck->isChecked());
+    m_container->setShowOnTx(m_showOnTxCheck->isChecked());
+
+    // Phase 3G-6 block 3 commit 17: write the new toggles back too.
+    if (m_lockCheck) {
+        m_container->setLocked(m_lockCheck->isChecked());
+    }
+    if (m_hideTitleCheck) {
+        m_container->setTitleBarVisible(!m_hideTitleCheck->isChecked());
+    }
+    if (m_minimisesCheck && m_minimisesCheck->isEnabled()) {
+        m_container->setContainerMinimises(m_minimisesCheck->isChecked());
+    }
+    if (m_autoHeightCheck) {
+        m_container->setAutoHeight(m_autoHeightCheck->isChecked());
+    }
+    if (m_hidesWhenRxNotUsedCheck && m_hidesWhenRxNotUsedCheck->isEnabled()) {
+        m_container->setContainerHidesWhenRxNotUsed(
+            m_hidesWhenRxNotUsedCheck->isChecked());
+    }
+
+    // Write items back to the real MeterWidget
+    MeterWidget* target = findMeterWidget();
+    if (!target) {
+        return;
+    }
+
+    QVector<MeterItem*> replacements;
+    for (const MeterItem* item : m_workingItems) {
+        ContainerContentRegistry registry;
+        MeterItem* clone = registry.createMeterItem(registry.captureMeterItem(*item),nullptr);
+        if (clone) {
+            replacements.append(clone);
+            // Re-wire interactive item signals through the container
+            m_container->wireInteractiveItem(clone);
+        }
+    }
+    target->replaceItems(replacements);
+    target->reflowStackedItems();
+    target->update();
+}
+
+// ---------------------------------------------------------------------------
+// Task 6: Preset browser
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::onLoadPreset()
+{
+    constexpr const char* kMenuStyle =
+        "QMenu { background: #1a2a3a; color: #c8d8e8; border: 1px solid #205070; }"
+        "QMenu::item:selected { background: #00b4d8; color: #0f0f1a; }"
+        "QMenu::separator { background: #203040; height: 1px; }";
+
+    QMenu menu(this);
+    menu.setStyleSheet(QLatin1String(kMenuStyle));
+
+    // S-Meter sub-menu
+    QMenu* sMeterMenu = menu.addMenu(QStringLiteral("S-Meter"));
+    sMeterMenu->setStyleSheet(QLatin1String(kMenuStyle));
+    sMeterMenu->addAction(QStringLiteral("S-Meter Only"),        this, [this]{ loadPresetByName(QStringLiteral("SMeterOnly")); });
+    sMeterMenu->addAction(QStringLiteral("S-Meter Bar Signal"),  this, [this]{ loadPresetByName(QStringLiteral("SignalBar")); });
+    sMeterMenu->addAction(QStringLiteral("S-Meter Bar Avg"),     this, [this]{ loadPresetByName(QStringLiteral("AvgSignalBar")); });
+    sMeterMenu->addAction(QStringLiteral("S-Meter Bar MaxBin"),  this, [this]{ loadPresetByName(QStringLiteral("MaxBinBar")); });
+    sMeterMenu->addAction(QStringLiteral("S-Meter Text"),        this, [this]{ loadPresetByName(QStringLiteral("SignalText")); });
+
+    // Composite sub-menu
+    QMenu* compositeMenu = menu.addMenu(QStringLiteral("Composite"));
+    compositeMenu->setStyleSheet(QLatin1String(kMenuStyle));
+    compositeMenu->addAction(QStringLiteral("ANAN Multi Meter"), this, [this]{ loadPresetByName(QStringLiteral("AnanMM")); });
+    compositeMenu->addAction(QStringLiteral("Cross Needle"),     this, [this]{ loadPresetByName(QStringLiteral("CrossNeedle")); });
+    compositeMenu->addAction(QStringLiteral("Magic Eye"),        this, [this]{ loadPresetByName(QStringLiteral("MagicEye")); });
+    compositeMenu->addAction(QStringLiteral("History"),          this, [this]{ loadPresetByName(QStringLiteral("History")); });
+
+    // TX Meters sub-menu
+    QMenu* txMenu = menu.addMenu(QStringLiteral("TX Meters"));
+    txMenu->setStyleSheet(QLatin1String(kMenuStyle));
+    txMenu->addAction(QStringLiteral("Power/SWR"),      this, [this]{ loadPresetByName(QStringLiteral("PowerSwr")); });
+    txMenu->addAction(QStringLiteral("ALC"),            this, [this]{ loadPresetByName(QStringLiteral("Alc")); });
+    txMenu->addAction(QStringLiteral("ALC Gain"),       this, [this]{ loadPresetByName(QStringLiteral("AlcGain")); });
+    txMenu->addAction(QStringLiteral("ALC Group"),      this, [this]{ loadPresetByName(QStringLiteral("AlcGroup")); });
+    txMenu->addAction(QStringLiteral("Mic Level"),      this, [this]{ loadPresetByName(QStringLiteral("Mic")); });
+    txMenu->addAction(QStringLiteral("Compressor"),     this, [this]{ loadPresetByName(QStringLiteral("Comp")); });
+    txMenu->addAction(QStringLiteral("EQ Level"),       this, [this]{ loadPresetByName(QStringLiteral("Eq")); });
+    txMenu->addAction(QStringLiteral("Leveler"),        this, [this]{ loadPresetByName(QStringLiteral("Leveler")); });
+    txMenu->addAction(QStringLiteral("Leveler Gain"),   this, [this]{ loadPresetByName(QStringLiteral("LevelerGain")); });
+    txMenu->addAction(QStringLiteral("CFC"),            this, [this]{ loadPresetByName(QStringLiteral("Cfc")); });
+    txMenu->addAction(QStringLiteral("CFC Gain"),       this, [this]{ loadPresetByName(QStringLiteral("CfcGain")); });
+
+    // RX Meters sub-menu
+    QMenu* rxMenu = menu.addMenu(QStringLiteral("RX Meters"));
+    rxMenu->setStyleSheet(QLatin1String(kMenuStyle));
+    rxMenu->addAction(QStringLiteral("ADC"),         this, [this]{ loadPresetByName(QStringLiteral("Adc")); });
+    rxMenu->addAction(QStringLiteral("ADC MaxMag"),  this, [this]{ loadPresetByName(QStringLiteral("AdcMaxMag")); });
+    rxMenu->addAction(QStringLiteral("AGC"),         this, [this]{ loadPresetByName(QStringLiteral("Agc")); });
+    rxMenu->addAction(QStringLiteral("AGC Gain"),    this, [this]{ loadPresetByName(QStringLiteral("AgcGain")); });
+    rxMenu->addAction(QStringLiteral("PBSNR"),       this, [this]{ loadPresetByName(QStringLiteral("Pbsnr")); });
+
+    // Interactive sub-menu
+    QMenu* interactiveMenu = menu.addMenu(QStringLiteral("Interactive"));
+    interactiveMenu->setStyleSheet(QLatin1String(kMenuStyle));
+    interactiveMenu->addAction(QStringLiteral("VFO Display"), this, [this]{ loadPresetByName(QStringLiteral("Vfo")); });
+    interactiveMenu->addAction(QStringLiteral("Clock"),       this, [this]{ loadPresetByName(QStringLiteral("Clock")); });
+    interactiveMenu->addAction(QStringLiteral("Contest"),     this, [this]{ loadPresetByName(QStringLiteral("Contest")); });
+
+    // Display sub-menu
+    QMenu* displayMenu = menu.addMenu(QStringLiteral("Display"));
+    displayMenu->setStyleSheet(QLatin1String(kMenuStyle));
+    displayMenu->addAction(QStringLiteral("Rotator"),        this, [this]{ loadPresetByName(QStringLiteral("Rotator")); });
+    displayMenu->addAction(QStringLiteral("Filter Display"), this, [this]{ loadPresetByName(QStringLiteral("FilterDisplay")); });
+
+    // Top-level
+    menu.addSeparator();
+    menu.addAction(QStringLiteral("Spacer"), this, [this]{ loadPresetByName(QStringLiteral("Spacer")); });
+
+    menu.exec(m_btnPreset->mapToGlobal(QPoint(0, -menu.sizeHint().height())));
+}
+
+void ContainerSettingsDialog::loadPresetByName(const QString& name)
+{
+    // Phase E — bar-row presets append to the current stack instead
+    // of replacing. This matches Thetis's Appearance → Meters/Gadgets
+    // flow where each meter type the user picks adds a new row below
+    // the previous one. Composite presets (ANAN MM, Cross Needle,
+    // Magic Eye, full S-Meter, Power/SWR) still replace on load
+    // because they occupy the entire container.
+    static const QSet<QString> kBarRowPresets = {
+        QStringLiteral("Alc"),       QStringLiteral("AlcGain"),
+        QStringLiteral("AlcGroup"),  QStringLiteral("Mic"),
+        QStringLiteral("Comp"),      QStringLiteral("Eq"),
+        QStringLiteral("Leveler"),   QStringLiteral("LevelerGain"),
+        QStringLiteral("Cfc"),       QStringLiteral("CfcGain"),
+        QStringLiteral("Adc"),       QStringLiteral("AdcMaxMag"),
+        QStringLiteral("Agc"),       QStringLiteral("AgcGain"),
+        QStringLiteral("Pbsnr"),     QStringLiteral("SignalBar"),
+        QStringLiteral("AvgSignalBar"), QStringLiteral("MaxBinBar"),
+    };
+    if (kBarRowPresets.contains(name)) {
+        appendPresetRow(name);
+        return;
+    }
+
+    if (!m_workingItems.isEmpty()) {
+        const QMessageBox::StandardButton result = QMessageBox::question(
+            this,
+            QStringLiteral("Load Preset"),
+            QStringLiteral("This will replace all current items. Continue?"),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (result != QMessageBox::Yes) {
+            return;
+        }
+    }
+
+    qDeleteAll(m_workingItems);
+    m_workingItems.clear();
+
+    ItemGroup* group = nullptr;
+
+    if (name == QLatin1String("SMeterOnly")) {
+        group = ItemGroup::createSMeterPreset(0, QStringLiteral("S-Meter"), this);
+    } else if (name == QLatin1String("SignalBar")) {
+        group = ItemGroup::createSignalBarPreset(this);
+    } else if (name == QLatin1String("AvgSignalBar")) {
+        group = ItemGroup::createAvgSignalBarPreset(this);
+    } else if (name == QLatin1String("MaxBinBar")) {
+        group = ItemGroup::createMaxBinBarPreset(this);
+    } else if (name == QLatin1String("SignalText")) {
+        group = ItemGroup::createSignalTextPreset(0, this);
+    } else if (name == QLatin1String("AnanMM")) {
+        group = ItemGroup::createAnanMMPreset(this);
+    } else if (name == QLatin1String("CrossNeedle")) {
+        group = ItemGroup::createCrossNeedlePreset(this);
+    } else if (name == QLatin1String("MagicEye")) {
+        group = ItemGroup::createMagicEyePreset(0, this);
+    } else if (name == QLatin1String("History")) {
+        group = ItemGroup::createHistoryPreset(0, this);
+    } else if (name == QLatin1String("PowerSwr")) {
+        group = ItemGroup::createPowerSwrPreset(QStringLiteral("Power/SWR"), this);
+    } else if (name == QLatin1String("Alc")) {
+        group = ItemGroup::createAlcPreset(this);
+    } else if (name == QLatin1String("AlcGain")) {
+        group = ItemGroup::createAlcGainBarPreset(this);
+    } else if (name == QLatin1String("AlcGroup")) {
+        group = ItemGroup::createAlcGroupBarPreset(this);
+    } else if (name == QLatin1String("Mic")) {
+        group = ItemGroup::createMicPreset(this);
+    } else if (name == QLatin1String("Comp")) {
+        group = ItemGroup::createCompPreset(this);
+    } else if (name == QLatin1String("Eq")) {
+        group = ItemGroup::createEqBarPreset(this);
+    } else if (name == QLatin1String("Leveler")) {
+        group = ItemGroup::createLevelerBarPreset(this);
+    } else if (name == QLatin1String("LevelerGain")) {
+        group = ItemGroup::createLevelerGainBarPreset(this);
+    } else if (name == QLatin1String("Cfc")) {
+        group = ItemGroup::createCfcBarPreset(this);
+    } else if (name == QLatin1String("CfcGain")) {
+        group = ItemGroup::createCfcGainBarPreset(this);
+    } else if (name == QLatin1String("Adc")) {
+        group = ItemGroup::createAdcBarPreset(this);
+    } else if (name == QLatin1String("AdcMaxMag")) {
+        group = ItemGroup::createAdcMaxMagPreset(this);
+    } else if (name == QLatin1String("Agc")) {
+        group = ItemGroup::createAgcBarPreset(this);
+    } else if (name == QLatin1String("AgcGain")) {
+        group = ItemGroup::createAgcGainBarPreset(this);
+    } else if (name == QLatin1String("Pbsnr")) {
+        group = ItemGroup::createPbsnrBarPreset(this);
+    } else if (name == QLatin1String("Vfo")) {
+        group = ItemGroup::createVfoDisplayPreset(this);
+    } else if (name == QLatin1String("Clock")) {
+        group = ItemGroup::createClockPreset(this);
+    } else if (name == QLatin1String("Contest")) {
+        group = ItemGroup::createContestPreset(this);
+    } else if (name == QLatin1String("Spacer")) {
+        group = ItemGroup::createSpacerPreset(this);
+    } else if (name == QLatin1String("Rotator")) {
+        auto* item = new RotatorItem();
+        item->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+        item->setBindingId(300);
+        m_workingItems.append(item);
+    } else if (name == QLatin1String("FilterDisplay")) {
+        auto* item = new FilterDisplayItem();
+        item->setRect(0.0f, 0.0f, 1.0f, 1.0f);
+        m_workingItems.append(item);
+    }
+
+    if (group) {
+        // Offset every cloned preset item by the current stack
+        // position so the preset doesn't overlap existing narrow
+        // items at the top of the container. Without this offset, a
+        // user who adds a single Bar (lands at y=0) and then loads
+        // the Clock preset (factory items also at y=0) sees the bar
+        // and clocks piled on top of each other. Computed BEFORE the
+        // loop so the offset is constant for all items in the preset.
+        const float yOffset = nextStackYPos(m_workingItems);
+        for (MeterItem* src : group->items()) {
+            ContainerContentRegistry registry;
+            MeterItem* clone = registry.createMeterItem(registry.captureMeterItem(*src),nullptr,ContentRenderMode::Preview);
+            if (clone) {
+                clone->setRect(clone->x(),
+                               clone->y() + yOffset,
+                               clone->itemWidth(),
+                               clone->itemHeight());
+                // Phase 3G-7: factory presets won't normally have MMIO
+                // bindings, but copy them defensively in case a future
+                // preset wires one.
+                if (src->hasMmioBinding()) {
+                    clone->setMmioBinding(src->mmioGuid(), src->mmioVariable());
+                }
+                m_workingItems.append(clone);
+            }
+        }
+        delete group;
+    }
+
+    refreshItemList();
+    if (!m_workingItems.isEmpty()) {
+        m_itemList->setCurrentRow(0);
+    }
+    updatePreview();
+}
+
+// ---------------------------------------------------------------------------
+// Task 7: Import/Export via Base64
+// ---------------------------------------------------------------------------
+
+void ContainerSettingsDialog::onExport()
+{
+    if(m_editSession) {QApplication::clipboard()->setText(exportPortableEntries()); m_transactionStatus->setText(tr("Complete contents copied to clipboard.")); return;}
+
+    QStringList lines;
+    for (const MeterItem* item : m_workingItems) {
+        lines << item->serialize();
+    }
+    const QString raw = lines.join(QLatin1Char('\n'));
+    const QString encoded = QString::fromLatin1(raw.toUtf8().toBase64());
+    QApplication::clipboard()->setText(encoded);
+    QMessageBox::information(
+        this,
+        QStringLiteral("Export"),
+        QStringLiteral("Layout copied to clipboard as Base64.\nPaste it into another container to import."));
+}
+
+void ContainerSettingsDialog::onImport()
+{
+    if(m_editSession) {importPortableEntries(QApplication::clipboard()->text()); return;}
+
+    const QString clipText = QApplication::clipboard()->text().trimmed();
+    if (clipText.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Import"),
+                             QStringLiteral("Clipboard is empty."));
+        return;
+    }
+
+    const QByteArray decoded = QByteArray::fromBase64(clipText.toUtf8());
+    const QString raw = QString::fromUtf8(decoded);
+    const QStringList lines = raw.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+
+    QVector<MeterItem*> imported;
+    for (const QString& line : lines) {
+        MeterItem* item = createItemFromSerialized(line);
+        if (item) {
+            imported.append(item);
+        }
+    }
+
+    if (imported.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Import"),
+                             QStringLiteral("No valid items found in clipboard data."));
+        return;
+    }
+
+    const QMessageBox::StandardButton result = QMessageBox::question(
+        this,
+        QStringLiteral("Import"),
+        QStringLiteral("Replace all current items with %1 imported item(s)?")
+            .arg(imported.size()),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+
+    if (result != QMessageBox::Yes) {
+        qDeleteAll(imported);
+        return;
+    }
+
+    qDeleteAll(m_workingItems);
+    m_workingItems.clear();
+    m_workingItems = imported;
+
+    refreshItemList();
+    if (!m_workingItems.isEmpty()) {
+        m_itemList->setCurrentRow(0);
+    }
+    updatePreview();
+}
+
+// ---------------------------------------------------------------------------
+// buildTypeSpecificEditor — type-tag dispatch to BaseItemEditor subclass
+// (block 4 phase 3, restored after block 7 commit 1 deleted the legacy
+// buildXItemEditor methods that lived above this in the file).
+// ---------------------------------------------------------------------------
+
+QByteArray ContainerSettingsDialog::exportPortableContainer()
+{
+    saveCurrentDraft(); if(!m_editSession) {return {};}
+    for(const auto& c:m_editSession->draft().containers) {if(c.id==m_selectedId) {return ContainerDocumentCodec::exportContainer(c);}}
+    return {};
+}
+QString ContainerSettingsDialog::exportPortableEntries()
+{
+    saveCurrentDraft(); if(!m_editSession) {return {};}
+    for(const auto& c:m_editSession->draft().containers) {if(c.id==m_selectedId) {return ContainerDocumentCodec::exportEntries(c.contents);}}
+    return {};
+}
+bool ContainerSettingsDialog::importPortableContainer(const QByteArray& bytes) {return insertImported(ContainerDocumentCodec::importContainer(bytes),true);}
+bool ContainerSettingsDialog::importPortableEntries(const QString& text) {return insertImported(ContainerDocumentCodec::importEntries(text),false);}
+bool ContainerSettingsDialog::insertImported(const DocumentResult& result,bool replaceContainer)
+{
+    if(!m_editSession || !result.ok || result.document.containers.size()!=1) {
+        if(m_transactionStatus) {m_transactionStatus->setText(result.error.isEmpty()?tr("Import requires one container."):result.error);} return false;
+    }
+    saveCurrentDraft();auto d=m_editSession->draft(); auto imported=result.document.containers.first();
+    for(const auto& c:d.containers) {if(c.id==m_selectedId && c.locked) {m_transactionStatus->setText(tr("The destination container is locked."));return false;}}
+    for(const auto& e:imported.contents) {const QString error=m_manager->contentRegistry()->validateEntry(e);if(!error.isEmpty()) {m_transactionStatus->setText(error);return false;}}
+    const QString importedId=imported.id;
+    // Existing singleton identities become draft Moves. No live factory or reparent.
+    QSet<QString> singletonTypes; QHash<QString,QString> singletonIds;
+    for(auto& e:imported.contents) {
+        if(e.returnLocation && e.returnLocation->containerId==importedId) {e.returnLocation->containerId=m_selectedId;}
+        if(!e.typeId.startsWith("applet:")) {continue;}
+        if(singletonTypes.contains(e.typeId)) {m_transactionStatus->setText(tr("Import contains duplicate singleton views."));return false;}
+        singletonTypes.insert(e.typeId);
+        bool found=false;
+        for(auto& c:d.containers) {for(int i=0;i<c.contents.size();++i) {if(c.contents[i].typeId==e.typeId) {
+            if(c.locked) {m_transactionStatus->setText(tr("The singleton source container is locked."));return false;}
+            auto existing=c.contents[i];
+            if(c.id!=m_selectedId && !existing.returnLocation) {
+                existing.returnLocation=ReturnLocation{c.id,i>0?c.contents[i-1].id:QString(),i+1<c.contents.size()?c.contents[i+1].id:QString(),{}};
+            }
+            singletonIds[e.id]=existing.id;
+            // Preserve imported metadata without embedding generated histories in
+            // themselves on subsequent copy/import cycles.
+            auto importedEntry=e;
+            for(auto it=importedEntry.extensions.begin();it!=importedEntry.extensions.end();) {
+                const auto backup=it.value().toObject();
+                if(backup["format"]=="nereus.portable-recovery" && backup["schemaVersion"]==1 && backup["records"].isArray()) {
+                    for(const auto& record:backup["records"].toArray()) {ContainerDocumentCodec::retainPortableRecovery(existing.extensions,record.toObject());}
+                    it=importedEntry.extensions.erase(it);
+                } else {++it;}
+            }
+            importedEntry.id=existing.id;
+            ContainerDocument payload;payload.id="imported-singleton";payload.contents={importedEntry};
+            WorkspaceDocument recovered;recovered.mainContainerId=payload.id;recovered.containers={payload};
+            ContainerDocumentCodec::retainPortableRecovery(existing.extensions,QJsonObject{{"importedSingleton",QJsonDocument::fromJson(ContainerDocumentCodec::encode(recovered)).object()}});
+            c.contents.removeAt(i);e=existing;found=true;break;
+        }}if(found) {break;}}
+    }
+    for(auto& e:imported.contents) {if(e.returnLocation) {
+        e.returnLocation->beforeId=singletonIds.value(e.returnLocation->beforeId,e.returnLocation->beforeId);
+        e.returnLocation->afterId=singletonIds.value(e.returnLocation->afterId,e.returnLocation->afterId);
+    }}
+    for(int i=0;i<d.containers.size();++i) {auto& c=d.containers[i];if(c.id!=m_selectedId) {continue;}
+        if(replaceContainer) {
+            const auto retained=c.contents; c.contents.clear();
+            auto outcome=ContainerArrangeController::returnBatch(d,i,retained);
+            if(!outcome.ok) {m_transactionStatus->setText(outcome.error);return false;}
+            imported.id=c.id;
+            if(c.id==d.mainContainerId) {imported.contents+=c.contents;}
+            c=imported;
+        } else {c.contents+=imported.contents;}
+        break;
+    }
+    const QString error=ContainerDocumentCodec::validate(d);
+    if(!error.isEmpty()) {m_transactionStatus->setText(error);return false;}
+    m_editSession->setDraft(d);loadCurrentDraft();refreshDraftDropdown();return true;
+}
+
+QWidget* ContainerSettingsDialog::buildTypeSpecificEditor(MeterItem* item, QWidget* parent)
+{
+    if (!item) {
+        return nullptr;
+    }
+
+    const QString serialized = item->serialize();
+    const int pipeIdx = serialized.indexOf(QLatin1Char('|'));
+    const QString typeTag = (pipeIdx >= 0) ? serialized.left(pipeIdx) : serialized;
+
+    BaseItemEditor* ed = nullptr;
+
+    // R-R3-21: each tag is the one its item saves (serialize()); the button
+    // boxes and the VFO display were listed under names they never write,
+    // so their editors never opened.
+    if      (typeTag == QLatin1String("BAR"))            ed = new BarItemEditor(parent);
+    else if (typeTag == QLatin1String("SOLID"))          ed = new SolidColourItemEditor(parent);
+    else if (typeTag == QLatin1String("SPACER"))         ed = new SpacerItemEditor(parent);
+    else if (typeTag == QLatin1String("FADECOVER"))      ed = new FadeCoverItemEditor(parent);
+    else if (typeTag == QLatin1String("IMAGE"))          ed = new ImageItemEditor(parent);
+    else if (typeTag == QLatin1String("SCALE"))          ed = new ScaleItemEditor(parent);
+    else if (typeTag == QLatin1String("NEEDLE"))         ed = new NeedleItemEditor(parent);
+    else if (typeTag == QLatin1String("NEEDLESCALEPWR")) ed = new NeedleScalePwrItemEditor(parent);
+    else if (typeTag == QLatin1String("TEXT"))           ed = new TextItemEditor(parent);
+    else if (typeTag == QLatin1String("TEXTOVERLAY"))    ed = new TextOverlayItemEditor(parent);
+    else if (typeTag == QLatin1String("SIGNALTEXT"))     ed = new SignalTextItemEditor(parent);
+    else if (typeTag == QLatin1String("LED"))            ed = new LedItemEditor(parent);
+    else if (typeTag == QLatin1String("HISTORY"))        ed = new HistoryGraphItemEditor(parent);
+    else if (typeTag == QLatin1String("MAGICEYE"))       ed = new MagicEyeItemEditor(parent);
+    else if (typeTag == QLatin1String("DIAL"))           ed = new DialItemEditor(parent);
+    else if (typeTag == QLatin1String("WEBIMAGE"))       ed = new WebImageItemEditor(parent);
+    else if (typeTag == QLatin1String("FILTERDISPLAY"))  ed = new FilterDisplayItemEditor(parent);
+    else if (typeTag == QLatin1String("ROTATOR"))        ed = new RotatorItemEditor(parent);
+    else if (typeTag == QLatin1String("CLOCK"))          ed = new ClockItemEditor(parent);
+    else if (typeTag == QLatin1String("VFO"))            ed = new VfoDisplayItemEditor(parent);
+    else if (typeTag == QLatin1String("CLICKBOX"))       ed = new ClickBoxItemEditor(parent);
+    else if (typeTag == QLatin1String("DATAOUT"))        ed = new DataOutItemEditor(parent);
+    else if (typeTag == QLatin1String("BANDBTNS"))       ed = new BandButtonItemEditor(parent);
+    else if (typeTag == QLatin1String("MODEBTNS"))       ed = new ModeButtonItemEditor(parent);
+    else if (typeTag == QLatin1String("FILTERBTNS"))     ed = new FilterButtonItemEditor(parent);
+    else if (typeTag == QLatin1String("ANTENNABTNS"))    ed = new AntennaButtonItemEditor(parent);
+    else if (typeTag == QLatin1String("TUNESTEPBTNS"))   ed = new TuneStepButtonItemEditor(parent);
+    else if (typeTag == QLatin1String("OTHERBTNS"))      ed = new OtherButtonItemEditor(parent);
+    else if (typeTag == QLatin1String("VOICERECPLAY"))   ed = new VoiceRecordPlayItemEditor(parent);
+
+    if (ed) {
+        ed->setItem(item);
+    }
+    return ed;
+}
+
+} // namespace NereusSDR

@@ -1,0 +1,42 @@
+<RCC>
+    <qresource prefix="/help">
+        <file alias="getting-started.md">resources/help/getting-started.md</file>
+    </qresource>
+    <qresource prefix="/meters">
+        <file alias="anan-approved-clean.jpg">resources/meters/anan-approved-clean.jpg</file>
+        <file alias="anan-approved-hubs.jpg">resources/meters/anan-approved-hubs.jpg</file>
+        <file alias="anan-approved-lettering.jpg">resources/meters/anan-approved-lettering.jpg</file>
+        <file alias="ananMM.png">resources/meters/ananMM.png</file>
+        <file alias="cross-needle.png">resources/meters/cross-needle.png</file>
+        <file alias="cross-needle-bg.png">resources/meters/cross-needle-bg.png</file>
+    </qresource>
+    <qresource prefix="/icons">
+        <file alias="NereusSDR.png">resources/icons/NereusSDR.png</file>
+        <file alias="spin-up.svg">resources/icons/spin-up.svg</file>
+        <file alias="spin-up-workspace.svg">resources/icons/spin-up-workspace.svg</file>
+        <file alias="spin-down.svg">resources/icons/spin-down.svg</file>
+        <file alias="spin-down-workspace.svg">resources/icons/spin-down-workspace.svg</file>
+        <file alias="badge-check.svg">resources/icons/badge-check.svg</file>
+        <file alias="badge-dot.svg">resources/icons/badge-dot.svg</file>
+        <file alias="badge-prohibited.svg">resources/icons/badge-prohibited.svg</file>
+        <file alias="badge-mode.svg">resources/icons/badge-mode.svg</file>
+        <file alias="badge-filter.svg">resources/icons/badge-filter.svg</file>
+        <file alias="badge-agc.svg">resources/icons/badge-agc.svg</file>
+        <file alias="badge-nr.svg">resources/icons/badge-nr.svg</file>
+        <file alias="badge-nb.svg">resources/icons/badge-nb.svg</file>
+        <file alias="badge-apf.svg">resources/icons/badge-apf.svg</file>
+        <file alias="badge-sql.svg">resources/icons/badge-sql.svg</file>
+    </qresource>
+    <qresource prefix="/icons/emoji">
+        <file alias="pc-on.svg">resources/icons/emoji/pc-on.svg</file>
+        <file alias="pc-muted.svg">resources/icons/emoji/pc-muted.svg</file>
+        <file alias="radio-on.svg">resources/icons/emoji/radio-on.svg</file>
+        <file alias="radio-muted.svg">resources/icons/emoji/radio-muted.svg</file>
+        <file alias="radio-none.svg">resources/icons/emoji/radio-none.svg</file>
+        <file alias="lock.svg">resources/icons/emoji/lock.svg</file>
+        <file alias="unlock.svg">resources/icons/emoji/unlock.svg</file>
+        <file alias="bulb.svg">resources/icons/emoji/bulb.svg</file>
+        <file alias="pin.svg">resources/icons/emoji/pin.svg</file>
+        <file alias="pinned.svg">resources/icons/emoji/pinned.svg</file>
+    </qresource>
+</RCC>

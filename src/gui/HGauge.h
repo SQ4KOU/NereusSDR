@@ -1,0 +1,90 @@
+// src/gui/HGauge.h
+// Modification history (NereusSDR):
+//   2026-10-12 - Preserve caller width constraints around the workspace text floor.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+#pragma once
+#include <QFont>
+#include <QStringList>
+#include <QWidget>
+
+namespace NereusSDR {
+
+class HGauge : public QWidget {
+    Q_OBJECT
+public:
+    explicit HGauge(QWidget* parent = nullptr);
+
+    void setRange(double min, double max);
+    void setYellowStart(double val);
+    void setRedStart(double val);
+    void setReversed(bool rev);
+    void setTitle(const QString& t);
+    void setUnit(const QString& u);
+    void setValue(double val);
+    void setPeakValue(double val);
+    void setTickLabels(const QStringList& labels);
+
+    // iPhone app plan Task 39 (NereusSDR-native): the gauge cannot show a
+    // reading here (a remote window's Core does not send it). It is drawn
+    // dimmed; the caller says why in its tooltip.
+    void setUnavailable(bool unavailable);
+    bool isUnavailable() const noexcept { return m_unavailable; }
+
+    // Read-only accessor for unit tests + state inspection.  No
+    // corresponding signal — HGauge is a passive read-only widget driven
+    // only by its setValue setter.  Phase 3M-4 Task 13 (added for
+    // PureSignalApplet wiring tests).
+    double value() const noexcept { return m_value; }
+
+    // The drawn fill, as a fraction of the bar width in [0, 1]. Normal
+    // gauges fill from the left with (value - min) / range. Reversed gauges
+    // (R-R3-21) map as AetherSDR's HGauge does: the maximum is empty and the
+    // minimum is a full bar, filled from the right.
+    double filledFraction() const noexcept;
+    bool isReversed() const noexcept { return m_reversed; }
+
+    // Test seam: draw the scale numbers at this pixel size instead of the
+    // 7 points the app uses (0, the default, means 7 points). 7 points is
+    // 7 px on the Mac and 9 px at 96 dpi (Windows at 100%, Linux), so a
+    // test on any platform can render either case.
+    void setScaleFontPixelSize(int pixelSize);
+    // Test seam: the same for the title in the bar, which the app draws
+    // at 8 points bold: 8 px on the Mac and 11 px at 96 dpi.
+    void setTitleFontPixelSize(int pixelSize);
+
+    QSize sizeHint() const override { return {200, heightForScale()}; }
+    QSize minimumSizeHint() const override { return {100, 26}; }
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+    void changeEvent(QEvent* event) override;
+
+private:
+    // The font of the scale numbers under the bar.
+    QFont scaleFont(const QString& family) const;
+    // The font of the title in the bar.
+    QFont titleFont(const QString& family) const;
+    // The widget height that shows the scale numbers whole: 30 px where
+    // the scale font is 7 px, more where it is larger.
+    int heightForScale() const;
+    void updateFixedHeight();
+
+    double m_min = 0.0;
+    double m_max = 100.0;
+    double m_value = 0.0;
+    double m_peak = -999.0;
+    double m_yellowStart = 80.0;
+    double m_redStart = 90.0;
+    bool   m_reversed = false;
+    bool   m_unavailable = false;
+    QString m_title;
+    QString m_unit;
+    QStringList m_tickLabels;
+    int m_scaleFontPixelSize = 0;
+    int m_titleFontPixelSize = 0;
+    int m_minimumWidthBeforeTextFloor = 0;
+    int m_textFloorMinimumWidth = 0;
+    bool m_textFloorMinimumApplied = false;
+};
+
+} // namespace NereusSDR

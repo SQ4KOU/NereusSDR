@@ -1,0 +1,186 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Upgrading to NereusSDR 2026.10.1 | NereusSDR</title><link rel="canonical" href="https://nereussdr.com/guides/upgrading-to-2026.10.1.html"><link rel="icon" href="/favicon.ico" sizes="any"><link rel="stylesheet" href="/assets/css/site.css"><link rel="stylesheet" href="/manual/manual.css"></head><body><a class="skip-link" href="#content">Skip to chapter</a><div class="manual-shell"><nav class="manual-nav" aria-label="Manual chapters"><a class="manual-brand" href="/">NereusSDR</a><a href="/">Home</a><p class="manual-draft">User manual<br>NereusSDR 2026.10.1</p><details open><summary>Browse all chapters</summary><a href="/manual/index.html">NereusSDR User Manual</a><a href="/manual/01-desktop-connect.html">Install, connect, and check desktop audio</a><a href="/manual/02-desktop-window.html">Get to know the desktop window</a><a href="/manual/03-receive.html">Tune and receive</a><a href="/manual/04-slices.html">Slices, receiver windows, and panadapters</a><a href="/manual/05-transmit.html">Set up and transmit</a><a href="/manual/06-iphone-connect.html">Connect an iPhone to a Core</a><a href="/manual/07-iphone-operate.html">Operate from an iPhone</a><a href="/manual/08-shared-core.html">Share a Core with other devices</a><a href="/manual/09-tools.html">Digital audio and external applications</a><a href="/manual/10-customize.html">Display, meters, and desktop layout</a><a href="/manual/11-troubleshooting.html">Troubleshoot operation</a><a href="/manual/12-reference.html">Control reference</a><a href="/manual/13-receiver-dsp.html">Receiver DSP and filter setup</a><a href="/manual/14-voice-profiles.html">Voice processing and profiles</a><a href="/manual/15-rade-freedv.html">RADE and FreeDV Reporter</a><a href="/manual/16-spots-reporters.html">Spots and reporters</a><a href="/manual/17-hardware-antennas-calibration.html">Radio hardware, antennas, and calibration</a><a href="/manual/18-puresignal-diversity.html">PureSignal and diversity</a><a href="/manual/19-amplifiers-tuners.html">Amplifiers and tuners</a><a href="/manual/20-phone-preferences.html">Phone preferences and session care</a></details><details open><summary>How-to guides</summary><a href="/guides/install-core-sbc.html">Fresh Raspberry Pi or Armbian Core install</a><a href="/guides/tx-eq-cfc.html">Transmitter EQ and CFC</a><a href="/guides/upgrading-to-2026.10.0.html">Upgrading to NereusSDR 2026.10.0</a><a href="/guides/upgrading-to-2026.10.1.html" aria-current=page>Upgrading to NereusSDR 2026.10.1</a><a href="/guides/contributing-with-ai.html">Contribute to NereusSDR with AI</a><a href="/guides/remote-access.html">NereusSDR rendezvous</a></details></nav><main id="content"><h1 id="upgrading-to-nereussdr-2026101">Upgrading to NereusSDR 2026.10.1</h1><details class="page-contents" open><summary>On this page</summary><ol><li><a href="#update-the-core-and-the-desktop-together">Update the Core and the desktop together</a></li><li><a href="#what-changes-on-first-launch">What changes on first launch</a></li><li><a href="#core-installs-on-a-raspberry-pi-rock-or-other-sbc">Core installs on a Raspberry Pi, Rock or other SBC</a></li><li><a href="#what-to-try">What to try</a></li><li><a href="#reporting">Reporting</a></li></ol></details>
+<p>Use this note when updating a station from 2026.10.0. It lists what changes
+when you first launch, what to do on a Core, and a short list of things to
+try. If you are coming from 0.5.2, read the
+<a href="/guides/upgrading-to-2026.10.0.html">2026.10.0 checklist</a> first. When reporting a
+problem, include the installed version, operating system, radio model and
+firmware, and whether you use a local or remote Core.</p>
+<h2 id="update-the-core-and-the-desktop-together">Update the Core and the desktop together</h2>
+<p>The Core owns the radio, the station DSP and the accessories. The console runs
+where you operate. Update both. Rotor control, the <strong>CAT Control</strong> page on the
+phone and the Core speaker need a 2026.10.1 Core. An older Core grays them out
+with a reason such as &quot;This Core does not control a rotor. Updating the Core
+may help.&quot;, and older Cores, desktops and phone apps still connect to each
+other. The phone shows the new Display pages only with a 2026.10.1 Core; with
+an older Core it keeps the earlier pages.</p>
+<h2 id="what-changes-on-first-launch">What changes on first launch</h2>
+<p>Keep a backup of your settings before the first launch, and close the console
+normally so the new version can migrate them once.</p>
+<ul>
+<li><strong>Two-tone is one setting.</strong> The two-tone level (<strong>Test &gt; Two-Tone IMD</strong>) is
+now a single value for the radio, and TX profiles no longer save any
+two-tone values. If your saved level was the old default of -6 dB, it
+becomes 0 dB. That is 6 dB more two-tone drive than before for anyone who
+never changed it, and it lets PureSignal calibrate. <strong>If you use PureSignal,
+check your two-tone level and drive before the first calibration.</strong> Any saved
+level other than -6 dB is left alone.</li>
+<li><strong>Audio choices move to the new Driver list.</strong> Each device card now has one
+<strong>Driver</strong> list above <strong>Device</strong>, replacing the Driver API list and the
+Windows audio checkboxes. Your saved choices carry over once, and the old
+settings are kept. On a headless Linux Core, every profile moves to ALSA
+direct. After the first launch, open <strong>File &gt; Settings... &gt; Audio</strong> and
+confirm that your speaker and microphone picks are still the ones you
+expect.</li>
+<li><strong>The workspace look is the default.</strong> Containers dock on all four edges,
+headers show or hide with an eye button, and there is no container <strong>Lock</strong>
+with this look. Locks you saved earlier open unlocked. Your saved layout is
+copied the first time you start, so nothing is lost.</li>
+<li><strong>On the Mac, the Mic Mode goes to Standard.</strong> NereusSDR sets its own Mic
+Mode to Standard at each launch, which ends the long wait for the microphone
+after launch. If you picked Voice Isolation or Wide Spectrum for NereusSDR
+in Control Center, it is back at Standard. The first window can appear up to
+about a second later.</li>
+<li><strong>Attenuator and preamp are remembered.</strong> They are saved and sent to the
+radio each time you connect. Connecting never keys the radio.</li>
+<li><strong>Each receiver keeps more of its own settings.</strong> L/R pan, binaural,
+squelch, APF, the FM settings, the DIGL and DIGU offsets and the RTTY mark
+and shift are now saved for each receiver, so they start saving from the
+first launch. AGC-T AUTO and its offset move from each band to each
+receiver: the first time, a receiver takes the value it had saved for the
+band it opens on. Receivers B, C and D now run on the settings they show,
+so one whose saved settings differ from the defaults may sound different
+from before.</li>
+<li><strong>FM squelch reads 0 to 100.</strong> <strong>Squelch Threshold</strong> on
+<strong>File &gt; Settings... &gt; DSP &gt; FM</strong> now shows 0 to 100, where 100 is the
+tightest, instead of dB. 2026.10.0 did not save this threshold, so every
+receiver now starts at 100, the tightest. With FM squelch on it now opens;
+lower the threshold if it stays closed.</li>
+<li><strong>Display settings are now defaults plus per-pan values.</strong> Setup's Display
+pages (now Spectrum, Levels, Waterfall, View, Peaks &amp; Markers, FFT &amp; Engine,
+Transmit Display and Multimeter) set the default for every pan, and each pan's
+Display pill can keep its own value, marked with an amber dot. Old page names
+such as Spectrum Defaults and Grid &amp; Scales no longer exist. <strong>Reset this pan</strong>
+returns one pan to the defaults.</li>
+<li><strong>Waterfall Black Level and Color Gain are converted once.</strong> With Clarity,
+Black Level now runs 0 to 100 with 50 at the noise floor, and Color Gain
+sets how many dB the colors cover; in the other choices they trim Low and
+High. Your saved values, and each pan's, are converted so the waterfall
+looks the same as before. If it looks different, check Levels.</li>
+<li><strong>Cal Offset is reset and stored noise floors are cleared once.</strong> The saved
+display Cal Offset values (the Setup default and each pan's) held the
+station's offset, so they are removed and Cal Offset starts at 0 dB; the
+control stays on Setup's Spectrum page. The stored per-band noise floors
+that Clarity measured before calibration are removed, so Clarity measures
+each band again the first time you tune to it. Your radio's own calibration
+is not touched.</li>
+<li><strong>FFT size has a Sizing choice.</strong> Sizing is <strong>Auto</strong>, <strong>Hz/bin</strong> or <strong>Fixed</strong>.
+If you had a Hz/bin target above zero, you start in <strong>Hz/bin</strong>. Otherwise you
+start in <strong>Auto</strong>, and the FFT Size you saved applies only if you choose
+<strong>Fixed</strong>. Check FFT &amp; Engine if your spectrum looks coarser or finer than
+before. The setting is shared by every pan and every window connected to the
+Core.</li>
+<li><strong>AGC Off is quieter.</strong> With AGC set to Off, a receiver now runs the
+<strong>Fixed Gain</strong> on <strong>File &gt; Settings... &gt; DSP &gt; AGC/ALC</strong>, 20 dB unless you
+changed it. In 2026.10.0 it ran 60 dB until you changed the value, so AGC
+Off is about 40 dB quieter. Raise <strong>Fixed Gain</strong> if you want the old level.</li>
+<li><strong>Every receiver starts with your DSP Options sizes.</strong> Receivers B, C and D
+did not take the block size, filter size and filter type on <strong>File &gt;
+Settings... &gt; DSP &gt; Options</strong> until their next mode change, and ran a
+4096-sample block with a Linear Phase filter until then. They now use the
+saved values for their mode, 64, 4096 and Low Latency unless you changed
+them, so they may sound and respond differently. The FM row on that page now
+starts at 64 for receive and transmit.</li>
+<li><strong>PureSignal looks different.</strong> The applet and the Bench show <strong>CORRECTION</strong>
+and <strong>CALIBRATION FEEDBACK</strong> with a class (Too low to High), <strong>Advanced</strong> now
+hides the bottom strip too, and AmpView names its curves differently. Two-tone
+IMD readouts on the display are off until you check <strong>Show 2Tone
+measurements</strong>.</li>
+</ul>
+<h2 id="core-installs-on-a-raspberry-pi-rock-or-other-sbc">Core installs on a Raspberry Pi, Rock or other SBC</h2>
+<p>The Core runs as a service account with no groups of its own, so Linux sound
+cards and serial adapters each need a small systemd drop-in.</p>
+<ul>
+<li><strong>Audio.</strong> Every SBC install and every <code>.deb</code> package now ships or writes the
+audio drop-in. An older install that lacks it cannot open a sound card, so
+the Core speaker will not work until you add
+<code>/etc/systemd/system/nereusd.service.d/audio.conf</code> with <code>[Service]</code> and
+<code>SupplementaryGroups=audio</code>.</li>
+<li><strong>Serial.</strong> A rotor on a GS-232 adapter, or serial CAT on the Core, needs
+<code>/etc/systemd/system/nereusd.service.d/serial.conf</code> with <code>[Service]</code> and
+<code>SupplementaryGroups=dialout</code>. The Pi 4 and Rock installers and
+the station image write it; the
+<code>.deb</code> packages do not. After adding either file, run
+<code>sudo systemctl daemon-reload</code> and <code>sudo systemctl restart nereusd</code>.</li>
+<li><strong>Rock real-time priority.</strong> On a Rock, run the 2026.10.1 installer once and
+then restart the board. It adds a drop-in meant to keep an ssh login from
+costing the Core its real-time priority. See What to try.</li>
+<li><strong>Network receive buffer.</strong> The 2026.10.1 packages and the Pi 4 and Rock
+scripts raise Linux's <code>net.core.rmem_max</code> to 4 MB through
+<code>/usr/lib/sysctl.d/10-nereusd.conf</code>, and never lower a limit that is already
+higher. Removing the package removes it. The README section &quot;The system
+setting the Core's installer changes&quot; says how to check or undo it.</li>
+</ul>
+<p>The <a href="/guides/install-core-sbc.html">SBC install guide</a> has the details, including the
+sound card's own mixer and kernels that refuse real-time priority.
+Building the PulseAudio engine from source on Linux needs
+<code>libpulse-dev</code>.</p>
+<h2 id="what-to-try">What to try</h2>
+<p>Each item is a short check you can do in a few minutes. Note the result,
+including anything that surprised you.</p>
+<ol>
+<li><strong>Rotor.</strong> Open <strong>File &gt; Settings... &gt; CAT &amp; Network &gt; Rotor</strong>, choose your
+controller (<strong>Yaesu GS-232A, serial port</strong>, <strong>Yaesu GS-232B, serial port</strong>, <strong>Hamlib rotctld, already running</strong> or <strong>Hamlib rotctld, started by the Core</strong>), set the
+end stop and travel, and select <strong>Save and connect</strong>. Open the Rotor
+applet, turn to a heading, stop it, and try a preset. Right-click a spot
+and choose <strong>Turn beam to</strong> the call. On the iPhone or iPad, open the Rotor
+page and confirm it shows the same heading. Release a held turn button and
+confirm the rotor stops.</li>
+<li><strong>CAT.</strong> Open <strong>Tools &gt; CAT Control...</strong> (or the CAT pages in <strong>File &gt;
+Settings... &gt; CAT &amp; Network</strong>), assign a channel to a slice, enable one
+listener, and connect a logging or digital-mode program. Change frequency
+from the program and from NereusSDR and confirm both follow. Try the
+Hamlib rigctld port with a program that speaks it. On a headless Core, set
+CAT up from a connected desktop or from the phone's Tools tab. Confirm
+that a refused setting says why.</li>
+<li><strong>Native audio.</strong> Check that the <strong>Driver</strong> lists show your system's audio
+system and that devices appear and disappear as you plug them in. With a
+Core, pick the <strong>Core speaker</strong> in <strong>Audio &gt; Outputs</strong> and confirm the
+level and mute match the phone's Sound panel. Disconnect and reconnect your
+microphone and confirm transmit audio returns.</li>
+<li><strong>Workspace look.</strong> Hide and show a container header with the eye button.
+Hold Shift (or press Ctrl+Shift+A) to arrange, dock a container on each
+edge, pop one out, pin it and return it. Save a workspace profile and
+switch to it with <strong>Containers &gt; Manage Workspace Profiles…</strong>. Choose
+<strong>Reset Default Layout</strong> and confirm the S-Meter comes back.</li>
+<li><strong>Receivers after a relaunch.</strong> Give two receivers different squelch, L/R
+pan, APF and AGC-T AUTO settings, close NereusSDR normally, open it again
+and confirm each receiver comes back as you left it and sounds the way it
+did.</li>
+<li><strong>Hermes Lite 2 through a Pi Core.</strong> Key the radio from a window or the
+phone through a Core on a Raspberry Pi and hold it for half a minute.
+Confirm the radio stays keyed for the whole time.</li>
+<li><strong>Rock real-time priority.</strong> After installing on a Rock and restarting it,
+log in over ssh and run <code>cat /sys/fs/cgroup/cgroup.subtree_control</code>.
+Confirm that <code>cpu</code> is not in the list, and that the Core's log has no
+&quot;Raised thread priority was refused&quot; line from after the restart.</li>
+<li><strong>Two-tone and PureSignal.</strong> If you use PureSignal, run a two-tone test and
+a calibration at your new two-tone level and compare it with what you
+expect.
+Then check <strong>Show 2Tone measurements</strong> (Bench &gt; IMD measurements), turn on
+DUP, run a brief two-tone test and read <strong>WORST IMD3</strong> and <strong>WORST IMD5</strong> on
+the rail's <strong>Inspect</strong> readout.</li>
+<li><strong>RADE waveforms.</strong> In <strong>Containers &gt; Edit Container</strong>, add <strong>Microphone
+waveform</strong> and <strong>Decoded speech waveform</strong> to a container whose <strong>Slice</strong>
+is the transmit slice and is in RADE-U or RADE-L. Speak while transmitting
+in RADE and confirm the microphone trace moves; receive a RADE signal and
+confirm the decoded speech trace moves. On a remote desktop, confirm an
+older Core shows a reason instead of a trace.</li>
+</ol>
+<h2 id="reporting">Reporting</h2>
+<p>Report expected behavior, actual behavior, a minimal reproduction, desktop and
+Core versions, platform, radio model and firmware, the connection path and a
+support bundle. Keep credentials and pairing tokens out of public reports.
+Bench results for physical serial ports, a physical rotor and logging
+programs on Windows and Linux are still open. Say which hardware and program
+you used.</p>
+<div class="page-next"></div></main></div></body></html>

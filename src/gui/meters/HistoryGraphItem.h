@@ -1,0 +1,194 @@
+#pragma once
+
+// =================================================================
+// src/gui/meters/HistoryGraphItem.h  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis source:
+//   Project Files/Source/Console/MeterManager.cs, original licence from Thetis source is included below
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code.
+//   2026-09-23: R-R3-13: a no-reading sample (isNoMeterReading) is not
+//                 pushed, so it moves neither the axis scale nor the line;
+//                 sampleCount0() / sampleCount1() read-only accessors.
+//                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
+//                 Anthropic Claude Code.
+// =================================================================
+
+/*  MeterManager.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2020-2026 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+#include "MeterItem.h"
+#include <QColor>
+#include <vector>
+
+namespace NereusSDR {
+
+// From Thetis clsHistoryItem (MeterManager.cs:16149+)
+// Scrolling time-series graph with dual-axis ring buffer.
+// Renders grid in OverlayStatic, line data in OverlayDynamic.
+
+// ---------------------------------------------------------------------------
+// RingBuffer — fixed-size O(1) push, ordered read oldest→newest
+// NOT Thetis's List+time-cleanup approach.
+// ---------------------------------------------------------------------------
+struct RingBuffer {
+    std::vector<float> data;
+    int writeIdx{0};
+    int count{0};
+    float runMin{1e30f};
+    float runMax{-1e30f};
+
+    void resize(int cap) {
+        data.assign(cap, 0.0f);
+        writeIdx = 0;
+        count = 0;
+        runMin = 1e30f;
+        runMax = -1e30f;
+    }
+
+    void push(float val) {
+        if (data.empty()) { return; }
+        data[writeIdx] = val;
+        writeIdx = (writeIdx + 1) % static_cast<int>(data.size());
+        if (count < static_cast<int>(data.size())) { ++count; }
+        if (val < runMin) { runMin = val; }
+        if (val > runMax) { runMax = val; }
+    }
+
+    // oldest = index 0, newest = count-1
+    float at(int i) const {
+        if (data.empty() || count == 0) { return 0.0f; }
+        int idx = (writeIdx - count + i);
+        if (idx < 0) { idx += static_cast<int>(data.size()); }
+        return data[idx % static_cast<int>(data.size())];
+    }
+};
+
+class HistoryGraphItem : public MeterItem {
+    Q_OBJECT
+
+public:
+    // From Thetis clsHistoryItem (MeterManager.cs:16149+)
+    static constexpr int kDefaultCapacity = 300;  // 30s at 100ms poll
+
+    explicit HistoryGraphItem(QObject* parent = nullptr);
+
+    // --- Properties ---
+    int capacity() const { return m_capacity; }
+    void setCapacity(int cap);
+
+    int durationMs() const { return m_durationMs; }
+    void setDurationMs(int ms);
+
+    QColor lineColor0() const { return m_lineColor0; }
+    void setLineColor0(const QColor& c) { m_lineColor0 = c; }
+
+    QColor lineColor1() const { return m_lineColor1; }
+    void setLineColor1(const QColor& c) { m_lineColor1 = c; }
+
+    bool showGrid() const { return m_showGrid; }
+    void setShowGrid(bool v) { m_showGrid = v; }
+
+    bool autoScale0() const { return m_autoScale0; }
+    void setAutoScale0(bool v) { m_autoScale0 = v; }
+
+    bool autoScale1() const { return m_autoScale1; }
+    void setAutoScale1(bool v) { m_autoScale1 = v; }
+
+    bool showScale0() const { return m_showScale0; }
+    void setShowScale0(bool v) { m_showScale0 = v; }
+
+    bool showScale1() const { return m_showScale1; }
+    void setShowScale1(bool v) { m_showScale1 = v; }
+
+    int bindingId1() const { return m_bindingId1; }
+    void setBindingId1(int id) { m_bindingId1 = id; }
+
+    // --- Data ---
+    void setValue(double v) override;   // axis 0 — called by MeterWidget
+    void setValue1(double v);           // axis 1 — called by MeterWidget for bindingId1
+
+    // Samples held per axis (R-R3-13: no-reading samples are skipped).
+    int sampleCount0() const { return m_buf0.count; }
+    int sampleCount1() const { return m_buf1.count; }
+
+    // --- Multi-layer rendering ---
+    Layer renderLayer() const override { return Layer::OverlayDynamic; }
+    bool participatesIn(Layer layer) const override;
+    void paint(QPainter& p, int widgetW, int widgetH) override;
+    void paintForLayer(QPainter& p, int widgetW, int widgetH, Layer layer) override;
+
+    // --- Serialization ---
+    // Tag: HISTORY
+    // Format: HISTORY|x|y|w|h|bindingId|zOrder|capacity|lineColor0|lineColor1|
+    //         showGrid|autoScale0|autoScale1|showScale0|showScale1|bindingId1|durationMs (v2)
+    // (v2 adds durationMs at index [16]; v1 stops at [15])
+    QString serialize() const override;
+    bool deserialize(const QString& data) override;
+
+private:
+    void paintGrid(QPainter& p, const QRect& rect);
+    void paintLine(QPainter& p, const QRect& rect, const RingBuffer& buf,
+                   const QColor& color, float yMin, float yMax);
+    void computeScale(const RingBuffer& buf, float& yMin, float& yMax) const;
+
+    int     m_capacity{kDefaultCapacity};
+    int     m_durationMs{60000};  // Task 3.3: default 60 s, corresponds to AppSettings default
+    // From Thetis clsHistoryItem _history_data_list_0 / _history_data_list_1
+    RingBuffer m_buf0;
+    RingBuffer m_buf1;
+
+    // Colors: cyan for axis 0 (AetherSDR palette), amber for axis 1
+    QColor  m_lineColor0{0x00, 0xb4, 0xd8};   // #00b4d8 cyan
+    QColor  m_lineColor1{0xff, 0xb8, 0x00};   // #ffb800 amber
+    bool    m_showGrid{true};
+    bool    m_autoScale0{true};
+    bool    m_autoScale1{true};
+    bool    m_showScale0{true};
+    bool    m_showScale1{false};
+    int     m_bindingId1{-1};
+};
+
+} // namespace NereusSDR

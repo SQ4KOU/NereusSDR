@@ -1,0 +1,334 @@
+// no-port-check: AetherSDR-derived NereusSDR file. Per-pan container
+// (SpectrumWidget host, slice association) is adapted structurally from
+// AetherSDR src/gui/PanadapterApplet.{h,cpp} [@0cd4559]. NereusSDR
+// preserves the existing single-output-device + per-slice pan from its
+// own audio model. Registered in
+// docs/attribution/aethersdr-reconciliation.md.
+
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// =================================================================
+// src/gui/PanadapterApplet.h  (NereusSDR)
+// =================================================================
+//
+// Ported (structurally) from AetherSDR src/gui/PanadapterApplet.{h,cpp}
+// [@0cd4559].
+//   Copyright (C) 2024-2026  Jeremy (KK7GWY) / AetherSDR contributors
+//       per https://github.com/ten9876/AetherSDR (GPLv3; see LICENSE
+//       and About dialog for the live contributor list)
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-10-13  J.J. Boyd / KG4VCF  Export the applet's Qt signal
+//                addresses from the Windows GUI DLL. AI-assisted via
+//                OpenAI Codex.
+//   2026-05-27  J.J. Boyd / KG4VCF  Phase 3F Sub-Epic D Task 1.
+//                                    Per-pan container skeleton ported
+//                                    structurally from AetherSDR
+//                                    src/gui/PanadapterApplet.{h,cpp}
+//                                    [@0cd4559]. Hosts one SpectrumWidget
+//                                    + tracks associated slices for
+//                                    overlay rendering. NereusSDR
+//                                    preserves the existing single-
+//                                    output-device + per-slice pan from
+//                                    its own audio model; wideband-
+//                                    extended-pan support follows Phase
+//                                    3F design. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
+//   2026-08-08  J.J. Boyd / KG4VCF  Bench report: a floated pan "does
+//                                    not live inside a container like I
+//                                    would expect". Adds a
+//                                    floating-only title strip (grip,
+//                                    pan name, Dock button) plus
+//                                    setFloatingState() / isFloating() /
+//                                    dockRequested. Strip shape from
+//                                    AetherSDR
+//                                    src/gui/PanadapterApplet.cpp:46-83,
+//                                    552-565 [@1e0718ad]; NereusSDR shows
+//                                    it only while floating, where
+//                                    upstream carries it on docked pans
+//                                    too. AI-assisted transformation via
+//                                    Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Remote-window parity Task 18 (C8,
+//                                    R-R3-24, R-R3-34): a connected pan
+//                                    with no slice says so and how to add
+//                                    one, instead of standing blank.
+//                                    NereusSDR-original. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 78 (R-IOS-02,
+//                R-IOS-30): an empty pan offers Take a receiver after another
+//                device took this window's receiver; the TX pill offers Take
+//                transmit. AI-assisted via Anthropic Claude Code.
+//   2026-10-08  J.J. Boyd / KG4VCF  Workspace visual review Task 26 (JJ's
+//                ruling): the receiver flags stay on top of the corner
+//                badges; the badges' strip is masked out of the flags' area.
+//                AI-assisted via Anthropic Claude Code.
+//   2026-10-09  J.J. Boyd / KG4VCF  The floated pan's title bar names its
+//                own style rule, so its bottom line no longer repeats under
+//                the grip and title labels. AI-assisted via Anthropic
+//                Claude Code.
+// =================================================================
+#pragma once
+
+#include "gui/NereusGuiExport.h"
+#include "gui/PanStatusText.h"
+
+#include <QWidget>
+#include <QString>
+#include <QByteArrayList>
+#include <QChar>
+#include <QSet>
+
+class QContextMenuEvent;
+class QLabel;
+class QPushButton;
+class QMenu;
+class QBoxLayout;
+
+namespace NereusSDR {
+
+class SpectrumWidget;
+class SliceModel;
+class SpectrumStatusOverlay;
+class ImdMeasurementPanel;
+
+/// Container for a single panadapter view: spectrum + waterfall (via SpectrumWidget)
+/// + associated slice overlays. AetherSDR overlay model: a pan picks one DDC for
+/// FFT, any slice whose freq falls within visible range overlays as a flag.
+/// See docs/architecture/2026-05-26-phase3f-multi-pan-multi-slice-design.md §3
+/// (Slice / Pan binding).
+class NEREUS_GUI_EXPORT PanadapterApplet : public QWidget {
+    Q_OBJECT
+    Q_PROPERTY(QString panId READ panId CONSTANT)
+    Q_PROPERTY(int activeSliceIndex READ activeSliceIndex WRITE setActiveSliceIndex NOTIFY activeSliceChanged)
+
+public:
+    explicit PanadapterApplet(const QString& panId, QWidget* parent = nullptr);
+    ~PanadapterApplet() override;
+
+    QString panId() const { return m_panId; }
+    SpectrumWidget* spectrumWidget() const { return m_spectrum; }
+    ImdMeasurementPanel* imdRail() const { return m_imdRail; }
+    ImdMeasurementPanel* imdInspector() const { return m_imdInspector; }
+
+    /// Show/hide this pan's own title strip, which exists only while the pan
+    /// is popped out of the console.
+    ///
+    /// Bench report 2026-08-08: a floated pan "does not live inside a
+    /// container like I would expect". A bare window gave the operator no
+    /// name for what they were looking at and no way back except the OS close
+    /// box, where every other detachable surface in the app (the meter
+    /// containers) carries a title bar with a dock button.
+    ///
+    /// Deliberately floating-ONLY: AetherSDR shows this strip on docked pans
+    /// too (PanadapterApplet.cpp:46-83 [@1e0718ad]), but adopting that here
+    /// would put a 16 px bar on top of every docked panadapter, which is a
+    /// redesign of the docked stack rather than a fix to the float path.
+    void setFloatingState(bool floating);
+    bool isFloating() const { return m_isFloating; }
+
+    /// Associate a slice (its flag will overlay when in visible range).
+    void addSlice(int sliceIndex);
+    void removeSlice(int sliceIndex);
+    QSet<int> associatedSlices() const { return m_associatedSlices; }
+
+    /// The "active" slice: receives tune/mode/filter commands from spectrum clicks.
+    int activeSliceIndex() const { return m_activeSliceIndex; }
+    void setActiveSliceIndex(int sliceIndex);
+
+    /// Display state (client-side, persists via AppSettings)
+    double centerMhz() const { return m_centerMhz; }
+    void setCenterMhz(double mhz);
+    double bandwidthMhz() const { return m_bandwidthMhz; }
+    void setBandwidthMhz(double bw);
+
+    /// Phase 3F Sub-Epic E Task 2: refresh per-pan overlay from active slice state.
+    ///
+    /// `chainIndex` is the ADC chain feeding the slice and must come from
+    /// RadioModel::sliceChainIndex, which is also what RadioModel::
+    /// panBypassState groups by. It is a parameter rather than something read
+    /// off the slice because SliceModel::chainIndex() has no production
+    /// writer: reading it painted "CH 0" on every pan and would have let the
+    /// CH tag disagree with the WIDE pill sitting beside it. Pass -1 for a
+    /// slice bound to no stream; the tag then holds its last value rather
+    /// than claiming chain 0.
+    void updateStatusOverlay(SliceModel* activeSlice, int chainIndex);
+
+    /// The SliceModel properties updateStatusOverlay reads, by name.
+    ///
+    /// The overlay is rebuilt wholesale from the model, so it is correct only
+    /// while every field it paints has a refresh trigger. MainWindow connects
+    /// the NOTIFY signal of each property named here instead of listing
+    /// individual signals at the call site, so a new overlay field means
+    /// adding its property to this one list and nowhere else. Kept next to
+    /// updateStatusOverlay because that is its only reader.
+    ///
+    /// tst_pan_status_overlay asserts every name resolves to a real
+    /// SliceModel property with a NOTIFY signal, so an upstream rename fails
+    /// a test rather than silently stranding the overlay.
+    static QByteArrayList statusOverlaySliceProperties();
+
+    /// Read-backs for the status overlay, mirroring wideBpf() / wideReason().
+    /// The overlay was write-only, so nothing could assert a pan painted its
+    /// own slice rather than the placeholders.
+    QChar   statusSliceLetter() const;
+    qint64  statusFrequencyHz() const;
+    QString statusMode() const;
+    int     statusChainIndex() const;
+    /// Parity Task 18 (C8, R-R3-24, R-R3-34): the words a connected pan with
+    /// no slice shows over its display.
+    static QString noSliceHintText();
+    /// Whether a pan with no slice may say so: true while the radio is
+    /// connected and the window knows the slices it has. The hint shows
+    /// while this is true and the pan hosts no slice.
+    void setNoSliceHintAllowed(bool allowed);
+    /// The hint as shown now; empty when hidden.
+    QString visibleNoSliceHint() const;
+    /// iPhone app plan Task 78 (the several-devices design, section 12):
+    /// another device took this window's receivers, so the empty pan offers
+    /// a take: the hint says so and a Take a receiver button asks the Core
+    /// for a slice here (addSliceRequested), which the Core answers with
+    /// its take-a-receiver question.
+    void setTakeReceiverOffered(bool offered);
+    bool takeReceiverOffered() const { return m_takeReceiverOffered; }
+    static QString takeReceiverHintText();
+    QPushButton* takeReceiverButton() const { return m_takeReceiverButton; }
+    /// Task 78: the TX pill offers Take transmit (SpectrumStatusOverlay).
+    void setTakeTransmitOffered(bool offered, const QString& holderName, bool holderOnAir);
+    SpectrumStatusOverlay* statusOverlay() const { return m_statusOverlay; }
+    /// Remote display status (R-R3-37): the short line is painted under the
+    /// badges, the explanation is the overlay's hover text.
+    void setRemoteDisplayStatus(const PanStatusText& status);
+    QString remoteDisplayStatus() const;
+    QString remoteDisplayExplanation() const;
+    /// The short line as painted at the pan's current width: the longest
+    /// form that fits, never elided.
+    QString visibleRemoteDisplayStatus() const;
+
+    /// Phase 3F: light (or clear) this pan's WIDE pill.
+    /// A pan shows WIDE when the RX preselector chain feeding it is bypassed
+    /// on the wire. The decision is per chain and is made by
+    /// RadioModel::panBypassState; this is the forwarder that keeps
+    /// MainWindow out of the pan's widget tree.
+    void setWideBpf(bool wide, const QString& reason);
+    bool wideBpf() const;
+    QString wideReason() const;
+
+    /// Phase 3F Sub-Epic F Task 13: per-pan Extended view toggle.
+    /// Operator override of the zoom-driven auto-derive on SpectrumWidget.
+    /// Default true (on); persisted per-pan via AppSettings under
+    /// "Pan_<panId>_ExtendedView". When false, the embedded SpectrumWidget
+    /// is held at extendedMode == false regardless of zoom (forced off);
+    /// when true, the zoom auto-derive decides extendedMode dynamically.
+    bool extendedViewEnabled() const { return m_extendedViewEnabled; }
+    void setExtendedViewEnabled(bool on);
+
+    /// Test-only: build and return the right-click context menu without
+    /// exec()-ing it, so a test can find + trigger() its actions without a
+    /// live nested event loop. Mirrors
+    /// SMeterWidget::buildContextMenuForTesting() (tst_smeter_widget_context_menu.cpp).
+    /// NereusSDR-native test seam.
+    QMenu* buildContextMenuForTesting() { return buildContextMenu(this); }
+
+signals:
+    void activated(const QString& panId);  // emitted on any click within applet
+    void closeRequested(const QString& panId);
+    void activeSliceChanged(const QString& panId, int sliceIndex);
+
+    // Phase 3F Sub-Epic E Task 2: forwarded from SpectrumStatusOverlay
+    // so MainWindow can wire TX-arbiter handoff, FilterPolicyDialog,
+    // and chain-swap menu (later tasks).
+    void txBadgeClicked(const QString& panId);
+    void wideBadgeClicked(const QString& panId);
+    /// Carries the pan id as well as the chain the tag was showing. The id is
+    /// what lets MainWindow resolve the chain the same way the WIDE pill
+    /// beside it does -- live, through RadioModel::sliceChainIndex on this
+    /// pan's active slice -- rather than trusting a second, cached answer
+    /// that can disagree with the one on screen.
+    void chainTagClicked(const QString& panId, int chainIdx);
+
+    /// Task B5 (bottom-banner + pan-menu epic, design doc s8.5): both carry
+    /// THIS applet's own panId(), never routed through PanadapterStack::
+    /// activePanId(). "Add slice on this pan" / "Float this pan" used to
+    /// live on the +PAN button's dropdown (Phase 3F Sub-Epic D Task 10,
+    /// retired in Task B4), which sat nowhere near any pan, so "active pan"
+    /// meant whichever pan happened to be active when the operator reached
+    /// the far side of the window. A control drawn on a pan targets THAT
+    /// pan.
+    void addSliceRequested(const QString& panId);
+    /// Task 78: the pan's TAKE TX pill was clicked.
+    void takeTransmitRequested(const QString& panId);
+    void floatRequested(const QString& panId);
+
+    /// The floating-only title strip's Dock button. PanadapterStack wires it
+    /// to the same dockPanadapter() the window close box reaches, so the two
+    /// routes back cannot diverge.
+    void dockRequested(const QString& panId);
+
+protected:
+    /// Right-align the status strip clear of the dBm scale strip. Re-run
+    /// whenever a pill lights or goes dark: the strip's minimum width grows to
+    /// fit its pills, and setGeometry clamps up to that minimum by expanding
+    /// rightward, which walks the strip back under the dBm range arrows.
+    void repositionStatusOverlay();
+    void refreshNoSliceHint();
+    void resizeEvent(QResizeEvent* event) override;
+    /// Delegates to buildContextMenu(). Task B5 added the add-slice / float
+    /// entries at the top of the menu; the pre-existing Extended-view
+    /// toggle stays below a separator.
+    void contextMenuEvent(QContextMenuEvent* event) override;
+    /// Emits activated(panId) on any press in this pan, so clicking a pan makes
+    /// it the active one. Watches the spectrum host and overlay too -- they take
+    /// the press before this widget sees it. AetherSDR PanadapterApplet.cpp:628
+    /// [@6a142807] does the same in its own eventFilter.
+    bool eventFilter(QObject* obj, QEvent* ev) override;
+
+private:
+    /// Workspace visual review Task 26 (JJ, 2026-10-08): the receiver flags
+    /// stay on top of the corner badges (CH, TX, WIDE) wherever they meet.
+    /// The badges' strip is a sibling over the whole SpectrumWidget, so no
+    /// raise() inside the pan can put a flag above it; instead the strip is
+    /// masked out of the area the flags show in
+    /// (SpectrumWidget::receiverFlagRegion). This is the one place the rule
+    /// lives. A mask does not depend on stacking order, so a later raise() of
+    /// the strip cannot undo it, and popups and flyouts keep their own order.
+    /// Re-run when the flags change and when the strip or the spectrum moves
+    /// or resizes (eventFilter).
+    void applyStatusOverlayMask();
+    /// Build the right-click context menu: add-slice / float (Task B5, both
+    /// carrying this applet's own panId()) then a separator then the
+    /// pre-existing Extended-view toggle. Returns a heap-allocated QMenu*
+    /// parented to `parent`; contextMenuEvent() exec()s it and
+    /// deleteLater()s it, buildContextMenuForTesting() hands it to a test
+    /// untouched. Mirrors SMeterWidget::buildContextMenu().
+    QMenu* buildContextMenu(QObject* parent);
+
+    /// Build the floating-only title strip. Constructed hidden by the ctor so
+    /// setFloatingState() is a pure show/hide and the docked pan pays nothing
+    /// for it beyond one hidden 18 px widget.
+    void buildFloatTitleBar();
+
+    void refreshImdPresentation();
+    QBoxLayout* m_imdBodyLayout{nullptr};
+    ImdMeasurementPanel* m_imdRail{nullptr};
+    ImdMeasurementPanel* m_imdInspector{nullptr};
+    QString                 m_panId;
+    SpectrumWidget*         m_spectrum {nullptr};
+    SpectrumStatusOverlay*  m_statusOverlay {nullptr};
+    QWidget*                m_floatTitleBar {nullptr};
+    // Parity Task 18 (C8): shown over an empty connected pan.
+    QLabel*                 m_noSliceHint {nullptr};
+    bool                    m_noSliceHintAllowed {false};
+    bool                    m_takeReceiverOffered {false};
+    QPushButton*            m_takeReceiverButton {nullptr};
+    int                     m_activeSliceIndex {-1};
+    QSet<int>               m_associatedSlices;
+    double                  m_centerMhz {14.225};
+    double                  m_bandwidthMhz {0.192};
+    bool                    m_extendedViewEnabled {true};  // Phase 3F Sub-Epic F Task 13
+    bool                    m_isFloating {false};
+};
+
+} // namespace NereusSDR

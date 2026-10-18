@@ -1,0 +1,44 @@
+<!doctype html>
+<!--
+  The link preview card, public/assets/img/og-card.jpg (1200x630).
+  It carries no version number, so it stays true from release to release.
+  Render it from the repository root with the site served locally:
+
+    python3 -m http.server 8765 --bind 127.0.0.1 --directory website &
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
+      --hide-scrollbars --window-size=1200,630 --virtual-time-budget=3000 \
+      --screenshot=og-card.png http://127.0.0.1:8765/og-card.html
+    sips -s format jpeg -s formatOptions 88 og-card.png --out website/public/assets/img/og-card.jpg
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>NereusSDR link card</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400..600&amp;family=Atkinson+Hyperlegible+Next:ital,wght@0,300..700;1,400&amp;family=Saira:wdth,wght@100..125,300..700&amp;display=swap">
+  <link rel="stylesheet" href="public/assets/css/site.css">
+  <style>
+    html, body { width: 1200px; height: 630px; margin: 0; overflow: hidden; }
+    .card { position: relative; width: 1200px; height: 630px; overflow: hidden; }
+    .card .hero__copy { position: absolute; left: 64px; top: 96px; width: 740px; }
+    .card .hero__copy > * { animation: none; }
+    .card h1 { font-size: 68px; }
+    .card .hero__lede { font-size: 23px; max-width: 600px; }
+    .card .hero__emblem { right: -150px; width: 720px; transform: translateY(-50%); }
+    .card .hero__emblem img { animation: none; opacity: 0.55; }
+    .card .phone { position: absolute; right: 70px; top: 46px; width: 300px; margin: 0; z-index: 2; }
+    .card .phone img { display: block; width: 100%; height: auto; border-radius: 34px;
+      box-shadow: 0 0 0 2px rgba(120, 160, 200, 0.28), 0 30px 80px rgba(0, 0, 0, 0.6); }
+  </style>
+</head>
+<body>
+  <div class="card hero">
+    <figure class="hero__emblem" aria-hidden="true"><img src="public/assets/img/nereus-640.webp" alt=""></figure>
+    <div class="hero__copy">
+      <p class="eyebrow">Free and open source · OpenHPSDR</p>
+      <h1><span class="line">Your station.</span><span class="line line--lit">Wherever you operate.</span></h1>
+      <p class="hero__lede"><strong>NereusCore</strong> runs your OpenHPSDR radio and its DSP at the station. Operate it from a native <strong>desktop</strong>, <strong>iPhone</strong> or <strong>iPad</strong> console, at home or away.</p>
+    </div>
+    <figure class="phone"><img src="public/assets/img/iphone-panadapter.png" alt=""></figure>
+  </div>
+</body>
+</html>

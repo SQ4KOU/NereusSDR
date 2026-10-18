@@ -1,0 +1,3596 @@
+# Changelog
+
+## [2026.10.1] - 2026-10-17
+
+[Website](https://nereussdr.com/) · [User guide](https://nereussdr.com/manual/) · [Discord](https://discord.gg/m35ERjwRe)
+
+Upgrading from 2026.10.0? Start with the [upgrade note](https://nereussdr.com/guides/upgrading-to-2026.10.1.html).
+
+### CAT control
+
+Logging, contest and digital-mode programs can now control NereusSDR with
+Thetis-compatible CAT commands.
+
+- Up to four CAT channels. Each one controls the slices you assign to it, not
+  whichever pan has focus.
+- A channel can listen on TCP, on a serial port, or on macOS and Linux on a
+  virtual serial port (PTY) that programs open like a real one.
+- Programs that speak Hamlib's rigctld protocol connect to a separate rigctld
+  port on the same channel.
+- Configure the channels in Setup > CAT & Network. The CAT applet and the
+  status bar show what is listening and how many programs are connected. The
+  CAT log shows every command and reply, and the tester sends one command at a
+  time without a program.
+- CAT keys the radio (PTT, Tune and two-tone) under the same transmit rules as
+  every other source. Opening a channel or loading settings never keys.
+- Every listener stays off until you turn it on. The CAT channels run only on
+  the Core. A headless Core's CAT is set up from a connected desktop's Setup
+  pages, applet, tester and log, or from the iPhone or iPad app's Tools tab
+  (CAT Control).
+- A remote window can run its own rigctld, at **CAT & Network > rigctld**, so
+  WSJT-X and other Hamlib programs on that computer control the slice the
+  window transmits on and key it as the window. While they key, what they play
+  into NereusSDR TX goes on the air, never the microphone. It is off until you
+  turn it on and listens on 127.0.0.1, port 4532. VFO B is refused, so set the
+  program's split operation to None or Fake It.
+- Serial CAT and serial-pin PTT work in every package: the macOS, Windows and
+  Linux builds and the `nereusd` packages all include serial-port support.
+- When Setup refuses a CAT setting it now says why, in plain words. The
+  **Enable serial CAT** and **Enable input PTT** boxes stay grayed, with the
+  reason as their tooltip, until the device, input source or CTS/DSR input they
+  need is chosen. The same reasons reach a phone or a remote desktop.
+- Thetis commands for features NereusSDR does not have yet (recording, CWX,
+  VAC and memories among them) answer `?;`.
+
+### Antenna rotor control
+
+NereusSDR turns a Yaesu GS-232A or GS-232B rotor over a serial port, or any
+rotor run by Hamlib's `rotctld` (the Core can start `rotctld` itself).
+
+- The Core owns the rotor, so every desktop window and the iPhone or iPad app
+  show one heading. A desktop running its own radio runs the rotor too.
+- The desktop has a Rotor applet with a dial, a Rotor page in Setup > CAT &
+  Network, and drag-to-turn on the compass meter.
+- The Spot List has a Bearing column and a Turn beam to menu item. A switch in
+  Setup > General > Options (off by default) turns the beam when you tune to a
+  spot.
+- Set a north or south end stop and a 360 or 450 degree range. The Rotor
+  applet's Turn to can take the Short path or the Long path.
+- A held turn button stops the rotor when you let go, and a rotor stops if the
+  window that was turning it goes away.
+
+### Native audio engines and live device lists
+
+Each system now plays and records through its own audio system.
+
+- Core Audio on the Mac; Windows audio (shared or exclusive) and ASIO on
+  Windows; PipeWire or PulseAudio on a Linux desktop; ALSA direct on a headless
+  Core. PortAudio stays as **Older drivers**.
+- Device lists update by themselves: AirPods connected mid-session appear.
+  A device that goes away shows "not connected". Speakers fall back to the
+  system default; the microphone and VAX go silent; all switch back when the
+  device returns.
+- Each device card has one **Driver** list above **Device**, replacing the
+  Driver API list and the three WASAPI checkboxes. Your saved choices carry
+  over into it.
+- A remote window's Outputs page has a **Core speaker** card, and the iPhone
+  or iPad Sound panel shows the Core speaker's level and mute. A headless
+  Core's own speaker now plays every receiver routed to the speakers.
+- A missing PC microphone turns the transmit badge amber. A Bluetooth
+  microphone is never opened unless you pick it. On Windows, **VAX TX
+  (virtual device)** is grayed out with a reason.
+- Protocol 2 transmit monitoring is clean while keyed, and remote windows show
+  the six transmit peak readings.
+- Remote listening no longer stutters or lags, and local audio recovers after
+  its source pauses.
+- On macOS the VAX driver now registers under its own identity, so it no
+  longer clashes with another driver built from the same source.
+- On Linux, VAX in two profiles at once no longer breaks the other profile.
+- PortAudio starts when it is first needed, not at launch. The Mac no longer
+  shows a "Virtual cables detected" notice with a Windows badge.
+- A migrated microphone choice is kept on first setup, and a working
+  microphone is not reopened when its reader stalls.
+
+### Workspace look
+
+The workspace look is now the default.
+
+- Containers dock on all four edges, float, or pop out into their own windows.
+  Each header can be shown or hidden with an eye button. Hold Shift, or choose
+  Containers > Arrange Workspace (Ctrl+Shift+A), to arrange. Pop-outs have a
+  pin and a Return button.
+- Workspace profiles, with a profile rail, save and recall whole layouts.
+- With the look on there is no container **Lock**, and saved locks open
+  unlocked.
+- Your saved layout is copied the first time you start with the new look; after
+  that the two looks keep separate layouts.
+- Windows keep their monitor and position in both looks. Text is at least
+  11 px.
+- The S-Meter has a checkbox in Containers and comes back on Reset Default
+  Layout.
+- Ticking an applet in Containers > Applets also shows the container that
+  holds it, whether that container was hidden, disabled, hidden on receive or
+  transmit, or hidden by a macro, and brings its window where you can reach
+  it. The tick reads on only while the applet can be seen.
+- Containers > Hidden also lists containers hidden on receive or transmit and
+  containers hidden by a macro. Choosing one shows it again.
+- An applet that cannot be used right now, such as the amplifier, tuner,
+  RF-Kit or RADE applet, is grayed in its container with the reason under its
+  title, instead of being hidden.
+- Fixed two crashes: a pop-out growing during a drag between monitors on
+  Windows, and removing a popped-out container.
+
+### Display and waterfall
+
+- Clarity is per pan, and selecting another receiver no longer changes the
+  waterfall brightness. Clarity returns after you unkey.
+- A remote picture carries on through a retune instead of blanking, and with
+  **Adjust grid min to track noise floor** on, the remote spectrum no longer restarts.
+- The GPU waterfall no longer shimmers or flickers at its bottom line, and
+  resize drags are smooth.
+- Stale noise-floor lines are gone, and tracking the noise floor can no longer
+  invert the dB scale.
+- Deep zoom caps the FFT at about 0.7 s per transform, locally and in a remote
+  window. FFT size changes in a remote window now take effect.
+- Clicking a slice letter, Take control or a row in the bottom RX chooser
+  brings that slice into view.
+- Tune offset and the TX spectrum stay aligned, and remote TX mini displays
+  draw again.
+- Local zoom stops at what the radio can supply, so no empty edges appear when
+  the radio or the chosen ADC has no wideband stream. Your **Extended view (wideband wings)** choice
+  is kept for a radio that offers it.
+- An extended pan's wideband view follows its active receiver, and is released
+  when the pan or the receiver goes away.
+- A saved display span below 10 kHz (down to 1 kHz) is kept when the slice
+  opens.
+- Notices follow the main window when it moves or resizes, and closing one
+  closes the gap in the stack.
+- The waterfall stays lit while you drag a dock edge, instead of going dark
+  until you let go.
+- The Core does less work for each wide display row it sends.
+- A remote window wider than the shared transmit picture keeps the TX trace
+  and waterfall at their real frequencies instead of stretching them, and TX
+  filter shading comes back after Tune.
+- Each panadapter has a **Display** pill with Spectrum, Levels, Waterfall, View
+  and FFT tabs. Open it from the **Display** button on the pan's strip or from
+  **Display settings...** in the right-click menu, which now keeps only Display
+  Range, Tuning and Notch. Levels holds the spectrum scale and the waterfall
+  levels together, and Background is on View.
+- Setup's Display pages are now Spectrum, Levels, Waterfall, View, Peaks &
+  Markers, FFT & Engine, Transmit Display and Multimeter. They set the default
+  for every pan. A **Settings for:** strip picks All pans or one pan. A pan you
+  adjusted keeps its own value, marked with an amber dot, until you click the
+  dot, choose **Reset this pan**, or set the value back to the default.
+  Changing a default reaches every pan, including pans that are not open.
+  **Setup defaults →** on a pill tab opens the Setup page that holds that tab's
+  defaults.
+- Child rows stay visible, grayed, with the reason they cannot act. Grid
+  spacing follows Grid, averaging time follows averaging, and trace, fill,
+  background and 3D rows follow the chosen view. Each tab has a fixed area for
+  the reason under the pointer.
+- On the pill, Spectrum groups Trace, Grid and Markers, and Waterfall groups
+  Drawing, Overlays and Time. **Normalize to 1 Hz** is available with the
+  Average, Sample and RMS detectors. Rewind explains how much history fits at
+  the selected waterfall rate.
+- New on the pill: **NB Blank**, a Background picture or color with opacity,
+  grid spacing, scale text, and trace and fill colors.
+- Waterfall levels have one chooser: Clarity, Auto, Floor, Manual or Scale.
+  Clarity sets Low and High from the noise floor. Auto sets Low from the
+  weakest signals and you set High. Floor puts Low at the noise floor plus NF
+  Offset and you set High. Manual lets you set both. Scale uses the spectrum's
+  dB Min and dB Max. With Clarity, **Black Level** runs 0 to 100 in half-dB
+  steps with 50 at the noise floor (default 57), and **Color Gain** sets how
+  many dB the colors cover (default 60, which is 38 dB). In Auto, Floor,
+  Manual and Scale they trim Low and High around those defaults. Your saved
+  levels are converted once.
+- The spectrum scale is Manual or Track floor. Each pan's dB Max and dB Min are
+  kept per band, and the pill and the right-click menu's **Ref Level** and
+  **Dyn Range** change the same band value.
+- Normalization, the noise-floor and peak-value markers, and the Track floor
+  choices are saved for each pan. Level calibration pauses tracking and gives
+  each pan its own choice back afterward.
+- FFT size has a **Sizing** choice: **Auto** lets the zoom pick the size,
+  **Hz/bin** follows the bin width you set (0.5 to 200 Hz), and **Fixed** uses
+  the **FFT Size** slider. It is one station setting, shared by every pan and
+  every window connected to the Core, and it is kept after a restart. On the
+  first launch of this version, a saved Hz/bin target above zero opens as
+  Hz/bin and anything else as Auto. A
+  remote window pan picks its FFT size by the same rule as a local pan, so the
+  pan's width in pixels no longer changes it.
+- After a key or un-key every pan keeps its level. The FFT input is cleared on
+  both, and Clarity waits before it measures again: about 11 seconds at a
+  262144-point FFT and 48 kHz.
+- Setup's Waterfall page has **Edit Custom gradient…** for the receive
+  waterfall, as Transmit Display has for transmit. Pick the Custom scheme to
+  use it.
+- The phone's Setup shows the same Display pages from a 2026.10.1 Core, with
+  the same All pans and Pan 1 choice, and the waterfall levels chooser on the
+  phone's Display sheet has the same five choices.
+- Fixed: Setup's **dB Step** now sets the spacing of the horizontal dB lines on
+  every pan. It was saved and drew nothing. With a dB range of 50 or less the
+  lines were 5 dB apart; they are now dB Step apart (10 unless you change it).
+- Fixed: the FFT size looking like it reset after a restart (Setup showed the
+  zoomed size instead of the one you chose).
+
+### Transmit, two-tone and PureSignal
+
+- Two-tone level is one Setup value and is no longer part of TX profiles. A
+  level saved at the old -6 dB becomes 0 dB, so PureSignal can calibrate; that
+  is 6 dB more two-tone drive if you never changed it.
+- The Core saves transmit edits made from a remote window.
+- A fast two-tone off and on restarts the test, and a remote window's
+  PureSignal two-tone stays keyed.
+- TUNE clears on the press that stops it.
+- Selecting RADE no longer crashes on Windows.
+- A TCI program's key never needs this computer's microphone: keyed audio from
+  a program is its own audio, or silence.
+- Remote MOX, TUNE and 2-TONE lights start in the right state.
+- PureSignal status uses less CPU.
+- The Tuner Genius XL's OPERATE and STANDBY follow the tuner's own state.
+- The saved transmit slice is kept when slices are restored on connect,
+  instead of falling back to slice A.
+- A TCI program that connects late gets the transmit slice's frequency at once.
+- The TX applet has a **DUP** button next to PS-A. It is the same Display
+  Duplex setting as the View menu item and the container DUP button.
+- The **PureSignal** applet and the **PureSignal Bench** show the same
+  readings. **CORRECTION** reads **Applied**, **Off** or **Unavailable**, and
+  **CALIBRATION FEEDBACK** shows the raw number on a bar with the classes
+  **Too low** (90 or below), **Low / marginal**, **In range** (129 to 181)
+  and **High**, the calibration stage, and the successful and attempted
+  calibration counts. The applet's old gauges, lamps and iteration count are
+  gone. Right-click an enabled button or the readouts in the applet, or press
+  **Details →**, to open the Bench.
+- The Bench has two button rows (**Two-tone**, **Single Cal**, **Start Auto**,
+  **OFF**; **Apply Current**, **AmpView**, **Advanced**), a **Calibration**
+  tab and an **IMD measurements** tab, and a **Calibration details** group in
+  place of **Calibration Information**. **Save**, **Restore** and **Always On
+  Top** moved to a strip at the bottom, and **Advanced** now hides that strip
+  too. The **Feedback Level** and **Correcting** readouts became badges named
+  **Feedback Level** and **Correction applied / feedback >90**.
+- **AmpView** has a cursor readout of the input, amplifier and correction
+  magnitude or gain and phase at the cursor (click or drag, or the Left,
+  Right, Home and End keys), clearer series names, and a status line that
+  says whether the curve is **Current** or **Retained** and how old it is.
+- Two-tone intermodulation is measured on the display. With **Show 2Tone
+  measurements** on (**PureSignal Bench > IMD measurements**), a two-tone test
+  keyed and **View > Display duplex (DUP)** on, the keyed pan marks the tones
+  and the third- and fifth-order products, and reads **WORST IMD3** and
+  **WORST IMD5** in dBc, with each product's dBm, dBc and MHz and derived
+  OIP3 and OIP5.
+- A rail above the spectrum shows the measurement status (for example
+  **Waiting for two-tone TX** or **Products outside view · widen span**) with
+  **Enable DUP**, **Guides**, **Inspect** and **×** controls. **Inspect**
+  opens the full readout beside the pan, or below a narrow one.
+- The waterfall draws the same guides during a measured test and tags rows
+  **Correction applied** or **Correction off**, so you can see where
+  correction changed the products.
+- Protocol 1 radios get their transmit packets from a thread of their own, as
+  Protocol 2 radios do. Before, a busy receive loop on a Pi could hold those
+  packets back for long stretches while keyed; a Hermes Lite 2 drops PTT
+  when its packets stop, so a held key went on and off.
+- Physical PTT from a Protocol 1 radio is read in the order the radio sent it.
+- A remote microphone on a Protocol 1 radio sees the radio's transmit queue,
+  so its latency handling can use it.
+- On the Mac, the thread that feeds the microphone to the radio while
+  transmitting now gets the high scheduling class it asks for. macOS refused
+  it before, so the thread ran at the default class.
+- Saved TX profiles show in the TX and Phone/CW pickers at startup, instead of
+  leaving them empty until a profile is chosen again.
+- While transmitting, an edit to the RX1 S-ATT readout (which shows the
+  attenuation on TX then) changes the TX attenuation and leaves the receive
+  value for when you unkey.
+- When a keyed remote window or phone loses its link, the Core cuts its
+  transmit 400 ms after the link goes quiet (for any device whose media
+  connection is open), even while the Core's main thread
+  is busy. Before, a stall on that thread (about half a second in a Windows
+  desktop Core with the screen locked) could keep the radio keyed for about a
+  second.
+
+### RADE digital voice
+
+- Two new container meters, **Microphone waveform** and **Decoded speech
+  waveform**, draw the audio RADE works with. Add them in **Containers > Edit
+  Container** from **Available**. They show the container's slice when it is
+  in a RADE mode; the microphone one draws only when that slice is the
+  transmit slice, and can show the conditioned encoder input or the raw
+  microphone.
+- A remote desktop shows the waveforms from a 2026.10.1 Core. An older Core
+  gives a reason in the meter.
+- Experimental **RADE2-U** and **RADE2-L** modes are off by default. Start the
+  Core with the environment variable `NEREUS_ENABLE_RADE_V2` set to `1` to
+  show them in the Mode menu, the RX applet and the VFO flag. They send and
+  show no callsign at the end of an over.
+
+### Receivers and radios
+
+- A short Protocol 1 dropout recovers in place instead of costing about 16
+  seconds.
+- Remote receive audio returns at once after you unkey.
+- Anvelina Pro 3: two bands on one input no longer go deaf, and 6 m is
+  handled.
+- An Anvelina Pro 3's third receiver no longer shows a comb over a floor
+  about 58 dB too high. On the bench, the radio's receiver channel DDC4
+  sent damaged samples, and the third receiver used it. The third and fourth
+  receivers now use DDC5 and DDC6. This applies when **Radio Model** is set
+  to Anvelina Pro 3 in the **Connect to Radio** window (pick the radio in the
+  list, then choose the model). The radio reports itself as an Orion MkII, so
+  auto-detect does not choose it.
+- The RX applet's TX antenna menu grays out a port that Setup blocks for
+  transmit, and refuses it if the block changes while the menu is open.
+- The RX applet's AGC-T AUTO acts on its own slice. A desktop acting as a Core
+  no longer shows "NF awaiting measurement".
+- Remote C-Tune controls stay current with receiver authority.
+- The attenuator and preamp are saved and sent to the radio when you connect,
+  and a desktop Core saves attenuator changes while it runs.
+- The receive sample rate stays correct after a settings restore is refused.
+- Receivers come back the way you left them after a relaunch. L/R pan,
+  binaural, squelch, APF, the FM settings, the DIGL and DIGU offsets and the
+  RTTY mark and shift are now saved for each receiver, and AGC-T AUTO is kept
+  per receiver. Receivers B, C and D run on the values they show, and come
+  back at connect without a Core too.
+- A change is saved to the receiver it was made on, not the active one.
+- Filter and AGC edits stick when you tune across a band right after them.
+- RX-only antennas (BYPS, EXT1, XVTR, EXT2) stay selected instead of jumping
+  back to ANT1.
+- The RX1 preamp checkbox appears once the radio is identified.
+- The Alex 1 and Alex 2 filter tabs have **Reset filter defaults**, which puts
+  that tab's filter edges back. Bypass and routing settings are kept.
+- On an Anvelina Pro 3, Ext2 is labeled **RX BYPASS on TX**.
+- The NNR quick controls stay on screen, and scroll when they don't fit.
+- FM squelch opens again. With FM squelch on, an FM receiver no longer stays
+  muted whatever its threshold. **Squelch Threshold** on
+  **File > Settings... > DSP > FM** now reads 0 to 100, where 100 is the
+  tightest, instead of dB. A new receiver starts at 100. 2026.10.0 did not
+  save this threshold, so after the update every FM receiver starts at 100;
+  lower it if squelch stays closed. The CAT SQ, ZZSQ and ZZSX commands set
+  the same threshold as before.
+- The radio's firmware shows its second number where the radio reports one,
+  so an Anvelina Pro 3 on gateware 2.2.14 reads 22.14 instead of 22 and a
+  Hermes Lite 2 on 74.2 reads 74.2 instead of 74. It shows in the radio
+  list, Add Custom Radio, **Radio > Protocol Info**, the station block,
+  **File > Settings... > Diagnostics > Radio Status** and support bundles,
+  and a remote window or the phone shows the number its Core sent. An
+  ANAN-G2, and any radio that reports no second number, reads as before.
+- With AGC Off, a receiver now runs the **Fixed Gain** that **File >
+  Settings... > DSP > AGC/ALC** shows, 20 dB by default. Before, a receiver
+  left at 20 dB ran 60 dB, so AGC Off is about 40 dB quieter than in
+  2026.10.0. The **Fixed Gain** and **Max Gain** boxes also follow a change
+  made by CAT, TCI or a remote window.
+- Every receiver starts with the sizes saved on **File > Settings... > DSP >
+  Options**. Before, receivers B to D did not take them until their next mode
+  change and until then ran a 4096-sample block with a Linear Phase filter,
+  85 ms of delay. They now run the block
+  size, filter size and filter type for their mode, 64, 4096 and Low Latency
+  unless you changed them, so expect less delay and a different filter shape
+  on those receivers.
+- A change on the **DSP Options** page now reaches every receiver in the
+  mode group you edited, not only the first. The FM row starts at 64 for
+  receive and transmit, which is what ran; it showed 256 and 128.
+- With Auto AGC-T on, the AGC threshold no longer drops as you zoom a pan in.
+  It used to fall 3 dB each time the zoom doubled the FFT size, up to 15 dB on
+  a 192 kHz receiver, so zoomed in it now sits higher than before, where it
+  sits at full span. The FFT Size slider no longer moves it either, and a
+  local console and a Core set the same threshold for the same band noise. The
+  "NF" number beside AGC-T shows the noise floor that threshold is built from,
+  so it no longer drops as you zoom in either.
+
+### iPhone and iPad app
+
+- Tools has a **CAT Control** page, and a new **Rotor** page with Rotor setup.
+  A spot's details show its Bearing and a Turn beam button.
+- The Sound panel has Radio speaker and Core speaker sections, and its Mute
+  becomes **Mute this phone**.
+- The picture carries on through a retune.
+- The mode list shows **RADE2-U** and **RADE2-L** with an asterisk, and a note
+  that they are experimental, when the Core has turned them on.
+
+These need a 2026.10.1 Core. An older Core grays them with a reason, and older
+Cores and apps still connect.
+
+### Core installs on a Pi, Rock or Linux computer
+
+- Every SBC install and every `.deb` package gives the Core sound-card access
+  through an audio drop-in. The Pi 4 and Rock installers and the station image
+  also add the serial drop-in that rotor and serial CAT need on the Core; the
+  `.deb` packages do not ship it. See the Core install guide.
+- Building the PulseAudio engine from source on Linux needs `libpulse-dev`.
+- The Rock installer adds a drop-in that keeps logins from switching on the
+  CPU controller, which costs the Core its real-time priority on the Rock's
+  kernel. Restart the Rock once after installing. This is not yet confirmed
+  on a Rock.
+- On Windows the Core can lock its signal-processing buffers in memory; before,
+  Windows refused the lock and logged a warning for every FFT buffer.
+- On a board with slow and fast cores, such as the Rock 5C, the Core puts the
+  radio connection on a fast core beside the DSP thread, gives the first
+  receiver a fast core to itself, and lets spectrum use the signal-processing
+  cores. With four receivers at 1.536 MHz, kernel packet drops on the Rock
+  fell from about 12,000 a second to about 1. With VOX on, the receivers keep their
+  fast cores between transmissions. Pi 4, Pi 5 and x86 placement is unchanged.
+- A Core on Linux is now given the network receive buffer it asks for. It
+  asks for 4 MB on the socket its radio sends to, and Linux granted only what
+  its limit (`net.core.rmem_max`) allowed: 212992 bytes on a Rock 5C, which
+  three or four wide receivers fill in 6 to 9 ms. The `nereusd` packages, the
+  station images and the Pi 4 and Rock install scripts now install
+  `/usr/lib/sysctl.d/10-nereusd.conf`, which raises that limit to 4 MB, and
+  apply it at install without lowering a limit that is already higher. This
+  is the only system setting the packages and the Pi 4 scripts change (the
+  Rock script also writes a login-manager drop-in); removing the package or
+  the file undoes it from the next system start. The Core's log
+  now says how much of the buffer it was given. See "The system setting the
+  Core's installer changes" in the README.
+
+### Settings, support and spotting
+
+- Support bundles keep the settings and audio device choices they are allowed
+  to.
+- Import Settings survives the save when you quit.
+- Turning VAX on and off returns to the right microphone.
+- FreeDV and PSK Reporter send one version tag.
+- A window no longer freezes for hours while it redials through the
+  rendezvous route.
+- USB audio inputs named "Line" are no longer offered as virtual cables.
+- The Connections picker closes once the radio you chose there connects, or
+  the Core you chose signs you in. A pending or failed attempt keeps it open.
+- Settings are saved when the computer logs off or shuts down, not only on a
+  normal close.
+- Each desktop profile keeps its own filter impulse cache, so closing one
+  profile no longer deletes the cache another profile saved.
+- Network Diagnostics names the sound system the way the Audio pages do
+  (Core Audio, Windows audio, ASIO, PipeWire, PulseAudio, ALSA direct or older
+  drivers) instead of always reading WASAPI or CoreAudio.
+- The 2-Tone tooltip names its page, Settings > Test > Two-Tone IMD, and the
+  flag's squelch slider tooltip says it sets the 0 to 100 squelch, with the AM and FM
+  thresholds on their DSP pages.
+
+### Separate computer and radio speaker volumes
+
+The header now has two volume controls: PC for this computer's speakers and
+RADIO for the speaker on the radio.
+
+- RADIO sets and mutes the radio's own speaker output without changing the
+  computer's volume, and PC no longer changes the radio speaker. Each slice's
+  AF level and mute still apply to both.
+- RADIO is saved for each radio. With a Core, the Core controls the radio's
+  speaker: every remote console and the iPhone or iPad app show the same
+  setting, and a change on one reaches the others.
+- On a narrow window the two controls stack.
+- Radios with a switchable speaker amplifier (on Protocol 2: the ANAN-G2,
+  ANAN-G2 1K, ANAN-7000DLE, ANAN-8000DLE, Anvelina Pro 3 and Red Pitaya) get a
+  Speaker amplifier choice in Setup > Audio > Outputs: Normal, Off while
+  transmitting (it stays on for CW and Tune so you hear the sidetone) or
+  Always off. Muting RADIO also switches the amplifier off. On other radios the
+  choice is grayed out with the reason. The ANAN-G2E is left off until it is
+  tested.
+- Drawn icons replace the emoji on the desktop's volume and mute buttons.
+
+### Audio Setup regrouped
+
+Setup > Audio is now Outputs, Microphone, Digital modes, TX Profile and
+Advanced, and each control appears on one page only.
+
+- Outputs holds this computer's speakers, the headphones and the radio speaker,
+  with a Sound system line that says which audio system NereusSDR uses.
+- Microphone holds the PC microphone and the radio's mic jack; the one not in
+  use is grayed out, never hidden. Mic gain applies to whichever is picked.
+- Digital modes holds VAX and TCI.
+- Every page opens at the top. Your saved audio settings carry over, and the
+  Driver choice picks up your saved Driver API and WASAPI choices.
+
+### Tuner and amplifier meters while transmitting
+
+- The Tuner Genius XL and Power Genius XL meters follow the signal while you
+  transmit or tune: NereusSDR asks the tuner for its readings up to about 16
+  times a second and the amplifier up to 10 times a second while keyed (the
+  tuner also while it reports tuning), and for two seconds after. In receive
+  the tuner's readings now update four times a second; it was once a second.
+- The Tuner Genius XL, Power Genius XL and RF2K-S panels show forward power as
+  one large bar with its scale, a limit marker and a mark that holds the
+  peak. Reflected power and SWR are slim rows under it, and the Power Genius
+  XL and RF2K-S panels add temperature. Each row has its number on it (whole
+  watts and whole degrees).
+- Forward power, reflected power and SWR show dashes when no power is passing,
+  where they used to read 0 W and 1.00: the Power Genius XL when it is not
+  transmitting, the RF2K-S at 0 W forward, and the Tuner Genius XL below
+  0.5 W forward. Temperature stays live. On the amplifier panels forward
+  power turns red past the 1500 W legal display marker; on the Tuner Genius XL
+  panel the bar runs 0 to 200 W with its marker at 125 W, and 0 to 2000 W
+  with the 1500 W marker when an amplifier is in OPERATE. SWR turns red past
+  2.5 and temperature past 80 °C. Reflected power has no limit marker. The
+  RF2K-S line under the meters now shows only volts and amps.
+- Main power meters use a connected amplifier in OPERATE, with Power Genius
+  XL taking precedence over RF2K-S. They show its forward power and SWR on
+  a 0 to 2000 W display; standby or disconnection restores the radio's
+  readings and scale. Reverse power on a meter stays the radio's reading.
+  The TX applet's **Power** gauge shows the radio's own power as a small
+  **DRIVE** figure while you transmit on an amplifier, and its gauges now
+  show dashes instead of 0 and 1.0 when you are not transmitting. The
+  1500 W marker is visual only, and reported readings such as 2300 W remain
+  complete. It does not change drive, keying or output controls.
+- The phone shows the same readings. The Power Genius XL, RF2K-S and Tuner
+  Genius XL pages put each reading in its gauge title (for example **Fwd Pwr
+  850 W**, or `--` when there is none), so the Power Genius XL page no longer
+  has a separate **Output** row; the three pages gain a **Ref Pwr** gauge,
+  the RF2K-S line shows only volts and amps, and the TX panel shows
+  **DRIVE** beside the meter while an amplifier is in use and you are keyed.
+  The Live Activity's forward power and SWR follow the same readings and
+  show dashes when there is none.
+
+### Tuner Genius XL firmware 1.2.44
+
+- A Tuner Genius XL on firmware 1.2.44 connects again. That firmware adds a
+  field to the tuner's network announcement, which NereusSDR rejected, so the
+  tuner stayed disconnected after the upgrade.
+
+### Fixes
+
+- The Power Genius XL connection no longer drops and redials by itself, on
+  Windows often exactly 90 seconds after connecting. NereusSDR asked the
+  amplifier for its status again before it had answered the last request (a
+  30-second keepalive request landing on top of the meter poll, or the poll
+  outrunning a slow amplifier), and the amplifier closed the connection.
+  Now one status request waits for the answer to the one before. The Tuner
+  Genius XL connection follows the same rule; it had not been seen to drop.
+- With the S-meter set to Max Bin, each slice's flag shows its own signal. In
+  a window running its own radio, every flag showed the reading of whichever
+  pan was clicked last.
+- A desktop window that other windows or phones sign in to now shares its
+  Tuner Genius XL, Power Genius XL and RF-Kit RF2K-S with them: meters,
+  OPERATE and STANDBY, the tuner controls, connect and disconnect. Before,
+  only a headless Core shared them, and a window signed in to a desktop saw
+  "Updating the Core may help" with nothing to control.
+- Tuning from a remote console no longer makes the receive audio stutter. The
+  Core saved its settings file half a second after a tuning step, on the same
+  thread that sends the audio, and nothing was sent until the disk finished
+  (a third of a second and more on a Rock 5C). The timed save now writes the
+  file on its own thread. Saves at quit, at disconnect and at station handover
+  still finish before the program goes on.
+- The same pause no longer follows other changes made on a running Core: the
+  attenuator and preamp, the Core speaker's level, mute and device, VAX
+  levels, TCI server settings, amplifier and tuner addresses, the rotor setup
+  and presets, the transmit display settings, the radio list, and the
+  accessory fault and limit records. Each of these saved the settings file on
+  the thread that sends the audio and now hands it to the same writer thread.
+- The Power Genius XL's OPERATE button works again in a NereusSDR window
+  that runs its own radio. Since 2026.10.0 the click was sent only by the
+  headless Core (`nereusd`); in the desktop app it did nothing.
+- On Windows, closing the window with "Keep it running when NereusSDR is
+  closed" checked starts the background Core. In 2026.10.0 Windows refused
+  the startup task the app wrote, and every close ended with "The background
+  Core could not start." A start that fails now says why, on every system.
+- The background Core is the Core the window ran, so paired computers and
+  phones can sign in to it. Started from the default profile it kept an
+  identity and a list of paired devices of its own, and a paired device
+  could not reach it. It also uses the FFT plans the app has saved, instead
+  of building them all again before it takes the radio, which took minutes
+  the first time.
+- A TCI program set to the second receiver (WSJT-X on receiver 2, for one)
+  is no longer told that receiver 2 is off immediately after its key is
+  accepted. That contradictory state could make the program abandon PTT and
+  miss its release. A key or TUNE now names only the receiver that transmits,
+  as Thetis does; the initial state names that receiver too.
+- A remote window shows Take transmit whenever it does not have transmit,
+  including when no device does, and one click takes it. A program cannot
+  transmit until the window has transmit; when a program's request is refused
+  for that reason, the notice now says so and names the button. Before, the
+  button appeared only while another device had transmit.
+- The Windows installer and portable zip now include every Qt module the app
+  loads, so it starts without a missing-DLL error such as
+  "Qt6WebSockets.dll was not found".
+- When a TCI app that asked for fast sensor updates disconnects, the other
+  apps go back to their own rate.
+- A desktop TCI program never gets a phone slice's frequency, at connect or
+  while the phone holds transmit.
+- A window signed in to a Core no longer makes the Core bypass an input's
+  Alex filters for a moment when a slice moves to another band. A removed
+  receiver is not asked for again, and sentences about receivers in use name
+  "the Core" where the Core's own position used to be left blank.
+- On a Mac with VoiceOver or another accessibility tool on, the CAT setup
+  pages, device lists, rotor page, VAX cable picker, Spot List and FreeDV
+  station table no longer crash the window when their rows change.
+- NereusSDR builds against OpenSSL 4.
+- A window no longer fails to reach its Core through the remote access
+  service. The window left the service as soon as its end of the connection opened, and
+  the Core then closed the connection before its own end opened, ending in
+  "The Core could not be reached from here."
+- On Windows the background Core started at sign-in or at window close runs
+  at normal priority, as one started from its shortcut does. Before, Windows
+  ran it below normal, with low disk and memory priority.
+- On Windows, quitting no longer hangs while the last settings save finishes.
+- Closing a remote window while it is connected to a Core no longer reads
+  freed memory, which could crash it on exit.
+- On Windows the warning signs on the PureSignal and DSP Options pages are
+  drawn as text instead of color emoji.
+- On the Mac, a remote window can no longer hang when its microphone stops
+  while Core Audio is slow to answer at startup.
+- On the Mac, the microphone no longer takes up to about two minutes to start
+  after launch. NereusSDR now sets its own Mic Mode to Standard at each
+  launch, so macOS does not apply Voice Isolation to it; Voice Isolation or
+  Wide Spectrum picked for NereusSDR in Control Center is back at Standard at
+  the next launch. The first window can appear up to about a second later
+  while this is done.
+- On a Mac with a Protocol 2 radio, the transmit sender no longer waits on a
+  Core Audio lookup when the radio connects. Under load that lookup took a
+  quarter of a second to nearly two seconds, and no transmit samples went out
+  until it answered; a disconnect right after a connect waited for it too.
+- A remote window with **VAX TX** as its transmit source sends what programs
+  on this computer write to its VAX TX device. Before, it sent the PC
+  microphone instead. The TX row meter on its **VAX** applet now shows that
+  audio.
+- In a remote window, a slice change the Core refuses goes back to the Core's
+  value, and the window shows the Core's reason. Before, the window could keep
+  a refused tune step until the next reconnect, and a refused change showed no
+  reason.
+- A phone or window that connects to a Core sees one active slice, so TUNE
+  and transmit go to the slice it shows. Before, a phone could show its own
+  saved slice on 40 m while TUNE keyed the Core's slice on 20 m. Each device's
+  active slice is also marked again when transmit is taken or released, a
+  device leaves, or a saved layout is restored.
+- A window that reaches its Core through the remote access service before the
+  connection's path is known now keeps looking for a better path. Before, it
+  counted as already direct, so its better-path search never tried the
+  direct route through the service again. The log now says which addresses
+  each path search tries or drops and why, and how each attempt ended.
+- A remote window whose media starts on the web relay now follows a move to
+  a direct secure WebSocket (WSS) at once. Where UDP between the window and
+  the Core is blocked but TCP port 443 works, it used to wait 40 to 85
+  seconds first. Audio and display kept flowing on the relay meanwhile.
+- A remote window's receive audio rides out a pause in the network of up to
+  2.5 seconds instead of restarting, and comes back with no added delay.
+  Before, half a second with no packets restarted it, which added 1.3 to 2.4
+  seconds more silence.
+- A remote window no longer starts with no sound until you mute and unmute. It
+  opens its speakers when the window starts, and after a speaker fault it asks
+  the Core for audio again on its own (after 1, 2 and 4 seconds, then every 4
+  seconds) until it plays; the problem and **Retry audio** then clear. While
+  this computer's list of audio devices is still coming in, the status reads
+  Waiting for audio from Core, for up to 10 seconds, instead of showing a
+  problem. A speaker or headphones device set to a format remote playback
+  cannot play now says so and is not asked for again until you change it. A
+  fault that comes while the window's connection is moving still tells the
+  Core to stop sending audio.
+- When a remote window's audio and displays move to a new connection, as after
+  the network drops and comes back, the window asks the Core again for
+  everything the move lost: receive audio, the headphones mix, the transmit
+  monitor, streams for programs on this computer and pan displays. Before, the
+  receive audio could stay silent until you muted and unmuted, and a display
+  being set up could stall.
+- In a remote window, a pan whose span the Core narrowed no longer asks for a
+  larger FFT as if you had zoomed in. It sizes the FFT from the span it asked
+  for, the same span it sends.
+- A remote window's VAX receive audio has fewer repeat dropouts. After a gap
+  it keeps a larger reserve, up to a quarter second, so the next short pauses
+  in the network link are not heard, and its pitch holds steady through them.
+  Before, each pause was a gap a program such as WSJT-X heard, and the pitch
+  could move by up to about 25 Hz, enough to cost FT8 decodes. The larger
+  reserve moves WSJT-X's DT by up to about 0.12 s.
+- When a Core stops naming a direct address, a desktop window and the iPhone
+  and iPad app now drop it, also from the addresses they reached the Core on.
+  That includes a Core reporting that it has none, as after IPv6 is turned off
+  on it. The address the current connection uses goes once a connection on
+  another address is made. Before, a Core's empty list was ignored and an
+  address it had named stayed, so a dead address was dialed on every
+  reconnect.
+- A remote window's VFO flag level meters now work when there is no S-meter
+  item.
+- On Linux, a window closed while maximized or full screen comes back with
+  its panadapter and waterfall drawn. Before, they stayed blank.
+- On a Mac, a remote window or Core's connection no longer fails to open
+  because another program, such as an Android emulator, holds the same IPv4
+  port. Before, the other program could get the traffic and the connection
+  timed out.
+- The receive S-ATT no longer ends up at its transmit value when you key again
+  while the radio is still finishing an unkey, or disconnect from the radio
+  while transmitting. Before, the next receive, or the next connect, used the
+  transmit attenuation (31 dB, or the band's TX ATT), and on HPSDR boards the
+  preamp stayed off.
+- Changing band while transmitting no longer saves the transmit attenuation,
+  or on HPSDR boards the preamp the key turned off, as the receive values of
+  the band you left. The S-ATT readout keeps showing the transmit value until
+  you unkey, and the unkey puts back the new band's receive S-ATT and sends it
+  to the radio. Before, the readout jumped to the new band's value while the
+  radio stayed on the transmit value, and the unkey put back the old band's
+  value on the new band.
+- Disconnecting from the radio or quitting with VAX TX as the microphone
+  source can no longer crash NereusSDR. The transmit audio now stops before
+  the audio devices close.
+- A floating container window that would be shown with its header off every
+  screen is moved back where it can be reached: when it is shown again, at the
+  end of a transmit, or when a monitor is added, removed or resized. Before,
+  the Rotor could read as ticked while its window sat off every screen.
+- A slice you control that was placed on a pan this window does not show now
+  moves onto the window's first pan. Before, it sat on a hidden pan: it played
+  but could not be seen, and the hidden pan still drew a spectrum. The
+  window's layout is not changed.
+- A Core sends its spectrum and waterfall to remote windows and phones from a
+  thread of its own, so they keep flowing while the desktop app that runs the
+  Core is busy drawing. Before, a Windows desktop Core with the screen locked
+  sent them only 2 to 4 times a second. The RADE waveform meters still pause
+  while it is busy.
+
+## [2026.10.0] - 2026-10-05
+
+**Your station. Wherever you operate.**
+
+[Website](https://nereussdr.com/) · [User guide](https://nereussdr.com/manual/) · [Discord](https://discord.gg/m35ERjwRe)
+
+Upgrading from 0.5.2? Start with the [upgrade checklist](https://nereussdr.com/guides/upgrading-to-2026.10.0.html).
+For a new station computer, follow the [Raspberry Pi OS Lite / Armbian Core install guide](https://nereussdr.com/guides/install-core-sbc.html).
+
+2026.10.0 brings together the work since 0.5.2: independent receivers, a shared
+station Core, remote desktop and native iPhone/iPad operation, IPv6-aware
+remote access, WDSP 2.10 with NNR and PureSignal 3, a new 3D display, native
+TX EQ/CFC editors, and a console built around movable applets and configurable
+meter objects.
+
+This is the first release using **calendar versions**. `2026.10.0` means the first release in October 2026. Another release that month will be `2026.10.1`; the first release in November will be `2026.11.0`. Releases continue to ship when ready. Existing releases keep their original numbers.
+
+## The Core and GUI can run in different places
+
+The **Core** owns the radio connection and station state. It runs receiver
+and transmit DSP, noise reduction and PureSignal, computes spectra, manages
+station audio and accessories, and decides receiver and transmit authority.
+The **GUI** is your console: it renders VFOs, pans, waterfalls,
+meters and editors, sends control requests, plays received audio and sends
+microphone audio to the Core. Radio processing stays with the Core as
+you move between consoles.
+
+There are two ways to run it. A local desktop runs the Core and GUI together.
+For a remote station, headless **`nereusd`** runs beside the radio while the
+GUI runs on a Mac, Windows or Linux computer, iPhone or iPad elsewhere.
+Several paired devices can share one Core within the station's capacity.
+The Core coordinates receiver ownership and a single transmit holder.
+
+The headless Core can run on a suitable Linux **single-board computer (SBC)**,
+including a Raspberry Pi inside an **ANAN-G2**, or a separate SBC beside the
+radio. Development testing included a **Raspberry Pi 4** and a **Radxa Rock 5C
+with 2 GB RAM**. Other compatible SBCs can host the same Core; sustainable
+receiver count, DSP features and display load depend on the board and its
+configuration. A display and a locally running GUI are not required at the
+radio. Keep the radio and Core at the station, and take the console with you.
+
+### A native iPhone and iPad console
+
+The **native iPhone and iPad app** is another full operator console for the
+same Core. It provides live spectrum/waterfall and VFO
+flags, touch tuning and receiver controls, received audio, microphone uplink
+and PTT, transmit readings, station Setup, spots and accessory pages. It uses
+the same station identity, pairing, receiver ownership and transmit-holder
+rules as a desktop GUI. The phone or tablet renders station data while the
+Core runs the radio and DSP, including the transmit processing chain.
+
+This is a major part of the Core/GUI split: you can use a desktop,
+iPhone or iPad with the radio and its processing remaining at the station.
+The mobile app has its own TestFlight/App Store delivery process. Desktop
+and Core packages do not install it; mobile availability is announced separately.
+
+Native EQ/CFC controls bring voice shaping to the phone. Filter Presets, local
+PA peak/minimum readings and resets, named TX profile saving, overwrite
+confirmation and unsaved-profile switching join the console. TX profile changes
+track the full set of saved settings.
+When a setting needs confirmation, the displayed Core value and your pending
+edit stay distinct. Old-session replies cannot change a new session's
+transmit authority.
+
+### Reaching the station through the RV server
+
+The **rendezvous (RV) server** is a separate network service that helps a
+GUI reach a Core across different networks. Both ends contact the configured
+RV service. The Core registers its station identity with the RV signalling
+service; the GUI asks for an introduction to that station. The service passes
+connection offers and network candidates between them and provides a pairing
+mailbox when the devices are not on the same network. The Core authenticates
+the device and retains all control and transmit-authority decisions.
+
+After introduction, the station session uses its own connection. It can run
+directly between the GUI and Core, through a **TURN relay** when a direct path
+is unavailable, or through the separate **WebSocket relay** for a network that
+only passes web traffic. The RV service issues short-lived relay credentials;
+its signalling process handles introductions rather than ongoing session
+traffic. The signalling service, TURN relay and WebSocket relay are separate
+parts of the RV server installation.
+
+A directly reachable Core on the same LAN or a VPN can also be selected by
+address. Core Settings shows the chosen station, connection and audio path,
+so you can see which Core is in use and how the session is connected.
+The RV server provides reachability; the Core continues to own the radio and
+perform the DSP on every path.
+
+### IPv6 and CGNAT/mobile networks
+
+The station link, LAN discovery and connection selection support **IPv4
+and IPv6**. Clients try usable IPv6 addresses alongside IPv4 alternatives,
+and the RV installation offers relay hosts for both address families. This
+lets a phone on an IPv6 mobile network reach a compatible station using
+IPv6. This applies to Core/client and RV networking; the Core continues to
+use the radio's existing OpenHPSDR connection.
+
+This matters on **carrier-grade NAT (CGNAT)** and mobile broadband networks.
+CGNAT shares an IPv4 address at the provider, so a forwarding rule on the
+home router alone does not provide an incoming route through that provider.
+A usable global IPv6 path can provide direct connectivity when both ends and
+their firewalls permit it. When that path is unavailable, RV-assisted
+connection setup and the TURN/WebSocket relays provide alternatives.
+
+For example, [T-Mobile's Home Internet documentation](https://www.t-mobile.com/support/home-internet/connect)
+states that its gateways do not offer configurable NAT/port forwarding.
+IPv6-aware connection selection and outbound relay paths are therefore
+important for stations and mobile consoles on networks with those limits.
+The actual selected route and its audio status remain visible in Core Settings;
+carrier, router and firewall conditions still determine which route succeeds.
+
+Core Settings brings Core names, saved and manually entered addresses,
+connection targets, current audio status and device authority together.
+Unattended Pi and Radxa installations keep logs and deployment backups within
+bounded retention limits.
+
+Receiver and transmit transfers use explicit Core decisions and confirmations.
+Link loss blocks new keying, and old-session replies cannot grant authority
+to a replacement session. The same station authority and
+session contracts serve desktop and native mobile consoles.
+
+### Fresh Raspberry Pi OS Lite and Armbian installation
+
+A dedicated Debian 13/Trixie ARM64 Core package accompanies the Ubuntu
+packages. Choose the package matching your board's operating system.
+The [short SBC install guide](https://nereussdr.com/guides/install-core-sbc.html) covers flashing
+a 64-bit Raspberry Pi OS Lite or compatible Armbian Trixie image, installing
+the package with `apt`, starting the service and pairing a desktop or phone.
+
+The [user guide](https://nereussdr.com/manual/)
+brings desktop and mobile operation together: connecting, tuning, sharing a
+Core, choosing audio, arranging your workspace, editing transmit audio and
+using station accessories. Its illustrated procedures identify the builds
+and example data shown in the figures.
+
+## Independent receivers and richer displays
+
+- Multiple receivers now have independent tuning, mode, DSP and audio routing. Capacity follows the connected radio's hardware.
+- Pan layouts, floating pans, saved receive layouts and stable receiver identities let the console span several displays. Coloured slice markers make receivers easier to distinguish.
+- The selected transmit receiver owns its transmit display, including TX spectrum and waterfall settings.
+- The native **3D stacked spectrum/waterfall** adds depth and history. A display applet and shared display settings make its controls available in local and remote windows.
+- **Tunable notch filters** can be positioned and adjusted on the spectrum and saved across sessions. Optional visual dents leave calibrated signal readings intact.
+- **Core-owned Diversity** can move to an eligible receiver. Hardware/resource refusals and PureSignal-related pause are visible instead of silently assuming a fixed receiver.
+
+## WDSP 2.10, NNR and PureSignal 3
+
+The desktop and Core share the upgraded WDSP 2.10 engine.
+
+**NNR** adds Standard and Premium models managed by the station, with tuning
+for each radio and receiver, quick controls, advanced settings and a Models
+manager. Import a model, select it, then apply it when you are ready. Receivers
+keep their identities through the update, and unavailable saved models are
+identified clearly.
+
+**PureSignal 3** adds retained-correction application, station-owned correction assets, advanced status and AmpView integration. Normal preferences persist. Reloading settings never repeats a calibration, Restore, two-tone or PTT command. Calibration pause and Off remain distinct operations.
+
+PS3 uses **version-2 correction files**. Legacy version-1 files are refused with an explanation; create a fresh calibration rather than assuming old correction curves transfer.
+
+PureSignal status reflects what the Core has applied. Reset, correction and
+two-tone status stay with the operation that produced them.
+Saved Auto preferences resume when the first authenticated media session
+joins an eligible local Core, including after rejoining. Restoring a saved
+preference does not replay a calibration or keying command. The existing
+factory two-tone level is retained.
+
+## TX EQ and CFC editors
+
+Graphic and Parametric TX EQ retain their own values and have native graph editing, width handles, exact entry and session undo/redo. CFC presents aligned Compression and post-EQ graphs, shared frequency selection, independent gain/Q controls and measured compression bars.
+
+Configured 5/10/18-band curves and their applicable Q factors follow the microphone profile through to processing. Band-count changes make the curve reset explicit and undoable. Advanced controls stay beside their fixed header, and the Apply button states the pending band count. Unrecognized legacy CFC data is retained until explicit editing replaces it.
+
+The graphs show configured curves; they are not measurements of the complete audio chain.
+
+## Containers, applets and meters
+
+Applets and meter objects share one container system. Move them with dotted grips or menu commands, reorder stacks, float them and return them to remembered homes. Container settings offer previews, Apply/Cancel, reload and conflict handling.
+
+Container meter stacks size responsive bars to the available space while
+preserving saved row heights and fixed layouts. Pending moves and resizes
+survive content refreshes until their placement is saved. A per-object
+**Follow selected RX** option lets a supported reading follow the receiver
+selected in that window; fixed receiver choices remain available, and
+changing source clears readings retained from the previous receiver.
+
+Arrange each object on an editable Canvas: move and resize it, enter an exact
+position and size, change layers, lock it in place and scroll around the scene.
+Apply saves your changes; Cancel returns to the saved layout. Existing
+compositions, precise positions and records from other versions are preserved.
+Fifteen supported controls can be placed as individual buttons. Their usual
+capability and authority rules still apply, and preview controls stay inactive
+while you arrange them.
+
+Meter titles, scales and readings fit the object's size. The ANAN artwork,
+scale lettering, blue ALC section and needle origins stay intact as you resize.
+Control indications refresh after a click, including when Monitor's momentary
+indication ends.
+
+Export and exchange layouts while preserving custom objects, older records
+and external MMIO bindings. Migration retains recovery data. Composite meter
+faces follow their selected reading source and show unavailable readings
+clearly. The ANAN multimeter adds Nereus artwork, calibrated live/peak/history
+needles and named readings with units. RX/TX transitions clear stale readings;
+scale labels and readouts remain legible at ordinary sizes. Idle needles rest
+dim at their calibrated starting points, with no invented readings or history.
+
+## Modes, audio and accessories
+
+- **AM/SAM/DSB transmit** and the **AM modulation monitor** add carrier, positive/negative modulation, peak and envelope displays, including vintage meter presentation.
+- The radio's speaker/headphone output carries the receive mix and appropriate monitor audio. Hardware microphone boost, input selection/gain, tip/ring, bias and XLR controls follow board capabilities.
+- Level Cal and preamp behavior receive further Thetis-based calibration corrections.
+- **RF-Kit RF2K-S** monitoring/control joins the accessory system. PGXL/TGXL operation follows Core authority, with connection recovery and carrier-ready tuner sequencing.
+- Remove the TGXL chip from the bottom status bar to free banner space; tuner controls remain in their existing applet.
+- RADE sends and decodes FreeDV-format end-of-over callsigns when FreeDV Reporter is enabled and flushes held speech before ending an over.
+
+## Reliability fixes
+
+- Avoid a crash on the next connection attempt when the initial Protocol 1 or 2 UDP socket could not bind.
+- Correct the main and mini TX displays' buffer size on the first transmission after a queued mode/DSP change.
+- Include accepted Core automatic waterfall levels in the remote display transport range, preserving low-level detail that the previous range could clip. Saved waterfall controls are preserved; the separate brightness change when switching between Core and Clarity level ownership remains under investigation.
+- Close structured floating containers during application Quit while preserving final saved geometry and canceled-quit behavior.
+- Place the first owned receiver's flag within its newly created remote pan after the Core confirms receiver authority. Preserve pan views the operator has already moved or zoomed, and preserve listener views.
+- Keep remote automatic waterfall levels updating when peak hold is disabled, within the existing display-data budget.
+- Restart TX microphone pumping after live receiver reconfiguration (#331).
+- Keep the selected PC microphone’s level meter active while receiving in a remote desktop window. Preview audio is drained locally and never queued for a later PTT.
+- Preserve each waterfall row’s original RF window, so retained transmit history aligns correctly when returning to the receive display without losing the saved receive rows.
+- Match local NF-AGC precedence in remote windows when both waterfall AGC options are enabled.
+- Recover the remote transmit display when joining an already keyed station, and resolve missing or stale Core pan keys through the receiver’s unique host in the window.
+- Follow the transmit-bound receiver’s sideband for two-tone operation after a transmit handoff, even when a different receiver remains selected.
+- Keep the DEXP threshold marker across restarts (#332).
+- Keep HL2 tune power independent across repeated TUNE cycles (#333).
+- Replay saved anti-VOX state to replacement transmit workers (#334).
+- Prevent a callback from an old radio session from keying a replacement session (#335).
+- Align spectrum painting and mouse geometry in CPU and GPU builds (#336).
+- Keep each pan's displayed and wheel-tuning STEP bound to its selected receiver, including selection changes and replacement receivers.
+- Let new and surviving spectra/waterfalls resume after a media handover when a retired display's reply was lost. The Core still confirms the display release before its reservation is reused.
+- Preserve fresh remote VAX audio during startup and resumed streams instead of losing it during inactive-source cleanup; quiet stale audio is still discarded.
+- Improve macOS connection, preamp, audio-device, buffer, TX Input and container selectors when their contents refresh. Reconnecting and changing Settings selections preserve the chosen values without stale dropdown entries or the reproduced accessibility-cache crashes.
+- Avoid a macOS crash when the Core refreshes the RADE profile list, while preserving profile order, selection rules and transmit permissions.
+
+Other reliability work improves receiver lifetimes, audio and media recovery,
+microphone restart, shared-station authority and reconnect cleanup. The original
+reconnect reports in #235, #299 and #300 still need their reporters' retests.
+
+## Upgrading from 0.5.2
+
+Keep existing settings and profiles; let the application perform its migrations.
+
+- Update the Core and desktop together for the new controls and authority contracts. Older peers may lack capabilities and receive an explicit refusal.
+- The previously unused **Network Watchdog** now controls how long the application waits for radio data. Migration enables it once. Protocol 2 and HL2 hardware safety timers remain enabled independently.
+- The TCI frequency-update rate is now an interval in milliseconds, 0 to 1000, with 100 ms as the default. The old, unused messages-per-second value is discarded once.
+- Non-Atlas saved preamp Off/“-20dB” maps to SA -20. RX2 input attenuation follows its own board limit; ANAN-100D/200D RX2 is capped at 31 dB. Microphone boost is now on by default.
+- PS3 requires new compatible correction files, as described above.
+- Compressed per-receiver digital-app audio uses Opus at 48 kbit/s. Lossless availability follows the accepted path and fallback rules; the speaker/headphone mix has its own Core setting. File-based FT8 checks found a small weak-signal penalty with Opus and matching decodes with lossless. Other modes and live comparisons still need their recorded checks.
+- BNR is no longer offered. DFNR and macOS-dependent MNR remain visible with an unavailable reason when the Core cannot run them.
+- The Power Genius discovery beacon keeps its existing `version=0.5.2` value. Product CalVer, settings schema, driver bundle versions and station wire protocol versions are separate numbers.
+
+## Known issues and follow-up work
+
+PureSignal two-tone runs have an open transmit-stream continuity issue,
+observed during both first and repeated runs. Receive restoration after
+unkeying still needs physical-radio validation. Waterfall brightness can
+change when selecting a receiver and switching between Core and Clarity
+level ownership. These items remain under investigation.
+
+Radio-specific TNF listening, NNR quality, PureSignal RF improvement, RADE
+on-air interoperability, sustained SBC operation and accessory checks continue
+in the [feature verification documents](https://github.com/boydsoftprez/NereusSDR/tree/v2026.10.0/docs/architecture).
+The legacy PS-RX/PS-TX spectrum view remains unavailable, and high-resolution
+trackpad gestures remain under review.
+
+Native G2/XDMA support remains incomplete and is outside this release.
+CAT/rigctld follows in the next release. CW transmit, FM pre-emphasis, skin
+import and WAV/IQ recording remain future work.
+
+## Find your next step
+
+| What you need | Guide |
+| --- | --- |
+| Install and connect on a computer | [Desktop setup](https://nereussdr.com/manual/01-desktop-connect.html) |
+| Operate from an iPhone or iPad | [Mobile setup](https://nereussdr.com/manual/06-iphone-connect.html) and [mobile operation](https://nereussdr.com/manual/07-iphone-operate.html) |
+| Share a Core between devices | [Shared station operation](https://nereussdr.com/manual/08-shared-core.html) |
+| Arrange applets and meters | [Customize your workspace](https://nereussdr.com/manual/10-customize.html) |
+| Set up EQ and CFC | [Transmit audio editing](https://nereussdr.com/guides/tx-eq-cfc.html) |
+| Solve a connection or audio problem | [Troubleshooting](https://nereussdr.com/manual/11-troubleshooting.html) |
+
+Visit [nereussdr.com](https://nereussdr.com/) for the project overview and
+join [Discord](https://discord.gg/m35ERjwRe) for questions, station discussion
+and feedback. Please use [GitHub Issues](https://github.com/boydsoftprez/NereusSDR/issues)
+for tracked bug reports, including your OS, radio model, protocol and log.
+
+J.J. Boyd ~ KG4VCF
+
+## [0.5.2] - 2026-05-24
+
+> [!IMPORTANT]
+> 📖 **Alpha testers, start here:** [docs/debugging/v0.5.2-alpha-tester-smoketest.md](https://github.com/boydsoftprez/NereusSDR/blob/main/docs/debugging/v0.5.2-alpha-tester-smoketest.md)
+
+> [!NOTE]
+> **A substantial release on top of v0.5.1.** Three pieces of work land together: external RF accessories (4O3A Power Genius XL amplifier + Tuner Genius XL antenna tuner over Ethernet, plus the Thetis analog S-Meter widget on the operator banner), a new SKU port (Apache Labs ANAN-G2E / HermesC10), and a new UI control for showing or hiding right-side applets, plus a polish tail (4O3A integration cleanup, TCI live-state push to clients, PS-A persistence, PA quit handling). 268 commits since v0.5.1.
+>
+> 1. **Phase 3P-II: 4O3A external RF accessories + analog S-Meter port.** If you run a Power Genius XL amplifier or a Tuner Genius XL antenna tuner on the same LAN as your radio, NereusSDR can now talk to both. AmpApplet shows live forward / reflected power, SWR, and PGXL state. TunerApplet shows relay positions, antenna selection, and the autotune cycle. Setup > Network > Peripherals discovers PGXL / TGXL on the LAN, configures their hosts and ports, and shows live connection status; PGXL Advanced and TGXL Advanced sub-pages cover identity, hardware, network, pairing, diagnostics, fault history, and per-band tune memory. Setup > Transmit > PGXL Interlock optionally blocks MOX when the amp says no. The S-Meter on the right panel is now the Thetis-style analog needle with four RX modes (Signal / Signal Average / Signal Peak / Max Bin) and configurable peak hold.
+> 2. **ANAN-G2E (HermesC10) SKU port.** Apache Labs' newest radio in the ANAN family is now a first-class SKU on par with the rest of the family. Discovery recognises it (P1 wire byte `0x14`), the ConnectionPanel knows about it, PA telemetry reads sensibly on TX, and the P2 RX path streams cleanly. Closes a gateware-lockup crash that surfaced in early G2E testing (zero-rate on disabled DDCs, `SendStop` retry with bounds-check on the I/Q batch, Thetis-faithful disconnect via `CmdGeneral` winddown). Verified against Thetis v2.10.3.15.
+> 3. **Applet visibility controller.** The right-side applet panel gained a hamburger menu on its banner. Click it to show or hide individual applets: RX, TX, Phone/CW, EQ, FM, Digital, PureSignal, Diversity, CWX, DVK, CAT, Tuner, Amp, RADE, TCI. The same toggles also live under View > Containers > Applets in the menu bar, and the two stay in sync. Your toggle state persists across launches. Applets that don't apply to your current radio or mode (e.g. PureSignal on a board that doesn't support it, RADE applet when the slice isn't in RADE_U / RADE_L, Amp + Tuner when the 4O3A master toggle is off) hide automatically.
+> 4. **Polish tail + bench-found bug fixes.** The 4O3A integration got a long bench-fix sweep (handshake timing, LAN discovery broadcast subnet, macOS PGXL IPv6 connect fix, master-toggle gating, "AMP" → "Power Genius" rebrand). TCI's live-state push to connected clients got five PR-review-issue fixes and the remaining `ChangedHandlers` ports. PS-A `autoCalEnabled` now actually persists to disk (three-bug stack closed). PA profile lookup falls back to manifest backfill if a profile is missing, and clean disconnect-on-quit + SIGTERM handling were both hardened. **Highlights of the bench-reported bug fixes:** Chris Palmgren (W4ORS)'s P1 disconnect-crash report ([#258](https://github.com/boydsoftprez/NereusSDR/issues/258)) traced to two real bugs (ep6 reconnect-storm + TxChannel thread-affinity); his follow-up BSOD report ([#272](https://github.com/boydsoftprez/NereusSDR/issues/272)) cleared 7 Qt layout warnings and added SetupDialog timing instrumentation; ANAN-7000DLE Mk II operators' EXT1 RX-only routing bug ([#257](https://github.com/boydsoftprez/NereusSDR/issues/257)) was a missed Mk II BPF relay-split port; ANAN-10E operators on community P2 firmware ([#263](https://github.com/boydsoftprez/NereusSDR/issues/263)) hit a connect-then-disconnect-after-2s symptom that needed the HermesII / Hermes branches of Thetis `UpdateDDCs()` ported; US 60m TX at the standard USB dial frequency ([#271](https://github.com/boydsoftprez/NereusSDR/issues/271)) is now allowed (the channelized gate was 100 Hz off). Detail in the per-section bullets below.
+
+> [!IMPORTANT]
+> **Existing users: no action required.** Saved radios, mic profiles, DSP settings, container layout, spectrum / waterfall settings, PA cal points, per-band tune power, spot-system identity, and FreeDV Reporter hidden state all carry forward. No `SettingsSchemaVersion` bump (last bump was v5 in v0.4.0). The new applet-visibility menu starts with every applet visible; toggle to taste and the state persists.
+
+> [!NOTE]
+> **No PGXL / TGXL or ANAN-G2E? Still useful.** v0.5.2's applet-visibility menu, TCI live-state fixes, PS-A persistence, PA quit handling, and the 4O3A discovery broadcast-subnet fix are all testable on any supported radio. The 3P-II bench-verification matrix (36 rows at `docs/architecture/phase-pgxl-tgxl-smeter-verification/README.md`) and the ANAN-G2E matrix (12 rows at `docs/architecture/2026-05-21-anan-g2e-verification/README.md`) gate the marquee features on live hardware; both are next on the bench.
+
+### Phase 3P-II: 4O3A external RF accessories + analog S-Meter port
+
+Four-phase epic. Ported source-first from AetherSDR (PGXL / TGXL baseline at `@a29ff40` (byte-for-byte where the protocol is unambiguous)) and Thetis (analog S-Meter from `@501e3f5` + AetherSDR `SMeterWidget` at `@0cd4559`). NereusSDR-native FlexRadio API extensions are layered on top for the bits AetherSDR didn't cover (pairing handshake, keepalive, RTT-correlated ping, exponential auto-reconnect, setup / ifconf round-trip, interlock).
+
+**Power Genius XL amplifier (PGXL):**
+
+- **`PgxlConnection`** is a TCP client on port 9008 that speaks the FlexRadio amp protocol. V (banner), R (request / reply key-value), and S (unsolicited status push) frames all parse correctly. The full pairing flow is implemented: `amplifier create serial=... port=9008 antmap=...` and `flexradio pair serial=<paired> slice=A txant=ANT1` round-trip with the radio, the paired-serial is captured for later `setBand` calls, and slice band changes get pushed to the amp without any operator action.
+- **Connection robustness:** exponential auto-reconnect on transient drops (1 / 2 / 5 / 10 / 30 / 60 s ladder, gated by `PGXL_AutoReconnect`), 30 s keepalive (`status` command), 10 s RTT-correlated ping (`ping seq=N` / `pong=N` with 5 s unanswered-ping disconnect), full `readSetup` / `writeSetup` / `readIfconf` / `writeIfconf` / `save` round-trip.
+- **AmpApplet** (right-side panel) shows forward / reflected power as horizontal bar gauges, SWR as a single gauge, PGXL state, and a Power Genius badge. The OPERATE / STANDBY toggle and band selector both round-trip through the wire protocol.
+- **PGXL Advanced page** (Setup > Network > PGXL Advanced) exposes Identity (serial / firmware / nickname), Hardware (bias mode / fan mode / LED), Network (static IP via ifconf), Pairing (slice letter / TX antenna / antmap / PTT mode), Diagnostics (uptime / RTT / frames / bytes / reconnect count, live-bound at 1 Hz), and Fault History (10-entry ring buffer with a likelyCause heuristic, JSON-persisted under `PGXL_FaultLog`).
+- **PGXL Interlock page** (Setup > Transmit > PGXL Interlock) configures the TX interlock policy. Three modes: Disabled (default), Warn (toast on TX, MOX proceeds), Block (toast, MOX denied). Optional SWR gate with max-SWR threshold. Grace period (0..30 s) suppresses the policy during the OPERATE transition.
+- **Power-cap soft-alert toast** fires on the first sample that exceeds `PGXL_TxPowerCapWatts` (5 s rearm cooldown so it doesn't spam during sustained high-power TX).
+
+**Tuner Genius XL antenna tuner (TGXL):**
+
+- **`TgxlConnection`** is a TCP client on port 9010 that speaks the TGXL native protocol (the same one TunerGeniusDesktop uses). V / R / S frame parsing with state / status object discrimination.
+- **TunerApplet** (right-side panel) shows relay positions (C1 / L / C2 horizontal bars via `RelayBar`), antenna port selection, a TUNE button (orchestrates carrier + tune start + auto-drop), and current tuning state.
+- **TGXL Advanced page** (Setup > Network > TGXL Advanced) covers Identity, Hardware (antenna port labels ANT 1/2/3, persisted under `TGXL_AntLabel_N` and propagated live to the TunerApplet button text), Network (static IP), Diagnostics (parallel binding to PGXL's), and Tune Memory Management (per-band relay-position cache with Save / Recall / Clear All controls + an auto-recall toggle).
+- **Auto-recall:** on slice band change, `TuneMemoryStore` looks up the stored (antenna, band) relay positions and restores them. Falls back to a fresh tune if the device doesn't support absolute relay-write. Persisted under `TGXL_TuneMemory` as JSON; auto-recall gated by `TGXL_AutoTuneMemoryRecall`.
+
+**LAN discovery and Peripherals page:**
+
+- **`LanDiscovery`** is a UDP broadcast listener on ports 9008 and 9010. Parses the official FlexRadio LAN discovery regex, deduplicates by serial, and emits `deviceDiscovered`.
+- **Setup > Network > Peripherals** shows two rows (PGXL and TGXL) with Host + Port spinboxes, a Scan LAN button (opens `LanScanDialog`, a modeless 3-second LAN scan with a 6-column results table), and a live status label per row (Disconnected / Connecting / Connected / Connected + paired / Error).
+- **4O3A master toggle** (Setup > Network) gates auto-connect. With it off, AmpApplet and TunerApplet stay hidden and auto-connect doesn't fire. With it on, both applets appear and PGXL + TGXL connect on radio-connect. Changes apply live without restart via `RadioModel::fourO3AEnabledChanged`.
+
+**Analog S-Meter widget:**
+
+- **`SMeterWidget`** replaces the prior composite digital S-Meter on the AppletPanel header. 180-degree analog needle, S-unit scale (S0 = -127 dBm, 6 dB/S-unit, S9+60 = -13 dBm), animated needle (45 ms attack / 180 ms release). Ported from AetherSDR `@0cd4559` with two new Thetis RX modes layered on.
+- **Four RX modes via right-click context menu:** Signal (the existing `getRxaSmeter`), Signal Average (Thetis `RXA_S_AV`), Signal Peak (peak tracked inside the widget), Max Bin (Thetis `SetupDetectMaxBin` + `GetDetectMaxBin`, recenters on the passband after every filter change via a 100 ms debounce).
+- **Peak hold via right-click:** Enable toggle + Decay rate (Fast = 20 dB/s, Medium = 10 dB/s, Slow = 5 dB/s) + Reset.
+- **PGXL-aware 2 kW power scale:** when a PGXL is connected, `setPowerScale(2000, true)` triggers the amplifier power-scale snap (120 W / 600 W / 2000 W). Recomputes the needle source between amp power and radio power on `ampStateChanged`.
+- **AppSettings round-trip:** `SMeter_RxSelect`, `SMeter_TxSelect`, `PeakHoldEnabled`, `PeakDecayRate` all persist; constructor loads them on startup.
+
+**Right-click applet menus:**
+
+- **AmpApplet:** Open PGXL Advanced (jumps Setup to the right page via the new `MainWindow::openSetup(pageKey)` slot), Disconnect / Reconnect, Copy diagnostics (serialises `ConnectionDiagnostics` to JSON on the clipboard).
+- **TunerApplet:** Open TGXL Advanced, Disconnect / Reconnect, Save / Recall / Clear tune memory, Copy diagnostics.
+
+**Tests:** 11 executables, 28 slots covering parse, pairing handshake, keepalive, ping + RTT, auto-reconnect, setup / ifconf / save round-trip, fault log heuristic + persistence, tune memory store + auto-recall, TX interlock policy decisions, and ConnectionDiagnostics counters.
+
+**Bench verification:** 36-row matrix at `docs/architecture/phase-pgxl-tgxl-smeter-verification/README.md`. All non-deferred rows pending live PGXL + TGXL hardware. Row 18 (HL2) gated on the open ATT / filter safety audit.
+
+### ANAN-G2E (HermesC10) SKU port
+
+Apache Labs' newest ANAN-family radio is now a first-class supported SKU, on par with the existing ANAN-G2 / 10E / 100B / 100D / 200D / 7000DLE / 8000DLE. Twelve bench tasks (A3 / A4 / B4'-B7' / D1-D5 / E1-E5 / F1-F6), all verified against Thetis v2.10.3.15.
+
+**Discovery and connection:**
+
+- P1 wire byte `0x14` maps to `HPSDRHW::HermesC10`.
+- ANAN-G2E appears in `AddCustomRadioDialog` and the ConnectionPanel's Board column switch. Andromeda and HermesLiteRxOnly also gained Board column switch entries during the audit.
+- Default settings, sample-rate set (P2 full 6-rate), and BPF1 algorithm family all match the Hermes-class P2 family.
+
+**Codec and DSP wiring:**
+
+- `SetADCSupply` and `LRAudioSwap` codec wrappers added with connect-time wiring; values flow from `HardwareProfile` through `CodecContext` onto the wire. All SKUs re-verified against Thetis v2.10.3.15.
+- ANAN-G2E uses the Hermes-class DDC4 + DDC0 family; PS-DDC config places it in the Hermes-class PureSignal group.
+- HermesC10 added to the BPF1 algorithm family for `setAlex1HPF`.
+
+**PA and telemetry:**
+
+- PA Gain uses `kAnan7000dRow` case-group; fwd-power scaling uses `PaTelemetryScaling::scaleExciterPowerMw` (lifted into its own namespace and wired for G2E).
+- PA current and supply-volts telemetry rows show in Setup > PA only when the board reports `hasPaAmps` / `hasPaVoltsTelemetry`.
+- New `chkBypassANANPASettings` checkbox under Setup > PA, backed by `TransmitModel::paSettingsBypass`. The Auto PA Calibrate checkbox is gated on `allowsAutoPaCalibrate`.
+- ANAN-G2E added to `factoryProfileNames` and `modelFromFactoryName`.
+
+**SKU UI overlay:**
+
+- `SkuUiProfile` EXT label overrides include ANAN-G2E so Setup > Antenna shows the correct per-product button labels.
+
+**P2 RX unblock and crash fix:**
+
+- Mask dither / random for HermesC10. The P2 RX path now produces clean I/Q samples.
+- Disabled DDCs must carry rate=0 explicitly; otherwise the radio refuses the start command.
+- `SendStop` retries with bounds-checked I/Q batch; closes a G2E gateware lockup + crash mode observed in early bench testing.
+- Disconnect uses `CmdGeneral` winddown (no `run=0` frame), matching Thetis P2 sequence.
+
+**Bench verification:** 12-row matrix at `docs/architecture/2026-05-21-anan-g2e-verification/README.md` pending live G2E hardware. Rows F2 / F3 / F4 / F6 are documented as `DONE_WITH_CONCERNS` for bench-time follow-up.
+
+### Applet visibility controller
+
+The right-side applet panel gains a hamburger menu on its banner and a corresponding View > Containers > Applets section in the menu bar. Both entry points toggle the same set of applets and stay in sync.
+
+- New **`AppletVisibilityController`** owns the master visibility state and rounds it through AppSettings (per-applet keys under `AppletVisibility/<name>`).
+- The hamburger menu lives in the AppletPanel banner row, embedded in the S-Meter title bar so it doesn't waste vertical space. Click it for the menu; tick boxes flip applets between visible and hidden.
+- **Capability gating** via `setAvailable(QString, bool)`: applets that don't apply to the current radio or mode hide automatically. Amp + Tuner gate on the 4O3A master toggle. RadeApplet gates on the active mode being RADE_U / RADE_L. TciApplet gates on TCI server being enabled.
+- **Live UI gating** via `RadioModel::fourO3AEnabledChanged`. Flipping the master toggle reveals or hides Amp + Tuner without requiring a restart.
+- The earlier "double header" bug from the v0.5.0 banner row is closed: redundant `appletTitleBar` calls swept across all applets.
+- The pre-v0.5.2 View > Network Applets menu (TciApplet + ClientChainApplet show / hide) is retired in favour of the unified Applets section.
+- **Stack order is preserved** across show / hide cycles; toggling an applet off and back on keeps it where it was.
+
+### 4O3A integration polish
+
+Twenty-five-commit bench-fix sweep after the Phase 3P-II baseline. Grouped by theme:
+
+*Handshake and interlock:*
+
+- **PGXL pre-standby on TGXL hardware TUNE.** Mirrors the captured SmartSDR pcap: PGXL drops into pre-standby during a TGXL autotune cycle and restores on completion. `UNKEY_REQUESTED` is now un-keyed before drain so the amp doesn't get stuck.
+- **Event-driven FlexAPI interlock chain.** Canonical `PTT_REQUESTED → ready ACK → TRANSMITTING` sequence ported from the SmartSDR pcap; broadcasts `amplifier= pttA + interlock TRANSMITTING` with handles; blocks-on-timeout per the FlexAPI spec; local MOX no longer rolls back on interlock-blocked.
+- **PGXL / TGXL TUNE end-to-end.** TunerApplet TUNE orchestrates carrier + tune start + auto-drop. TGXL antenna buttons now appear on the 1x3 device variant. Parses `3way` key as an alias for `one_by_three` (bench-confirmed firmware variant).
+
+*Discovery and connection:*
+
+- **Route-aware FLEX discovery.** Broadcasts go to the computed subnet address now, not generic `255.255.255.255`. Required for some LAN topologies where the generic broadcast doesn't reach the PGXL.
+- **macOS PGXL connect fix.** PGXL SmartSDR API responder now binds IPv4 explicitly. The macOS IPv6-only default was blocking PGXL's connect attempt. A passive TCP 4992 listener stub also captures PGXL SmartSDR API queries for bench analysis.
+- **Default discovery model = FLEX-6400.** PGXL validates against the FlexRadio model list; the prior default was triggering a model-mismatch rejection.
+- **FlexRadio-format 16-digit serial from MAC.** PGXL expects a dashed 16-digit serial; NereusSDR now derives one from the radio's MAC.
+
+*Applet polish:*
+
+- **AmpApplet "AMP" → "Power Genius" rebrand.** Matches 4O3A's product line.
+- **Bar graph zero-on-post-TX.** AmpApplet meters reset cleanly when MOX drops.
+- **TGXL identity labels populate.** Nickname / serial / firmware fields populate from the V-frame on connect.
+- **Master-toggle auto-connect gating.** PGXL + TGXL only auto-connect when the 4O3A master toggle is on.
+- **Distinguish user-initiated disconnect from network drop.** Auto-reconnect doesn't fire on intentional disconnect.
+- **AmpApplet reconnect uses canonical `PGXL_Manual*` keys.** Consistent AppSettings key naming.
+
+### TCI live-state + 5 review-issue fixes
+
+Six-commit tail on Phase 3J-1. The TCI server core stabilized against real clients in v0.5.0; v0.5.2 closes the live-state push gap so operator-side mode / VFO / filter changes propagate to connected clients (WSJT-X, ESDR3, N1MM, Log4OM, etc.).
+
+- **Init burst defaults match Thetis wire format (P1).** Byte-for-byte parity.
+- **`agc_mode` wire-token conversion (P2).** Tokens convert correctly between the NereusSDR enum and the TCI wire format.
+- **Live VFO broadcast reads `rx2Enabled` (P3).** Broadcasts respect the active RX count.
+- **`setFilterBand` emits `filterChanged` exactly once (P4).** No spurious double-emit.
+- **`sliceAdded` hook restored after stop / start (P5).** Server lifecycle correctly re-arms client subscriptions.
+- **Broadcast slice state changes to TCI clients.** Operator-side mode / VFO / filter changes now propagate. Five PR-review issues and the remaining `ChangedHandlers` ports landed in the same change.
+- **`af` / `mon` linear roundtrip** uses Thetis-faithful 0..100 range.
+
+Spectrum and meter fixes that landed in the same sweep:
+
+- **`setDbmCalOffset` triggers VBO re-render** so the spectrum trace updates when the calibration changes.
+- **Meters forward Thetis RXOffset to spectrum** so the meter and trace share the antenna reference.
+- **MaxBin reads spectrum's rendered pixels** (not raw FFT bins) so it matches what the operator sees.
+- **FLEX discovery: guard BSD socket headers** on `Q_OS_UNIX`.
+
+### Bench fixes (with thanks to reporters)
+
+Bug fixes that landed during the v0.5.2 cycle, mostly surfaced by alpha testers on real radios. Reporter credits inline.
+
+**Reported by Chris Palmgren / W4ORS:**
+
+- **P1 disconnect crash on Windows 11 / Hermes Lite 2** ([#258](https://github.com/boydsoftprez/NereusSDR/issues/258)). `0xc0000409` stack-buffer-overflow in `ucrtbase.dll` during disconnect, with PureSignal active + a band change between cycles tipping it over. Two compounding bugs behind the symptom: (a) `P1RadioConnection::onReadyRead` captured the connection-state snapshot OUTSIDE the per-datagram drain loop, so a burst of ep6 frames at the moment metis-start landed printed "ep6 stream established" 181 times in under 10 ms (state machine was correct but spammed itself; Chris reasonably misread it as a reconnect storm); (b) `RadioModel::teardownConnection` called `m_txChannel->moveToThread(this->thread())` from the main thread AFTER `m_txWorker->stopPump()` had already joined the worker, leaving `m_txChannel`'s thread-data pointing at the dead `QThread`. Qt's destruction order kept things just-in-bounds on most disconnects, but Chris's specific timing (PureSignal active + band change + audio-stack cascade) walked the dangling internals and surfaced `0xc0000409`. Has been firing on every disconnect since the 3M-1c TX pump v3 (v0.4.0); usually didn't crash. Both fixes have regression tests pinned in `tst_p1_loopback_connection` and `tst_tx_worker_thread`.
+- **Setup dialog Qt warnings + ~40 s UI-freeze BSOD cascade** ([#272](https://github.com/boydsoftprez/NereusSDR/issues/272)). Seven `QLayout: Attempting to add QLayout "" to QGroupBox ""` warnings traced via lldb to seven callsites in `DiagnosticsPhaseHPages.cpp`. Same fault class as #258 but a different code path: a ~40 s UI freeze stalled the audio engine long enough for the HL2 ep6 watchdog (2011 ms) to fire, then the unclean audio teardown tipped a legacy 2010 Realtek driver into `CLOCK_WATCHDOG_TIMEOUT`. SetupDialog now also has timing instrumentation so future stalls show up in the app log.
+
+**Reported by ANAN-7000DLE Mk II operators:**
+
+- **EXT1 RX-only antenna routing on Mk II BPF boards** ([#257](https://github.com/boydsoftprez/NereusSDR/issues/257)). Picking EXT1 dropped signal levels but didn't actually route to the EXT1 jack. `P2CodecOrionMkII::buildAlex0` always wired bit 11 (RL17 RX BYPASS OUT) for any rx_out, never bit 14 (the RX MASTER IN SEL RL22 line on Mk II boards). Affected all Mk II BPF SKUs: ORIONMKII / ANAN-7000D / ANAN-8000D / ANAN_G2 / ANAN_G2_1K / ANVELINAPRO3. Worse, ANT1 couldn't be restored afterwards because `AlexController::m_rxOnlyAnt` never cleared on subsequent ANT picks and the bypass mux stayed engaged on the wire even though the UI label said "ANT1", trapping the user on the bypass path. Ported the `if (mkiibpf)` relay-split branch verbatim from Thetis ChannelMaster (`netInterface.c:461-477 [v2.10.3.13]`) and mirrored Thetis `ProcessAlexAntCheckBox` for the UI state-leak.
+
+**Reported by ANAN-10E operators on community P2 firmware:**
+
+- **P2 connect-then-disconnect after 2 s** ([#263](https://github.com/boydsoftprez/NereusSDR/issues/263)). ANAN-10E running community P2 firmware was hardcoded onto the G2-class DDC2 wire path. But a 1-ADC HermesII never streams DDC2, so the 2 s connect watchdog fired and the user saw "connects for a few seconds then disconnects". Source-first port of the HermesII (`console.cs:8451-8521`) and Hermes (`console.cs:8378-8449`) branches of Thetis `UpdateDDCs()` into the P2 codec; the per-board primary DDC is now picked at connection time and the receiver-to-DDC mapping in `RadioModel` routes accordingly. The original P2 port only carried the G2-class case statement and implicitly assumed every P2 board placed RX1 on DDC2; true only for Angelia / Orion / OrionMkII / Saturn.
+
+**Reported by US 60m operators:**
+
+- **US 60m TX permitted at the standard USB dial frequencies** ([#271](https://github.com/boydsoftprez/NereusSDR/issues/271)). `BandPlanGuard::isValidTxFreq` channelized US 60m TX to `channel_center ± 1.4 kHz` using the FCC channel-center constants (5332.0 / 5348.0 / 5358.5 / 5373.0 / 5405.0 kHz, 2.8 kHz BW). But FCC 47 CFR §97.303(h) puts the USB suppressed-carrier dial 1.5 kHz BELOW channel center (e.g. 5330.5 kHz on Channel 1), 100 Hz outside the gate's lower edge. Any operator who tuned to the standard USB dial hit "Frequency outside TX-allowed range". Realigned with Thetis (`clsBandStackManager.cs:1063-1083 [v2.10.3.13]`): no channelization for US 60m, retained for UK (per-channel allocations) and Japan (10 Hz discrete); USB/CWL/CWU/DIGU mode restriction applied at the broad-range branch instead.
+
+**Other bench-found fixes:**
+
+- **Spot dedup by lifetime instead of fixed 60 s** ([#263](https://github.com/boydsoftprez/NereusSDR/issues/263) follow-up). On 20m, an operator observed `CT3MD x3`, `TC19TC x3`, `8P6PE x3` stacked on the panadapter overlay. `SpotModel::dedupIndexFor` had a fixed 60 s window that expired long before the typical 1800 s spot lifetime, so a re-emit of the same callsign at the same kHz past +60 s minted a fresh index. Worse, there was no expiration sweeper, so the prior entry stayed in `m_spots` and the overlay stacked N copies. Now `dedupIndexFor` reuses the existing index for as long as the prior spot is still alive (`addedMs + lifetimeSeconds*1000 > nowMs`); a 30 s `QTimer` sweeper drives `expireOlderThan` so aged spots actually leave `m_spots`. `removeSpot` and `clear` also drop the dedup cache slot.
+- **Step-attenuator state persists across restart** ([#259](https://github.com/boydsoftprez/NereusSDR/issues/259)). Three reinforcing root causes left Options → Step Attenuator RX1/RX2 Enable + value reverting to unchecked / 0 dB after closing and reopening NereusSDR on ANAN-10E: (1) `saveSettings()` never ran at app close because `teardownConnection` nulled `m_connection` before emitting `Disconnected`, so MainWindow's `if (connection())` guard around `saveSettings` was always false; (2) `loadSettings()` restored `m_stepAttEnabled` but did not emit `stepAttEnabledChanged`, so even after (1) the checkbox state didn't reflect the loaded value; (3) pre-load save clobber: `connectToRadio`'s teardown for a stale `m_connection` fired `saveSettings` BEFORE the matching `loadSettings`, persisting the controller's constructor defaults (`m_attDb=0`, `m_stepAttEnabled=true`) over the user's real saved state. All three closed; `markSettingsUnloaded()` gate on the controller blocks any pre-load save from clobbering the file.
+- **SetupDialog pre-load clobber + lazy stale state + hide RX2** ([#259](https://github.com/boydsoftprez/NereusSDR/issues/259) follow-up). Broader sweep of the same shape across the rest of Setup. Lazy SetupDialog construction no longer reads stale state. RX2 controls hidden on single-RX boards.
+- **Auto-Att RX1 state pulled fully on init** ([#260](https://github.com/boydsoftprez/NereusSDR/pull/260) review). `initFromController` was pulling only the active mode; missing fields surfaced as stale values on the Options page. Now pulls the full Auto-Att RX1 state.
+- **TCI `m_audioTapSources` dangling pointer guard.** `TciServer::stop()` crashed with `SIGSEGV` during `~MainWindow` teardown if the user had previously disconnected from a radio. `m_audioTapSources` was a `QSet<RxChannel*>` populated by `hookAudioAndIqTaps` and never pruned; `WdspEngine::shutdown()` (called from `teardownConnection`) destroyed all RxChannels, leaving the set full of dangling raw pointers. `stop()`'s loop then dereferenced freed memory in `QObject::disconnect`. Fixed via lifecycle hookup so destroyed RxChannels are removed from the set first.
+- **Spot panadapter visibility mask seeded at MainWindow startup.** Cosmetic but visible: the per-source visibility mask was constructed empty, so spots from every source hid until the user opened Spot Hub at least once.
+- **TX interlock grace period wired into `evaluateTxRequest`.** `TxInterlockPolicy::graceMs` was settable but `evaluateTxRequest` skipped the check entirely. `MainWindow` also now subscribes to `warned` / `denied` and surfaces both via the status-bar toast.
+- **PGXL `fwd`/`swr` wire-value conversion before fault-log heuristic.** Raw wire integers were being passed to the `likelyCause` heuristic that expected real units; misclassified faults until both converted.
+
+**RADE + FreeDV Reporter Path B bridge.** Ported from freedv-gui's `main.cpp` Path B handler: RADE RX decodes (after EOO callsign extraction) now upload `rx_report` records to FreeDV Reporter when `reportingEnabled` AND RADE-synced AND not TXing AND the reporter is connected. Empty-callsign records are gated out (matches upstream's `m_reporters[]` fan-out behaviour). Design + verification harness at `docs/architecture/phase3r-rade-reporter-bridge/README.md`.
+
+### PS-A persistence + bench tail
+
+Final pass on PureSignal persistence for ANAN-G2E and HermesC10 boards.
+
+- **PS-A direct AppSettings save.** Three-bug stack hiding PS-A persistence fixed end-to-end. PsForm `autoCalEnabled` toggle now persists to disk via `scheduleSettingsSave`.
+- **Per-packet PS pairing.** Source-first port from Thetis `sync.c InboundBlock(id=1)`. The prior implementation was pairing per-frame, which lost sync against G2E gateware timing.
+- **PsForm live `info[]` flow + FB readout + autoCal persistence + Alex1 + TwoTone defaults.** Bench-found gaps closed.
+- **TwoTone power defaults** bumped to 10 W to match Thetis defaults.
+
+### PA profile + quit handling
+
+- **PA profile manifest backfill.** PA factory-profile lookup falls back to manifest backfill if a profile is missing.
+- **Disconnect-on-quit + SIGTERM handler.** Clean disconnect when the app quits or receives `SIGTERM`. No more orphaned UDP sockets after kill.
+- **`paSettingsBypass` comment** reconciled with Thetis UI-only ground-truth.
+
+### Docs
+
+- **ANAN-G2E port plan + design.** Full-parity design (Thetis v2.10.3.15) + TDD task breakdown.
+- **ANAN-G2E 12-row bench verification matrix** with 4 documented `DONE_WITH_CONCERNS` gaps for follow-up.
+- **Thetis version reference bumped to v2.10.3.15** in CLAUDE.md and inline `// From Thetis` cites.
+- **FLEX-8600 ↔ PGXL / TGXL capture notes.** Two analysis writeups paired with existing pcapng captures for the 4O3A integration. Documents the FLEX discovery beacon on `255.255.255.255:4992` and the bidirectional pairing model (amp client on FLEX:4992 SmartSDR API, radio client on TGXL:9010 native protocol).
+- **Applet visibility menu plan + design.**
+- **CLAUDE.md brought forward** from the stale "Pending next 0.4.x release" framing to the v0.5.0 / v0.5.1 / v0.5.2 cadence; status table rows for 3J-1 / 3J-2 / 3R / 3M-4 / 3P-II re-flagged with their actual shipped-or-pending state.
+- **README.md IMPORTANT block** rewritten for v0.5.2; smoketest link updated to the new `docs/debugging/v0.5.2-alpha-tester-smoketest.md`.
+- **`docs/MASTER-PLAN.md`** "Up Next" header bumped to "after v0.5.2"; new "Shipped in v0.5.2" + "Shipped in v0.5.1" sections.
+
+### Build + packaging
+
+- **`CMakeLists.txt` project VERSION** bumped to 0.5.2.
+- No new vendored dependencies. The `third_party/rade/` + `third_party/r8brain/` + `third_party/wdsp/` + `third_party/fftw3/` set is unchanged from v0.5.0.
+- Artifact build matrix on `release.yml` is unchanged from v0.5.1: Linux x86_64 AppImage (jammy), Linux ARM64 AppImage (focal), macOS Apple Silicon + Intel DMG/PKG, Windows x64 portable ZIP + NSIS installer. All GPG-signed.
+
+### Cleanup
+
+- Remove unused includes flagged by clangd `unused-includes`.
+- Remove tracked CTest temp + gitignore `Testing/Temporary/`.
+- `MoxController` header drift fixed re interlock denial signal source.
+
+## [0.5.1] - 2026-05-15
+
+> [!NOTE]
+> **Patch release on top of v0.5.0.** Eight fix-only PRs: three close ship-blocking gaps in the v0.5.0 release artifacts themselves (Windows installer was missing `rade.dll`; macOS x86_64 DMG shipped without `Qt6::WebSockets` so FreeDV Reporter / PSK Reporter / TCI were silently disabled; HL2 + Windows 11 waterfall sliders did not stick across launches), three are persistence / connection-state correctness fixes that surfaced after v0.5.0 hit a bench (orphan `.bak` recovery, connect-state-stuck-green-on-failed-connect, VOX needed juggling to prime on every connect), and two keep the CodeQL SAST pipeline green after the `Qt6::WebSockets` REQUIRED gate.
+
+### Release-artifact hotfixes
+
+- **`rade.dll` missing from Windows installer + portable ZIP** ([#250](https://github.com/boydsoftprez/NereusSDR/pull/250)). v0.5.0's `NereusSDR-0.5.0-Windows-x64-portable.zip` and NSIS installer staged every other runtime DLL (`libfftw3-3.dll`, `libfftw3f-3.dll`, `deepfilter.dll`, `dxcompiler.dll`, `dxil.dll`, Qt) but not `rade.dll`, so the .exe failed to launch on a clean install with `rade.dll was not found`. `release.yml`'s `build-windows` stage-deploy step gains a `rade.dll` block alongside the existing FFTW / DeepFilter blocks.
+- **macOS x86_64 DMG built without `Qt6::WebSockets`** ([#251](https://github.com/boydsoftprez/NereusSDR/pull/251)). The v0.5.0 `aqtinstall` step on the macOS x86_64 builder was missing `qtwebsockets`, so the build silently dropped FreeDV Reporter, PSK Reporter, and the TCI server at compile time (`HAVE_WEBSOCKETS` undefined). Promotes `Qt6::WebSockets` from a `QUIET` optional `find_package` to the main `REQUIRED` block in `CMakeLists.txt` so configure hard-fails next time, and adds `qtwebsockets` to the five CI/release Qt install manifests that were missing it. Same shape as the v0.1.1 `NEREUS_GPU_SPECTRUM` regression: an implicit optional gate quietly dropping a core feature without failing the build.
+- **HL2 + Windows 11: waterfall starts saturated or blank, Setup -> Display sliders revert across launches** ([#243](https://github.com/boydsoftprez/NereusSDR/pull/243), closes [#230](https://github.com/boydsoftprez/NereusSDR/issues/230) reported by Chris W4ORS). Root cause: `m_wfLow/HighThreshold` was doing double duty as both the persisted user setting AND the per-frame runtime AGC / Clarity / "Use spectrum min/max" output. `ClarityController` called the user setters on every tick, so `scheduleSettingsSave()` persisted Clarity-derived values over the user's chosen sliders. Source-first re-align with Thetis `display.cs:2522 + 2536 + 6575-6594 [v2.10.3.13]`: introduces `m_wfActiveLow/HighThreshold` (Thetis local equivalents) on `SpectrumWidget`; `dbmToRgb()` reads these; AGC + NF-AGC write to active only; "Use spectrum min/max" is wired via `setWaterfallGainsIfLinkedToSpectrum` at one write per grid change (Thetis `console.cs:9098-9101 [v2.10.3.13]`).
+
+### Persistence / connection-state correctness
+
+- **VOX "juggle to prime" bench symptom on radio connect** ([#253](https://github.com/boydsoftprez/NereusSDR/pull/253)). Load-time `voxThresholdRequested` / `voxHangTimeRequested` / `antiVoxGainRequested` emits landed in a void receiver because `MoxController::TxChannel` connect was wired after `TransmitModel::loadFromSettings` ran. Adds `MoxController::primeWdspState()` to re-emit the three signals after the late-wired `TxChannel` is connected; called from the `pushTxProcessingChain` lambda alongside the existing DEXP initial-sync block, so load-time VOX values now reach WDSP on every fresh connect (and on profile change).
+- **Connection state stuck `Connected` on failed initial connect** ([#242](https://github.com/boydsoftprez/NereusSDR/pull/242), closes [#239](https://github.com/boydsoftprez/NereusSDR/issues/239)). Both `P1RadioConnection` and `P2RadioConnection` transitioned to `Connected` immediately after sending `metis-start`, before any ep6 / DDC I/Q frame arrived. With the radio powered off, the connect watchdog fired `connectFailed(Timeout)` but state stayed `Connected`, so the UI pill, title-bar segment, and status strip all showed green until the user manually disconnected. State now stays `Connecting` until the first frame promotes it to `Connected` in `onReadyRead()` / `processIqPacket()`, matching the contract documented in `ConnectionState.h:17-20`. `onConnectTimeout()` tears down to `Disconnected` on both protocols so a failed initial connect no longer leaves the UI claiming success while the radio is unreachable.
+- **Orphan-`.bak` data-loss gap closed** ([#249](https://github.com/boydsoftprez/NereusSDR/pull/249), [#241](https://github.com/boydsoftprez/NereusSDR/issues/241) follow-up). `AppSettings::load()` returned early on `ReadResult::Missing`, treating any absent main file as first-run before checking `.bak`. Combined with the corrupt-preserve rename PR [#244](https://github.com/boydsoftprez/NereusSDR/pull/244) added, this re-created the exact data-loss failure mode #241 was filed against: corrupt main -> preserve as `.corrupt-*` (main now missing on disk) -> recover from `.bak` in memory only -> user crashes before next `save()` -> next launch sees main missing and silently goes to defaults despite valid `.bak`. The Missing branch now distinguishes first-run from orphan-`.bak` by checking whether `.bak` exists; falls through to the `.bak` attempt if so. New tests: `missingMainWithGoodBakRecovers` (direct probe) and `orphanBakAfterCorruptPreserveStillRecovers` (end-to-end repro). Companion test commit unifies `resolveSettingsPath` assertions across all platforms.
+
+### CI / build
+
+- **CodeQL: require Qt 6.8 + add `qt6-websockets-dev`** ([#252](https://github.com/boydsoftprez/NereusSDR/pull/252), [#254](https://github.com/boydsoftprez/NereusSDR/pull/254)). CodeQL was the only workflow still on apt `qt6-*` (Qt 6.4.2 on ubuntu-24.04); `ci.yml` and `release.yml` both build against Qt 6.8.*. Right after #252 promoted `Qt6::WebSockets` to REQUIRED, CodeQL compiled `CatNetworkSetupPages.cpp` and tripped on a `connect(..., &TciServer::clientConnected, this, [this](QWebSocket*){...})` lambda. Qt 6.4.2's `QMetaTypeId<QWebSocket*>` instantiation requires the complete type, but Qt 6.8 pulls `<QWebSocket>` in transitively via newer qtbase headers, so `ci.yml` + `release.yml` never saw it. Replaces the apt `qt6-*` install with `jurplel/install-qt-action@v4` (Qt 6.8.*, matching `ci.yml`); drops the stale `-DNEREUS_GPU_SPECTRUM=OFF` workaround (Qt 6.8 has `QRhiWidget`); adds defensive `#include <QWebSocket>` in `CatNetworkSetupPages.cpp`, `MainWindow.cpp`, `TciApplet.cpp`.
+
+## [0.5.0] - 2026-05-13
+
+> [!NOTE]
+> **A substantial minor release on top of v0.4.0.** Three epics + a bench-fix tail land together. (The earlier `v0.4.1-rcN` tags were bench-diagnostic builds that never shipped as a final v0.4.1.)
+>
+> 1. **Phase 3J-1: TCI v2.0 WebSocket server.** External programs (WSJT-X, JTDX, FreeDV, Quisk, ESDR3, N1MM, Log4OM, contest software) can now drive NereusSDR over Thetis-compatible TCI. Setup -> CAT/Network -> TCI Server configures bind interface + port + sensor intervals; Tools -> TCI Server opens the log viewer; the bottom-bar TCI indicator shows Disabled / Listening / Connected / Error. 62 dispatch commands across 8 families. Binary audio pipeline negotiates 8 / 12 / 16 / 44.1 / 48 kHz client rates with per-stream resampling, so FreeDV 8 kHz / Quisk / JTDX 12 kHz all work end-to-end. Init burst is byte-for-byte parity with Thetis (~98 wire frames). 15 closeout items shipped after the initial port stabilized the on-bench behaviour against real clients.
+> 2. **Phase 3J-2: Spot system + FreeDV Reporter + PSK Reporter.** Seven spot-source clients in one dialog: DX cluster, RBN, WSJT-X UDP, SpotCollector / DXLab UDP, POTA HTTPS, FreeDV Reporter Socket.IO, PSK Reporter IPFIX. Tools -> Spot Hub (Ctrl+Shift+S) opens a 10-tab modeless dialog (Settings + per-source views + unified Spot List + Display knobs). Tools -> FreeDV Reporter (Ctrl+Shift+R) opens the 14-column live station view with TX/RX highlights, QSY, status messages, and 2-hour idle auto-removal. Spots render on the panadapter with collision-avoidance stacking and click-to-tune; DXCC coloring resolves through cty.dat plus the operator's ADIF log.
+> 3. **Phase 3R: RADE as a true peer mode (RX + TX end-to-end).** RADE is wired as a first-class DSP mode (`DSPMode::RADE_U` / `DSPMode::RADE_L`), not a DIGU pretense or a virtual audio bus or a slice-mute hack. RX swaps RxChannel for a dedicated RadeChannel; speech decodes through librade and reaches AudioEngine. The VFO flag gains a mode-aware SNR row and shows the EOO-decoded speaker callsign when known. TX runs end-to-end: TxWorkerThread feeds the RADE encoder and `sendTxIq` carries the 24 kHz stereo modem output. RadeApplet docks in the right column when RADE is the active mode. Confirmed on-air on ANAN-G2 via remote receivers; the earlier K-bench deferral is retired.
+> 4. **Bench-fix tail.** Wire / parser / UX gaps that surfaced when the 3J-1 + 3J-2 + 3R drafts hit real radios, real DX clusters, real WSJT-X feeds, and real WSJT-X TCI cycles. Highlights: first-MOX audio-volume seed, ten missing spot-client lifecycle wires, the DXSpider parser, FreeDV Reporter row-highlight / Socket.IO ACK message push / VFO freq-publish throttle, RADE callsign on the flag + idle-clear timer, and cross-source spot dedup via `SpotModel::dedupIndexFor`. Detail in the per-section bullets below.
+
+> [!IMPORTANT]
+> **Existing users: no action required.** Saved radios, mic profiles, DSP settings, container layout, spectrum / waterfall settings all carry forward. The new RADE factory profile (Profile #22) appears automatically alongside existing profiles. Spot system identity / connection keys default to inactive on first launch (no auto-connect until the user enables it).
+
+> [!NOTE]
+> **Binary size impact.** Vendoring `radae_nopy` + Opus (LPCNet + FARGAN) under `third_party/rade/` adds roughly 9 MB to the binary on every platform. Neural-net weights are compiled into librade so no external model file ships and no post-install model-download step is needed.
+
+### Phase 3J-1: TCI v2.0 WebSocket server
+
+Thetis-faithful port of the Transceiver Control Interface, so external programs can drive NereusSDR RX/TX over a WebSocket. Ported source-first from Thetis `v2.10.3.13 @501e3f51`, with AetherSDR informing the Qt6 class structure. The 9 documented divergences from upstream live in the design doc's §7 ledger.
+
+**Server core (`src/core/tci/`):**
+- 8 new classes: `TciServer` (lifecycle + listen socket + bind-interface), `TciProtocol` (text command dispatch), `TciClientSession` (per-client state), `TciBinaryFrame` (RX audio / TX audio / IQ framing), `TciSensorManager` (RX S-meter + TX power/SWR fan-out with per-client aggregation), `TciVfoCoalescer` (Layer-3 wheel-spin collapse), `TciSendQueue` (3-priority: status / sensor / spectrum), `TciVolume` (gain control mapped to pre-TXA / pre-resample scalars).
+- 62 dispatch commands across 8 families: session, VFO, filter, tune, audio, IQ, settings, spot. Selected examples: `protocol`, `iam`, `start`, `stop`, `close`, `vfo`, `mode`, `rit_offset`, `xit_offset`, `rx_filter_band`, `tx_filter_band`, `tune`, `mox`, `trx`, `audio_start`, `audio_samplerate`, `rx_audio_compression`, `iq_start`, `iq_samplerate`, `iq_swap`, `split_enable`, `agc_mode`, `volume`, `cw_pitch`, `keyer_speed`, `spot`, `spot_delete`, `spot_clear`, `spot_drx`.
+- 3-priority send queue keeps status replies ahead of bursty sensor or spectrum traffic.
+- Layer-3 VFO coalescer collapses wheel-acceleration spins (100+ ticks/sec) into one `vfo:` event per dwell window. Ported from Thetis `TCIVfoCoalescer.cs:1-200 [v2.10.3.13]`.
+- Init burst is byte-for-byte parity with Thetis (~98 wire frames) modulo one documented typo fix in §7.
+
+**Binary streams:**
+- **RX audio:** TCI clients negotiate 8 / 12 / 16 / 44.1 / 48 kHz. Non-48 kHz clients get a per-stream WDSP resampler, so FreeDV 8 kHz, Quisk, and JTDX 12 kHz all work end-to-end. Mirrors Thetis `cmaster.cs:1411-1444 [v2.10.3.13]`.
+- **TX audio:** single-client mutex (a second client trying to push TX gets a `tx_busy:` reply). Cross-thread dispatch from `TciClientSession::onBinaryFrame` to `TxWorkerThread::feedTxAudioFromTci`, ring-buffered so burst producers match the steady WDSP consumer.
+- **IQ stream:** IQSwap toggle (some clients expect Q+I order) and AlwaysStreamIQ option (stream IQ even when no client has called `iq_start`; useful for spectrum-fed external decoders).
+
+**UI surfaces:**
+- **Setup -> CAT/Network -> TCI Server** page: 6 group boxes covering enable / bind interface / port / TX-stream audio buffering / IQ swap / AlwaysStreamIQ / per-RX sensor interval / TX sensor interval / log window.
+- **Tools -> TCI Server** opens the modeless `TciLogWindow` viewer (filter + pause + clear + autoscroll, persisted geometry).
+- **View -> Network Applets** toggles the `TciApplet` (Slice A meter + TX peak meter + TX/RX gain sliders) and `ClientChainApplet` (per-client bytes-in / bytes-out / state pill) docks.
+- **Bottom-bar TCI indicator** (`m_tciIndicator`): 4 states (Disabled / Listening / Connected (N clients) / Error).
+
+**Verification harness:**
+- ~80 rows in `tests/data/tci/matrix.csv` driven by `tests/tst_tci_protocol_matrix.cpp`; generator at `tools/gen-tci-matrix-readme.py`. Every (command, args, expected reply) tuple exercised.
+- 18 TCI ctest binaries total.
+
+**15 closeout items** shipped after the initial port hit real clients on a real bench (`docs/architecture/2026-05-12-phase3j-1-loose-ends-plan.md`). Grouped by theme:
+
+*Client compatibility:*
+- **(3) `RadioModel` `Q_INVOKABLE` long tail.** 56 production shims (`setMode`, `setFrequency`, etc.) exposed for ESDR3 / N1MM / Log4OM. 18 category-level tests in `tst_tci_radio_model_shims`.
+- **(8) TX-path resampling for non-48 kHz clients.** FreeDV 8 kHz, Quisk 12 kHz, JTDX 12 kHz all play correctly through `TxWorkerThread`'s polyphase resampler.
+- **(1) Bind-interface dropdown.** `QNetworkInterface::allInterfaces()` enumeration with LAN-exposure warning tooltip; replaces the locked-loopback label. Live restart on bind/port change.
+- **(6) CW pitch from AppSettings.** 3 `SliceModel` sites read `CW/SidetonePitch` instead of the previous hard-coded 600 Hz.
+- **(5) `tx_stream_audio_buffering`** honored from AppSettings (`TciTxStreamBufferingMs`, default 200 ms, range 50..2000 ms).
+- **(4) Per-(band, mode) `LastFilter` persistence.** Mirrors Thetis `preset[m].LastFilter` via a new `bandModePrefix` namespace under `Slice<N>/Band<key>/Mode<key>/`. Reverts the DIGU/DIGL F1 (3 kHz) workaround back to the F5 (1.2 kHz) default now that filter choices stick per (band, mode).
+
+*Operator-facing polish:*
+- **(2) `TciLogWindow` viewer.** Modeless QDialog wired to `TciServer::messageLogged` firehose signal; filter + pause + clear + autoscroll + persisted geometry.
+- **(13) Real audio-peak level meters** on TciApplet (replaces the fake sine-wave placeholder from the initial port).
+- **(15) Real RX S-meter + TX power/SWR sensor values** from `RxChannel::getMeter` / `RadioStatus`.
+- **(14) MOX-gated TX sensor broadcast.** TX power / drive / SWR sensors stream only while `mox=1`; matches Thetis behaviour (was always-on in the initial port).
+- **(11)/(12) TCI gain sliders** wired: TX gain as a pre-TXA scalar, slice-A RX gain as a pre-resample scalar.
+
+*Stability:*
+- **(9) `QPointer<RadioModel>` shutdown-crash fix.** TciServer now survives child-destruction-order races on app exit; previously a partially-destroyed RadioModel raced teardown.
+- **(10) HL2 bandwidth-monitor startup grace.** No false-trip during legitimate connect-time ep6 silence on HL2; the throttle detector grants the first ~2 s of connection a clean slate.
+- **(7) Settings-purge regression pin.** `tst_app_settings_arbitrary_key_persistence` (4 subtests) confirms no purge mechanism exists and keeps it that way.
+
+### Phase 3J-2: Spot system + FreeDV Reporter + PSK Reporter
+
+- **7 spot-source clients ported from AetherSDR + freedv-gui:**
+  - `DxClusterClient` (`src/core/`): telnet client. Default targets DX cluster hosts (e.g. `dxc.k1ttt.net:7300`); also drives the RBN feed on `telnet.reversebeacon.net:7000` (RBN spots include per-spot SNR).
+  - `WsjtxClient`: UDP multicast listener on port 2237. Decodes WSJT-X v2.6 envelopes; emits a spot per decoded callsign.
+  - `SpotCollectorClient`: DXLab Suite UDP listener (default port 8888 per AetherSDR convention).
+  - `PotaClient`: HTTPS poller against `api.pota.app` (60-second interval, 10-second dedup window).
+  - `FreeDVReporterClient`: Socket.IO client against `qso.freedv.org` (Engine.IO/Socket.IO v4 protocol, ported from freedv-gui).
+  - `PskReporterClient`: IPFIX UDP listener on port 4739 (ported from freedv-gui).
+- **5 data-tier models:**
+  - `SpotModel`: TCI-keyed sink for all spot sources (ported from AetherSDR). Owns the canonical SpotData ring + emits `spotReceived` / `spotExpired`. Per-source dedup window (10 s, configurable).
+  - `SpotTableModel`: QAbstractTableModel backing the Spot List tab (extracted from AetherSDR DxClusterDialog).
+  - `BandFilterProxy`: QSortFilterProxyModel for band + source pill filtering.
+  - `FreeDVStationModel`: NereusSDR-native 14-field live station map driven by FreeDVReporterClient.
+  - `RxDecodeModel`: local decode ring buffer; sources WSJT-X UDP + RADE callsign-over-EOO decodes.
+- **DXCC color stack ported from AetherSDR:**
+  - `CtyDatParser`: parses the cty.dat country file (in-tree, refreshed quarterly from country-files.com).
+  - `AdifParser`: parses operator-supplied ADIF logs (e.g. `~/.config/NereusSDR/wsjtx_log.adi`).
+  - `DxccWorkedStatus`: worked-before tracker driven by AdifParser output.
+  - `DxccColorProvider`: 4-tier color resolver (worked = grey, needed-band = orange, needed-mode = yellow, needed-mode-and-band = red, per AetherSDR convention).
+- **SpotHubDialog** (`src/gui/SpotHubDialog.h`): modeless 9-tab dialog (Tools > Spot Hub, Ctrl+Shift+S) ported AetherSDR-faithfully. Tabs: 7 per-source tabs (DX Cluster, RBN, WSJT-X, SpotCollector, POTA, FreeDV Reporter, PSK Reporter), unified Spot List tab with band + source pill filters, and a Display tab whose knobs (ShowSpotsOnSpectrum, MaxSpotsPerSpectrum, font size, per-source toggles) round-trip through AppSettings.
+- **FreeDVReporterDialog** (`src/gui/FreeDVReporterDialog.h`): modeless 14-column live station view (Tools > FreeDV Reporter, Ctrl+Shift+R), Qt6 port from freedv-gui's wx UI. Columns: Callsign, Grid, Distance, Heading, Version, RX Frequency, RX Mode, Status, Last TX, Last RX, Last Update, Country, plus 2 reporter-internal columns. Features: TX-station red highlight + RX-station green highlight + 6-second clear, right-click QSY to remote station, MRU status messages with Save/Send/Clear round-trip, 2-hour idle auto-removal via idle-sweep timer, per-column filters.
+- **SpectrumWidget extensions:** `drawSpotMarkers` overlay + click hit-test (ported from AetherSDR); collision-avoidance multi-level stacking; `+N` cluster badges when density exceeds the configurable `MaxSpotsPerSpectrum` cap; click-to-tune snaps the active slice. `loadSpotDisplaySettings` + new spot test seams.
+- **RadioModel** owns the 7 spot clients + 4 of the new models (SpotModel, FreeDVStationModel, RxDecodeModel, SpotTableModel) + adapter slots; calls `restoreSpotClientAutoStartState` on launch to auto-connect every source whose AutoConnect key is True.
+- **MainWindow:** Tools menu gains Spot Hub (Ctrl+Shift+S) and FreeDV Reporter (Ctrl+Shift+R) entries, both opening modeless singletons.
+- **AppSettings keys:** per-source connection identity (host, port, login callsign, AutoConnect) for each of the 7 spot sources; Display tab knobs (ShowSpotsOnSpectrum, MaxSpotsPerSpectrum, font size, per-source toggles); DXCC color tracking keys.
+- **Attribution scaffolding:** new `FREEDV-GUI-PROVENANCE.md` registry + `scripts/discover-freedv-gui-author-tags.py` + integration into the existing `verify-inline-tag-preservation.py` pre-commit + CI hook chain. Every freedv-gui port carries byte-for-byte headers + a PROVENANCE row in the same commit that introduces the ported logic.
+
+### Phase 3R: RADE as a true peer mode
+
+- **Vendored RADE library** at `third_party/rade/`: `radae_nopy` (BSD-2-Clause, pinned to SHA b289102) + Opus (with LPCNet + FARGAN). License verified before vendoring (per the design doc's order-of-operations gate). Built via CMake ExternalProject; CI cold build adds approximately 90 seconds on first job, incremental builds cached. Neural-net weights are compiled into librade so no external model file ships. Approximately 9 MB added to the binary on every platform.
+- **Vendored r8brain-free-src** at `third_party/r8brain/`: MIT-licensed 24-bit polyphase resampler. Used by the RADE 48-to-16 kHz TX audio chain and reserved for future general resampling needs.
+- **`RadeChannel`** (`src/core/wdsp/RadeChannel.h`): peer-mode DSP channel for `DSPMode::RADE_U` / `DSPMode::RADE_L`. RX live: decodes I/Q to speech via librade, drives SliceModel `snrDb` for the VFO flag, emits `rxSpeechReady` into AudioEngine, exposes EOO callsign via `rxTextDecoded`. TX live: encodes mic audio via `txEncode`, emits `txModemReady` (24 kHz stereo); RadioModel hook upsamples to connection rate via a lazy `Resampler` and routes I/Q to `RadioConnection::sendTxIq`. Hybrid port: AetherSDR for the Qt6 channel structure + freedv-gui for the DSP pipeline truth.
+- **`RadeText`** (`src/core/wdsp/RadeText.h`): thin Qt6 wrapper over third_party/rade's native callsign-over-EOO API. Task I4 Option B decision per upstream review BLOCKED: this approach avoided porting freedv-gui's `rade_text.c` plus roughly 1500 lines of codec2 dependencies.
+- **Mode dispatch** (in WdspEngine): new `DSPMode::RADE_U = 12` and `DSPMode::RADE_L = 13` enum entries. Like USB/LSB, RADE has upper/lower sideband variants with mirrored 1700 Hz passbands (RADE-U: 650..2350 Hz; RADE-L: -2350..-650 Hz). On mode change to or from either RADE sideband, WdspEngine swaps RxChannel for RadeChannel (destroy-and-recreate by design; band changes inside RADE keep the channel alive). A RADE-U <-> RADE-L transition is also a destroy-and-recreate so the channel's sideband flag is set fresh on a clean instance.
+- **TX end-to-end wired** (commits 34a9f14c / 181d3ee5 / 7beacdc5 plus K-bench follow-up): `TxPath` enum on TxWorkerThread for mode-aware TX path selection; dedicated 80 Hz `RadeTxHpf80` HPF; `RadeTx48to16` 48-to-16 kHz polyphase resampler (uses r8brain); modem-output connect plumbing. **K-bench follow-up:** RADE TX now end-to-end wired (TxWorkerThread RADE pump drains mic block, runs HPF, resamples 48 -> 16 kHz, emits `radeMicBlockReady` queued to `RadeChannel::txEncode`; the channel emits `txModemReady` and the RadioModel hook upsamples 24 kHz -> connection-rate via a lazy `Resampler` then routes I/Q to `RadioConnection::sendTxIq`). Bench verification on ANAN-G2 + HL2 pending (Row 2 of the Phase 3R bench matrix flipped from Deferred to Untested).
+- **VFO flag SNR row** (`VfoWidget`): mode-aware; visible only when the active slice is in RADE mode. Text colour codes per the L1 spec (grey/yellow/green by SliceModel::snrDb thresholds).
+- **`RadeApplet`** (`src/gui/applets/RadeApplet.h`): right-column applet auto-docked when RADE is the active mode. Profile combo (defaults to RADE), sync indicator (colour tracks RadeChannel state), Reset Vocoder button (calls `RadeChannel::resetTx`).
+- **Mode menu** gains RADE-U and RADE-L entries (14 entries total). Selecting Mode > RADE-U sets the active slice to `DSPMode::RADE_U`; selecting Mode > RADE-L sets `DSPMode::RADE_L`.
+- **`MicProfileManager`** ships a new RADE factory profile: Leveler enabled; ALC + CFC + CESSB + Phase Rotator all bypassed. Auto-selected on mode entry to RADE. Profile count 21 -> 22 (the existing 21 ported-from-Thetis profiles are untouched).
+
+### Bench-fix tail (2026-05-11 → 2026-05-12)
+
+Gaps surfaced when the 3J-2 + 3R drafts hit a real radio + a real DX cluster + a real WSJT-X feed. All ported source-first from freedv-gui / AetherSDR upstream where applicable.
+
+- **First-MOX modulation fix (audio_volume seed at connect).** `RadioModel::m_lastAudioVolume` started at 0 and only updated when the user moved the power slider OR engaged TUNE. First MOX without prior TUNE produced no RF — wire byte and `setTxFixedGain` IQ scalar both stayed at zero. Seed `setPowerUsingTargetDbm(bFromTune=false, bSetPower=true)` in the WDSP-init `txSetup` lambda after the existing `pushTxModeAndBandpass` seed; MOX now keys with full drive on the first press.
+- **Spot system: 10 missing client-lifecycle wires in `MainWindow::openSpotHub`.** Only the FreeDV Reporter Start/Stop signals were wired to the client. `connectRequested` / `disconnectRequested` / `rbnConnectRequested` / `rbnDisconnectRequested` / `wsjtxStart`/`Stop` / `spotCollectorStart`/`Stop` / `potaStart`/`Stop` emitted from the SpotHubDialog per-tab buttons fell on the floor. Auto-start via `restoreSpotClientAutoStartState` bypassed the broken UI wire entirely, which is why launch-time auto-connect appeared to work but every manual Connect / Start did nothing.
+- **Spot system: DX cluster DXSpider format parser.** `DxClusterClient::parseDxSpotLine` only matched the AetherSDR-ported `DX de SPOTTER: FREQ CALL ... TIMEZ` format. The default cluster host (NG7M-1 running DXSpider V1.57) sends `FREQ CALL DD-MMM-YYYY TIMEZ COMMENT <SPOTTER>` which never matched. Adds a second regex with fall-through; both formats now parse.
+- **Spot system: SpotModel → SpectrumWidget overlay bridge (`refreshSpots` lambda).** `SpectrumWidget::setSpotMarkers()` was defined but never called from anywhere — the entire panadapter spot overlay had no data source. AetherSDR's `refreshSpots` lambda on MainWindow that translates SpotModel state into SpectrumWidget markers never carried over in the port. Adds the lambda in MainWindow ctor; subscribes to `SpotModel::spotAdded`/`Updated`/`Removed`/`Cleared`/`Refreshed`.
+- **Spot system: SpotTableModel ownership moved RadioModel-side.** Table model was owned by `SpotHubDialog` and constructed only when the user opened Tools → Spot Hub for the first time. Auto-connected sources flowed past with nothing listening for the Spot List table. Moved ownership to RadioModel (sibling to SpotModel); client signals wired in RadioModel ctor; dialog takes a non-owning pointer. Fixes "auto-start spots don't appear until I disconnect+reconnect every source."
+- **Spot system: connect / start / stop UI feedback wired on all source tabs.** Status labels and button text never updated on DX Cluster / RBN / WSJT-X / SpotCollector / POTA / PSK Reporter tabs. Adds the matching slot blocks per tab; button flips Start ↔ Stop, status label flips Stopped ↔ Connected / "Listening on …" / "Polling api.pota.app" / "Auto-send every 5 minutes"; console widget on each tab also gets the raw-line stream now.
+- **PSK Reporter: source-first port from freedv-gui.** PSK Start button was wired to nothing. Maps Start to `setAutoSendIntervalSec(kReportingIntervalSec=300)` (= upstream `main.cpp:2597 [@77e793a]` `5 * 60 * 1000`). Stop disarms the timer. Dropped the NereusSDR-specific `FreeDvReporter/ReportToPsk` gate; replaced with `isAutoSendActive()` matching upstream's "PSK is in m_reporters[] iff enabled" semantics. Added WSJT-X spot fan-out into `m_pskReporter->reportDecode` matching freedv-gui's `main.cpp:1959-1966 [@77e793a]` `addReceiveRecord` loop. `restoreSpotClientAutoStartState` now arms the 5-min timer when `PskReporterAutoStart=True` (it previously only set identity).
+- **Spot overlay: 10-gap closure against AetherSDR audit.** (1) Hover tooltip with callsign / freq / mode / source / spotter / comment / timestamp. (2) `Qt::PointingHandCursor` over spot labels and cluster badges. (3) Right-click context menu (Tune to / Copy Callsign / Lookup on QRZ / Remove Spot) — new `spotRemoveRequested(int)` signal. (4) Cluster popup verified as already a verbatim port. (5) Memory-spot variant ("Apply <call>" instead of "Tune to <call>"). (6) Spot List ↔ panadapter bidirectional hover sync — `spotHoverIndexChanged` + `spotListHoverChanged`; halo paint around matched label. (7) Per-source panadapter visibility toggles — new "Show on panadapter" group on Display tab; persists under `SpotSourceVisible/<source>`. (8) `leaveEvent` override hides tooltip + clears hover state. (9) Hover-halo paint driven by `setHoverSpotIndexExternal`. (10) Per-source visibility mask gate in `drawSpotMarkers`.
+- **FreeDV Reporter: 4 missing-features port from upstream.** (a) `setHiddenFromView(bool)` — Socket.IO `hide_self` / `show_self` events. (b) Frequency display in kHz toggle (column header MHz ↔ kHz, cell format 4-dec MHz ↔ 1-dec kHz). (c) Sort column / order persistence. (d) Per-column width persistence as comma-joined CSV.
+- **FreeDV Reporter: distance/heading were always zero.** `FreeDVStationModel::setOurGridSquare()` was defined but no code path called it. Wires `User/GridSquare` → `setOurGridSquare` in RadioModel ctor; forwards on `SpotHubDialog::identitySaved` so columns recompute live when the user saves identity.
+- **FreeDV Reporter: row highlight wins over selection.** Delegate paint was filling the highlight rect BEFORE `QStyledItemDelegate::paint`, which then overwrote it with the selection brush via `drawPrimitive(PE_PanelItemViewItem)`. Fix: stash bg in `opt.backgroundBrush` and re-point `QPalette::Highlight` so selection overlay coincides with the highlight color. Matches freedv-gui's `wxDataViewListCtrl` semantics where `reportData->backgroundColor` survives selection.
+- **FreeDV Reporter: messages weren't pushing on connect.** qso.freedv.org server doesn't always emit `connection_successful` after `role=report` auth (observed on bench — auth went out but the event never arrived). Belt-and-braces: also push cached message on the Socket.IO Connect ACK (`'0'` frame).
+- **FreeDV Reporter: VFO-spin no longer DoS's qso.freedv.org.** New throttle on `RadioModel`: 7 s trailing dwell + 100 kHz band-jump fast-path + `MoxController::txAboutToBegin` force-flush. Constants `kFreedvFreqDwellMs` / `kFreedvFreqJumpHz`.
+- **VFO flag: RADE speaker callsign display.** SNR row shows `<callsign> ● <snr>dB` when the RADE decoder pulls a callsign from the EOO text channel. New `SliceModel::lastRadeRxCallsign` Q_PROPERTY (sticky-while-in-RADE, cleared on mode-off-RADE / RADE_U↔RADE_L sideband swap / debounced sync rise with `kRadeSyncDropClearDebounceMs=2000`). `VfoWidget::setRadeCallsign` composed alongside `setRadeSynced` + `setRadeSnrLabel` + `setRadeFreqOffset` through a unified renderer.
+- **First-time setup UX.** Settings tab gains an orange-on-dark "First-time setup" banner shown only when `User/Callsign` is empty. All callsign / grid placeholder text rewritten from passive ("your callsign") to action ("Enter Callsign Here — set under Settings tab"). Banner disappears the moment a callsign saves; existing users never see it.
+
+### Changed
+
+- `MicProfileManager` factory profile count 21 -> 22 (added RADE).
+- `RxDecodeModel` now sources from RADE callsign-over-EOO decodes in addition to WSJT-X UDP decodes.
+- `SpectrumWidget` extended with `loadSpotDisplaySettings` and spot test seams.
+- `WdspEngine` lifecycle extended to swap channels on `DSPMode::RADE_U` / `DSPMode::RADE_L` entry/exit and on the U <-> L sideband flip.
+- `SliceModel` gains a `snrDb` Q_PROPERTY for the VFO flag SNR row.
+- `RadioModel` constructor and connect path expanded to own the 7 spot clients + 4 new models; `restoreSpotClientAutoStartState` runs on launch.
+- `MainWindow` Tools menu gains 2 entries; Ctrl+Shift+S / Ctrl+Shift+R hotkeys reserved.
+- **RADE split into RADE-U / RADE-L.** Pre-fix Phase 3R landed a single `DSPMode::RADE = 12` entry with a placeholder +/-5000 Hz AM-class filter. Bench testing revealed two issues: (1) the placeholder filter is wildly off from RADE's actual 1700 Hz modem footprint, and (2) RADE needs sideband variants like USB/LSB. Split into `RADE_U = 12` (650..2350 Hz passband, default) and `RADE_L = 13` (-2350..-650 Hz, mirrored). The filter window IS visible on the panadapter and defines the SSB-style passband the RADE modem energy occupies. Legacy persisted "RADE" string from pre-fix builds migrates to RADE_U on load.
+- **SpotHubDialog now has a Settings tab (first position) for one-time identity entry.** Callsign + Grid + FreeDV status message feed every spot source. Save propagates to the canonical `User/Callsign` + `User/GridSquare` + `FreeDvReporter/Message` keys and to every per-source legacy key (`DxClusterCallsign` / `RbnCallsign` / `PskReporterCallsign` / `FreeDvReporter/Callsign` / `FreeDvReporter/GridSquare`). Live `FreeDVReporterClient` + `PskReporterClient` get a `setIdentity()` push on Save so a running connection picks up the new identity without disconnect. FreeDV Reporter tab shows the resolved identity in green when set; warns in yellow with "Go to the Settings tab" when missing. Per-source tabs (Cluster / RBN / PSK Reporter) fall back to `User/Callsign` when their per-source key is empty. Tab count grows from 9 to 10.
+- **FreeDV Reporter auto-start now skips when no identity is configured** (previously attempted anonymous connect, producing the user-reported "FreeDV Reporter is not connecting" bug). `RadioModel::restoreSpotClientAutoStartState` resolves callsign + grid via the `FreeDvReporter/Callsign` -> `User/Callsign` fall-back chain, calls `setIdentity()` before `startConnection()`, and logs a warning + skips the connect entirely when both are empty. Same fall-back is applied to the DX cluster / RBN / PSK Reporter auto-start paths.
+
+### Deferred / known limitations
+
+- **HL2 RADE bench verification** is gated on closure of the HL2 ATT/filter safety audit. Row 9 of the Phase 3R bench matrix is tagged Deferred until the audit signs off.
+- **RADE multi-slice** (RADE on slice A while SSB on slice B) is exploratory in v0.5.0; full coverage waits on Phase 3F multi-panadapter. Row 12 of the Phase 3R bench matrix is tagged Deferred.
+- **RADE TX produces a DSB modulation** (I = real-valued modem baseband, Q = 0).  The receiver-side correlator in RADE syncs on its kernel regardless of sideband presentation so the link decodes either way, but constructing a proper analytic (Hilbert-transformed) baseband to get a true single-sideband presentation that matches the RADE_U / RADE_L mode selection is a follow-up DSP refinement.
+
+### Vendored
+
+- `third_party/rade/`: radae_nopy at SHA b289102, BSD-2-Clause. Opus with LPCNet/FARGAN built via CMake ExternalProject. Neural weights compiled into librade.
+- `third_party/r8brain/`: r8brain-free-src, MIT. 24-bit polyphase resampler for the RADE audio chain and general future use.
+- Both vendored trees have PROVENANCE rows in the appropriate registries and pre-port-checklist sign-off in the commit message.
+
+### Bench verification matrices
+
+- `docs/architecture/phase3j2-verification/README.md`: 11-row bench matrix covering DX cluster, RBN, WSJT-X UDP, SpotCollector, POTA, FreeDV Reporter (14-col view + TX/RX highlights + QSY + status messages + idle auto-delete), PSK Reporter, DXCC coloring with real ADIF, panadapter collision avoidance, auto-connect restore, Display knob round-trip.
+- `docs/architecture/phase3r-verification/README.md`: 12-row bench matrix covering RADE RX, RADE TX (K-bench follow-up gated), TX preset routing, mode dispatch round-trip, mode dispatch across band change, VfoWidget SNR row, RadeApplet behaviour, Mode menu entry, HL2 RADE (HL2 audit gated), TX-on-RADE PA safety, DEXP/VOX interaction, single-RX multi-slice limitations.
+
+All non-deferred rows must pass before v0.5.0 is tagged. Failed rows produce GitHub issues on the NereusSDR repo and block the final tag.
+
+### Design / plan reference
+
+- Design doc: `docs/architecture/phase3j2-3r-spots-and-rade-design.md`
+- Implementation plan: `docs/architecture/phase3j2-3r-spots-and-rade-plan.md`
+
+### Phase 3J-1: TCI Server (Thetis port) — closeout
+
+Phase 3J-1 ships the full TCI WebSocket server (port 50001 default, loopback bind, Thetis-faithful) alongside Phase 3J-2 in this point release. Init burst (`sendInitialisationData` + `sendInitialRadioState`) ports approximately 98 wire frames byte-for-byte; 62 dispatch commands across 8 families (VFO, mode/filter, TRX, DSP, audio stream, IQ stream, stubs, bespoke `_ex`); three-priority send queue per client (Urgent / Binary / Control) with bounded-depth oldest-drop; 3-layer VFO coalescer; audio binary RX pipeline with WDSP resampler lifecycle per-(client, slice); TX audio binary inbound with single-client mutex; IQ binary stream pipeline with IQSwap + AlwaysStreamIQ flag effects; TciSensorManager with 4 wire formats and interval aggregation. Operator surfaces: 6 group boxes in Setup → Network → TCI Server, TciApplet + ClientChainApplet docked in Container #0, bottom status-bar 4-state `m_tciIndicator`. Verification: 18 ctest binaries (matrix runner, dispatch seam, lifecycle, init burst smoke + typo divergence + golden, priority queues, VFO coalescer, sensor formats, audio + IQ roundtrip, TX mutex, resampler lifecycle, volume math, server lifecycle, server ping, silent-error invariant, log window).
+
+**Closeout items (PR #229 follow-up):**
+- TX-path resampler: `feedTxAudioFromTci` now honors the per-frame `srcRate` from the TX_AUDIO_STREAM binary header (was ignored — comment said "Phase 17 simplified scope: no rate conversion"). FreeDV at 8 kHz / Quisk / JTDX at 12 kHz / 24 kHz all play correctly on-air; WSJT-X 48 kHz path is unchanged. Mirrors Thetis `cmaster.cs:1411-1444 [v2.10.3.13]`.
+- `QPointer<RadioModel>` on TciServer to survive child-destruction-order races during MainWindow shutdown. Fixes a `EXC_BAD_ACCESS` segfault in `TciServer::stop()` at `QObject::disconnect(m_model, ...)` when `RadioModel` was destroyed first.
+- HermesLiteBandwidthMonitor startup grace: silent-tick counter no longer advances until at least one ep6 byte has been recorded. Fixes false connect-time throttle trip (bench log showed trip at +104 ms after `Connected (metis-start sent)`).
+- Bind-interface dropdown on Setup → Network → TCI Server (QNetworkInterface-enumerated; LAN-exposure tooltip warning; persisted as `TciServerBindAddress`); diverges from Thetis free-text `IP:port` field per `feedback_source_first_ui_vs_dsp.md`.
+- TciLogWindow viewer ("Show Log…" button — Setup → Network → TCI Server): modeless QDialog with filter combo (All / In / Out) + Pause + Clear + auto-scroll, persisted geometry. New `TciServer::messageLogged` firehose signal feeds it; MainWindow owns the lazy-constructed window so it survives Setup close.
+- `tx_stream_audio_buffering` AppSettings value now flows into the init burst.
+- CW pitch (`CWPitch`) read from AppSettings (was hardcoded 600 Hz in three SliceModel sites).
+
+**Known divergences from Thetis:** init-burst typo fix (Thetis `TCIServer.cs:2374-2375` sends duplicate `if:1,1,...; × 2` copy-paste bug; NereusSDR emits the intended `if:1,0,...; if:1,1,...;` cross-product); Qt6 `QWebSocketServer` replaces Thetis's hand-rolled RFC 6455 framing; Slice A/B/C/D in UI mapped to `trx:N` at the TciProtocol layer boundary; UTF-8 outbound text on all platforms (vs Thetis-on-Windows `Encoding.Default` Windows-1252; ASCII content is byte-identical); single-class `ClientChainApplet` (vs AetherSDR's split); `MinimumRequiredRxSensorInterval` aggregation surfaced in Setup UI.
+
+## [0.4.1-rc3] - 2026-05-09
+
+> [!NOTE]
+> **Bench diagnostic build.** rc2 bench data on the friend's ANAN-10E showed feedback ADC envelope still stuck at 0.0003 (-70 dBFS, ADC noise floor) despite the bank-16 ps_run fix landing. Either the friend isn't running rc2 (Gatekeeper / install path issue), or the chain `PS-A click → cmd-state → setPsEnabledWithFanOut → emit psEnabledChanged → cross-thread queued setPuresignalRun` is breaking somewhere we can't see without explicit logging. This rc adds two diagnostic log lines so the next bench bundle definitively answers both questions.
+
+### Added (diagnostic — will be removed before final v0.4.1)
+- **Startup banner.** `qInfo("NereusSDR <ver> (v0.4.1-rc3 bench - bank-16 ps_run flush + setPuresignalRun diagnostic) starting")` at the top of main.cpp's QApplication construction. Confirms which RC the bundle was captured from (system-info.json's appVersion only carries the base "0.4.1" without the rc tag).
+- **`P1RadioConnection::setPuresignalRun` entry log.** `qCInfo(lcConnection) << "P1: setPuresignalRun(" << run << ") previous=" << m_puresignalRun;` Confirms whether the cross-thread queued call from `PureSignal::psEnabledChanged` actually reaches the connection thread when the user clicks PS-A. If this log line is missing from the next bench bundle, the chain is broken at the signal/slot wiring; if it appears with `(true)`, the wire-byte path is working as coded and the remaining issue is on the radio side.
+
+## [0.4.1-rc2] - 2026-05-09
+
+> [!NOTE]
+> **Bench follow-up to rc1.** rc1 fixed the codec dispatch (PsccPump now activates correctly on Hermes-class boards) but exposed a second bug: `P1CodecStandard`'s bank 16 was a stub that wrote only C0 and zero-filled C1-C4. Thetis emits `puresignal_run` on TWO banks (bank 11 C2 bit 6 AND bank 16 C2 bit 6); without the bank-16 bit, the radio FPGA fires the bookkeeping but the PA-loopback physical path stays disengaged on every Hermes-class board. HL2's codec was fixed for this on 2026-05-07 (PR #212 follow-up) but the same fix never propagated to `P1CodecStandard`, which is why HL2 PS worked while Hermes / ANAN-10 / ANAN-10E / ANAN-100 / ANAN-100B all stayed broken even after rc1 landed.
+>
+> Bench data from a friend's ANAN-10E running rc1: `PsccPump` pumped 1361 blocks straight with TX envelope 0.20 (-14 dBFS) but feedback envelope stuck at 0.0003 (-70 dBFS — ADC noise floor); calcc reached `LCOLLECT` (state=4) but never converged because the FB ADC was deaf to the PA. After rc2, the FPGA loopback engages and the FB ADC sees the PA output at the expected -30 to -40 dB below TX.
+
+### Fixed
+- **`P1CodecStandard` bank 16 missing `puresignal_run` bit.** Pre-fix the bank-16 compose was `out[0] = C0base | 0x24; return;` — only C0 written. Now writes the full 5 bytes per Thetis `networkproto1.c:657-666 [v2.10.3.13]`: `C0 = 0x24`, `C1 = 0` (BPF2 not yet plumbed), `C2 = (puresignal_run & 1) << 6`, `C3 = 0`, `C4 = 0`. Mirrors the same fix that landed in `P1CodecHl2` on 2026-05-07. Affects every P1 board dispatching through `P1CodecStandard`: HERMES, ANAN10, ANAN100, ANAN10E, ANAN100B, AnvelinaPro3 in P1 mode.
+
+### Tests
+- `tst_p1_bank16_pursignal_run` (8 tests) — pins the `puresignal_run` bit emission on bank 16 C2 bit 6, for both Hermes-class and HermesII-class dispatch through `P1CodecStandard`. Includes no-clobber guards on other C2 bits.
+
+## [0.4.1-rc1] - 2026-05-09
+
+> [!NOTE]
+> **PureSignal hotfix.** PureSignal correction never landed on Hermes / ANAN-10 / ANAN-10E / ANAN-100 / ANAN-100B / AnvelinaPro3-on-P1 in v0.4.0 because `RadioModel` never pushed the connected hardware `HPSDRModel` into `ReceiverManager`, leaving the per-board codec dispatcher stuck on the safe Atlas default. The codec emitted an empty `PsDdcConfig`, `PsccPump` never activated, and calcc never received feedback samples. HL2 (P1CodecHl2) and G2 / G2-1K / 100D / 200D / 7000DLE / 8000DLE on P2 (P2CodecOrionMkII / P2CodecSaturn) were unaffected because their codecs ignore the model parameter — only `P1CodecStandard` and its `P1CodecAnvelinaPro3` subclass read it.
+>
+> **Step-att hygiene also fixed.** `setAttenuator` and `setPreamp` now flush bank 11 on the next EP2 frame (≤2.6 ms instead of ~22 ms worst case), matching peer-setter parity. `StepAttenuatorController` cross-thread connection pushes now marshal via `QMetaObject::invokeMethod` (closes a latent ARM64 thread-safety hazard).
+
+### Fixed
+- **PureSignal correction never lands on Hermes-class P1 boards.** `RadioModel::connectToRadio` now fans the connected `HPSDRModel` into both `TransmitModel` and `ReceiverManager` via the new `applyHpsdrModel()` helper. Without the `ReceiverManager` push, `P1CodecStandard::applyPureSignalDdcConfig` fell through its model switch's default branch and emitted an empty `PsDdcConfig` — keeping `PsccPump` inactive (its `wantActive` gate requires `ddcEnable` bit 0 set, `syncEnable` bit 1 set, and matching ps_rates — all zero in an empty cfg). Affects: HERMES, ANAN10, ANAN10E, ANAN100, ANAN100B, AnvelinaPro3 (P1 mode). HL2 / RedPitaya / G2 / G2-1K / 100D / 200D / 7000DLE / 8000DLE unaffected.
+- **`setAttenuator` + `setPreamp` missing bank-11 flush flag.** Both setters now set `m_forceBank11Next = true` before their state writes, matching the Codex P2 pattern used by every other bank-11 setter (`setMicTipRing` / `setMicBoost` / `setLineIn` / `setUserDigOut` / `setMicPTTDisabled` / `setPuresignalRun`). RX step-att and preamp UI changes now land within ≤2.6 ms instead of ~22 ms worst case.
+- **`StepAttenuatorController` cross-thread connection pushes.** The three RX-side `m_connection->setAttenuator()` / `m_connection->setPreamp()` call sites (in `setAttenuation`, `setPreampMode`, and `applyAttToHardware`) now marshal via `QMetaObject::invokeMethod` so connection-thread state mutations happen on the connection thread. Latent ARM64 thread-safety hazard; previously worked on x86/x64 by accident due to atomic aligned-int writes. The four TX-side (`setTxStepAttenuation`) sites already followed this pattern.
+
+### Tests
+- `tst_radio_model_hpsdr_model_push` (5 tests) — pins the `applyHpsdrModel` fan-out contract.
+- `tst_p1_step_att_flush_flag` (8 tests) — pins the bank-11 flush-flag pattern on `setAttenuator` + `setPreamp`.
+- `tst_step_att_cross_thread` (2 tests) — pins the `QMetaObject::invokeMethod` cross-thread marshalling on `setAttenuation` + `setPreampMode`.
+
+## [0.4.0] - 2026-05-08
+
+> [!NOTE]
+> **A substantial minor release on top of v0.3.2.** Five pieces of work landed together:
+>
+> 1. **3M-4 PureSignal arrives.** Feedback DDC plumbing on Protocol 1 and Protocol 2, calcc/IQC engine vendored verbatim from Thetis, PsForm dialog (Tools -> PureSignal), AmpView modeless dialog, two-tone IMD overlay on the spectrum, bottom-banner FB+PS indicator pair. PureSignal coordinator class drives the cmd state machine; PsccPump driver feeds calcc per chunk for convergence. Per-board PsDdcConfig with C&C-frame DDC pair indices. Enabled on every supported P1 and P2 SKU including Hermes Lite 2 and plain Hermes (with HL2 negative-ATT support, AutoAtt convergence, ATT-on-TX master force-enable, and HL2 psSampleRate=0 sentinel resolution).
+> 2. **Display + DSP-Options refactor.** WDSP `avenger()` and `detector()` ported (Thetis-faithful frame averaging + bin-to-pixel reduction). New Setup -> DSP page with 18 controls, warning icons, time-to-last-change readout, RX/TX combo split. Filter Impulse Cache, in-place filter resize, per-mode buffer/filter/filter-type live-apply. SettingsSchemaVersion v5 migrates DSP-Options Buffer/Filter Size to per-direction. Spectrum gains a full Thetis-faithful FFT slider with 7 windows + live bin width, K-based auto-zoom, NF-aware grid (auto-track noise floor), per-band NF priming, Hz/bin auto-zoom override, SpectrumPeaksPage with PeakBlobDetector + ActivePeakHoldTrace, and a new Multimeter page.
+> 3. **Anti-VOX cancellation feed (3M-3a-iv).** Closes the gap from v0.3.2's 3M-3a-iii where the gain control was plumbed but the RX-audio feedback path into DEXP was never connected. Moving the anti-VOX gain slider with VOX engaged now audibly suppresses RX-bleed false-trips. Setup -> Transmit -> DEXP/VOX gains the full grpAntiVOX trio (Enable + Gain + Tau) with verbatim Thetis tooltips.
+> 4. **Live-apply sample rate (no disconnect).** Switching sample rate on the Radio Info combo no longer requires a disconnect/reconnect cycle. 12-step Thetis-faithful coordinator routes through WDSP's `SetXcmInrate` path. HL2 P1 384 kHz parity (mi0bot-authoritative).
+> 5. **AF Gain audio fix (KM4BLG) + VAX bus calibration.** AF slider routes through WDSP `SetRXAPanelGain1` instead of fighting the master-volume atomic post-DSP. Closes a long-standing distortion bug. VAX tap inverse-scales by `1 / afGain` so digital-mode apps stay calibrated regardless of speaker AF slider position.
+
+> [!IMPORTANT]
+> **Existing users: no action required.** Saved radios, mic profiles, DSP settings, PA forward-power calibration, per-band tune power, container layout, spectrum / waterfall settings carry forward exactly. SettingsSchemaVersion bumps from v4 to v5 automatically on first launch and migrates the DSP-Options Buffer/Filter Size keys to per-direction.
+
+### 3M-4 PureSignal (the big new feature)
+- **`PureSignal` coordinator class** owns the cmd-state machine; splits `correctingChanged` from `correctionsBeingAppliedChanged` for cleaner UI binding; pumps `psEnabledChanged` fan-out from the cmd-state machine; ports the single-cal retry loop in `StayOn`; adds the AutoAtt `CalibrationAttemptsChanged` guard, per-board `deltaDb` clamps in `autoAttentionTick`, and consolidated `PSInfo` dispatch (drops the phantom `m_correcting`).
+- **`calcc.c` + `iqc.c` vendored verbatim** from Thetis ramdor v2.10.3.13. Full GPL attribution preserved per source-first protocol.
+- **`PsccPump` driver**: `pscc(channel, size, tx, rx)` per-chunk feed driving calcc convergence.
+- **Per-board `PsDdcConfig`**: P1 and P2 codecs inject DDC pair indices via `applyPureSignalDdcConfig` at C&C frame build time. P1 bank 2/3 frequency override on `CmdHighPriority` routes the feedback DDC tracking. P2 PS DDC config + multi-stream sync de-interleave + `CmdTx` for SATT.
+- **Tools -> PureSignal** opens `PsForm` modeless dialog (port of Thetis `PsForm`). `btnPSAmpView` opens `AmpView` modeless dialog (port of Thetis `AmpView`).
+- **Spectrum two-tone IMD overlay**: peak markers + readout box; gate-state logging for bench debug; per-frame `ResetBlobMaximums` with hard-cut + hold-off reset.
+- **`PsaIndicatorWidget`**: bottom-banner FB+PS pair status indicators.
+- **HL2 PureSignal enabled** with HL2-specific support: `minAttenuation()` unification for negative ATT range; AutoAtt convergence (Setup -> General -> Options PS checkboxes); ATT-on-TX master force-enable (PSForm.cs:738 verbatim port); HL2 `psSampleRate=0` sentinel resolution before WDSP call. **Plain Hermes also enabled.**
+- **HPF Bypass on PS warning** wired in Setup -> General -> Options.
+- **`PureSignalApplet`** + TxApplet `[PS-A]` button wire to live PureSignal state.
+- **`TxChannel` +22 PureSignal API wrappers**.
+- **`TINT` setter** wired through `SetPSIntsAndSpi`.
+- **Default `SetPk`** routed via `setHwPeak` (drops a duplicate audio-volume listener).
+- **Initial PS timing parameters** pushed to WDSP at init.
+- **NereusSDR-only PureSignal Setup pages retired** in favour of the Thetis-parity PsForm dialog.
+- **`BoardCapabilities`**: adds `psDefaultPeak` + `psSampleRate`.
+- **ReceiverManager `UpdateDDCs` PS branch** ported (consumes `PsDdcConfig` from codec).
+- **RadioModel** wires `PureSignal/StepAtt/PsccPump` for calcc convergence; codec injection mirror for PureSignal.
+
+### Display + DSP-Options refactor
+- **`DspOptionsPage`** (Setup -> DSP): 18 controls + warning icons + time-to-last-change readout + Thetis-faithful 3-column / 4-row layout + RX/TX combo split. Validity-rule warning icons ported from Thetis. `bindRxChannel` + initial-bind in DspOptionsPage high-res fan-out. Canonical dark page stylesheet.
+- **Filter Impulse Cache toggles** + WDSP cache load/save plumbing.
+- **High-resolution filter characteristics** + `FilterDisplayItem` high-res mode + `RxChannel::filterResponseMagnitudes()` accessor.
+- **In-place filter resize / type setters** on `RxChannel` + `TxChannel`.
+- **Per-mode buffer/filter/filter-type live-apply** via Phase 1 rebuild.
+- **Thetis-faithful filter/buffer cascade**: drops the clamp shortcut.
+- **Restored TX live-apply on band/mode change** (race resolved). Deterministic `onModeChanged` contract + UB-free test setup. Swap from heavy-rebuild to in-place setters.
+- **SettingsSchemaVersion v5 migration**: split DSP-Options Buffer/Filter Size into RX/TX (retire global keys).
+- **Full Thetis-faithful FFT slider + Pan-group layout** + 7 windows + live bin width.
+- **WDSP `avenger()` + `detector()` ports**: Thetis-faithful frame averaging + linear-to-dB stage and bin-to-pixel reduction. Single Thetis-faithful pipeline (Phase 1A.4 atomic).
+- **Linear-power side-channel + window ENB** exposed on FFT.
+- **K-based auto-zoom** maintains visual consistency across zoom; bound auto-zoom replan pause + reset avengers on `fftSize` change.
+- **Apply window changes immediately + add overlap** + preserve overlap state on safety-cap fire (60 fps zoom slowdown). Reset write head on 16ms-cap early-return.
+- **`PeakBlobDetector` class** + ellipse/text rendering + per-frame `ResetBlobMaximums`. Render Peak Blobs + Active Peak Hold in GPU overlay path. Persistence + default-off + immediate-render on toggle. Distinct trace colour for Active Peak Hold.
+- **Source-first port of Thetis `processNoiseFloor`** for NF overlay.
+- **NF-aware grid (auto-track noise floor)** + Copy button + `NoiseFloorEstimator::prime()` + per-band NF-estimate priming (NereusSDR-original). NF-tracking dialog-reopen restore.
+- **Hz/bin auto-zoom override**.
+- **Cursor frequency unify** + `dispNormalize` port + peak/binwidth GPU paths + grid band header + replan crossfade.
+- **WF NF-AGC + Stop-on-TX + Delay readout + Copy** on the waterfall; W5 dropped.
+- **Spectrum Defaults overlay group** + decimation wire-up.
+- **`SpectrumPeaksPage`**: cross-link buttons + hint lines.
+- **`MultimeterPage`** + configurable `MeterPoller` + `HistoryGraphItem` duration setting + `MeterItem` unit-mode fan-out (S / dBm / µV).
+- **Thetis-faithful averaging math + per-side time constants** + `DisplayAverageMode` split into Detector + Averaging (spectrum + waterfall).
+- **Logging & Performance page rename** + 3 perf-monitor toggles.
+- **`MeterStylesPage` VFO Flag group**: `SmallModeFilteronVFOs` toggle.
+- **Setup -> Hardware**: ANAN-8000DLE volts/amps toggle + CPU meter rate spinbox.
+- **Filter Presets widgets placement fix**: now sit inside their group boxes.
+- **Defensive FPS spin sync from `pushFps`**.
+
+### 3M-3a-iv anti-VOX cancellation feed
+- **Wired end-to-end.** Closes the gap left by 3M-3a-iii where the gain control was plumbed but the RX-audio feedback path into DEXP was never connected. Moving the anti-VOX gain slider with VOX engaged now audibly suppresses RX-bleed false-trips. Adds 4 WDSP wrappers (`SetAntiVOXSize` / `SetAntiVOXRate` / `SetAntiVOXDetectorTau` / `SendAntiVOXData`), wires `RxDspWorker -> TxWorkerThread -> TxChannel::sendAntiVoxData` per chunk (single-RX direct pump; aamix port deferred to 3F multi-pan), exposes Tau (ms) on Setup -> Transmit -> DEXP/VOX with persistence under per-MAC key `AntiVox_Tau_Ms`. Bench-verification matrix at `docs/architecture/phase3m-3a-iv-verification/README.md`.
+- **Setup -> Transmit -> DEXP/VOX gains grpAntiVOX parity** (sans source toggle). Beyond the Tau (ms) spinbox above, also adds `chkAntiVoxEnable` ("Anti-VOX Enable") and `udAntiVoxGain` ("Gain (dB)") to align with Thetis grpAntiVOX (`setup.designer.cs:44631-44760 [v2.10.3.13]`). All three tooltips (Enable / Gain / Tau) are verbatim from Thetis. Independent enable-flag refactor: `TransmitModel::antiVoxRun` Q_PROPERTY (persisted per-MAC under `AntiVox_Enable`), `MoxController::setAntiVoxRun` slot + `antiVoxRunRequested` signal.
+- **Anti-VOX tau default 10 ms -> 20 ms.** WdspEngine `create_dexp` passed `0.01` for the smoothing time-constant; Thetis spinbox default is 20 ms (= 0.02 s) per `setup.designer.cs:44682-44686 [v2.10.3.13]`. Fresh users with no Setup-page interaction now get the Thetis-faithful default.
+
+### Live-apply infrastructure (sample rate + active RX count)
+- **Sample-rate-live crash hot-fix.** PR #219 + #221 wired `RadioModel::setSampleRateLive` to `WdspEngine::rebuildRx/TxChannel`, which destroys the C++ wrapper and constructs a new one. Seven raw-pointer holders (`RadioModel::m_txChannel`, `TxWorkerThread`, `PureSignal`, `MeterPoller`, `TwoToneController`, `TxCfcDialog`, `TxChannel::s_voxKeyInstance`) were left dangling; first combo-change on the Radio Info page SIGSEGV'd inside `moveToThread` on the dead pointer. Replaced with the Thetis-faithful `SetXcmInrate` path (`cmaster.c:453-507 [v2.10.3.13]`): new `RxChannel::setSampleRate` (carry-only state mutation, idempotent guard) + new `WdspEngine::setRxChannelRate` (calls `SetInputSamplerate` and `SetInputBuffsize` on the live channel). `setSampleRateLive` rewritten as the 12-step sequence from `setup.cs:7003-7159 [v2.10.3.13]` (drain channel -> stop radio -> wait inflight -> WDSP rate update -> reconfigure AudioEngine + DSP worker -> restart radio -> re-enable channel -> reconnect I/Q -> resume audio). TX channel intentionally untouched (Thetis `audio.cs:637-672` routes `SetXcmInrate(0|1)` for RX1/RX2 only; TX input is mic at fixed 48 kHz). New test `tst_set_sample_rate_live.cpp` (7 cases). Underlying `WdspEngine::rebuildRx/TxChannel` API kept in tree but documented as "avoid for live rate changes".
+- **Hermes Lite 2 P1 sample-rate parity (`mi0bot-Thetis setup.cs:849-851 [v2.10.3.13]`).** HL2 now offers 48 kHz / 96 kHz / 192 kHz / **384 kHz** on P1, matching mi0bot. NereusSDR previously dropped HL2 into the 3-rate base list. Renamed `kP1RatesRedPitaya` to `kP1RatesWithExtra384k` since two boards now share that list. The HL2 `BoardCapabilities::sampleRates` already advertised 384 k correctly; only the master-list filter was stale. New test `p1_hermes_lite_gets_extra_384`.
+- **`RadioModel::setActiveRxCountLive()` coordinator** stays wired; Active RX count widget removed from Radio Info tab in single-RX builds. Will re-expose when Phase 3F multi-panadapter lands and RX2 actually streams. Copy Support Info button alongside repositioned to left-aligned natural width.
+- **`RadioModel::dspChangeMeasured(qint64)` signal** for time-to-last-change readout.
+- **Channel rebuild API in tree (held for now)**: `RxChannel::rebuild()` + `WdspEngine::rebuildRxChannel()`, `TxChannel::rebuild()` + `WdspEngine::rebuildTxChannel`, `RxChannel::captureState`/`applyState` round-trip, `ChannelConfig` and `RxChannelState` structs.
+
+### AF Gain rewire + VAX bus calibration (PR #218, KM4BLG)
+- **AF Gain via WDSP `SetRXAPanelGain1`**: routes the AF slider through panel gain rather than fighting the master-volume atomic post-DSP. Closes a long-standing distortion bug where `panel.gain1=4.0` default leaked +12 dB silently.
+- **VAX bus level decoupled from speaker AF slider.** PR #218's AF-Gain rewire moved the slider attenuation upstream of `AudioEngine::rxBlockReady` via `WDSP.SetRXAPanelGain1`, which is the right thing for headphone output but caused the VAX tap to inherit speaker attenuation; digital-mode apps suddenly heard ~18 dB less than before. `rxBlockReady` now inverse-scales the VAX push by `1 / afGain` (clamped at 0.001 to avoid div-by-zero) so VAX level stays calibrated independent of where the AF slider sits. Edge case acknowledged: AF=0 full mute also silences VAX; full decoupling requires a pre-`PanelGain1` WDSP tap, deferred.
+
+### Persistence + stability
+- **MainWindow position, size, and maximized state** persist across launches (#206).
+- **Audio bus on master mute** flushes the speakers ring (#201) so an unmute does not briefly play stale audio.
+- **PA Gain spinbox** clamps minimum to 38.8 dB (#199) per Thetis range.
+- **PA profile model auto-pick** (#202): filter Setup combo to connected model + non-default; ORIONMKII skipped in `defaultModelForBoard` auto-pick. Restore Thetis "100 = no output power" semantic. SWR topology + audio-volume signal pump + `m_tune`.
+- **Pre-connect Mic_Source survives app restart** (TransmitModel persistence fix).
+- **macOS mic-permission dialog** triggered deterministically at launch.
+- **macOS app icon wired into bundle**, DMG background + volicon added.
+- **Step-att MOX clobber** (#200): RX step-attenuator value survives an MOX cycle. Closes a regression where the TX-side ATT-on-TX safety scaffolding was over-writing the persisted RX ATT.
+- **HL2 FPGA temperature** published on the bottom banner.
+- **TwoToneLevel default 0 dB** (Thetis-faithful).
+- **Spectrum Linux build**: guard GPU-only field + drop `QVector::assign`.
+
+### Setup -> Hardware UI polish
+- **Combo + spinbox styling.** `RadioInfoTab`, `DiversityTab`, and `OcOutputsHfTab` were creating raw `QComboBox` / `QSpinBox` with `setMinimumWidth(120)` and no theme styling. Result: macOS-default combo-popup contrast (white-on-white selection), spinbox arrows missing entirely, controls stretching to full dialog width. `applyComboStyle` extended to put `spin-down.svg` on the dropdown arrow (was `image: none`); new sibling helper `gui/SpinBoxStyle.h` paints SVG up/down arrows directly per-widget so Setup-dialog cascade quirks can't drop them. All five combos + the one Hardware-tab spinbox now styled and width-capped at 160 px.
+
+### NereusSDR-original deviations (justified inline)
+- **Anti-VOX source-selector dropped.** Thetis `chkAntiVoxSource` (RX vs VAC at `setup.designer.cs:44646-44657 [v2.10.3.13]`) does not map to NereusSDR's architecture: VAX feeds digital-mode apps with no mic-feedback path, so the audio output device is the only valid anti-VOX reference. Dropped `TransmitModel::antiVoxSourceVax`, `MoxController::setAntiVoxSourceVax`, the `antiVoxSourceWhatRequested` signal, the `chkAntiVoxSource` UI, and the rejected-VAX scaffolding. Setup -> Transmit -> DEXP/VOX now shows a static "Source: Audio Output Device(s)" info row instead. Existing users with `AntiVox_Source_VAX` persisted will see an orphan AppSettings key (harmless, ignored on load). Tap-point signpost comments added at `RxDspWorker.cpp` and `AudioEngine.h` for the future radio-speaker output work. Full rationale in `docs/architecture/phase3m-3a-iv-antivox-feed-design.md` §18.
+- **PureSignal Setup pages retired** in favour of Thetis-parity PsForm dialog (Tools -> PureSignal). The previous setup-page model was a NereusSDR divergence; we never matched Thetis here.
+- **Active RX Count widget hidden** in single-RX builds. Re-exposes when Phase 3F multi-panadapter lands.
+- **VAX tap inverse-scaled by `1 / afGain`** post-PR #218. Deviates from the new "AF Gain through WDSP" architecture for the speaker path; preserves pre-PR-#218 calibrated VAX levels until per-bus processing diverges.
+
+### Compliance + cite touchups
+- Wave-recorder `//MW0LGE` tag preserved in AF Gain port.
+- License markers aggregated in `wdsp_api.h` header window.
+- `//MI0BOT` + `//MW0LGE` + `//DH1KLM` tags preserved near PSForm cites.
+- `ps_sync_stub.c` GPLv2-or-later census bumped to 134.
+- `PSpeak_TextChanged` cite line range corrected.
+- `[v2.10.3.14]` stamps added to two new Thetis cites.
+- S2 FFT Window provenance corrected to comboDispWinType.
+- Orphan PROVENANCE rows for retired PureSignalTab + `tst_averaging_modes` pruned.
+
+### Known limitations / deferred
+- Multi-panadapter (Phase 3F) still pending. Single-pan, single-RX. RX2 not yet enabled; aamix anti-VOX path waits on it.
+- Pre-emphasis on FM (3M-3b) still de-scoped from 3M-3a-ii.
+- CW transmit (3M-2) not yet implemented; SSB is the only voice mode.
+- Skin system (3H), TCI server (3J), CAT/rigctld (3K), recording (3M-recording) all still planned.
+- Anti-VOX aamix port deferred to Phase 3F (single-RX direct pump shipped).
+- Pre-`PanelGain1` VAX tap deferred (today's VAX path inverse-scales by `1 / afGain`).
+
+### Acknowledgments
+- **KM4BLG** for the AF Gain via WDSP `SetRXAPanelGain1` fix (PR #218) that closed a long-standing distortion bug.
+
+## [0.3.2] - 2026-05-05
+
+> [!NOTE]
+> **A substantial point release on top of v0.3.1.** Four pieces of work landed together:
+>
+> 1. **DEXP/VOX speech processor (3M-3a-iii).** VOX and DEXP work end-to-end for the first time. v0.3.1 had the menus and toggles in place but the WDSP DSP wasn't wired up. v0.3.2 ports the DEXP DSP from Thetis, connects the VOX callback to the MOX state machine, lands a dedicated Setup → Transmit → DEXP/VOX page mirroring Thetis 1:1, a live DexpPeakMeter strip, and a dedicated VOX row on the TxApplet.
+> 2. **Hermes Lite 2 maturity push.** The RF and Tune Power sliders now match the mi0bot fork (the de facto HL2 console) exactly: RF Power 0 to 90 in steps of 6, Tune Power 0 to 99 in steps of 3, per-band Tune Power grid in dB. Connect-time init now matches Thetis (resolves cold-start and SSB MOX path issues). A-ATT label corrected, N2ADR default flipped to True, RX attenuator max capped at +31 dB, P1 ADC overload byte offset corrected, HL2 PA forward and reverse power readings (which were 16.7x over-read) fixed.
+> 3. **PA Setup parity + safety hotfix.** Setup → PA pages rebuilt for full Thetis parity: PA Gain page with 14-band gain grid + 14×9 drive-step adjust matrix + auto-cal sweep state machine; Watt Meter page with new toggles; PA Values page closes the 4-label gap from v0.3.1. The kernel of this work doubles as a **PA over-drive safety hotfix** for high-gain finals (notably the ANAN-8000DLE) at low TUNE-slider positions. See CAUTION below.
+> 4. **Persistence and stability fixes.** Per-band TX RF Power across band changes and restart (#192), OC matrix pin persistence (#191), mic-jack PTT default behavior (#182), TUN-off cold-start (#177), audio bus reconfigure on Settings open (#172), NR3 dev-build model path (#184, thanks **KM4BLG**). Plus step-attenuator MOX gating, SWR foldback topology correction, TX meter rescaling per-SKU.
+
+> [!CAUTION]
+> **PA over-drive safety hotfix for high-power radios.** v0.3.1 could over-drive the PA on radios with high-gain finals (notably the ANAN-8000DLE) at low TUNE-slider positions. K2GX measured over 300 W out on a 200 W radio at slider 50%. Root cause: the drive value sent to the radio applied no per-band PA gain compensation, so high-gain PAs reached full output well below slider 100%. v0.3.2 ports Thetis's per-band PA gain table and the audio-volume math behind it. Lower-power radios (HL2, Hermes, Hermes II, Angelia, Orion) were never at risk.
+
+> [!IMPORTANT]
+> **Existing users: no action required.** Saved radios, mic profiles, DSP settings, PA forward-power calibration, and per-band tune power carry forward exactly as they were. New PA Gain profiles seed automatically on first connect. Hermes Lite 2 users: existing per-band Tune Power values reinterpret as int (0-99 mi0bot encoding) to dB at the UI boundary; no migration step required.
+
+> [!IMPORTANT]
+> 📖 **Alpha testers, start here:** [docs/debugging/v0.3.2-alpha-tester-smoketest.md](https://github.com/boydsoftprez/NereusSDR/blob/main/docs/debugging/v0.3.2-alpha-tester-smoketest.md)
+>
+> Bench-test walkthrough for the new DEXP/VOX DSP, the HL2 mi0bot slider rework, the PA-cal forward-power verification, and the persistence-fix regression sweep. Returning testers: most of v0.3.1's surface didn't change, so the v0.3.1 doc is still the right reference for connection workflow, RX, the speech processor (TX EQ / Leveler / ALC / CFC), the filter preset store, the TX filter overlay, and the per-board PA cal grid.
+
+### Safety
+- **Per-band PA gain compensation now applied** at the audio output level, not the wire-byte path. Faithful port of Thetis SetPowerUsingTargetDBM (console.cs:46645-46762 [v2.10.3.13]). Per-band gain table from clsHardwareSpecific.cs:459-751 (and mi0bot HL2 row at v2.10.3.13-beta2). The math: `target_dBm = 10*log10(slider_W*1000) - gbb; audio_volume = min(sqrt(10^(target_dBm/10) * 0.05) / 0.8, 1.0)`. Resolves K2GX (ANAN-8000DLE, P2) field report of >300 W output on a 200 W radio at low TUNE slider positions.
+- **Wire-byte vs IQ-scalar topology corrected** to MW0LGE-canonical (audio.cs:268 + cmaster.cs:1117): SWR foldback now applies to the IQ scalar only, NOT to the wire byte. Pre-hotfix code applied SWR to the wire byte (citing mi0bot NetworkIO.cs:209-211 [v2.10.3.14-beta1]); reverted to MW0LGE topology with inline citation at both call sites.
+
+### Setup -> PA full parity surface
+- **PA Gain page** (Setup → PA → PA Gain): ported from Thetis tpGainByBand (setup.designer.cs:47386-47525 [v2.10.3.13]). 14-band gain spinbox grid, 14×9 drive-step adjust matrix, per-band max-power column, profile combo with New / Copy / Delete / Reset Defaults buttons, warning icon + label, chkPANewCal toggle, chkAutoPACalibrate with auto-cal sweep state machine (HF-only band loop, per-step settle via QTimer, FWD reading via RadioStatus, gain delta written into the active profile).
+- **Watt Meter page**: Thetis tpWattMeter parity. Existing PaCalibrationGroup + new chkPAValues "Show PA Values page" toggle + Reset PA Values button.
+- **PA Values page** (NereusSDR-spin promotion): closed the 4-label gap from v0.3.1 (Raw FWD power, Drive, FWD voltage, REV voltage) via the new public PaTelemetryScaling helpers (lifted from RadioModel.cpp private helpers). Running peak/min tracking on six telemetry values + in-page Reset button.
+- **Per-SKU visibility**: `BoardCapabilities`-driven. PA category hidden on RX-only SKUs; editor controls disabled with "no PA support" banner when `caps.hasPaProfile=false` (Atlas / RedPitaya); informational warnings for Ganymede 500 W follow-up and PureSignal recovery linkage. Mirrors Thetis comboRadioModel_SelectedIndexChanged (setup.cs:19812-20310 [v2.10.3.13]).
+
+### TX (PA-cal kernel)
+- **TwoToneController** routes through the new math kernel (`bTwoTone=true` so txMode=2 selects `_2ToneDrivePowerSource`; gain compensation applies during the IMD test).
+- **ATT-on-TX-on-power-change safety scaffolding** added: when PureSignal arrives in
+  Phase 3M-4, the safety gate that forces TX attenuator to 31 dB on drive-power changes
+  (preventing RX frontend over-drive via the PS feedback DDC) will activate automatically —
+  no further wiring needed. **In v0.3.2 this subsystem has no observable behaviour**
+  because PureSignal is not yet implemented; the predicate gating the safety check
+  returns false unconditionally. The state and tests pre-stage the 3M-4 enablement.
+  See `docs/architecture/pa-calibration-hotfix.md` §5.
+- New `TransmitModel::computeAudioVolume(profile, band, sliderWatts)` math kernel (HL2 sentinel + Bypass-profile short-circuit + Thetis dBm math).
+- New `TransmitModel::setPowerUsingTargetDbm(...)` deep-parity wrapper (all txMode branches + drive-source enum routing + power_by_band write side-effect on txMode 0 + ATT-on-TX gate + audioVolumeChanged signal).
+- New `m_powerByBand[14]` per-band normal-mode power array (default 100 W per `limitPower_by_band` console.cs:1817 [v2.10.3.13]).
+
+### 3M-3a-iii: DEXP/VOX + AMSQ
+- **Full WDSP DEXP DSP** ported from Thetis `create_dexp` + `xdexp` driver. v0.3.1 had no DEXP DSP at all; the wrappers existed but the underlying DSP didn't. v0.3.2 lands the actual signal-processing block.
+- **Thetis-faithful VOX wiring**: WDSP `pushvox` callback routes through `MoxController::onVoxActive`; TXA pipeline pumps continuously while VOX is enabled (boot defaults `run_vox=0`, DEXP-meter MOX-or-VOX gate).
+- **Setup → Transmit → DEXP/VOX page** mirrors Thetis `tpDSPVOXDE` 1:1, with three group boxes (`grpDEXPVOX` + `grpDEXPLookAhead` + AMSQ NereusSDR-spin section), 2×2 grid layout, top-justified, dark page style.
+- **DexpPeakMeter** widget: live VOX/DEXP peak strip on the Setup page.
+- **TxApplet** gains a dedicated VOX row (relocated from PhoneCwApplet during bench polish), exposing the consolidated VOX label + ON button as a single button.
+- **PhoneCwApplet** VOX + DEXP rows wired with right-click DspParamPopup quick controls.
+- **TransmitModel** gains 14 DEXP setters per `cmaster.cs:160-206 [v2.10.3.13]` (3 already shipped in 3M-1b, 11 added now): envelope (attack/release/detector tau), gate ratio (expansion/hysteresis), audio look-ahead, side-channel filter properties; plus 3 AMSQ setters (`SetTXAAMSQRun/MutedGain/Threshold`).
+- **MicProfileManager** bundle gains 11 DEXP keys.
+- **Retired:** `VoxSettingsPopup` + legacy `VoxDexpSetupPage` (duplicate VOX surfaces dropped in favor of the unified DexpVoxPage).
+
+### HL2 TX UI parity with mi0bot-Thetis (#175)
+- **RF Power slider 0-90 step 6** (16-step output attenuator, 0.5 dB/step) on HL2; **Tune Power slider 0-99 step 3** (33 sub-steps; 0-51 = DSP audio gain modulation, 52-99 = PA attenuator territory); Fixed-mode Tune Power spinbox -16.5 to 0 dB in 0.5 dB increments.
+- **Setup → Transmit → Power** gains a new "Tune" group (`grpPATune` port) with 3 drive-source radios + TX TUN Meter combo + Fixed-mode spinbox + Reset Tune Power Defaults button, sitting above the existing per-band grid. The per-band Tune Power grid is now SKU-aware (HL2 dB / others W).
+- **TX volume on the wire matches mi0bot exactly** via the new `setPowerUsingTargetDbm` HL2 sub-step DSP modulation and `computeAudioVolume` HL2 audio-volume formula `(hl2Power * gbb / 100) / 93.75` (`mi0bot-Thetis console.cs:47660-47673 + 47775-47778 [v2.10.3.13-beta2]`).
+- **Per-SKU PA UI constants** on `HpsdrModel` for HL2 mi0bot parity; per-SKU visibility wiring across PA Setup pages.
+- **Slider rescale + dB label + Thetis-faithful tooltips** on HL2 TxApplet.
+- **Polymorphic per-band tune-power clamp** in TransmitModel.
+- **Tooltip wording** on RF Power and Tune Power sliders rewritten across every SKU to match Thetis upstream: "Transmit Drive: relative value, not watts unless the PA profile is configured with MAX watts at 100%". Replaces the previous misleading "RF output power (0-100 W)" wording.
+
+### HL2 stability fixes
+- **Connect-init parity (#189)**: HL2 cold-start init sequence now matches Thetis (resolves Bug 1 + #153 cold-start + #153 SSB MOX). TUN-off must complete when MOX is already RX; TUN-off restore now routes through dBm path.
+- **A-ATT label, N2ADR default-True, dead-checkbox cleanup (#174)**: A-ATT label corrected, N2ADR default flipped to True, dead checkbox removed; N2ADR connect-time reconcile gated on `hasIoBoardHl2`.
+- **P1 ADC-overload byte offset (#176, PR #187)**: corrected.
+- **HL2 RX att max** capped at +31 instead of +32 (was off-by-one).
+- **Step-attenuator gating** during MOX (#175 follow-up): auto-att gated, `attenuationChanged` emits on MOX, HL2 TX wire fixed; TX→RX restore gated on stash-valid flag.
+
+### TX persistence + behavior fixes
+- **Per-band RF power persists across band changes and app restart (#192)**: uses active-slice band; Codex P1 fix included. Default `powerByBand` corrected to 50 W per Thetis `power_by_band` parity.
+- **Mic-jack PTT enabled at firmware by default (#182)**: UI wired through to wire; `setMicPTT(bool enabled)` renamed to `setMicPTTDisabled(bool disabled)` to match the wire semantics.
+- **TUN-off gen1 + power-restore deferred until rxReady + 100 ms (#177)**.
+- **Tune slider was inert.** Auto-switch tune drive source on slider use.
+- **TX meter rescaling per-SKU** on radio swap (TxApplet RF Pwr gauge + top MeterPanel Power BarItem).
+- **TX bar snapping** on MOX falling edge (snap to 0, bypass attack/decay smoothing); TX telemetry pump gated on `isMox` so late samples don't refill bars; TX-active predicate broadened to cover TUNE; PA meters cleared on un-key + HL2 SWR transient suppressed.
+
+### General fixes
+- **Audio bus reconfigure** dropped on Settings open (#172); was triggering spurious bus reconfigure events.
+- **NR3 dev-build model path (#180, #184)**: probes `<exe>/../third_party` for the rnnoise model when running an unpackaged dev build (thanks **KM4BLG** for the patch).
+- **OC matrix pins persist (#191, PR #195)**: `setPin`, `setPinAction`, and `resetDefaults` now write to AppSettings; previously these mutations were lost on app restart.
+- **HL2 PA forward and reverse power scaling corrected**: both readings were 16.7x over-read pre-hotfix.
+- **PA Setup styling**: aligned with `StyleConstants` + `STYLEGUIDE`; bypass last-profile QMessageBox in headless tests.
+
+### NereusSDR-original deviations (justified inline)
+- **HL2 sentinel**: `gbb >= 99.5` short-circuits `computeAudioVolume` to a linear fallback (`clamp(sliderWatts/100, 0, 1)`). Preserves the pre-v0.3.2 HF-transmit behaviour on HL2, whose factory PA gain row at clsHardwareSpecific.cs:484 [v2.10.3.13-beta2 @c26a8a4] is 100.0 on HF as a "no compensation" marker (Thetis HL2 users live with `audio_volume ~= 0.0009`; NereusSDR's existing v0.3.1 users must not regress). Bypass profile (all-100.0 sentinel) trips the same fallback.
+- **NereusSDR-canonical PA profile serialization** (27-entry → 171-pipe-delimited fields). NOT byte-compatible with Thetis 423/507. Thetis profile-string import is a deferred follow-up.
+- **PA Values page promoted to its own dialog page** (Thetis hosts `panelPAValues` inline on the Watt Meter page). Cross-page wiring routes Reset PA Values from the WattMeter page to the Values page's `resetPaValues()` slot.
+- **HL2 RF Power / Tune Power encoding**: ported from `mi0bot-Thetis` instead of canonical ramdor/Thetis (mi0bot is the authoritative HL2 fork). Per-band Tune Power values reinterpret as int 0-99 (mi0bot encoding) to dB at the UI boundary; matches mi0bot's polymorphic-key pattern.
+
+### Known limitations / deferred
+- ChannelMaster `SetTXFixedGain` is a glue stub at `third_party/wdsp/src/txgain_stub.c` that stores the IQ scalar but doesn't apply DSP attenuation. The wire-byte path is the primary K2GX safety lever; full DSP attenuation lands when ChannelMaster is ported (3L).
+- XVTR transverter LO band translation not ported (NereusSDR has only one XVTR slot; sentinel fallback in `computeAudioVolume` catches `Band::XVTR` and falls back to linear).
+- PureSignal feedback DDC + `chkFWCATUBypass` live wiring deferred to Phase 3M-4. The ATT-on-TX gate becomes active when this lands.
+- Andromeda Ganymede 500 W PA tab deferred (informational warning shown when `caps.canDriveGanymede=true`).
+- Thetis profile-string import deferred.
+
+### Acknowledgments
+- **K2GX** for the field report on ANAN-8000DLE PA over-drive that triggered the PA-cal hotfix kernel.
+- **KM4BLG** for the NR3 dev-build model path patch (#184).
+
+## [0.3.1] - 2026-05-03
+
+> [!NOTE]
+> **You can transmit SSB now, on every board including the Hermes Lite 2.** v0.3.0 was pulled within hours of release for a packaging fix and effectively never reached testers. v0.3.1 is the first build most users will see — it carries forward everything 0.3.0 was supposed to deliver (SSB voice transmit with broadcast-grade processing, the rebuilt VPN-reach connection workflow, the expanded HL2 configuration surface, status-bar redesign, signed/notarized macOS builds) **plus** the post-0.3.0 polish: per-profile TX bandwidth control, user-editable filter presets, TX filter overlay on the panadapter and waterfall, mode-aware filter grids, the per-board PA forward-power calibration system (Watt Meter / PA Values pages), the Setup IA reshape, and the Hermes Lite 2 ATT/filter safety audit closure that clears HL2 SSB transmit for bench testing.
+
+> [!IMPORTANT]
+> 📖 **Alpha testers, start here:** [docs/debugging/v0.3.1-alpha-tester-smoketest.md](https://github.com/boydsoftprez/NereusSDR/blob/main/docs/debugging/v0.3.1-alpha-tester-smoketest.md)
+>
+> Walkthrough of what to try, what "success" looks like on your radio, and what's intentionally cold so you don't file bugs against it. v0.3.1 expands the v0.3.0 doc with the new TX bandwidth controls, filter preset editor, TX filter overlay, and **clears HL2 for bench-TX** with the ATT/filter safety steps the audit produced. Returning testers — receive-side coverage didn't move; the v0.2.3 doc is still the right reference for RX-side behavior.
+
+### Upgrade Steps
+
+* **Existing users** — no action required. Your saved radios, mic profiles, DSP settings, and per-band Clarity memory carry forward. Mic profiles gain new `FilterLow` / `FilterHigh` keys; existing profiles get sensible defaults seeded automatically on first launch.
+* **Fresh installs** — the spectrum and waterfall ship 12 dB lower than they did in v0.2.3 so band noise no longer floods the bottom of the panadapter on a typical residential antenna. If you preferred the old look, Setup → Display → Reset to legacy defaults.
+* **macOS** — the DMG and PKG are Apple Developer ID-signed and notarized. Gatekeeper should accept both without right-click → Open. If you have an older alpha installed, uninstall it before installing v0.3.1.
+* **Hermes Lite 2** — N2ADR filter board options and step-attenuator settings are saved per radio (was global). Verify Setup → Hardware → Hermes Lite Options matches your prior config the first time you connect. **HL2 TX is now bench-cleared** — see the alpha-tester guide for the ATT/filter pre-flight checklist before keying up.
+* **Anyone running the v0.3.0 build that briefly published** — uninstall and replace with v0.3.1. The 0.3.0 artifacts shipped a Windows portable bundle with missing MinGW runtime DLLs; that's fixed in 0.3.1.
+
+### Breaking Changes
+
+* The PSU/supply-voltage status indicator is gone. The PA drain-voltage label remains on MkII-class boards (Saturn / G2 / 8000D / 7000DLE / OrionMkII / Anvelina Pro 3) and is now the sole supply readout.
+* The "OC Outputs" setup page is renamed to "Hermes Lite Control" when an HL2 is connected.
+* Default spectrum/waterfall levels shifted 12 dB lower (new installs only).
+* Clarity (adaptive noise-floor tuning) defaults to ON for new installs.
+* **PA / Watt Meter / PA Values** are now top-level Setup categories (previously bundled under Transmit). The Hardware → Calibration tab Group 5 was relabelled "PA Current (A) calculation" → "Volts/Amps Calibration".
+* Transmit → "Power & PA" was renamed to **Power**; the placeholder per-band PA gain group was removed (deferred to 3M-3 follow-up).
+
+### New Features
+
+**You can transmit SSB voice — on every supported radio family, including Hermes Lite 2.** Microphone in, RF out. The HL2 ATT/filter safety audit closed during 0.3.1 polish — the step-attenuator and filter gating have been verified end-to-end on HL2 hardware. The MOX path is hardened with VOX, anti-VOX, and a two-tone test mode for measuring carrier suppression and IMD.
+
+**Broadcast-grade transmit audio.** A full processing chain you can dial in or run from a preset:
+
+* 10-band transmit equalizer with click-and-drag parametric editor
+* Transmit leveler and ALC with attack/decay/hang
+* Multi-band continuous-frequency compressor (CFC) with per-band gain and post-EQ
+* Compander pre-distortion / drive-ratio (CPDR)
+* Controlled-envelope SSB (CESSB) for legal-limit power without flat-topping
+* Phase rotator for symmetric peak distribution
+
+**21 factory mic profiles** ported verbatim from Thetis (Heil PR40, Heil PR781, Yamaha CM500, Behringer XM8500, etc.) — drop-down on the TX applet, save your own with one click. Each profile now includes per-profile TX bandwidth (FilterLow/FilterHigh) seeded from sensible defaults.
+
+**Per-profile TX bandwidth control** *(new in 0.3.1 since rc1)*:
+
+* TxApplet gains TX BW low/high spinboxes and a live status label (e.g. `100 – 3100 Hz · 3.0 kHz`)
+* TX Filter group on TxProfileSetupPage for editing per-profile bandwidth
+* Debounced TX filter → WDSP path applies changes without keying glitches
+* MicProfileManager extended with FilterLow/FilterHigh on every profile
+
+**User-editable filter preset store** *(new in 0.3.1 since rc1)*:
+
+* Filter presets are now editable per-mode (CW / SSB / AM / FM / DIGI)
+* New Setup → Filters → Filter Presets page with per-mode lists and edit dialog
+* `FilterPresetEditDialog` for adjusting low/high cut and naming presets
+* Mode-aware filter preset grid on RxApplet — buttons reflect the current mode
+* Shift+click a preset on the TX applet to snap TX BW to match the active RX preset
+
+**TX filter overlay on the panadapter and waterfall** *(new in 0.3.1 since rc1)*:
+
+* TX bandwidth is drawn on the spectrum and waterfall during MOX/TUNE — orange when transmitting, cyan otherwise
+* Z-ordered under bandplan and frequency labels so it doesn't obscure tick marks
+* TX/RX overlay color pickers in Setup → Display → Colors & Theme
+* Color pickers consolidated under one Colors & Theme section (was scattered across Spectrum / Waterfall / Grid)
+
+**Connection workflow rebuilt:**
+
+* Radios behind a VPN tunnel (WireGuard, ZeroTier, Tailscale) now connect — the unicast probe path doesn't require UDP broadcast.
+* New 16-model picker organized by silicon family (Auto-detect, Atlas, Hermes, Hermes II, Angelia, Orion, Orion MkII, Hermes Lite 2, Saturn).
+* Auto-connect-on-launch with a per-radio toggle.
+* When the radio drops, the spectrum fades and shows a "DISCONNECTED" overlay you can click to open the connection panel — no more frozen-spectrum mystery.
+* Saved radios stay in the list permanently; only discovered-only entries age out.
+
+**Status bar redesign:**
+
+* The title bar now shows a compact strip: state dot · transmit Mbps · ping ms · receive Mbps · audio indicator. Hover for the full diagnostic tooltip.
+* The receive panel adapts to window width: at full width it shows mode, filter, AGC, NR, NB, APF, and squelch side-by-side; on narrow windows the less-critical badges drop out and a "…" overflow chip lists what was hidden.
+* New ADC overload badge (yellow on any clip, red on level > 3, auto-clears).
+* New CPU readout — right-click to toggle between system-wide and this-process-only.
+
+**Per-board PA forward-power calibration** *(new in 0.3.1):*
+
+* `PaCalProfile` model with `PaCalBoardClass` enum (None / Anan10 / Anan100 / Anan8000); HL2 maps to Anan10.
+* `CalibrationController` persists 10 cal-points per board class, scoped per-MAC.
+* New Setup → PA → Watt Meter page hosts the calibration grid.
+* `alex_fwd` reading routed through `CalibratedPAPower` interpolation; SWR protection scaling factor applied at every `setTxDrive` site.
+
+**Setup IA reshape** *(new in 0.3.1):*
+
+* New top-level **PA** category in SetupDialog (gated on `caps.hasPaProfile`) with three sub-pages: PA Gain (placeholder for 3M-3 follow-up), Watt Meter (cal points), PA Values (9 live telemetry fields including FWD / REV / SWR / PA current / temperature / supply volts / ADC overload / raw ADC).
+* Hardware → Calibration tab is always visible; PA-specific groups self-gate at the new top-level.
+
+**P1 wire-format parity expanded** *(new in 0.3.1):*
+
+* bank 11 C2 wires `line_in_gain` (low 5 bits) + `puresignal_run` flag (bit 6)
+* bank 11 C3 wires `user_dig_out` (low 4 bits)
+* C0 XmitBit on frequency banks (1, 2, 3, 5-9) under MOX
+* New `RadioConnection` virtual setters: `setLineInGain`, `setUserDigOut`, `setPuresignalRun` (P1 + P2 overrides)
+
+**Hermes Lite 2 configuration surface expanded:**
+
+* Hermes Lite Options tab: I2C control, I/O pin state, real-time pin readout
+* N2ADR filter board: HERCULES toggle writes all 13 SWL pin-7 entries
+* SWL bands × 7-pins matrix on the OC Outputs page
+* Step attenuator now accepts the full signed −28..+32 dB range
+* All HL2 settings persist per radio
+* **HL2 SSB transmit is bench-cleared** as of 0.3.1 — ATT/filter audit closed during polish
+
+**More accurate diagnostics:**
+
+* Network Diagnostics dialog with 4-section health grid
+* Ping/round-trip readout uses a min-filter window — sub-millisecond LAN connections now read correctly instead of showing a smeared average
+
+**Capability-gated UI cleanups** *(new in 0.3.1)*:
+
+* `hasStepAttenuatorCal` gates the Adaptive auto-att mode visibility
+* `hasSidetoneGenerator` gates the CW Sidetone Volume slider
+* `hasPennyLane` gates the User Dig Out UI on `OcOutputsTab`
+* Antenna popup builder is now capability-gated and shared between VfoWidget and RxApplet
+* Filter preset grid is mode-aware (driven by `commonPresetsForMode`)
+* DSB and DRM modes added to VFO mode list (11-mode parity with RxApplet)
+
+**XIT support wired** *(new in 0.3.1 since rc1)*:
+
+* VFO Flag X/RIT tab and RxApplet wire XIT placeholders to SliceModel
+* `xitHz` offset applied to TX frequency (mirrors RIT pattern on RX)
+
+### Bug Fixes
+
+* **PA voltage on ANAN-G2 and other MkII radios was off by ~20 %** — formula corrected to match Thetis. A live G2 reading 13.8 V was being displayed as 11.0 V; now reads correctly.
+* **HL2 mic_ptt was inverted on every non-HL2 P1 board** — eliminates rapid T/R relay clicking on TUNE/TX for Atlas, Hermes, HermesII, Angelia, Orion, OrionMkII, AnvelinaPro3, RedPitaya. Matches Thetis `networkproto1.c:597-598` direct polarity.
+* **Hermes Lite 2 PA enable** — the bit that turns on the HL2 power amplifier on transmit was missing in earlier builds; HL2 transmit now works on the wire (and is now bench-cleared as of 0.3.1).
+* **P2 ANAN transmit path** — a WDSP filter stage was incorrectly active on Protocol 2 and broke ANAN transmit; now gated to the protocols that need it.
+* **Hermes Lite 2 mic decimation** — radio-rate mic samples are now correctly down-converted to 48 kHz before reaching the transmit chain (PR #161, KM4BLG).
+* **Hermes Lite 2 N2ADR settings used to leak between radios** — now stored per-MAC.
+* **PA cal-point spinbox edits weren't persisting** *(0.3.1 since rc1)* — `PaCalibrationGroup` now routes spinbox edits through the controller's save() path.
+* **macOS .pkg filename was missing the -rcN suffix on pre-release tags** *(0.3.1 since rc1)* — release.yml now preserves the pre-release suffix in the .pkg artifact name.
+* **//MI0BOT author tag was being dropped during ports** *(0.3.1 since rc1)* — pre-commit hook now preserves verbatim near `mi0bot setup.cs:5463` cite.
+* **Network Diagnostics throughput showed 0.00 Mbps** for any real traffic — fixed a redundant unit conversion.
+* **Glyph rendering on macOS** — up/down arrows and em-dashes were rendering as garbage characters under certain font fallback paths. Switched to Unicode codepoints, sweep complete.
+* **TX filter coalescing was dropping mid-flight changes** *(0.3.1 since rc1)* — replaced a broken QTimer debounce with direct WDSP application; aligned tests with direct-apply behavior.
+* **TX filter and bandplan z-order on the spectrum** *(0.3.1 since rc1)* — TX/RX overlays now sit under bandplan and frequency labels.
+* **Spectrum overlay defaults** *(0.3.1 since rc1)* — TX overlay flags now default to True; spectrum repaints on MOX flip.
+* **AGC-T slider direction on VFO Flag** *(0.3.1 since rc1)* — now matches RxApplet (and Thetis) instead of inverting.
+* **Filter overlay color theming** *(0.3.1 since rc1)* — passband cyan in RX, orange in TX/TUNE, MOX-gated to avoid flicker.
+
+### Performance Improvements
+
+* Transmit mic resampler runs without periodic stalls (clean 720 → 256 sample re-blocking).
+* PipeWire audio backend on Linux delivers lower latency and no stutter under load.
+* Spectrum overlay is cached and only invalidated on real changes — fewer unnecessary GPU uploads.
+* AppletPanel scrollbar reserves a fixed 8 px gutter to prevent content clipping/repaint thrash *(0.3.1 since rc1)*.
+
+### Other Changes
+
+* Build system bumped to Qt 6.8 LTS (3-year support window) on all platforms.
+* Linux PipeWire support is the default Linux audio path; the legacy pactl/FIFO bridge stays as a fallback.
+* macOS builds use the Apple Silicon-native arm64 toolchain.
+* All published artifacts are GPG-signed; checksums file shipped alongside.
+* Bundled neural noise-reduction models (rnnoise + DeepFilterNet3) ship inside every release artifact.
+* Substantial style-constants consolidation pass — TitleBar, RxApplet, PhoneCwApplet, FmApplet, EqApplet, VaxApplet, VfoWidget, SpectrumOverlayPanel, all Setup pages, AboutDialog, SupportDialog, NetworkDiagnosticsDialog, AddCustomRadioDialog, GeneralOptionsPage, AppearanceSetupPages, TransmitSetupPages now use canonical `Style::*` palette helpers (`applyDarkPageStyle`, `kLineEditStyle`, `kButtonStyle`, `kSliderStyle`, `kComboStyle`, `kLabelMid`, `dspToggleStyle`, `doubleSpinBoxStyle`).
+* TxApplet visual cleanup: TUNE+MOX repositioned above VOX+MON for action-button prominence; NYI rows (ATU / MEM / Tune Mode / DUP / xPA) removed; SWR Prot LED wired to `SwrProtectionController`; SWR gauge wired to `powerChanged`.
+* RxApplet AF gain row dropped (the VFO flag and master cover the same surface); Mute relocated; AGC-T moved to its own full-width row (Option B from the polish plan).
+* PhoneCwApplet CW tab is now a stub until 3M-2 ships.
+* MainWindow hides ghost applets until their feature phases ship.
+* "Colour" → "Color" (American spelling) in user-visible strings; internal type names retain "Colour" for Thetis source parity.
+* TxCfcDialog landed scalar-complete (profile combo + global spinboxes + 30 per-band spinboxes for F/COMP/POST-EQ across 10 bands) but is visually spartan; full Thetis-faithful `ucParametricEq` widget port is queued as a follow-up.
+
+## [0.3.1-rc1] - 2026-05-02
+
+Pre-release for bench verification of the P1 full-parity epic and Setup IA
+reshape. Triggered by rapid T/R relay clicking on the ANAN-10E (HermesII)
+on TUNE/TX. Targets all non-HL2 P1 boards for byte-faithful Thetis parity,
+ports the per-board PA forward-power calibration system, and restructures
+the Setup tree to mirror Thetis's information architecture.
+
+### Fixes (RF-impacting)
+- **fix(p1/standard): mic_ptt direct polarity** — eliminates rapid T/R relay
+  clicking on TUNE/TX for every non-HL2 P1 board (Atlas, Hermes, HermesII,
+  Angelia, Orion, OrionMkII, AnvelinaPro3, RedPitaya). Matches Thetis
+  `networkproto1.c:597-598 [v2.10.3.13]` direct polarity.
+
+### Features
+- P1 wire-format parity (vs Thetis `networkproto1.c [v2.10.3.13]`):
+  - bank 11 C2 wires `line_in_gain` (low 5 bits) + `puresignal_run` flag (bit 6)
+  - bank 11 C3 wires `user_dig_out` (low 4 bits)
+  - C0 XmitBit on frequency banks (1, 2, 3, 5-9) under MOX
+- New `RadioConnection` virtual setters: `setLineInGain`, `setUserDigOut`,
+  `setPuresignalRun`. P1 + P2 overrides; `TransmitModel` properties wired.
+- Per-board PA forward-power calibration:
+  - `PaCalProfile` model with `PaCalBoardClass` enum (None / Anan10 / Anan100 /
+    Anan8000); HL2 maps to `Anan10` (mi0bot `setup.cs:5463-5466` byte-faithful).
+  - `CalibrationController` persistence (per-MAC under
+    `hardware/<mac>/paCalibration/calPoint{1..10}`).
+  - `PaCalibrationGroup` widget — 10 cal-point spinboxes per board class.
+  - `alex_fwd` reading routed through `CalibratedPAPower` interpolation.
+  - `TransmitModel::swrProtectFactor` applied at every `setTxDrive` scale site.
+- Three `BoardCapabilities` audit-gap closures:
+  - `hasStepAttenuatorCal` gates Adaptive auto-att mode.
+  - `hasSidetoneGenerator` gates CW Sidetone Volume slider visibility.
+  - `hasPennyLane` gates User Dig Out UI on `OcOutputsTab`.
+
+### Setup IA reshape (mirrors Thetis's information architecture)
+- New top-level **PA** category in `SetupDialog` (gated on `caps.hasPaProfile`),
+  with three sub-pages:
+  - **PA Gain** — placeholder for 3M-3 work (per-band gain table + auto-cal)
+  - **Watt Meter** — hosts the migrated `PaCalibrationGroup`
+  - **PA Values** — 9 live telemetry fields (FWD / REV / SWR / PA current /
+    temperature / supply volts / ADC overload / raw FWD-ADC / raw REV-ADC)
+- Hardware → Calibration tab Group 5 relabelled "PA Current (A) calculation"
+  → "Volts/Amps Calibration" (matches Thetis `groupBoxTS27` intent). Internal
+  members renamed to upstream `udAmpSens` / `udAmpVoff`.
+- Transmit → "Power & PA" renamed to **"Power"**; placeholder PA group
+  (per-band-gain + Fan Control NYI labels) removed.
+- Over-aggressive `setTabVisible` gate on Calibration tab dropped — tab is
+  now always visible; PA-specific groups self-gate at the new top-level.
+
+### Imported from main (since v0.3.0)
+- fix(connect): wait for wisdom completion via connect-then-check pattern
+- fix(persistence): restore last-used band/frequency on launch
+- fix(persistence): flush coalesced slice save on close, wire missing signals
+- fix(shutdown): eliminate ~5 s Cmd-Q beach ball
+- fix(tx): construct `TxChannel` with no Qt parent so `moveToThread` works
+- fix(wdsp): always show wisdom progress dialog (collapse fast/slow paths)
+- docs(readme): bring v0.3.0 features forward in main narrative
+- docs: v0.3.0 alpha-tester smoketest + README pointer
+
+### Tests
+- 17 new test files / 60+ new test cases across the two sub-epics.
+- All epic-relevant tests green locally on macOS. Full ctest expected green
+  on Linux / macOS / Windows in CI.
+
+### Known status
+- **Not yet bench-verified on hardware.** That's the whole point of this RC.
+- Open follow-ups tracked separately:
+  - v0.3.0 Windows portable bundle missing MinGW runtime DLLs
+    (`libgcc_s_seh-1.dll` + `libstdc++-6.dll` + `libwinpthread-1.dll`);
+    FFmpeg DLLs depend on these. Fix in `release.yml` deploy step targeted
+    for v0.3.1 final.
+  - 9 Thetis Transmit-tab groups not yet ported (`grpPATune`, `chkPulsedTune`,
+    `chkRecoverPAProfileFromTXProfile`, `chkLimitExtAmpOnOverload`,
+    `udTXFilterLow/HighSave`, `grpTXAM`, `grpTXMonitor`, `grpTXFilter`,
+    `chkTXExpert`) — pre-existing gaps documented in TODO in `PowerPage`.
+
+### Source citations
+Every wire-format change cites Thetis `[v2.10.3.13]` per `HOW-TO-PORT.md`.
+mi0bot HL2-specific ports cite `[v2.10.3.13-beta2]`. Production code uses
+plain version stamps (no sha-in-brackets); test files use the richer form
+where appropriate.
+
+J.J. Boyd ~ KG4VCF
+
+## [0.3.0] - 2026-05-01
+
+### Features
+- feat(applet): TxEqDialog parametric panel + style fix (Batch 9)
+- feat(applet): TxCfcDialog full Thetis-verbatim rewrite (Batch 8)
+- feat(core): TxChannel::getCfcDisplayCompression WDSP wrapper (Batch 7)
+- feat(core): ParaEqEnvelope + TransmitModel.txEqParaEqData (Batch 6)
+- feat(widget): ParametricEqWidget JSON + public API + test (Batch 5)
+- feat(widget): ParametricEqWidget mouse + wheel + 6 signals (Batch 4)
+- feat(widget): ParametricEqWidget paintEvent + 10 draw helpers (Batch 3)
+- feat(widget): ParametricEqWidget axis math + ordering (Batch 2)
+- feat(widget): ParametricEqWidget skeleton + palette + ctor (Batch 1)
+- feat(chrome): finish 3Q chrome — SVG icons, glyph encoding, voltage source-first, CPU toggle
+- feat(hl2): Hl2OptionsTab — Hermes Lite Options + I2C Control + I/O Pin State
+- feat(hl2): N2ADR HERCULES toggle writes 13 SWL pin-7 entries (closes 30% gap)
+- feat(hl2): real OcOutputsSwlTab — 13 SWL bands × 7 pins matrix (mi0bot parity)
+- feat(widgets): RxDashboard drop-priority on narrow window
+- feat(mainwindow): restyle right-side strip — PSU/PA/CPU MetricLabel + TX StatusBadge
+- feat(model): extend Band enum with 13 SWL bands (mi0bot parity for HL2 N2ADR)
+- feat(widgets): add MetricLabel — labelled-metric pair for status strip
+- feat(mainwindow): swap m_callsignLabel for StationBlock — radio-name anchor
+- feat(mainwindow): replace m_statusConnInfo with RxDashboard (F.1)
+- feat(widgets): RxDashboard — RX1 + freq + mode/filter/AGC + active-only NR/NB/APF/SQL
+- feat(mainwindow): segment hover tooltip — aggregated diagnostic body
+- feat(mainwindow): wire ConnectionSegment to RadioModel + AudioEngine
+- feat(titlebar): rebuild ConnectionSegment — single dot + RTT + audio pip
+- feat(hl2): relabel OC Outputs → "Hermes Lite Control" + extend visibility for HL2
+- feat(gui): NetworkDiagnosticsDialog — 4-section diagnostic grid
+- feat(hl2): bring-up carry-forward — sequenced I2C probe + persistence + diagnostic surface
+- feat(audio): flowStateChanged signal — Healthy/Underrun/Stalled/Dead FSM
+- feat(connection): supplyVoltsChanged + userAdc0Changed signals
+- feat(connection): pingRttMeasured signal — RTT from C&C round-trip
+- feat(connection): rolling byte-rate counters for ▲▼ Mbps readout
+- feat(widgets): add StationBlock — clickable bordered radio-name anchor
+- feat(widgets): add StatusBadge — icon-prefix pill with 5 colour variants
+- feat(profile): MicProfileManager live capture/apply for CFC/CPDR/CESSB/PhRot (3M-3a-ii G.2)
+- feat(applet): TxApplet PROC + CFC enable + TxCfcDialog (3M-3a-ii F + A)
+- feat(connection): cold-launch ConnectionPanel auto-open (3Q polish)
+- feat(setup): CFC page (PhRot + CFC + CESSB) + dashboard live status (3M-3a-ii E)
+- feat(connection): edit saved radio entries (3Q polish)
+- feat(profile): MicProfileManager bundles 41 CFC/CPDR/CESSB/PhRot keys (3M-3a-ii G)
+- feat(model): wire TM → TxChannel routing for CFC/CPDR/CESSB/PhRot (3M-3a-ii D)
+- feat(model): TransmitModel CFC/CPDR/CESSB/PhRot properties (3M-3a-ii C)
+- feat(tx): add TxChannel phrot Corner/Nstages/Reverse wrappers (3M-3a-ii B.2)
+- feat(tx): add TxChannel CFC + CPDR + CESSB wrappers (3M-3a-ii B)
+- feat(setup): SpeechProcessorPage rewrite as TX dashboard (3M-3a-i E)
+- feat(applet): TxEqDialog adds profile combo + Save/Save-As/Delete (3M-3a-i A.2)
+- feat(profile): port 20 Thetis factory TX profiles verbatim (3M-3a-i A.2)
+- feat(applet): wire EQ right-click + Tools menu to TxEqDialog launch (3M-3a-i A.1)
+- feat(applet): TxEqDialog scaffold — 10-band sliders + freq spinboxes + preamp + Nc/Mp/Ctfmode/Wintype (3M-3a-i A.1)
+- feat(applet): TxApplet quick-toggle row [LEV] [EQ] [PROC] (3M-3a-i F)
+- feat(setup): AgcAlcSetupPage adds TX Leveler + TX ALC sections (3M-3a-i D)
+- feat(model): wire TransmitModel→TxChannel TX EQ + Lev + ALC routing (3M-3a-i Batch 2)
+- feat(profile): MicProfileManager bundles 27 EQ/Lev/ALC keys (3M-3a-i G)
+- feat(model): TransmitModel TX EQ + Leveler + ALC properties (3M-3a-i C)
+- feat(tx): add TxChannel EQ + Leveler/ALC wrappers (3M-3a-i B)
+- feat(3m-1c): RadioModel TxMicSource lifecycle + AudioEngine PC override gate
+- feat(3m-1c): VOX defensive guards on all 5 DEXP-touching setters
+- feat(3m-1c): P2 port 1026 mic frame parsing → TxMicSource
+- feat(3m-1c): P1 EP6 mic16 extraction → TxMicSource
+- feat(3m-1c): TxMicSource — Thetis Inbound/cm_main port
+- feat(3m-1c): Phase L — cross-cutting wiring + 720→256 mic re-blocker
+- feat(3m-1c): Phase J — TxApplet 2-TONE button + profile combo + Setup TX Profile page (J.1-J.4)
+- feat(3m-1c): Phase I — TwoToneController activation handler (I.1-I.5)
+- feat(3m-1c): Phase H — Setup → Test → Two-Tone page
+- feat(3m-1c): Phase G — VFO Flag TX badge wire-up + Phase L routing demo
+- feat(3m-1c): Phase F — MicProfileManager class (load/save/delete/setActive)
+- feat(3m-1c): Phase E.2-E.6 — 12 TXA PostGen wrapper setters
+- feat(3m-1c): Phase E.1 — TxChannel push-driven refactor
+- feat(3m-1c): Phase D.1/D.2 — AudioEngine micBlockReady signal + clearMicBuffer
+- feat(3m-1c): Phase C.2/C.3/C.4 — multicast Pre/Post MOX state-change signals
+- feat(3m-1c): Phase B.3 — add DrivePowerSource enum + TwoToneDrivePowerSource property
+- feat(3m-1c): Phase B.2 — add 7 two-tone test properties to TransmitModel
+- feat(3m-1c): Phase B.1 — rename 15 TransmitModel keys to Thetis column names
+- feat(3n-5.5): wire Developer ID signing + notarization for macOS
+- feat(tx): wire WDSP Leveler stage with upstream defaults — pull from 3M-3a
+- feat(3m-1b): L.3 Mic-source HL2 force-Pc on connect — Phase L complete
+- feat(3m-1b): L.2 AppSettings persistence per-MAC for TransmitModel
+- feat(3m-1b): L.1 RadioModel owns Pc/Radio mic sources + composite router
+- feat(3m-1b): K.2 MOX rejection toast + tooltip override — Phase K complete
+- feat(3m-1b): K.1 BandPlanGuard SSB-mode allow-list for TX
+- feat(3m-1b): J.3 TxApplet MON toggle + volume slider + mic-source badge — Phase J complete
+- feat(3m-1b): J.2 TxApplet VOX toggle button + settings popup
+- feat(3m-1b): J.1 TxApplet Mic Gain slider
+- feat(3m-1b): I.4 Mic gain slider per-board range + I.3 nit fixes
+- feat(3m-1b): I.3 Radio Mic settings group with per-family layout
+- feat(3m-1b): I.2 PC Mic settings group on AudioTxInputPage
+- feat(3m-1b): I.1 AudioTxInputPage skeleton + TransmitModel::micSource
+- feat(3m-1b): H.5 mic_ptt extraction from P1/P2 status frames — Phase H complete
+- feat(3m-1b): H.4 MoxController PTT-source dispatch (MIC/CAT/VOX/SPACE/X2)
+- feat(3m-1b): H.3 MoxController VOX hang-time + anti-VOX gain + anti-VOX source
+- feat(3m-1b): H.2 MoxController::setVoxThreshold with mic-boost-aware scaling
+- feat(3m-1b): H.1 MoxController::setVoxEnabled with voice-family mode-gate
+- feat(3m-1b): G.6 wire setMicXlr (P2-only byte-50 bit 5; P1 storage-only) — Phase G complete
+- feat(3m-1b): G.5 wire setMicPTT (P1 case-11 C1 bit 6 + P2 byte-50 bit 2, polarity inverted)
+- feat(3m-1b): G.4 wire setMicBias (P1 case-11 C1 bit 5 + P2 byte-50 bit 4)
+- feat(3m-1b): G.3 wire setMicTipRing (P1 case-11 C1 bit 4 + P2 byte-50 bit 3, polarity inverted)
+- feat(3m-1b): G.2 wire setLineIn (P1 case-10 C2 bit 1 + P2 byte-50 bit 0)
+- feat(3m-1b): G.1 wire setMicBoost (P1 case-10 C2 bit 0 + P2 byte-50 bit 1)
+- feat(3m-1b): F.3 add CompositeTxMicRouter — selector with HL2 force-PC + MOX-locked switching
+- feat(3m-1b): F.2 add RadioMicSource — SPSC ring drained by audio thread
+- feat(3m-1b): F.4 add RadioConnection::micFrameDecoded Qt signal
+- feat(3m-1b): F.1 add PcMicSource — TxMicRouter impl tapping AudioEngine::pullTxMic
+- feat(3m-1b): E.3 add AudioEngine::txMonitorBlockReady slot for TXA siphon mix
+- feat(3m-1b): E.2 add AudioEngine TX monitor enable + volume state
+- feat(3m-1b): E.1 add AudioEngine::pullTxMic for PcMicSource tap
+- feat(3m-1b): D.7 add TxChannel TX meter readouts (TxMic + ALC live; 4 deferred)
+- feat(3m-1b): D.6 add TxChannel mic-mute path via setMicPreamp + recomputeTxAPanelGain1
+- feat(3m-1b): D.5 add TxChannel::sip1OutputReady signal for MON siphon
+- feat(3m-1b): D.4 expand TxChannel::setStageRunning to MicMeter/AlcMeter/AmMod/FmMod
+- feat(3m-1b): D.3 add TxChannel VOX/anti-VOX WDSP wrappers (5x)
+- feat(3m-1b): D.2 add TxChannel per-mode TXA config setters
+- feat(3m-1b): add TransmitModel MON properties (2x)
+- feat(3m-1b): add TransmitModel anti-VOX properties (2x)
+- feat(3m-1b): add TransmitModel VOX properties (4x)
+- feat(3m-1b): add TransmitModel mic-jack flag properties (8x)
+- feat(3m-1b): add TransmitModel::micGainDb + derived micPreampLinear
+- feat(settings): migrate manual-IP-port macKey to real MAC on probe success (3Q-12)
+- feat(discovery): saved radios never age out; discovered-only at 60s (3Q-11)
+- feat(connection): auto-connect failure path + multi-flag handling (3Q-10)
+- feat(3m-1b): add BoardCapabilities::hasMicJack flag
+- feat(menu): role-based Radio menu — Connect/Disconnect mutually exclusive (3Q-9)
+- feat(spectrum): disconnect overlay — fade + DISCONNECTED + click-to-open (3Q-8)
+- feat(statusbar): verbose connection-info strip (3Q-7)
+- feat(titlebar): connection segment with state dot, rates, activity LED (3Q-6)
+- feat(connection): ConnectionPanel polish — pills, Last Seen, status strip (3Q-5)
+- feat(connection): rebuild Add Radio dialog with model-aware SKU picker (3Q-4)
+- feat(connection): structured ConnectFailure + frameReceived signal (3Q-3)
+- feat(discovery): add RadioDiscovery::probeAddress() unicast probe (3Q-2)
+- feat(connection): introduce ConnectionState enum on RadioModel (3Q-1)
+- feat(ui): H.4 PowerPaPage Power/TunePwr/ATTOnTX/ForceATT activation (3M-1a)
+- feat(ui): H.3 TxApplet TUN/Tune-Power/RF-Power/MOX activation (3M-1a)
+- feat(ui): H.2 MeterPoller TX bindings on MOX (3M-1a)
+- feat(ui): H.1 SpectrumWidget MOX overlay wiring (3M-1a)
+- feat(3m-1a): G.4 RadioModel::setTune TUN orchestrator
+- feat(tx): G.3 TransmitModel tunePowerByBand[14] + per-MAC persistence (3M-1a)
+- feat(ui): G.2 wire Receive Only checkbox visibility from caps.isRxOnlySku (3M-1a)
+- feat(3m-1a): G.1 — RadioModel integration (MoxController + TxChannel + TxMicRouter)
+- feat(safety): F.3 port SwrProtectionController source-first TODOs (3M-1a)
+- feat(tx): F.2 StepAttenuatorController TX-path activation (3M-1a)
+- feat(tx): F.1 RadioModel onMoxHardwareFlipped slot (3M-1a)
+- feat(tx): implement P2 sendTxIq with 24-bit BE SPSC ring (3M-1a E.6)
+- feat(tx): P1 setWatchdogEnabled wire-byte emission (RUNSTOP pkt[3] bit 7) (3M-1a Task E.5)
+- feat(tx): P1 setTrxRelay wire-byte emission (C3 bank 10 bit 7) (3M-1a Task E.4)
+- feat(tx): P1 setMox wire-byte emission (C0 byte 3 bit 0) (3M-1a Task E.3)
+- feat(tx): P1 sendTxIq wire format (EP2 zones, 16-bit I/Q) (3M-1a Task E.2)
+- feat(tx): RadioConnection TX virtuals — sendTxIq + setTrxRelay (3M-1a Task E.1)
+- feat(tx): TxMicRouter interface + NullMicSource stub (3M-1a Task D.1)
+- feat(tx): TxChannel setRunning + 3M-1a active stages (3M-1a Task C.4)
+- feat(tx): TxChannel setTuneTone via gen1 PostGen (3M-1a Task C.3)
+- feat(tx): TxChannel skeleton — 31-stage TXA pipeline (3M-1a Task C.2)
+- feat(tx): WdspEngine TX channel API (3M-1a Task C.1)
+- feat(tx): MoxController setTune slot with manualMox flag (3M-1a Task B.5)
+- feat(tx): MoxController 6 phase signals with Codex P1 boundary (3M-1a Task B.4)
+- feat(tx): MoxController 6 QTimer chains (3M-1a Task B.3)
+- feat(tx): MoxController skeleton with Codex P2 ordering (3M-1a Task B.2)
+- feat(tx): port Thetis PTTMode enum as PttMode (3M-1a Task B.1)
+- feat(spectrum): raise rewind cap to 16384 rows (~8 min default rewind)
+- feat(setup): add waterfall rewind depth dropdown (E task 11)
+- feat(spectrum): debounce history resize + period change (E task 10)
+- feat(spectrum): pan/zoom reproject + largeShift clear (E task 9)
+- feat(model): wire 3M-0 safety controllers into RadioModel + MainWindow
+- feat(ui): status-bar TX Inhibit indicator + PA Status badge
+- feat(setup): General → Options → prevent-different-band toggle
+- feat(setup): General → Hardware Configuration group
+- feat(setup): Block-TX antennas + Disable HF PA group boxes on Setup → Transmit
+- feat(setup): External TX Inhibit group box on Setup → Transmit
+- feat(setup): SWR Protection group box on Setup → Transmit
+- feat(spectrum): static "HIGH SWR" overlay (inert until 3M-1a)
+- feat(safety): per-board PA scaling table + MeterPoller telemetry routing
+- feat(radio-model): paTripped() live state + Ganymede CAT trip handler
+- feat(connection): setWatchdogEnabled(bool) stub on RadioConnection + P1/P2
+- feat(safety): TxInhibitMonitor — GPIO poll + 4-source inhibit aggregator
+- feat(safety): add SwrProtectionController — Phase 3M-0 Task 3
+- feat(safety): BandPlanGuard with 60m channel tables + isValidTxFreq
+- feat(caps): isRxOnlySku + canDriveGanymede for 3M-0 safety net
+- feat(spectrum): paint timescale strip + LIVE button (E task 8)
+- feat(spectrum): wire scrub gesture + LIVE click handlers (E task 7)
+- feat(spectrum): add timescale + LIVE button rects (E task 6)
+- feat(spectrum): add setWaterfallLive + paused-strip width (E task 5)
+- feat(spectrum): wire scrollback into push + clear paths (E task 4)
+- feat(spectrum): add ring buffer write paths (sub-epic E task 3)
+- feat(spectrum): add scrollback math helpers + capacity tests (E task 2)
+- feat(spectrum): add scrollback state + method decls (sub-epic E task 1)
+- feat(view-menu): wire View → Band Plan to AetherSDR pattern
+- feat(setup-display): bandplan region + label-size controls
+- feat(mainwindow): wire BandPlanManager → SpectrumWidget
+- feat(spectrum): port drawBandPlan from AetherSDR
+- feat(spectrum): add BandPlanManager hookup + font-size knob
+- feat(radiomodel): own BandPlanManager + load on init
+- feat(bandplan): port BandPlanManager from AetherSDR
+- feat(bandplan): add rac-canada bandplan JSON
+
+### Fixes
+- fix(p1/p2): gate WDSP CFIR on protocol — restore P2 ANAN TX path
+- fix(p1/hl2): align WDSP TX path + bank-17/11/10 wire bytes with Thetis
+- fix(p1/hl2): set bank 10 C2 bit 3 to enable HL2 PA on TX
+- fix(p1/hl2): decimate radio-rate mic to 48 kHz before TxMicSource
+- fix(hl2): address Codex P1 + P2 review on PR #160
+- fix(hl2): N2ADR per-MAC persistence + signed S-ATT spinbox range
+- fix(test): update parametric-edit test for direct-WDSP push contract
+- fix(applet): TxEqDialog parametric WDSP push -- direct profile, not legacy scalars
+- fix(applet): encode TX parametric EQ profile blobs
+- fix(applet): wire parametric EQ to WDSP + sync from model on profile load
+- fix(cmake): vendor zlib via FetchContent on Windows MinGW
+- fix(applet): TxEqDialog parametric Reset button now actually resets
+- fix(applet): apply project styles to TxCfc/TxEq dialog widgets
+- fix(applet): drop unused <algorithm> include in TxEqDialog
+- fix(widget): apply Task 5 code review feedback
+- fix(widget): apply Task 4 code review feedback
+- fix(test): drop unused <cmath> include in interaction test
+- fix(widget): apply Task 2 code review feedback
+- fix(test): drop unused <cmath> include in axis test
+- fix(cpu): real cross-platform CPU counting on Linux + Windows
+- fix(connection): address Codex P1 + P2 review on PR #158
+- fix(diagnostics): RTT min-filter + PSU drop + Mbps fix + ship defaults + NYI honesty
+- fix(hl2): address Codex P1 + P2 review comments on PR #157
+- fix(chrome): partial layout-overflow fixes (WIP — ADC repositioning pending)
+- fix(chrome): badge content clipping + audio-pip QChar — render fix follow-up
+- fix(chrome): rendering issues — glyph fallbacks + min-widths + board code
+- fix(widgets): RxDashboard re-entry guard — segfault on resize
+- fix(hl2): signed −28..+32 dB step attenuator user range (mi0bot parity)
+- fix(widgets): StationBlock — clean short-circuit, single applyStyle in ctor
+- fix(widgets): StatusBadge — paint background + guard idempotent setters
+- fix(settings): escape '+' and other non-NameChars in XML keys
+- fix(applet): wire PhoneCw PROC, drop duplicate from TxApplet (3M-3a-ii H)
+- fix(menu): Connect enablement reads connectionState, not isConnected (3Q polish)
+- fix(connection): manual entries seed m_lastSeenMs so pill+Last Seen are accurate (3Q polish)
+- fix(connection): force Disconnected state on teardown — strip + bar stuck "Connected" (3Q polish)
+- fix(connection): seed-from-saved entries also populate m_discoveredRadios (3Q polish)
+- fix(menu): Connect uses unicast probe — no listener leak on miss (3Q polish)
+- fix(connection): live-test polish — pill widget + name preservation + seed-from-disk (3Q polish)
+- fix(tx): push TX processing chain to WDSP on connect + profile activation
+- fix(3m-1c): two-tone level — convert dB→linear before TXPostGen mag
+- fix(3m-1c): marshal teardown setTxMicSource(nullptr) onto conn thread
+- fix(3m-1c): P1 setTxDrive — port stub to working setter (HL2 bench triage)
+- fix(3m-1c): refine C1 to sendPostedEvents + I3 invariant + test polish
+- fix(3m-1c): arm m_lastMicAt at TxMicSource attach (I3)
+- fix(3m-1c): zero-fill PC-mic short pulls in TxWorkerThread (I2)
+- fix(3m-1c): add QCoreApplication::processEvents to TxWorkerThread::run (C1)
+- fix(display): smooth spectrum repaint with timer-driven update loop
+- fix(3m-1c): route MoxController→TxChannel lambdas via Queued dispatch
+- fix(3m-1c): bump silence-drive threshold past mic-burst gap (SSB voice fix)
+- fix(3m-1c): E.1 bench regression — restore TUN + SSB voice TX (no pump)
+- fix(3m-1c): Phase L fixup — add 5 missing 2-tone signal connects + initial pushes
+- fix(3m-1c): Phase K — initial-state-sync audit (TX monitor enable + volume)
+- fix(3m-1c): correct chunk 1 attribution to AetherSDR + NereusSDR-native
+- fix(3m-1c): HL2 TX step att — apply 31-N inversion in P1CodecHl2
+- fix(3m-1c): HL2 PA scaling — add HermesLite case to paScalingFor
+- fix(3n-5.5): use documented `list-keychains` (plural) for search-list write
+- fix(3m-1b): address Codex P1+P1+P2 review on PR #149
+- fix(tx): zero-fill partial mic-pull + skip fexchange2 on empty pull
+- fix(tx): push initial micPreamp on TxChannel attach so SSB has gain
+- fix(mox): gate onMicPttFromRadio(false) on PttMode==Mic to prevent un-key
+- fix(ui): apply mic-gain to PhoneCwApplet level gauge so slider drives the meter
+- fix(audio): pick hardware mic + clamp channels + permanent mic-permission key
+- fix(audio): eager-open TX input mic on AudioEngine::start
+- fix(3m-1b): E.4 RX-leak-during-MOX fold via activeSlice gate in rxBlockReady
+- fix(connection): seed panel table from saved radios on construction (3Q polish)
+- fix(connection): split Add Radio dialog into Probe (verify) + Save (3Q polish)
+- fix(connection): Add Radio dialog verifies + saves; user connects from row (3Q polish)
+- fix(connection): hold probing overlay for 700ms min on dialog probe success (3Q polish)
+- fix(connection): live-test polish across Phase 3Q surface
+- fix(3m-1b): close deskhpsdr discover script regex coverage gaps
+- fix(3m-1b): add DL1YCF to deskhpsdr corpus via "by NAME" regex
+- fix(discovery): clean up Task 2 — unused captures + PROVENANCE row (3Q-2 follow-up)
+- fix(tx): wire TransmitModel::powerChanged → setTxDrive (Codex review)
+- fix(tx): TxApplet per-band TUN-power slider + fwd-power gauge live data
+- fix(tx): TX I/Q UDP destination port 1028 → 1029 (first RF on the air!)
+- fix(tx): reorder TxChannel ctor init list to match declaration order
+- fix(tx): TxChannel buffer size + P2 output rate (bench round 3)
+- fix(tx): bench fixes — re-enable P2 TX consumer + RX mute on MOX
+- fix(tx): wire TxChannel TX I/Q production loop to RadioConnection
+- fix(safety): wire setAlexFwdLimit + setTunePowerSliderValue from setTune
+- fix(ui): H.1-H.4 review fixups (QPointer + band wiring + ATT test)
+- fix(tx): G.4 cold-off guard + ordering fidelity + missing test coverage
+- fix(tx): G.3 drop s.save() from TransmitModel::save() (match AlexController)
+- fix(tx): G.3 preserve //[2.10.3.5]MW0LGE author tag + test no-port-check
+- fix(ui): G.2 sibling-field reset + named slot + 5th test
+- fix(tx): G.1 prevent WDSP-init lambda accumulation across reconnect
+- fix(safety): F.3 setTunePowerSliderValue clamp + setAlexFwdLimit doc
+- fix(safety): F.3 preserve K2UE attribution at ANAN-8000D branch
+- fix(tx): F.2 cross-thread dispatch + HPSDR setter wiring + cite fix
+- fix(tx): F.1 cross-thread dispatch + public slots declaration
+- fix(p2): E.7 setMox cleanup + drive-gate XVTR doc + m_mox threading note
+- fix(p2): wire m_mox to byte 4 bit 1 + out-of-band drive gate (E.7)
+- fix(tx): E.6 add keep-in-sync comment to P2 TX IQ drain loop
+- fix(tx): E.5 stub-comment + drift-risk + HL2 stamp polish
+- fix(tx): E.4 codec-path polarity propagation + flush priority docs
+- fix(tx): E.2 critical fixups (atomic ring + cites + HL2 LSB workaround)
+- fix(tx): remove unused <cstdint> include from P1RadioConnection.h (E.2 cleanup)
+- fix(tx): E.1 fixups (naming alignment + idempotency + log level)
+- fix(tx): C.4 fixups (explicit case arms + cite range + warning text)
+- fix(tx): QFAIL -> QSKIP in C.3 HAVE_WDSP skeleton tests
+- fix(tx): C.3 fixups (precision parity + attribution gaps)
+- fix(tx): C.1 ownership + comments (code-review fixups)
+- fix(tx): apply B.2 code-review fixups (CMakeLists + Q_DECLARE_METATYPE)
+- fix(spectrum): guard GPU sentinels with NEREUS_GPU_SPECTRUM (CI #1)
+- fix(spectrum): address Codex P1 + P2 on PR #140
+- fix(spectrum): post-live-test fixes for sub-epic E
+- fix(setup): use kMaxWaterfallHistoryRows constant (E task 11 review)
+- fix(safety): address Codex P1+P2 review on PR #139
+- fix(spectrum): wire debounce timer to resizeEvent (E task 10 review)
+- fix(spectrum): invalidate GPU overlay on pause/scrub (E task 8 review)
+- fix(safety): preserve verbatim Thetis inline author tags + thread-affinity doc
+- fix(safety): close BandPlanGuard channel/range gaps + reviewer follow-ups
+- fix(spectrum): wire scrollback flush to disconnect signal (E task 4 review)
+- fix(spectrum): add m_wfTexFullUpload to viewport rebuild (E task 3 review)
+- fix(dsp-menu): full RX DSP parity in top menu, drop overlay flyout
+- fix(theme): suppress orange NYI badge — keep disable + tooltip only
+- fix(theme): drop kSpinBoxStyle subcontrol override so app baseline arrows render
+- fix(build): link Qt6::Svg so macdeployqt bundles libqsvg.dylib
+
+### Docs
+- docs(changelog): hermes-filter-debug HL2 N2ADR + S-ATT fixes
+- docs(3M-3a-ii-followup): refresh PR-DRAFT + CHANGELOG for PR open
+- docs(3M-3a-ii-followup): verification matrix + CHANGELOG (Batch 10)
+- docs(widget): document Qt rect semantics divergence in paint notes
+- docs(plan): apply Task 1 code review feedback to Tasks 3 + 5
+- docs(plan): mark PROVENANCE rows as already-landed in Task 1
+- docs(3M-3a-ii-followup): ParametricEq port plan (10 batches)
+- docs(changelog): expand Phase 3Q section to cover full connect-flow rebuild
+- docs(arch): shell-chrome redesign verification matrix — 20 scenarios
+- docs(hl2): Phase 3L visibility brainstorm — design + lean implementation plan
+- docs(arch): shell-chrome redesign implementation plan — 9 sub-PRs
+- docs(arch): shell-chrome redesign spec — TitleBar/status-bar/STATION/segment
+- docs(3M-3a-ii): mark complete + queue ParametricEq widget hand-off
+- docs: CLAUDE.md mark 3M-3a-i Complete pending bench, 3M-3a-ii next
+- docs(arch): 3M-3a-i verification matrix extension + commit summary (3M-3a-i I)
+- docs(3m-3): pull forward — schedule swap with 3M-2 (HL2 audit gate)
+- docs(3m-1c): verification matrix — TX pump v3 + Stage-2 fixes + HL2 + Codex
+- docs(3m-1c): refresh v2-era doc comments to reflect v3 redesign (I1)
+- docs(3m-1c): plan v3 supersedes v2 — Thetis-faithful semaphore-wake
+- docs(3m-1c): correct TxChannel cross-thread audit doc-comments
+- docs(3m-1c): TX pump redesign execution status + 720 misread corrections
+- docs(3m-1c): TX pump architecture redesign plan + post-code review amendment
+- docs(3m-1c): M.7 — post-code Thetis review
+- docs(3m-1c): M.6 — verification matrix update (22 new rows)
+- docs(3m-1c): C.1 finalize — update stale MoxController::moxChanged refs
+- docs(3m-1c): implementation plan with TDD task list per chunk
+- docs(3m-1c): pre-code Thetis review for chunks 1-9
+- docs(3m-1c): chunk 0 — HL2 TX path desk-review vs mi0bot-Thetis
+- docs(3m-1c): add chunk 0 — HL2 TX path desk-review vs mi0bot-Thetis
+- docs(3m-1c): design spec — polish & persistence
+- docs(build): fix Arch PipeWire package name (libpipewire → pipewire)
+- docs(3m-1b): M.7 post-code Thetis review — Phase M autonomous tasks complete
+- docs(3m-1b): M.6 verification matrix extension — 17 rows for 3M-1b
+- docs(3m-1b): implementation plan for mic + SSB voice
+- docs(3m-1b): Thetis pre-code review for mic + SSB voice
+- docs(build): document missing Linux deps (qt6-svg, jack, alsa, pipewire)
+- docs(captures): add Thetis TUN-engaged pcap findings + next-session prompt
+- docs: execution handoff prompt for Phase 3Q
+- docs: implementation plan for Phase 3Q (Connection Workflow Refactor)
+- docs: introduce Phase 3Q (Connection Workflow Refactor) design + master plan placement
+- docs(3m-1a): I.5 post-code Thetis review §2
+- docs(3m-1a): I.4 verification matrix extension (TUNE-only First RF)
+- docs(p2): E.8 — annotate setWatchdogEnabled stub with §7.8 deferral
+- docs(3m-1a): add §7.11 — P1 16-bit vs P2 24-bit TX I/Q sample format
+- docs(tx): D.1 doc clarifications (zero-return + alloc constraint + wire breadcrumb)
+- docs(tx): C.2 fixups (stale Approach-A comments + 25→31 stage count)
+- docs(tx): fix off-by-one cmaster.c line cites in TX slew constants (C.1 fixup)
+- docs(tx): B.5 polish (typo + signal divider + contract notes)
+- docs(tx): correct B.4 phase-signal docs + typos (B.4 review fixups)
+- docs(3m-1a): disambiguate Thetis PttMode from existing PttSource
+- docs(architecture): Phase 3M-1a TUNE-only First RF plan
+- docs(architecture): Phase 3M-1a Thetis pre-code review
+- docs: changelog entry for sub-epic E (E task 13)
+- docs(phase3g): add sub-epic E verification matrix (E task 12)
+- docs(plan): mark task 10 step 3 deferred (E task 10 review polish)
+- docs(3m-0): verification matrix for PA safety foundation
+- docs(plan): clarify task 8 wfRect-width contract for drawTimeScale
+- docs(phase3g-rx-epic-e): add waterfall scrollback implementation plan
+- docs(architecture): Phase 3M-0 PA Safety Foundation implementation plan
+- docs(architecture): apply pre-code Thetis review corrections to 3M TX design
+- docs(architecture): Phase 3M TX epic master design
+- docs: audit phase status table — mark 3G-9b/c / 3G-13 / 3G-14 / 3P-H / 3P-I-b complete
+- docs(verify): retarget matrix rows 6-9 to View → Band Plan
+- docs(verify): 12-row manual matrix for bandplan port
+- docs(vax): surface VAX in README + add alpha-guide step 15
+- docs(plan): Phase 3G RX Epic sub-epic D — Bandplan overlay
+
+### CI / Build
+- chore(attribution): fix CI tag-preservation FAILs on PR #161
+- chore(connection): strip 3Q diagnostic logging — root cause was duplicate app instances
+- chore(attribution): regenerate contributor indexes after cfcomp PROVENANCE rows
+- chore(attribution): finish cfcomp.{c,h} provenance for Batch B.1 sync
+- chore(wdsp): partial sync cfcomp.{c,h} → Thetis v2.10.3.13 for Qg/Qe (3M-3a-ii B.1)
+- chore: drop 3 unused includes (TxApplet/MainWindow/TransmitSetupPages)
+- chore(profile): drop unused kProfileSubpath const
+- chore(build): fix POST_BUILD PlistBuddy invocation for mic-permission gate
+- chore(ui): drop unused <gui/StyleConstants.h> from PhoneCwApplet.cpp
+- chore(3m-1b): L.1 cleanup — drop unused <memory> from ownership test
+- chore(3m-1b): J.3 cleanup — drop unused <cmath> from tst_tx_applet_mon
+- chore(3m-1b): J.2 cleanup — drop unused <functional> from VoxSettingsPopup.h
+- chore(3m-1b): I.4 cleanup — fix kUnknown field-designator order + drop unused include
+- chore(3m-1b): I.2 cleanup — remove unused <core/audio/CompositeTxMicRouter.h> in test
+- chore(3m-1b): H.2 cleanup — move <cmath> from .h to .cpp + drop unused <limits> in test
+- chore(3m-1b): F.2 cleanup — remove 2 unused includes
+- chore(3m-1b): D.3 cleanup — move <cmath> to .cpp + wdsp_api history
+- chore(3m-1b): D.2 move <stdexcept> include from TxChannel.h to .cpp
+- chore(3m-1b): D.1 cleanup — remove redundant public: label + unused include
+- chore(3m-1b): register deskhpsdr as recognised upstream
+- chore(tx): strip 3M-1a bench-debug instrumentation
+- chore(safety): add v-prefix to MW0LGE cite stamps
+- chore(safety): add clsBandStackManager.cs + setup.designer.cs headers
+- chore(caps): extend forBoard data table + spacing/comment polish
+- ci: pin mi0bot-Thetis to c26a8a4 to fix tag-preservation drift
+- ci: install Qt6::Svg dev headers across all platforms
+
+### Other
+- style(3m-1c): regroup AudioEngine public/public-slots blocks (I6)
+- style(3m-1c): TxWorkerThread::run uses unique_ptr<QTimer> for RAII
+- wip(tx): 5 wire-protocol fixes from first-RF debug session
+- wip(tx): bench-debug checkpoint — first-RF path almost there
+- revert(setup-display): remove Bandplan Overlay group box
+- style(radiomodel): regroup BandPlanManager include with model headers
+
+### Tests
+- test(gui): tst_network_diagnostics_dialog — 4 cases for null-safety + reset
+- test(widgets): tst_station_block — 5 cases for appearance + click signals
+- test(widgets): tst_status_badge — 8 cases for variant + signal coverage
+- test(3m-1c): add cross-thread queued-delivery regression tests for C1
+- test(3m-1c): widen cross-thread race test to MoxController-routed setVoxRun
+- test(3m-1c): RadioModel TxWorkerThread ownership test
+- test(3m-1b): I.5 verify chk20dbMicBoost → VOX threshold scaling integration
+- test(3m-1b): D.1 verify real mic-router drives fexchange2 with Q=0
+- test(3m-1b): close 3 minor C.3 review items
+- test(3m-1b): close idempotent-guard test coverage for C.2 mic-jack flags
+- test(tx): assert no spurious moxStateChanged in rapid-toggle test (B.3 I-1)
+- test(persistence): audit 15 AppSettings keys round-trip for 3M-0
+- test(safety): add per-sample foldback test + TODO deferred conditions
+- test(bandplan): failing tests for BandPlanManager loader
+
+### Refactors
+- refactor(3m-1c): TxWorkerThread semaphore-wake (no QTimer)
+- refactor(3m-1c): TxChannel fexchange2→fexchange0 + interleaved double + 64-block
+- refactor(3m-1c): TX pump architecture redesign — TxWorkerThread
+- refactor(ui): relocate Mic Gain slider TxApplet → PhoneCwApplet + wire mic level gauge
+- refactor(safety): name kPollIntervalMs constant per plan spec
+
+
+## [Unreleased]
+
+### Added (Phase 3Q — Connection Workflow Refactor / connect-flow rebuild)
+
+Triggered by an April 2026 user report: an HL2 across a WireGuard
+tunnel couldn't be reached through the existing manual-entry path,
+and the disconnect state gave no feedback beyond a frozen spectrum.
+This entry covers the connect / discover / disconnect flow rebuild
+and the chrome layer that surrounds it.
+
+- **Single ConnectionState state machine** — `Disconnected → Probing →
+  Connecting → Connected → (Disconnected | LinkLost)` with broadcast
+  scan and unicast probe as different *triggers* into the same path.
+  Replaces the earlier broadcast-only-then-blind-connect flow.
+
+- **Unicast probe** — `RadioDiscovery::probeAddress(addr, port, timeout)`
+  with 1.5 s timeout, parallel P1 + P2 attempts, parses replies via the
+  existing P1 / P2 reply helpers. Lets the Connect menu and the manual
+  Add Radio dialog reach radios that aren't reachable via UDP broadcast
+  (Layer-3 VPNs like WireGuard / ZeroTier / Tailscale).
+
+- **Add Radio dialog rebuild** — replaces the 9-board picker with a
+  16-SKU model dropdown organized by silicon family in `<optgroup>`s
+  (Auto-detect first, then Atlas / Hermes (3) / Hermes II (2) /
+  Angelia / Orion / Orion MkII (5) / Hermes Lite 2 / Saturn (2)).
+  Two action buttons — `Probe and connect now` and `Save offline`.
+  Failure path keeps the dialog open with form preserved + red
+  error band; success path auto-closes and lands the row in the
+  table tagged "(probe)".
+
+- **ConnectionPanel polish.** Modal kept; status strip up top with
+  inline Disconnect; state-pill column (🟢 Online <60 s · 🟡 Stale
+  60 s–5 min · 🔴 Offline) replaces the bare `●`; Last Seen column
+  replaces MAC; single ↻ Scan in the table header replaces
+  Start/Stop Discovery; Auto-connect-on-launch checkbox added to the
+  detail panel; auto-opens on launch + on disconnect; auto-closes
+  1 s after Connected.
+
+- **Radio menu rework.** `Connect (⌘K) · Disconnect (⌘⇧K) · Discover
+  Now · Manage Radios… · Antenna Setup… (NYI) · Transverters… (NYI) ·
+  Protocol Info` with state-aware enablement (Connect/Disconnect
+  mutually exclusive; Protocol Info follows connection). Replaces
+  the prior four-item-three-aliases set.
+
+- **Spectrum disconnect overlay** — 800 ms fade to ~40 % opacity +
+  DISCONNECTED label + click-anywhere-to-open-panel. Multi-cue
+  feedback closes the loop on the "spectrum just freezes when the
+  radio drops" complaint.
+
+- **Stale policy change.** Saved radios *never* age out (previously
+  dropped at 15 s); discovered-only radios age out at 60 s (raised
+  from 15 s, long enough not to flap); the connected MAC stays
+  exempt.
+
+- **Auto-connect-on-launch** — uses the existing per-radio
+  `AppSettings::autoConnect` flag; on failure the panel auto-opens
+  with the target highlighted offline + a status-bar diagnostic.
+  Multi-flag case picks most-recent-connected MAC + a one-time
+  setup-bar warning.
+
+- **macKey migration.** Offline entries saved with the synthetic
+  `manual-<IP>-<port>` key get migrated under the real MAC on first
+  probe success, preserving Name / Model / Auto-connect / Pin-to-MAC.
+
+### Added (Phase 3Q — chrome layer)
+
+- **Title-bar ConnectionSegment.** Collapses the old verbose connection
+  text into a compact `[state dot] [▲ tx Mbps] [RTT ms] [▼ rx Mbps] [♪ audio]`
+  segment that lives in the macOS title bar. Click opens the connection
+  panel, right-click pops Reconnect / Disconnect / Manage Radios, hover
+  shows a multi-line diagnostic tooltip with full IP / MAC / protocol /
+  firmware / sample rate / throughput. The state dot color encodes
+  connection state and pulses on each ep6 / DDC frame so the user can
+  see "the radio is talking to me" at a glance.
+
+- **RxDashboard with BadgePair drop ladder.** A 3-stage responsive
+  dashboard in the status bar replacing the old free-text strip: at
+  full width, three side-by-side `BadgePair`s show `[mode] [filter]
+  [AGC] [NR] [NB] [APF]` plus a lone `SQL`; on a narrower window the
+  pairs stack vertically (medium); on the narrowest, badges drop in
+  priority order. Mode + filter never drop. A 30 px hysteresis
+  deadband prevents the boundary-stack-flash that v0.2.3 testing
+  surfaced.
+
+- **StationBlock anchor.** The center "STATION" cell becomes a clickable
+  block bearing the connected radio's name (or "Click to connect" with
+  a dashed-red border when offline). Click opens the connection panel;
+  right-click offers Disconnect / Edit radio… / Forget radio.
+
+- **Right-side strip restyle.** CAT / TCI / PA voltage / CPU / PA-OK /
+  TX status now use the new `MetricLabel` and `StatusBadge` widgets
+  with consistent typography. Drop-priority shrinks the strip in a
+  fixed order on narrow windows and surfaces dropped items via an
+  `OverflowChip` (`…`) with a hover tooltip.
+
+- **AdcOverloadBadge** — stacked `ADCx` / `OVERLOAD` two-row badge
+  living between PA-OK and TX. Yellow on any ADC level > 0, red on
+  any > 3 (Thetis severity rules), 2 s auto-hide.
+
+- **SVG icon system on StatusBadge.** New `setSvgIcon(":/icons/...")`
+  API renders SVG via `QSvgRenderer` with `CompositionMode_SourceIn`
+  tinting; auto re-tints on `setVariant()`. Replaces the Unicode
+  glyph prefixes that rendered inconsistently across font fallbacks.
+  Nine SVGs ship: `badge-check`, `badge-dot`, `badge-mode` (sine
+  wave), `badge-filter` (passband curve), `badge-agc` (lightning),
+  `badge-nr` (smoothing wave), `badge-nb` (impulse spike), `badge-apf`
+  (notch), `badge-sql` (threshold chevron).
+
+- **CPU System / App toggle.** Right-click the CPU MetricLabel to
+  switch between system-wide CPU usage and this-process-only.
+  Mirrors Thetis's `m_bShowSystemCPUUsage`. Persisted as
+  `CpuShowSystem` (defaults to System). 1 s tick rate, 0.8 / 0.2
+  smoothing, integer percent display — all matching Thetis.
+
+- **Min-filtered RTT.** The title-bar RTT readout now uses the
+  2nd-smallest of a rolling 10-sample window instead of the mean.
+  The previous mean-based smoother showed `~half_cadence` on
+  sub-millisecond LAN connections (because the radio's status-packet
+  cadence — P1 2.6 ms, P2 100 ms — adds bracket noise to every
+  measurement) and showed random low values on WAN connections
+  (because lucky-aligned samples pulled the mean down). Same min-filter
+  technique TCP BBR uses.
+
+### Changed (Phase 3Q — ship defaults aligned to live-radio testing)
+
+- **Spectrum / waterfall ship defaults shifted down 12 dB** to match a
+  typical residential HF noise floor: `DisplayGridMax -36→-48`,
+  `DisplayGridMin -104→-116`, `DisplayWfHighLevel -50→-62`,
+  `DisplayWfLowLevel -110→-122`, `DisplayWfBlackLevel 98→104`.
+  Dynamic range (68 dB grid, 60 dB waterfall) is unchanged. Earlier
+  defaults gave a noisy first-launch impression — band noise jammed
+  the bottom of the panadapter and lit up the waterfall floor.
+
+- **Clarity defaults to ON** for fresh installs. Auto-tuning the noise
+  floor is the better first-launch experience than asking the user
+  to find and toggle the setting.
+
+- **PSU widget removed from status bar and Network Diagnostics dialog.**
+  Source-first audit against Thetis [v2.10.3.13] confirmed
+  `supply_volts` (AIN6) is dead data in Thetis —
+  `computeHermesDCVoltage()` exists but has zero callers, and the
+  only voltage status indicator (`toolStripStatusLabel_Volts`) reads
+  `_MKIIPAVolts` which is `convertToVolts(getUserADC0)` — i.e. the
+  PA drain voltage on AIN3. The PA volt label is now the sole supply
+  indicator on MkII-class boards (Saturn / G2 / 8000D / 7000DLE /
+  OrionMkII / Anvelina Pro 3), matching Thetis behaviour.
+
+### Fixed (Phase 3Q — bench-caught bugs)
+
+- **PA voltage formula correction.** `convertMkiiPaVolts` now uses
+  5.0 V ADC reference and `(22+1)/1.1` divider per Thetis
+  `convertToVolts` (`console.cs:24886-24892` [v2.10.3.13]). Prior
+  formula used 3.3 V × 25.5 — wrong on both axes; the combined error
+  was a 0.805 scaling factor (13.8 V actual displayed as 11.0 V).
+  Verified live on ANAN-G2: now reads 13.3 V.
+
+- **Network Diagnostics TX / RX rate.** Dialog was applying a redundant
+  `* 8 / 1e6` conversion to values that were already in Mbps,
+  producing 0.00 Mbps for any real throughput. Fixed and the
+  `RadioConnection::txByteRate / rxByteRate` API doc strengthened
+  to flag the misleading "ByteRate" name (returns Mbps).
+
+- **Glyph encoding sweep.** Continuation of the v0.2.3 ebe9030 fix —
+  on the macOS compile path, `\xe2\x96…` byte-escape strings inside
+  `QString::asprintf` and `QStringLiteral` get misinterpreted as
+  Latin-1 codepoints. Switched to `QChar(0x25B2)` / `QChar(0x25BC)` /
+  `QChar(0x2014)` for: TitleBar painted Mbps `▲ ▼` glyphs, RTT
+  em-dash placeholder, RadioModel connection tooltip, and four
+  em-dash sites in `AntennaAlexAlex2Tab`.
+
+- **Header initializer drift.** `m_refLevel`, `m_wfBlackLevel`,
+  `m_wfHighThreshold`, `m_wfLowThreshold` member initializers in
+  `SpectrumWidget.h` synced to the new ship defaults so any code
+  path that reads these before `loadSettings()` runs sees the right
+  values, not the stale `-50 / -110 / 98 / -36` from earlier work.
+
+- **Network Diagnostics honesty.** Jitter / packet loss / packet gap
+  rows previously showed hardcoded `0 ms` / `0.0%` / `—` placeholders
+  that read as "perfect network" rather than "not measured". All
+  three now show em-dash with a "Not yet measured" tooltip until
+  proper protocol-level instrumentation lands.
+
+### Added (Phase 3M-3a-ii follow-up — `ucParametricEq` Qt6 port)
+
+- **`src/gui/widgets/ParametricEqWidget`** (NEW, ~3160 LOC h+cpp) — full
+  Qt6 port of Thetis's `ucParametricEq.cs` (Richard Samphire MW0LGE,
+  3396 LOC C# WinForms control). Five-batch port: skeleton + EqPoint /
+  EqJsonState classes (B1), axis math + ordering + reset (B2),
+  `paintEvent` + 10 draw helpers + 33 ms peak-hold bar-chart timer
+  (B3), mouse + wheel + 6 Qt signals (B4), JSON marshal + 34-property
+  public API (B5). All ports cite `ucParametricEq.cs [v2.10.3.13]`
+  inline; GPLv2 + Samphire dual-license header preserved byte-for-byte.
+  47 named test slots across 5 test files (4 + 10 + 7 + 10 + 16).
+
+- **`src/core/ParaEqEnvelope`** (NEW, ~330 LOC h+cpp) — gzip + base64url
+  envelope helper mirroring Thetis `Common.cs Compress_gzip` /
+  `Decompress_gzip [v2.10.3.13]`. Byte-identical encode output with
+  Thetis (verified via Python-fixture decode test). 9 test slots.
+
+- **`src/models/TransmitModel`** — new `txEqParaEqData` field (mirror of
+  existing `cfcParaEqData` pattern), with getter / setter / signal.
+
+- **`src/core/MicProfileManager`** — new `TXParaEQData` bundle key
+  wired into capture + apply paths (50 → 51 keys; 91 → 92 total bundle
+  keys). 8 test slots in `tst_mic_profile_manager_para_eq_round_trip`.
+
+- **`src/core/TxChannel::getCfcDisplayCompression`** (NEW) — WDSP
+  wrapper for live CFC compression display data, used by `TxCfcDialog`'s
+  50 ms bar-chart timer. 6 test slots.
+
+- **`src/gui/applets/TxCfcDialog`** — full Thetis-verbatim rewrite.
+  Drops the spartan profile combo (TxApplet hosts profile management).
+  Embeds two cross-synced `ParametricEqWidget` instances (compression
+  + post-EQ curves) with 50 ms live bar chart, 5/10/18-band radios,
+  freq-range spinboxes, three checkboxes (`Use Q Factors` / `Live
+  Update` / `Log scale`), two reset buttons, OG CFC Guide LinkLabel.
+  Hide-on-close. 21 test slots (was 12).
+
+- **`src/gui/applets/TxEqDialog`** — adds parametric panel behind
+  `Legacy EQ` toggle (persists via AppSettings
+  `TxEqDialog/UsingLegacyEQ`). Drops profile combo. Fixes legacy
+  band-column slider/spinbox/header styling regression with
+  `Style::sliderVStyle()` / `kSpinBoxStyle` / `kTextPrimary`. 11 test
+  slots.
+
+- **`CMakeLists`** — adds `find_package(ZLIB REQUIRED)` + `ZLIB::ZLIB`
+  link.
+
+- **Bench feedback (in-branch fixes before PR open):** dialog-level QSS
+  block added to both `TxCfcDialog` and `TxEqDialog` constructors so the
+  default Qt6 widgets (spinboxes / combos / radios / checkboxes /
+  group-boxes / labels / buttons) pick up the project dark theme — the
+  rewrites had been inheriting the system Qt6 default style and rendered
+  dark-on-dark. `TxEqDialog`'s parametric Reset button was a no-op
+  because it called `setBandCount(currentCount)` which early-returns at
+  `ucParametricEq.cs:583 [v2.10.3.13]`; now synthesizes flat-default
+  arrays inline (gain=0, q=4, evenly spaced freq) and calls
+  `setPointsData` directly, mirroring `TxCfcDialog::onResetCompClicked`.
+
+- **Total impact:** 9074 insertions / 1407 deletions across 31 files;
+  102 new automated test slots; full ctest **280 / 280 green** at HEAD
+  `e733fa6` (post-rebase onto current `main` at `f40f5a0`).
+
+  Inline cite scan: 1739 cites validated against upstream sources
+  (`verify-inline-tag-preservation.py`); 289 / 289 Thetis files pass
+  header check; PROVENANCE registered for both `ParametricEqWidget`
+  and `ParaEqEnvelope`. Closes the plan at
+  [`docs/architecture/phase3m-3a-ii-followup-parametriceq-plan.md`](docs/architecture/phase3m-3a-ii-followup-parametriceq-plan.md).
+  Verification matrix at
+  [`docs/architecture/phase3m-3a-ii-followup-parametriceq-verification/README.md`](docs/architecture/phase3m-3a-ii-followup-parametriceq-verification/README.md).
+
+### Fixed (hermes-filter-debug — HL2 N2ADR + S-ATT bench bugs)
+
+Two HL2 bugs JJ caught while running on a Hermes Lite 2 the day after
+the 3Q chrome layer landed. Both were silent (no warnings, no logs);
+each had a non-obvious root cause that took source-first digging
+through mi0bot to settle.
+
+- **HL2 step-attenuator UI clamped at 0 dB despite the signed
+  `-28..+32` range advertised in `BoardCapabilities`.** The
+  `StepAttenuatorController` clamp at `setAttenuation` was correct,
+  but three UI sites never received the negative bound:
+  `RxApplet::setBoardCapabilities` only updated antenna-button
+  visibility (not the spinbox range); `GeneralOptionsPage` re-ranged
+  the RX1 / RX2 spinboxes from `m_ctrl->maxAttenuation()` but
+  hardcoded `0` for the minimum; `RadioModel::connectToRadio` never
+  pushed the connected board's `attenuator.{minDb, maxDb}` into the
+  controller. Fix wires all three so HL2 sees `-28..+32`
+  (mi0bot `setup.cs:16085-16086 [v2.10.3.13-beta2]`) end-to-end on
+  every connect; legacy `0..31` boards unaffected.
+
+- **N2ADR Filter board enable lost on app restart — and the Setup
+  tab actively destroyed the persisted state.** Write side
+  (`Hl2IoBoardTab::onN2adrToggled`) wrote to global
+  `"hl2IoBoard/n2adrFilter"`; `HardwarePage::restoreSettings` read
+  per-MAC `hardware/<mac>/hl2IoBoard/n2adrFilter`. Per-MAC was always
+  empty, so restore defaulted `checked = false`, then unconditionally
+  fired `onN2adrToggled(false)` — wiping the global key AND the
+  OcMatrix every time the user opened Setup → HL2 I/O. Fix routes
+  the write through `settingChanged()` → `HardwarePage::wire()` →
+  `setHardwareValue(mac, ...)` (the path every other Hardware sub-tab
+  uses). `RadioModel::connectToRadio` reads per-MAC.
+  `restoreSettings` is no-op when the key is absent (a missing key
+  means "no explicit user intent yet" — leave the matrix alone).
+  One-shot migration `AppSettings::migrateLegacyN2adrFilter`
+  (called from `main.cpp`) copies any pre-existing global value
+  into `hardware/<mac>/...` for every saved HL2, then deletes the
+  global; non-HL2 saved radios are skipped (`chkHERCULES` on a
+  non-HERMESLITE radio is Apollo, not N2ADR — mi0bot
+  `setup.cs:14369-14412 [@c26a8a4]`).
+
+  **Why per-MAC and not mirror upstream global:** mi0bot's effective
+  per-radio semantic comes from per-DB-file scoping
+  (`database.cs:64 [@c26a8a4]`); multi-radio Thetis users swap files
+  via `ImportDatabase` (`database.cs:11237 [@c26a8a4]`). NereusSDR
+  achieves the same property via MAC scoping in one settings file —
+  matches every other HL2 setting (OcMatrix, HL2 Options, Alex,
+  calibration).
+
+  22 new unit tests added: persistence round-trip + multi-MAC
+  isolation + 5 migration cases + behavioural regression guard for
+  the matrix-wipe-on-Setup-open scenario + controller signed range
+  + RxApplet caps→spinbox propagation. **Codex review caught two
+  follow-ups (PR #160) addressed in-branch: P1 — preserve the
+  legacy global key when no HL2 saved radios exist yet so a future
+  migration run can still pick it up; P2 — reset the N2ADR checkbox
+  to false on missing-key restore so a re-used `Hl2IoBoardTab`
+  instance doesn't show stale state from the previously selected
+  radio.**
+
+### Added (Phase 3M-3a-ii — TX Dynamics: CFC + CPDR + CESSB + Phase Rotator)
+
+- **CFC (Continuous Frequency Compressor) — 10-band freq compander.** New
+  `TxChannel` wrappers expose the WDSP CFC stage (`SetTXACFCOMPRun`,
+  `Position`, `profile`, `Precomp`, `PeqRun`, `PrePeq`). The
+  `cfcomp.c` source under `third_party/wdsp/` was surgically re-synced to
+  Thetis v2.10.3.13 to pick up the 7-arg `SetTXACFCOMPprofile`
+  (Qg/Qe gain-skirt and ceiling-Q arrays) added by MW0LGE/Samphire upstream;
+  the original TAPR v1.29 5-arg signature was forward-compatible but lossy.
+  GPL Samphire dual-license block + MW0LGE inline tags preserved verbatim;
+  full attribution chain logged in `docs/attribution/WDSP-PROVENANCE.md` and
+  `docs/attribution/REMEDIATION-LOG.md`.
+
+- **CPDR (Compressor) — global enable + level dB.** TxChannel wrappers for
+  `SetTXACompressorRun` / `SetTXACompressorGain`; level slider on
+  PhoneCwApplet now maps `0..2` step → `0..20 dB` linear and drives the same
+  `cpdrLevelDb` model property used by the new dialog and Setup page.
+
+- **CESSB (Controlled-Envelope SSB) — overshoot envelope shaping.** TxChannel
+  wrapper for `SetTXAosctrlRun`. Gating preserved: CESSB requires CPDR
+  (`TXASetupBPFilters: bp2.run = compressor.run && osctrl.run`).
+
+- **Phase Rotator (`phrot`).** Folded in from 3M-3a-i deferral — TxChannel
+  wrappers for `SetTXAPhaseRotCorner` / `Nstages` / `Reverse`, fully
+  controllable from the new CFC setup page.
+
+- **TransmitModel — 15 new properties.** `phaseRotatorEnabled/Reverse/FreqHz/Stages`,
+  `cfcEnabled/PostEqEnabled/PrecompDb/PostEqGainDb`, `cfcEqFreq[10]` /
+  `cfcCompression[10]` / `cfcPostEqBandGain[10]`, opaque `cfcParaEqData` blob
+  (for the future ParametricEq widget round-trip), global `cpdrOn`,
+  `cpdrLevelDb`, `cessbOn`. All wired through `RadioModel::connectToRadio`
+  with `pushTxProcessingChain` resync on connect / profile activation.
+
+- **MicProfileManager — bundles +41 keys (was 50 → 91).** 19 of 21 factory
+  profiles ported byte-for-byte from `database.cs:9282-9418 [v2.10.3.13]`
+  with **155 verbatim overrides** (incl. AM 10k's unique `PhRotStages=9`
+  override at `database.cs:9314`). Live capture/apply paths handle the new
+  keys so [Save] in `TxCfcDialog` round-trips.
+
+- **CfcSetupPage rewrite.** Setup → Transmit → CFC now exposes Phase Rotator
+  group (Enable / Reverse / Corner / Stages), CFC group (Enable / Post-EQ /
+  Precomp / Post-EQ Gain / Open Dialog button), and CESSB group
+  (Enable / status text). The "Open Dialog" button raises `TxCfcDialog`
+  modeless via the cross-thread `cfcDialogRequested` signal routed through
+  `MainWindow::wireSetupDialog()`.
+
+- **TxCfcDialog (modeless).** Profile combo + Save / SaveAs / Delete / Reset
+  + Precomp / PostEQ-Gain global spinboxes + 10×3 per-band F / COMP / POST-EQ
+  spinbox grid. Landed scalar-complete but visually spartan — full
+  Thetis-faithful `ucParametricEq` widget port (3396-line C# WinForms
+  UserControl, used by both CFC and EQ dialogs in Thetis) is queued as a
+  separate sub-PR. Design hand-off doc:
+  [`docs/architecture/phase3m-3a-ii-cfc-eq-parametriceq-handoff.md`](docs/architecture/phase3m-3a-ii-cfc-eq-parametriceq-handoff.md).
+
+- **PhoneCwApplet PROC integration.** PROC button/slider now drives `cpdrOn`
+  and `cpdrLevelDb`; numeric "X dB" label replaces the old NOR/DX/DX+ tick
+  marks; NyiOverlay dropped. Duplicate `[PROC]` button on TxApplet (added
+  during Batch 6 prep) was removed after JJ caught the redundancy — surfaced
+  the feedback memory `feedback_survey_before_adding_controls.md` to keep
+  future GUI batches from blindly adding controls without surveying.
+
+- **SpeechProcessorPage live-status bindings.** Dashboard rows reflect
+  CFC / CPDR / CESSB on/off + level + position in real time.
+
+- **17 GPG-signed commits** stacked on 3M-3a-i; 7 new test executables
+  (TxChannel CFC/CPDR/CESSB/PhRot setters; TM properties; profile round-trip;
+  profile live-path; CfcSetupPage; TxCfcDialog; PhoneCwApplet PROC); 253/253
+  ctest green. Verification matrix updated at
+  `docs/architecture/phase3m-0-verification/README.md`.
+
+- **Pre-emphasis** was de-scoped from this sub-PR to 3M-3b (FM-mode work) per
+  master design §7.2 ("run as written").
+
+### Added (Phase 3G RX Epic Sub-epic E — Waterfall rewind / scrollback)
+
+- **Waterfall rewind / scrollback.** Drag up on the right-edge time-scale
+  strip to pause the waterfall and scroll backward through up to ~8 minutes
+  of history at default refresh, or 20+ minutes at any period ≥ 73 ms. A
+  bright-red "LIVE" button appears when paused; one click returns to
+  real-time. Tick labels switch from elapsed seconds (live) to absolute
+  UTC timestamps (paused). Configurable depth via Setup → Display →
+  Waterfall (60 s / 5 min / 15 min / 20 min, default 20 min, persisted as
+  `DisplayWaterfallHistoryMs`).
+
+  Ported from AetherSDR `main@0cd4559` for the live machinery and the
+  unmerged PR `aetherclaude/issue-1478@2bb3b5c` (#1478) for the row cap
+  and 250 ms resize debounce. NereusSDR raises the cap from upstream's
+  4 096 rows to 16 384 rows (~128 MB at 2 000 px wide) so the default
+  30 ms refresh delivers ~8 minutes of effective rewind instead of ~2.
+  A disk-spool tier (to extend beyond the in-memory cap at the fastest
+  refresh rates) is deferred to Phase 3M (Recording).
+
+  Diverges from upstream by clearing history on band/zoom largeShift,
+  keeping the rewind window coherent with the current band — see
+  [`docs/architecture/phase3g-rx-epic-e-waterfall-scrollback-plan.md`](docs/architecture/phase3g-rx-epic-e-waterfall-scrollback-plan.md)
+  §authoring-time #3.
+
+  Closes the last item in the Phase 3G RX Experience Epic.
+
+## [0.3.0] — TBD
+
+This release delivers the **Thetis Display + DSP Parity Audit** (the v0.3.0
+epic): every display control that existed in Thetis but was missing from
+NereusSDR's Setup → Display pages is now wired, two entirely new setup pages
+are added (Spectrum Peaks and Multimeter), and the **WDSP channel rebuild
+infrastructure** lands as the engine that makes sample-rate and active-RX-count
+changes apply live without a disconnect/reconnect cycle. The DSP Options page
+ports 18 Thetis DSP controls with full filter-type combos and an impulse-cache
+workflow. Totals: ~37 new source files, ~35 new test executables.
+
+### Added
+
+**Setup → Display → Spectrum Peaks (new page)**
+- Active Peak Hold per-bin decay trace (5 controls): per-bin maximum tracking
+  with configurable hold time + decay rate, optional fill, optional TX-state
+  gating. Ported from Thetis `display.cs` `m_bActivePeakHold` /
+  `m_dBmPerSecondPeakBlobFall` state machine.
+- Peak Blobs top-N markers (7 controls + 2 color pickers): ellipse + dBm text
+  overlay on spectrum; defaults match Thetis `display.cs:8434-8435`
+  (OrangeRed blob, Chartreuse text).
+
+**Setup → Display → Multimeter (new page, folded from Thetis Display→General)**
+- 8 multimeter polling/display globals: delay, peak hold time, text hold time,
+  average window, digital delay, show decimal, and signal history enable +
+  duration.
+- S / dBm / µV unit selector with full fan-out across all MeterItem subclasses
+  that display signal levels.
+
+**Setup → Display → Spectrum Defaults — new controls**
+- New "Spectrum Overlays" group: ShowMHzOnCursor, ShowBinWidth,
+  ShowNoiseFloor + position, DispNormalize, ShowPeakValueOverlay + position +
+  delay + color.
+- Get-Monitor-Hz button: snaps the display FPS to the screen refresh rate.
+- Decimation control wired through to FFTEngine.
+- Detector and Averaging Method split into separate combos (previously a single
+  combined averaging-mode combo; matches Thetis layout).
+
+**Setup → Display → Waterfall Defaults — new controls**
+- NF-AGC group: auto-tracks waterfall low/high thresholds to the live noise
+  floor estimate so the waterfall stays calibrated as band conditions change.
+- Stop-on-TX: pauses waterfall scrolling during transmit.
+- Calculated-Delay readout: live millisecond estimate derived from FFT size /
+  decimation / sample rate.
+- Copy spectrum min/max → waterfall thresholds button (and reverse direction).
+- Reverse Waterfall Scroll (W5) removed — see "Removed" below.
+
+**Setup → Display → Grid & Scales — new controls**
+- Noise-floor-aware grid: AdjustGridMinToNoiseFloor + offset + maintain-delta
+  flag; auto-tracks grid min to live noise-floor estimate so the S-0 line stays
+  at the noise floor as conditions change.
+
+**Setup → DSP → Options (new page)**
+- 18 controls ported from Thetis `setup.cs` DSP Options tab:
+  per-mode (Phone / CW / Dig / FM) buffer-size combos, filter-size combos,
+  and filter-type combos (LowLatency vs LinearPhase).
+- Filter Impulse Cache: enable toggle + persist-to-disk toggle (saves/restores
+  the computed FIR impulse across sessions, eliminating the per-launch filter
+  compile cost).
+- High-resolution filter characteristics: increases the frequency resolution of
+  the FilterDisplayItem passband/stopband visualization.
+- "Time to last change" live readout: displays the measured rebuild time in
+  milliseconds after any DSP option change.
+- 3 warning icons driven by Thetis validity rules (buffer/filter size
+  combinations that WDSP rejects).
+
+**WDSP channel rebuild infrastructure (Phase 1 — enables live-apply features)**
+- `RxChannel::rebuild()` and `TxChannel::rebuild()`: capture all DSP state,
+  destroy the WDSP channel, recreate it with new `ChannelConfig` parameters,
+  and reapply the captured state — all without audio dropout on other channels.
+- `WdspEngine::rebuildRxChannel()` / `rebuildTxChannel()`: engine-level
+  orchestration that holds the audio lock, calls rebuild, and resumes.
+- Sample-rate live-apply: 48k / 96k / 192k / 384k can now switch while a
+  radio is connected. A 8-step coordinator in `RadioModel::setSampleRateLive()`
+  handles the channel teardown/rebuild sequence.
+- Active-RX-count live-apply: the RX2 toggle no longer requires a
+  disconnect/reconnect cycle.
+- `RadioModel::dspChangeMeasured(qint64 ms)` signal: broadcasts the measured
+  rebuild time so the DspOptionsPage "Time to last change" readout stays live.
+
+**Per-band noise-floor priming (NereusSDR-original)**
+- Stores the last-seen noise-floor estimate per band in AppSettings; primes
+  the `NoiseFloorEstimator` when the user changes band. Eliminates the visual
+  cold-start jump where the waterfall would appear fully white for 1–2 seconds
+  after a band change.
+
+**Relocations from Thetis Display→General (housekeeping)**
+- ANAN-8000DLE PA volts/amps toggle moved to Setup → Hardware → Radio Info tab
+  (capability-gated; only visible on ANAN-8000DLE SKUs).
+- CPU meter rate spinbox moved to Setup → General → Options.
+- "Small filter display on VFOs" moved to Setup → Appearance → Meter Styles.
+- Setup → Diagnostics → Logging page renamed "Logging & Performance"; new
+  Performance group adds Spectral Warning LEDs toggle and Purge Buffers button.
+
+### Changed
+
+- **Spectrum + waterfall averaging mode** split into separate Detector combo
+  and Averaging Method combo, matching the Thetis `setup.cs` DSP Options
+  layout. Existing saved values are migrated to the new keys on first launch
+  (see Settings migration below).
+- **Active-RX-count toggle** now applies live (no disconnect/reconnect needed).
+- **Sample-rate change** now applies live (no disconnect/reconnect needed).
+
+### Settings migration (v0.3.0 schema bump)
+
+On first launch of v0.3.0 the settings schema version is bumped from 2 to 3.
+The following keys are retired and reset to defaults automatically:
+
+- `DisplayAverageMode` → replaced by `DisplayDetectorMode` + `DisplayAveragingMethod`
+- `SpectrumPeakHold` → replaced by the new Active Peak Hold per-bin trace
+  (configure under Setup → Display → Spectrum Peaks)
+- `WaterfallReverseScroll` → removed (see below)
+
+No manual action required. Reconfigure your preferences under Setup → Display.
+
+### Removed
+
+- **Reverse Waterfall Scroll (W5)** — removed after a source-first audit
+  found the Thetis feature is controlled by a single `chkWaveformReverseScroll`
+  checkbox with no meaningful user base on NereusSDR (no persisted settings
+  observed in the field). Can be reintroduced if users request it.
+
+## [0.2.3] - 2026-04-24
+
+This release rounds out the **Phase 3G RX experience epic** (AetherSDR-style
+dBm scale strip, full Thetis Noise Blanker family port, cross-platform
+7-filter Noise Reduction stack), brings **Alex antenna integration** to
+feature-complete (3P-I-a + 3P-I-b — full `Alex.cs:310-413` composition,
+RX-only antennas with SKU-driven labels, P1 bank0 / P2 Alex0 wire-locked),
+and adds a **Linux PipeWire-native audio bridge** that supersedes the 0.2.2
+pactl/PulseAudio fallback on PipeWire systems. v0.2.3 also addresses three
+ANAN-G2 bench bugs caught after 0.2.2 shipped (P2 first-packet HPF/LPF
+mismatch, band-crossing antenna-label desync, AlexController per-band
+persistence).
+
+### Added (Phase 3G RX Epic Sub-epic A — dBm scale strip)
+- New AetherSDR-style **dBm scale strip** rendered on the right edge of the
+  spectrum widget. Wheel inside the strip zooms the dynamic range live;
+  arrow clicks at top/bottom nudge the floor or ceiling and persist back to
+  `PanadapterModel`. Hover shows a cursor crosshair with the dBm value at
+  the pointer. The strip honors the calibration offset, so on-screen labels
+  reflect the actual signal level the user reads, not raw FFT bins. New
+  `DisplayDbmScaleVisible` toggle in Setup → Display lets users hide the
+  strip entirely. 17-row manual verification matrix at
+  `docs/architecture/phase3g-rx-epic-a-verification.md`.
+- Pure dBm-strip geometry helpers split out of the renderer with their own
+  unit tests so layout changes are caught at build time.
+
+### Added (Phase 3G RX Epic Sub-epic B — Noise Blanker family)
+- Full port of Thetis's three-filter NB stack: **NB** (`nob.c`, Whitney),
+  **NB2** (`nobII.c`, second-gen), and **SNB** (`snb.c`, spectral). New
+  `NbFamily` wrapper on `RxChannel` owns the WDSP create/destroy lifecycle
+  and tuning. The VFO Flag gets a cycling NB button (`Off → NB → NB2 → Off`)
+  mirroring Thetis `chkNB` tri-state (`console.cs:43513-43560 [v2.10.3.13]`).
+- RxApplet gains Threshold (0-100) + Lag (0-20 ms) sliders, scaled to match
+  `setup.cs:8572, 16236 [v2.10.3.13]`. Setup → DSP → NB/SNB page is now
+  interactive (previously greyed) and wires global defaults via AppSettings.
+- `NbMode` + full `NbTuning` struct persist per-slice-per-band under
+  `Slice<N>/Band<key>/Nb{Mode,Threshold,TauMs,LeadMs,LagMs}`; `SnbEnabled`
+  session-level. Defaults pinned to Thetis `cmaster.c:43-68 [v2.10.3.13]`
+  byte-for-byte (`nbThreshold=30.0`, times=0.1 ms, `backtau=0.05 s`,
+  `nb2MaxImpMs=25.0`).
+- New tests: `tst_nb_family`, `tst_slice_nb_persistence`, plus a rewritten
+  `tst_rxchannel_nb2_polish` cover mode cycling, default parity, and
+  per-band round-trip.
+
+### Added (Phase 3G RX Epic Sub-epic C-1 — 7-filter NR stack)
+- Full noise-reduction stack on the VFO flag DSP grid: **NR1** (ANR, WDSP),
+  **NR2** (EMNR including post2 cascade), **NR3** (RNNR/rnnoise with
+  user-loadable .bin models), **NR4** (SBNR/libspecbleach), **DFNR**
+  (DeepFilterNet3 — cross-platform neural NR), **MNR** (Apple Accelerate
+  MMSE-Wiener — macOS-only native), and **ANF**. BNR (NVIDIA Broadcast) is
+  intentionally deferred (gRPC/NIM transport out of scope; tracked for
+  follow-up).
+- Setup → DSP → NR/ANF page with sub-tabs for NR1, NR2, NR3, NR4, DFNR,
+  MNR, and ANF. NR1-NR4 sub-tabs mirror the Thetis `setup.designer.cs`
+  layout byte-for-byte. The MNR sub-tab gains all 6 tuning knobs (Strength /
+  Aggressiveness / Floor / Alpha / Bias / Gsmooth) with factory-default
+  Reset buttons. The DFNR sub-tab uses AetherSDR-verbatim defaults
+  (AttenLimit 100 dB, PostFilterBeta 0).
+- Right-clicking any NR button on the VFO flag opens a `DspParamPopup` (port
+  of AetherSDR's pattern) with 3-6 quick-control sliders plus a "More
+  Settings…" entry point that deep-links into the matching Setup sub-tab.
+- Per-slice NR independence via `SliceModel::setActiveNr` mutual exclusion
+  (only one of NR1/NR2/NR3/NR4/DFNR/MNR active per slice at a time; ANF is
+  independent and can stack).
+- Vendored Xiph rnnoise (BSD-3) and libspecbleach (LGPL-2.1) into the WDSP
+  build tree. Ported Thetis `rnnr.c` + `sbnr.c` (GPLv2+ + MW0LGE
+  dual-license) into `third_party/wdsp/src/`.
+- Bundled `Default_large.bin` (3.4 MB) and `Default_small.bin` (1.5 MB)
+  rnnoise models plus `DeepFilterNet3_onnx.tar.gz` (7.6 MB) into every
+  release artifact (Linux AppImage × 2 archs / macOS DMG / Windows ZIP +
+  NSIS).
+- New `ModelPaths` helper (`src/core/ModelPaths.{h,cpp}`) resolves rnnoise
+  + DFNR model paths per platform install layout (Resources/ on macOS,
+  share/NereusSDR/ on Linux, adjacent on Windows, plus dev-build fallbacks).
+- New `setup-deepfilter.{sh,ps1}` scripts at the repo root build the
+  DeepFilterNet3 Rust libdf for local development. CI workflows install
+  Rust + invoke the appropriate script before `cmake -B build` so release
+  artifacts always carry the runtime library.
+- The 4×2 DSP toggle grid on the VFO Flag was rewritten as a 3×4 grid that
+  mirrors AetherSDR's pattern exactly: NR mutex (NR1-4 + DFNR + MNR
+  alternating off the same row) + NB mutex + ANF/SNB independent toggles.
+  Buttons are 63×26 and fully fill the flag width.
+
+### Added (Phase 3G RX Epic — band-button auto-mode, #118)
+- New `RadioModel::onBandButtonClicked` handler funnels every band-button
+  entry point (VFO Flag, RxApplet bands row, container `BandButtonItem`,
+  spectrum overlay Band flyout) through one routing path. Closes #118.
+- New `BandDefaults` seed table provides the per-band default mode + filter
+  preset on the user's first visit to each band; subsequent visits load
+  whatever the user last set there.
+- `SliceModel::hasSettingsFor(Band)` probe + `Band::bandFromName` helper
+  back the seed-vs-restore decision and round-trip with case-sensitivity
+  pinning tests.
+
+### Added (Phase 3P-I-a — Alex antenna integration core, #116)
+- `AlexController`'s per-band antenna state now reaches the radio via
+  `RadioConnection::setAntennaRouting`. Three triggers fire the pump:
+  `AlexController::antennaChanged`, `PanadapterModel::bandChanged`, and
+  `onConnectionStateChanged(Connected)`. All 5 writeable antenna surfaces
+  (VFO Flag, RxApplet, Setup-grid, SpectrumOverlayPanel combos,
+  AntennaButtonItem) funnel through `AlexController` as the single source
+  of truth; `SliceModel` caches from the controller via
+  `refreshAntennasFromAlex` so VFO/applet labels stay coherent on band
+  changes. **Closes [#98](https://github.com/boydsoftprez/NereusSDR/issues/98).**
+- `BoardCapabilities` gains `hasAlex2`, `hasRxBypassRelay`, and
+  `rxOnlyAntennaCount` fields with cites to Thetis `setup.cs:6228` and
+  `HPSDR/Alex.cs:377` (`//DH1KLM` / `//G8NJJ` author tags preserved
+  verbatim).
+- New `AntennaLabels` helper (`src/core/AntennaLabels.{h,cpp}`) is the
+  single source for the ANT1/ANT2/ANT3 label list; returns empty on boards
+  without Alex so UI sites can `setVisible(!empty)`. Replaces ~10
+  hardcoded `QStringList{"ANT1","ANT2","ANT3"}` sites.
+- New `PopupMenuStyle.h` defines the universal `kPopupMenu` dark-palette
+  `QMenu` stylesheet. Every antenna popup (VFO Flag + RxApplet) now
+  applies it, fixing Ubuntu 25.10 GNOME dark-on-dark menu rendering.
+- `RadioConnection::setAntennaRouting(AntennaRouting)` pure-virtual
+  replaces the deprecated `setAntenna(int)`. `AntennaRouting` carries
+  RX/TX antenna numbers + `caps.hasAlex` so the protocol layer can zero
+  the antenna bits on HL2/Atlas. Both P1 and P2 implementations updated
+  with byte-for-byte wire-lock tests.
+- VFO Flag, RxApplet, and SpectrumOverlayPanel antenna UI hidden on
+  HL2 / Atlas (`!caps.hasAlex || antennaInputCount < 3`); these SKUs
+  previously saw zombie ANT2/ANT3 buttons that wrote nothing. Matches
+  Thetis's behavior of hiding antenna controls for boards with no
+  Alex relay. `AntennaButtonItem` (meter) click is a silent no-op on
+  `!caps.hasAlex`.
+- New manual verification matrix at
+  [`docs/architecture/antenna-routing-verification.md`](docs/architecture/antenna-routing-verification.md)
+  covers per-SKU VFO Flag / RxApplet / Setup grid / spectrum overlay /
+  AntennaButtonItem / band-change reapply / pcap verification.
+- 17 new tests: `tst_antenna_routing_model` (4), `tst_alex_controller`
+  (+4), `tst_ui_capability_gating` (5), `tst_popup_style_coverage` (1),
+  plus expanded byte-lock cases on `tst_p1_codec_standard` and
+  `tst_p2_codec_orionmkii`.
+
+### Added (Phase 3P-I-b — RX-only antennas + SKU labels + XVTR, #117)
+- New `SkuUiProfile` (`src/core/SkuUiProfile.{h,cpp}`) — per-`HPSDRModel`
+  UI overlay describing RX-only labels + checkbox visibility. 14-case
+  switch ports Thetis `setup.cs:19832-20375` exactly: Hermes/ANAN10 →
+  "RX1/RX2/XVTR", ANAN100-class → "EXT2/EXT1/XVTR", 7000D/G2/etc. →
+  "BYPS/EXT1/XVTR". Pure UI overlay; doesn't touch the wire.
+- `AlexController` gains 6 flags (`rxOutOnTx` / `ext1OutOnTx` /
+  `ext2OutOnTx` mutual-exclusion trio + `rxOutOverride` +
+  `useTxAntForRx` + `xvtrActive`), ported from Thetis `Alex.cs:61-66`
+  static fields. 5 persisted per-MAC; `xvtrActive` session-scoped.
+  Mutual-exclusion matches Thetis `setup.cs:15420-16505` handlers.
+- P1 bank0 C3 bits 5-7 now encode `AntennaRouting.rxOnlyAnt` + `rxOut`,
+  byte-locked against Thetis `networkproto1.c:453-468` +
+  `netInterface.c:479-481`. Both `P1CodecStandard` and `P1CodecHl2` (which
+  has its own bank0, not inherited) updated.
+- P2 Alex0 bits **8-11** (not 27-30 as the original plan said — bit 27 is
+  `_TR_Relay`; corrected against authoritative Thetis `network.h:263-307`)
+  encode rxOnlyAnt (bits 8/9/10 for XVTR_Rx_In / Rx_2_In / Rx_1_In) and
+  rxOut (bit 11 = K36 RL17 RX-Bypass-Out relay).
+- `RadioModel::applyAlexAntennaForBand(Band, bool isTx=false)` now ports
+  the full Thetis `Alex.cs:310-413 UpdateAlexAntSelection` composition
+  (minus MOX coupling + Aries clamp, both deferred to Phase 3M-1): isTx
+  branch with Ext1/Ext2OnTx mapping, xvtrActive gating (derived from
+  `band == Band::XVTR`), rx_out_override clamp. 6 new signal triggers
+  wire flag changes to reapply composition.
+- Setup → Antenna Control tab gains 5 new TX-bypass checkboxes (RX
+  Bypass on TX, Ext 1 on TX, Ext 2 on TX, Disable RX Bypass relay,
+  Use TX antenna for RX). SKU-driven visibility + per-SKU Ext2-on-TX
+  tooltip variants. RX-only column sub-headers retargeted per SKU.
+- Setup → Antenna → Alex-2 Filters sub-tab now gates on `caps.hasAlex2`
+  (replaces the 3P-F hardcoded board check + hides the tab outright on
+  non-BPF2 boards instead of leaving it gray).
+- The VFO Flag gains an optional grey **BYPS** 3rd button between blue RX
+  and red TX antenna buttons, double-gated on `caps.hasRxBypassRelay &&
+  SkuUiProfile.hasRxOutOnTx`. Toggles `AlexController::rxOutOnTx` with
+  bidirectional sync to the Setup checkbox.
+- `AntennaButtonItem` meter gains `setHpsdrSku(HPSDRModel)` — button
+  indices 3-5 (Thetis "Aux1/Aux2/XVTR" slots) now show SKU-specific
+  labels from `SkuUiProfile.rxOnlyLabels`.
+- 32 new tests across `tst_sku_ui_profile`, `tst_antenna_labels`,
+  `tst_alex_controller` (flag mutual-exclusion), the codec byte-lock
+  suites, and `tst_antenna_routing_model` integration cases.
+- Verification doc: appended §7 per-SKU matrix (RX-only / XVTR /
+  Ext-on-TX) + §8 authoritative P1 bank0 C3 and P2 Alex0 bit-layout
+  reference.
+
+### Added (Phase 3O — Linux PipeWire-native audio bridge)
+- Native PipeWire audio bridge on Linux with live latency telemetry,
+  separate sidetone / MON sinks, and per-slice output routing. Falls
+  back to pactl / PulseAudio where PipeWire isn't present.
+- New `Setup → Audio → Output` page (Primary, Sidetone, Monitor cards
+  + per-slice routing section). Real PipeWire terminology throughout:
+  `quantum`, `node.name`, `media.role`, `xruns`, `process-cb CPU`,
+  `stream state` (no cosmetic relabeling).
+- Setup → Audio → VAX page rebuilt: VAX is now a virtual source the
+  system sees, not a device the user picks. Per-channel Rename + Copy
+  node-name buttons.
+- New `AudioBackendStrip` header on every Setup → Audio sub-page —
+  shows the detected backend (PipeWire / Pactl / None) and Rescan +
+  Open-logs buttons.
+- `Help → Diagnose audio backend…` menu item opens the same
+  detection-state dialog used at first launch when no audio backend
+  is detected. The first-launch `VaxLinuxFirstRunDialog` walks the
+  user through installing PipeWire / Pactl with copy-pasteable
+  package commands.
+- New optional build dependency on Linux: `libpipewire-0.3-dev`
+  ≥ 0.3.50 (auto-detected via `pkg-config`). Without it the build
+  still succeeds and the legacy LinuxPipeBus FIFO path is used.
+- Lock-free SPSC byte ring (`AudioRingSpsc`) for cross-thread audio
+  delivery, plus an RAII `PipeWireThreadLoop` wrapper over
+  `pw_thread_loop` and a `QAudioSinkAdapter` that lets the unified
+  `IAudioBus` interface front the QAudioSink fallback path.
+- Manual verification matrix:
+  `docs/architecture/linux-audio-verification/README.md`.
+
+### Added — UI / theme polish
+- App-wide dark `QPalette` + baseline QSS bootstrap installed at
+  startup so every window — not just the spectrum / VFO chrome —
+  renders against the correct palette on Linux. Fixes the gray-on-gray
+  Setup dialog that some Ubuntu users saw on first launch.
+- Setup → DSP → NR/ANF page: spinboxes replaced with sliders per the
+  user-facing directive that NR controls should feel continuous.
+  DFNR + MNR sliders use the shared `addSliderRow` /
+  `addDoubleSliderRow` helpers so all NR sub-tabs render identically.
+
+### Build
+- Rust + cargo are now required for DFNR builds. CI installs
+  `dtolnay/rust-toolchain@stable`. Local devs run
+  `./setup-deepfilter.sh` (or `./setup-deepfilter.ps1` on Windows)
+  before `cmake -B build`. `ENABLE_DFNR` auto-OFFs if the libdf is
+  absent at configure time, so the build still succeeds without Rust
+  — just without DFNR.
+- `qt6-shadertools-dev` added to the Linux build prerequisites for
+  Ubuntu 25.10 (Qt 6.8).
+- CI installs ALSA + JACK + PipeWire dev headers on Linux so
+  PortAudio's ALSA / JACK backends are compiled in (`PA_USE_ALSA` +
+  `PA_USE_JACK` forced on).
+- `NEREUS_HAVE_PIPEWIRE` is now propagated to `NereusSDRObjs` consumers
+  so unit tests under `build/tests/` see the same compile-time gates as
+  the app.
+- Release artifacts grow ~12 MB per platform (DFNet3 model + rnnoise
+  large/small models bundled).
+
+### Fixed
+- **Initial `CmdHighPriority` packet on P2 connect sent a DDC frequency
+  that didn't match the HPF/LPF bits.** `P2RadioConnection::connectToRadio`
+  unconditionally reset `m_rx[2].frequency` to 3865000 (80m LSB) after
+  `RadioModel` had queued `setReceiverFrequency` with the persisted VFO.
+  Worker-thread FIFO order made the hardcoded seed overwrite the real
+  value, so the first packet told the radio to tune DDC2 to 80m while
+  enabling 13 MHz HPF. Audio stayed silent until the user moved the
+  panadapter. Fixed by only seeding the default when
+  `m_rx[2].frequency == 0`. Caught on ANAN-G2 (Saturn) bench testing
+  by KG4VCF.
+- **Band-crossing reapplied the wire antenna but kept the old UI label.**
+  `SliceModel::frequencyChanged` → `applyAlexAntennaForBand` was missing
+  the `refreshAntennasFromAlex` call that the click-driven path had —
+  so the relay switched but the VFO Flag / RxApplet buttons showed the
+  previous band's antenna. Fixed + regression test
+  `band_crossing_refreshes_slice_labels`.
+- **`AlexController` per-band antenna selection didn't persist across
+  app restart.** `AlexController::save()` had zero production call
+  sites — only tests invoked it. User would pick ANT2 on 20m, quit,
+  relaunch, and see ANT1 again. Hooked `antennaChanged` +
+  `blockTxChanged` into the existing `scheduleSettingsSave()` coalescer
+  via an `m_alexControllerDirty` flag so the 14-per-band emit burst
+  during `load()` collapses to a single write. Also flushes on
+  `teardownConnection()`.
+- **SpectrumOverlayPanel RX Ant / TX Ant combos in the ANT flyout now
+  actually change the antenna.** Previously the combos rendered but
+  had no `currentTextChanged` handler — zombie controls. Wired through
+  slice 0 via the same pattern as the VAX Ch combo with
+  `m_updatingFromModel` echo guard.
+- **Latent 3P-I-a bug: `AlexController::setRxOnlyAnt(band, 0)` was
+  clamped to 1** by the shared `clampAnt(v)` helper, but Thetis
+  `Alex.cs:58` uses 0 as "none selected" (required by the RX
+  composition logic). New `clampRxOnlyAnt(0..3)` helper allows the 0
+  state; constructor default changed from 1 to 0; `load()` defaults +
+  clamp updated. 3P-I-b's full composition now works as Thetis intended.
+- **Latent 3P-F bug: `setAntennasTo1` no longer touches rxOnlyAnt**
+  (Thetis `Alex.cs:72-77` is explicit: "the various RX bypass
+  unaffected"). 3P-F wrote all 3 arrays to 1; combined with 3P-I-b's
+  new 0 semantic this would have silently activated the RX-bypass
+  relay in external-ATU compat mode.
+- **MNR's MMSE prior-SNR computation had a dimensional bug** in the
+  post-filter application (caught while wiring the 6-knob tuning
+  surface). Fixed in `src/core/MnrFilter.cpp`. Worth flagging upstream
+  to AetherSDR — maintainers may want to backport.
+- **`VfoWidget` removed raw `delete` calls** that bypassed Qt parent
+  ownership. Closes #113.
+- **AudioEngine fallback now honors the requested `deviceName`** and
+  falls back through the `QMediaDevices` enumeration in order, instead
+  of jumping straight to the system default. Closes #112.
+- Three antenna/BPF bench bugs caught on ANAN-G2 during 3P-I-a
+  shakedown (double-connect post-sweep, container `BandButtonItem`
+  click routing, lock-state short-circuit on `onBandButtonClicked`).
+- Several PipeWire shakedown bugs surfaced during Ubuntu 25.10 testing:
+  non-blocking ring write on the PW data thread (was blocking and
+  triggering Mutter's RT-thread SIGKILL); RT-thread `qCInfo` removed
+  from `probeSchedOnce` (same Mutter SIGKILL path); null-guard on
+  `on_process` buffer pointers (PipeWire PAUSED-state crash); a
+  pre-existing SEGFAULT in `stop()` that skipped bus teardown when not
+  running.
+- Restored `//G8NJJ` author tag in the VfoWidget port from
+  `setup.cs:6277` and preserved `//G8NJJ //MW0LGE //N1GP //DH1KLM`
+  tags across the 3P-I-b ports — caught by the
+  `verify-inline-tag-preservation.py` corpus drift gate.
+
+### Changed
+- `RadioModel` pushes the active slice's NR tuning state to its
+  `RxChannel` whenever any of the 7 NR knobs changes (Task 19) — keeps
+  WDSP/DFNR/MNR in sync with the model without requiring callers to
+  reach into `RxChannel` directly.
+- `RxChannel` consumes the `NbFamily` facade rather than juggling
+  WDSP NB lifecycle directly. `WdspEngine` is no longer involved in
+  per-channel NB create/destroy (it never should have been —
+  duplicated lifecycle was a refactor leftover from 3-UI).
+
+### Deprecated
+- `RadioConnection::setAntenna(int)` — use
+  `setAntennaRouting(AntennaRouting)`. Kept as a thin wrapper for one
+  release cycle; scheduled for removal in 0.3.x.
+
+### Internal
+- New attribution corpus refresh (`thetis-author-tags.json` regenerated
+  from upstream walk) + the standard `verify-inline-cites.py` baseline
+  regression gate, `compliance-inventory.py --fail-on-unclassified`,
+  and the cross-platform CI workflows that now build PipeWire +
+  DeepFilterNet on Linux/macOS/Windows.
+
+## [Unreleased]
+
+## [0.2.2] - 2026-04-22
+
+### Added
+- New `--profile <name>` / `-p <name>` CLI flag for running multiple NereusSDR instances against different radios concurrently. Each profile gets its own isolated `NereusSDR.settings` + log directory under `profiles/<name>/`; profile names are validated against `[A-Za-z0-9_-]+` to prevent path traversal. FFTW wisdom stays machine-scoped (shared across profiles). Main window title gains a `[<profile>]` suffix. `SupportDialog` / `SupportBundle` now read the same profile-scoped log directory `main.cpp` writes to. Without `--profile`, behavior is byte-for-byte unchanged. Closes #100.
+- New **Alex-1 Filters** per-row live-LED column mirroring Alex-2 — lights the matched HPF + LPF band for the current RX VFO. Ports Thetis `console.cs:setAlexHPF` / `setAlexLPF` first-match range logic including master-bypass and per-row bypass fallback. (Phase 3P-H)
+- **ADC Overload** status-bar label on MainWindow (left of STATION). Text format matches Thetis verbatim: `"ADCi Overload"` with three-space separator, trimmed. Yellow at levels 1-3, red at level > 3, 2 s single-shot auto-hide timer restarts on each event (matches `ucInfoBar._warningTimer`). RxApplet's per-ADC OVL badges removed from the visible layout — the status-bar indicator is now authoritative. Ports `console.cs:21323, 21359-21389` + `ucInfoBar.cs:911-933`. (Phase 3P-H)
+- New **attribution enforcement pipeline**: `scripts/discover-thetis-author-tags.py` walks upstream Thetis + mi0bot source, mechanically builds `docs/attribution/thetis-author-tags.json` (19 contributors discovered, with human-curated name/role fields). `scripts/verify-inline-tag-preservation.py` reads the corpus and fails commits that drop any developer-attribution tag (e.g. `//DH1KLM`, `//MW0LGE`) within ±10 port lines of a cite. `scripts/generate-contributor-indexes.py` regenerates `thetis-contributor-index.md` + `thetis-inline-mods-index.md` from the corpus + upstream walk — indexes now cover **151 upstream files, 2947 inline markers** (up from 30 files / 1458 markers). Old hand-curated indexes preserved as `-v020-snapshot.md`. CI runs `--drift` check so new upstream contributors block the PR until named. Pre-commit hook enforces strict mode locally. (Phase 3P-H attribution infra)
+- **Attribution sweep commits** restore 74 historical `//DH1KLM` / `//MW0LGE` / `//G8NJJ` / `//W2PA` tags across 22 files (src + tests) that prior porting work had silently dropped. (Phase 3P-H sweep)
+- New **Diagnostics → Radio Status** dashboard consolidating Thetis's piecemeal readouts (Front Console, PA Settings, main meter) into a single 5-card layout: PA Status (temp/current/voltage with bar meters), Forward/Reflected/SWR, PTT Source (pill row for MOX/VOX/CAT/Mic/CW/Tune/2-Tone + 8-event history), Connection Quality summary, Settings Hygiene actions. (Phase 3P-H)
+- New **Diagnostics → Connection Quality**, **Settings Validation**, **Export / Import**, **Logs** sibling sub-tabs. Connection Quality shows live EP6/EP2 byte rates + throttle + sequence-gap counter from `HermesLiteBandwidthMonitor`. Settings Validation lists `SettingsHygiene::issues()` with per-row Reset / Forget / Re-validate; auto-refreshes on `issuesChanged()`. Export / Import round-trips the full AppSettings XML via QFile + QFileDialog. (Phase 3P-H)
+- `RadioStatus` aggregator (`src/core/RadioStatus.{h,cpp}`) — PA temperature/current/forward-reflected/SWR/active PttSource + 8-event PTT history. Variant `multi-source`; data shapes from Thetis `console.cs` status handlers `[@501e3f5]`. Owned by `RadioModel`. (Phase 3P-H)
+- `SettingsHygiene` (`src/core/SettingsHygiene.{h,cpp}`) — NereusSDR-original. Validates AppSettings against `BoardCapabilities` on connect and emits per-MAC mismatch records (severity Critical / Warning / Info). Powers the dashboard Reset / Forget actions. (Phase 3P-H)
+- `PttSource` enum (`src/core/PttSource.h`) — NereusSDR-original. Tracks the trigger that asserted MOX so the Radio Status dashboard highlights the active source. (Phase 3P-H)
+- `RadioModel` wires PA telemetry from both protocols into `RadioStatus` and runs `SettingsHygiene::validate()` on every `Connected` transition. P1 extracts PA fwd/rev/exciter/userADC0/userADC1/supply raws from `parseEp6Frame`'s C0 telemetry cases 0x08/0x10/0x18; P2 reads the same six fields from `processHighPriorityStatus` at documented offsets. Thetis per-board scaling (`computeAlexFwdPower` / `computeRefPower` / `convertToVolts` / `convertToAmps` `[@501e3f5]`) applied verbatim. (Phase 3P-H)
+- **Live LED wire-up across earlier-phase pages**: Alex-2 Filters HPF + LPF LED rows highlight the active filter for the current RX frequency (mirrors Thetis `setAlex2HPF` / `setAlex2LPF` first-match ranges); OC Outputs pin-state LED row reflects `OcMatrix::maskFor(band, isTx)` and flips on MOX; HL2 I/O register state table polls `IoBoardHl2::registerValue(idx)` at 40 ms + bandwidth meter lit from `HermesLiteBandwidthMonitor`. (Phase 3P-H)
+- Tests: `tst_ptt_source` (10), `tst_radio_status` (18), `tst_settings_hygiene` (11), `tst_p1_status_telemetry` (4), `tst_p2_status_telemetry` (3), `tst_radio_model_status_wiring` (4), `tst_alex2_live_leds` (5), `tst_oc_outputs_live_pins` (5), `tst_hl2_live_polling` (4). (Phase 3P-H)
+- New **Hardware → Calibration** Setup page (renamed from PA Calibration). Hosts 5 Thetis-1:1 group boxes: **Freq Cal** (frequency spinbox + Start button + accuracy helptext), **Level Cal** (reference freq/level + Rx1/Rx2 6m LNA offsets + Start/Reset), **HPSDR Freq Cal Diagnostic** (correction factor with 9 decimal places + Using external 10 MHz ref toggle + 10 MHz factor), **TX Display Cal** (dB offset), and the existing **PA Current (A) calculation** group (preserved exactly). Per-MAC persistence under `hardware/<mac>/cal/`. (Phase 3P-G)
+- `CalibrationController` model holds frequency correction factor (default 1.0), separate 10 MHz factor, using10MHzRef toggle, level offset, Rx1/Rx2 6m LNA offsets, TX display offset, PA current sensitivity/offset. `effectiveFreqCorrectionFactor()` returns factor10M when using10MHzRef, else factor. Per-MAC persistence. Ports `setup.cs:5137-5144; 14036-14050; 22690-22706; 14325; 17243; 18315` + `console.cs:9764-9844; 21022-21086` `[@501e3f5]`. (Phase 3P-G)
+- New **Hardware → HL2 I/O** Setup page replacing the Phase 3I empty placeholder. Diagnostic surface for HL2 owners: connection status (LED + I2C address + last-probe timestamp), N2ADR Filter enable, register state table (8 principal registers from the IoBoardHl2 33-register set), 12-step state machine visualizer (current step highlighted), I2C transaction log (monospace listing of recent enqueue/dequeue with timestamps), bandwidth monitor mini (EP6/EP2 byte-rate progress bars + LAN PHY throttle indicator). Auto-hides for non-HL2 boards. (Phase 3P-E)
+- `IoBoardHl2` model — 33-register enum + I2C TLV circular queue (32 slots per `network.h:MAX_I2C_QUEUE`) + 12-step UpdateIOBoard state machine with human-readable step descriptors. Closes the long-deferred Phase 3I-T12 work. (Phase 3P-E)
+- `HermesLiteBandwidthMonitor` — HL2 LAN PHY throttle detection layered on a faithful port of mi0bot's `bandwidth_monitor.{c,h}` two-pointer byte-rate compute. Tracks ep6 ingress + ep2 egress, flags throttle when ep6 stays silent for 3 consecutive ticks while ep2 has traffic. (Phase 3P-E)
+- New **Hardware → OC Outputs** Setup page with HF + SWL sub-sub-tabs (SWL placeholder). Hosts the full OC Outputs surface modeled 1:1 on Thetis: master toggles (Penny Ext Control, N2ADR Filter, Allow hot switching, Reset OC defaults), per-band RX matrix (14 × 7), per-band TX matrix (14 × 7), TX Pin Action mapping (7 pins × 7 actions per `enums.cs:443-457` TXPinActions), USB BCD output config, External PA control, and live OC pin state LED stubs (Phase H wires them to ep6 status). (Phase 3P-D)
+- New `OcMatrix` model (per-band × per-pin × per-mode bit storage + TX pin action mapping) backs the OC Outputs page. Per-MAC persistence under `hardware/<mac>/oc/{rx,tx}/<band>/pin<n>` and `.../actions/pin<n>/<action>`. Owned by `RadioModel`. (Phase 3P-D)
+- **RxApplet preamp combo now populates per board** from `BoardCapabilities::preampItemsForBoard()` at construction time instead of hardcoded items. HL2 / OrionMKII / Saturn / Angelia-no-Alex show the 4-item anan100d set (Off / -10 / -20 / -30 dB); Alex-equipped boards (Hermes, Angelia, Orion) show the 7-item on_off+alex set; Atlas no-Alex shows the 2-item on_off set. On connect the combo was already repopulated (PR #34); this closes the pre-connect gap. Matches Thetis `SetComboPreampForHPSDR` (`console.cs:40755-40825 [@501e3f5]`). (Phase 3P-C)
+- **Hermes Lite 2 preamp combo corrected to 4 items** (anan100d set: 0dB / -10dB / -20dB / -30dB). Previously returned a 1-item table ("0dB" only). HL2 is not in Thetis's `SetComboPreampForHPSDR` switch (postdates it), but its LNA supports the same 4-level control as the anan100d set per mi0bot HL2 LNA design `[@c26a8a4]`. (Phase 3P-C)
+- New `tst_preamp_combo` (17 assertions) locks per-board combo contents 1:1 with Thetis and verifies the 7-mode `PreampMode` enum has correct integer indices (0=Off, 1=On, 2–6=Minus10–50). Also verifies `RxApplet.preampComboItemCountForTest()` reflects board caps at construction. (Phase 3P-C)
+- Hardware → Antenna / ALEX page split into three sub-sub-tabs — Antenna Control (placeholder for Phase F), **Alex-1 Filters**, and **Alex-2 Filters** — matching Thetis's General → Alex IA. Alex-1 page exposes per-band HPF/LPF bypass + edge editors and the **Saturn BPF1 panel** (gated on ANAN-G2 / G2-1K). Alex-2 page exposes per-band HPF/LPF for the RX2 board with live-LED indicator stubs (Phase H wires them). Per-MAC persistence under `hardware/<mac>/alex/...` and `.../alex2/...`. (Phase 3P-B)
+- ADC OVL badge in RxApplet now splits into OVL₀ + OVL₁ for dual-ADC boards (Orion-MKII family — boards with `BoardCapabilities::p2PreampPerAdc=true`). Single-ADC boards (HL2, Hermes, Angelia) keep a single badge. (Phase 3P-B)
+- Per-ADC RX1 preamp toggle exposed in RxApplet for OrionMKII-family boards; routes to byte 1403 bit 1 in P2 CmdHighPriority via the new `P2RadioConnection::setRx1Preamp(bool)`. (Phase 3P-B)
+- ANAN-G2 / G2-1K can now use user-configured Saturn BPF1 band edges instead of Alex defaults via the new Hardware → Antenna/ALEX → Alex-1 Filters page; codec layer (`P2CodecSaturn`) reads the configured edges from `CodecContext.p2SaturnBpfHpfBits`. (Phase 3P-B)
+- New **Hardware → Antenna / ALEX → Antenna Control** sub-sub-tab — third sub-sub-tab alongside Phase B's Alex-1/Alex-2 Filters. Per-band antenna assignment grid (14 bands × TX/RX1/RX-only ports 1-3) with Block-TX safety toggles. Backed by AlexController model. (Phase 3P-F)
+- `AlexController` — per-band TX/RX/RX-only antenna arrays + Block-TX safety + SetAntennasTo1 force mode. Per-MAC persistence. Replaces Phase 3I Alex stubs. Ports `HPSDR/Alex.cs:30-106`. (Phase 3P-F)
+- `ApolloController` — Apollo PA + ATU + LPF accessory state model (present/filterEnabled/tunerEnabled). Per-MAC persistence. Capability-gated on `BoardCapabilities::hasApollo` (only HPSDR-kit per Thetis source). Ports `setup.cs:15566-15590`. (Phase 3P-F)
+- `PennyLaneController` — Penny external control master enable (companion to Phase D's OcMatrix which holds the per-pin/per-band masks). Per-MAC persistence. Ports `Penny.cs` + `console.cs:14899`. (Phase 3P-F)
+- `BoardCapabilities` extended with `hasApollo` / `hasAlex` / `hasPennyLane` per-board enable rules per Thetis `setup.cs:19834-20205` board-model if-ladder. Source-first correction caught: only HPSDR-kit enables Apollo (NOT all ANAN family — every ANAN board explicitly disables it in Thetis). (Phase 3P-F)
+- **VAX audio routing subsystem** — full port of AetherSDR's virtual-cable audio bus architecture as a NereusSDR-native multi-platform stack. Replaces the single-device QAudioSink output with `IAudioBus` abstract interface backed by 3 platform implementations: `PortAudioBus` (render + TX capture + device enumeration), `CoreAudioHalBus` (macOS HAL plugin bridge), `LinuxPipeBus` (pipewire/pulse module-pipe-source × 4 + module-pipe-sink × 1 under `nereussdr-vax-*` namespace). Per-slice VAX channel routing with up to 4 output channels + 1 TX input channel. (Phase 3O)
+- `IAudioBus` abstract interface (`src/audio/IAudioBus.h`) — unified render / capture / enumerate API across platform backends. `AudioEngine` now holds `IAudioBus` instances rather than `QAudioSink` directly; platform selection at startup via `Q_OS_*`. (Phase 3O Sub-Phase 1 + 4)
+- `MasterMixer` (`src/audio/MasterMixer.{h,cpp}`) — per-slice mute / volume / pan accumulation feeding the bus render path. Sits between slice audio output and the bus; master-mute API added to `AudioEngine`. (Phase 3O Sub-Phase 2)
+- `PortAudioBus` (`src/audio/PortAudioBus.{h,cpp}`) — PortAudio v19.7.0 vendored via CMake FetchContent. Windows audio backend (the one that owns virtual-cable driver interop) plus fallback on macOS/Linux. Render-only minimal scaffold → host-API + device enumeration → TX capture (input stream + `pull()`). (Phase 3O Sub-Phase 3)
+- `LinuxPipeBus` (`src/audio/LinuxPipeBus.{h,cpp}`) — PulseAudio / PipeWire named-pipe bus. Loads `module-pipe-source × 4` (RX destinations) + `module-pipe-sink × 1` (TX source) at startup under a `nereussdr-vax-*` namespace; render writes raw PCM to the pipes, capture reads from the sink's monitor. Auto-unloads modules on shutdown. (Phase 3O Sub-Phase 6)
+- **macOS VAX HAL plugin** (`hal-plugin/`) — full port of AetherSDR's `NereusSDRVAX.driver` CoreAudio HAL plugin. Exposes 4 virtual output devices (`NereusSDR VAX 1..4`) + 1 TX input device to the macOS audio system; app process communicates with the plugin via a shared-memory ring (`VaxShmBlock`) for low-latency sample handoff. `CoreAudioHalBus` wraps the plugin on the app side. Includes `packaging/macos/hal-installer.sh` that builds + signs + packages the driver into a `productbuild` `.pkg` with a postinstall restart of `coreaudiod` (with macOS 14.4+ `killall` fallback when `launchctl kickstart` returns EPERM). **Note:** the release pipeline cannot produce a redistributable notarized installer until Apple Developer ID credentials are in place, so **v0.2.2 does NOT attach the HAL plugin `.pkg` to the GitHub Release**. macOS users who want VAX routing today can self-sign locally — see [docs/debugging/alpha-tester-hl2-smoke-test.md](docs/debugging/alpha-tester-hl2-smoke-test.md) §"macOS notes" for step-by-step instructions. (Phase 3O Sub-Phase 5)
+- `VirtualCableDetector` (`src/audio/VirtualCableDetector.{h,cpp}`) — Windows-focused auto-detect of VB-Audio Virtual Cable, VAC, Voicemeeter, Dante Virtual Soundcard, and FlexRadio DAX virtual-cable families. Enumerates PortAudio devices against a family-signature table; reports detected cable pairs with suggested channel bindings. `rescan()` + rescan-diff helpers feed the VAX first-run wizard. (Phase 3O Sub-Phase 7)
+- `VaxChannelSelector` widget (`src/widgets/VaxChannelSelector.{h,cpp}`) — compact per-slice VAX channel button row (1-4 + Off) embedded in the VFO flag. `setSlice()` rebinds cleanly on slice reshuffle (e.g. RX2 enable/disable); prior bindings are disconnected before new ones attach. Tooltips explain each button's destination. (Phase 3O Sub-Phase 8)
+- `VaxFirstRunDialog` (`src/gui/VaxFirstRunDialog.{h,cpp}`) — launched on MainWindow startup when no VAX configuration has been persisted. Platform-specific: Windows runs `VirtualCableDetector` and offers to pre-fill channel bindings from detected virtual-cable pairs; macOS prompts for HAL-plugin install if absent; Linux checks for PulseAudio/PipeWire presence. "Apply suggested" maps detected pairs onto the first unassigned VAX slots. (Phase 3O Sub-Phase 10)
+- `MasterOutputWidget` (`src/widgets/MasterOutputWidget.{h,cpp}`) hosted in the new `TitleBar` strip at the top of the main window — global speaker-volume slider + master-mute button + right-click → device picker + scroll-wheel fine-tune. One source of truth for output routing across the app. (Phase 3O Sub-Phase 11)
+- `TitleBar` widget — thin strip above the main menu that hosts the menu bar, `MasterOutputWidget`, and the 💡 feature-request button (moved from menu corner). Keeps top chrome clean at narrow window widths. (Phase 3O Sub-Phase 11)
+- **Setup → Audio sub-tabs** — `AudioDevicesPage` (per-device driver API / buffer / format with live-reconfig), `AudioVaxPage` (4 channel strips with meter + gain + mute + device picker + Auto-detect QMenu wiring `VirtualCableDetector`), `AudioTciPage` (placeholder for Phase 3J TCI), `AudioAdvancedPage` (reset-all-audio-settings with confirmation dialog + IVAC feedback parity controls). Full Audio-nav refactor from the legacy single-page Setup → Audio. (Phase 3O Sub-Phase 12 Tasks 12.1–12.5)
+- `VaxApplet` (`src/gui/applets/VaxApplet.{h,cpp}`) — container-applet port from AetherSDR with per-channel RX gain slider + mute button + TX gain slider + level meter for all 4 VAX slots. `MeterSlider` widget (ported from AetherSDR) drives the sliders. (Phase 3O)
+- `SliceModel::vaxChannel` property (`VaxChannel` enum: `Off` / 1-4) — per-slice VAX routing persisted under `slice<N>/vaxChannel`. New `SliceModel::slicePrefix()` helper unifies settings-key composition for VAX + future slice-scoped fields. Clamped on load so invalid persisted values don't poison the engine. (Phase 3O)
+- `TransmitModel::txOwnerSlot` + `VaxSlot` enum — TX arbitration field so only the slice that armed TX actually transmits; `vaxSlotFromString` / `vaxSlotToString` round-trip with explicit `MicDirect` arm. Prevents ambiguous multi-slice MOX. (Phase 3O)
+- `AppSettings` VAX schema migration helper — `main.cpp` runs a one-shot migration from pre-3O `daxChannel` keys to `vaxChannel` keys (covers the Phase 3O DAX→VAX rebrand). Idempotent; subsequent launches are no-ops. (Phase 3O)
+- `SpectrumOverlayPanel` VAX Ch combo now wires to slice 0 directly; changes propagate through `SliceModel::vaxChannel` (was: unwired stub). (Phase 3O)
+- Tests: `MasterOutputWidgetSignalRefreshTest` (with 50 ms timing assertion), audio-engine IAudioBus refactor coverage, VirtualCableDetector rescan helpers, `VaxFirstRunDialog` guard tests, `vaxSlotFromString` round-trip, SliceModel `VaxChannel` clamp-on-load. (Phase 3O)
+- **macOS alpha-tester guidance for code signing + VAX HAL plugin** — `docs/debugging/alpha-tester-hl2-smoke-test.md` now documents the v0.2.x signing state (ad-hoc codesign, no Developer ID, no notarization), the Gatekeeper right-click → Open workflow, the `xattr -dr com.apple.quarantine` fallback, and a step-by-step self-sign procedure for the VAX HAL plugin so testers can enable VAX routing on macOS today without the notarized `.pkg`.
+
+### Fixed
+- **Setup-dialog checkboxes and radio buttons now visible on the dark theme.** `SetupPage` base class applies `kCheckBoxStyle` + `kRadioButtonStyle` at the page root; previously system defaults rendered black-on-dark and were invisible. (Phase 3P-H)
+- **Alex-1 / Alex-2 Filters live LED now tracks VFO through CTUN-mode edge crossings.** Tabs were subscribing to `PanadapterModel::centerFrequencyChanged` but in CTUN mode the pan centre stays put while the slice tunes, so edge crossings were missed. Switched to `SliceModel::frequencyChanged` on every current + future slice (handles post-connect `addSlice` events). Added 250 ms polling fallback as a signal-path belt-and-suspenders. (Phase 3P-H)
+- **ADC Overload status-bar label no longer shifts STATION** when firing. Fixed 180 px width + 12 px gap + empty-text-when-idle holds layout stable. (Phase 3P-H)
+- **Silent shutdown crash on Windows after HL2 session, plus downstream Thetis startup hang.** `RadioConnectionTeardown` posted the worker-thread disconnect via a plain queued `invokeMethod` and immediately called `quit()`; on Windows' event dispatcher the quit could race the posted event out of the loop, leaving metis-stop unsent, the UDP socket open, and the `P1RadioConnection` + its three timers orphaned on a dead thread. Later Qt teardown then tripped a fast-fail abort and left the HL2 Winsock endpoint in a state that blocked Thetis from binding port 51188 until `netsh winsock reset` / reboot. Helper now uses a `QSemaphore` + `tryAcquire(1, 3000ms)` to ensure `disconnect()` completes on the worker before quit while keeping a bounded shutdown latency if the worker is wedged; `P1RadioConnection::disconnect()` now also closes its UDP socket explicitly, matching P2. Closes #83.
+- **Hermes Lite 2 bandpass filter now switches on band/VFO change.** P1RadioConnection was emitting `m_alexHpfBits=0`/`m_alexLpfBits=0` permanently because the filter bits were never recomputed from frequency. P2 had the right code; lifted into shared `src/core/codec/AlexFilterMap` and called from P1's `setReceiverFrequency`/`setTxFrequency`. (Phase 3P-A)
+- **Hermes Lite 2 step attenuator now actually attenuates.** P1's bank 11 C4 was using ramdor's 5-bit mask + 0x20 enable for every board; HL2 needs mi0bot's 6-bit mask + 0x40 enable + MOX TX/RX branch. Fixed via per-board codec subclasses (`P1CodecStandard` for Hermes/Orion, `P1CodecHl2` for HL2). RxApplet S-ATT slider range now widens to 0-63 dB on HL2 from `BoardCapabilities::attenuator.maxDb`. (Phase 3P-A)
+- **VFO frequency entry no longer rejects valid thousand-grouped input.** The prior parser treated `7,200` as two tokens and silently dropped the comma group; full rewrite now handles decimal / comma-grouped thousands / unit-suffix (`k`, `M`, `G`, `Hz`, `kHz`, `MHz`, `GHz`) inputs consistently, including the single-comma + unit + 3-digit tail case (`7,200kHz`) which is treated as thousands. Closes #73.
+- **RX-applet STEP ↑/↓ arrows now actually step the tuning ladder.** The arrows were rendering but their clicks were unwired; both now advance/retreat through the tuning-step ladder, and **500 Hz was added** between 100 Hz and 1 kHz to match Thetis's default ladder. Closes #69.
+- **Receivers no longer leak across disconnect/reconnect cycles on the same radio.** `ReceiverManager` is now `reset()` on disconnect so the DDC-to-receiver map is clean when a second connect attempt runs; previously reconnecting the same rig would accumulate phantom receivers and crash WDSP channel allocation on the second attempt. Closes #75.
+- **HL2 I2C read responses now persist into the `IoBoardHl2` model.** The HL2 I/O Setup page's register table was reading a model whose register slots were never updated from ep6 I2C read-response frames; the parse path now writes the received byte into the model and emits a change signal so the page stays in sync with the radio's live register state.
+- **`FreqCorrectionFactor` now actually shifts the radio.** The Phase 3P-G Calibration page wrote the factor into the model correctly, but `P2CodecOrionMkII::hzToPhaseWord` never consulted it — the UI changed and the phase word didn't. Moved the multiplication into the codec so the dial on the Calibration page takes effect on the next tune.
+- **`OcMatrix` state guarded with `QReadWriteLock` for cross-thread access.** Main-thread writes from the OC Outputs page were racing connection-thread reads at C&C compose time on boards with busy OC traffic; per-mask read/write locks remove the race. Default state remains byte-identical.
+- **RX1 preamp toggle queued onto the connection thread.** The per-ADC RX1 preamp combo was calling `P2RadioConnection::setRx1Preamp()` synchronously from the GUI thread — could race the codec's next C&C compose. Now invoked via queued connection so the codec sees a stable value at compose time.
+- **P1 bank scheduler ceiling now reads `codec->maxBank()`** instead of a hardcoded constant, so HL2 and Anvelina Pro 3 stop clipping at bank 10 and correctly reach bank 11 (S-ATT) / bank 17 (Anvelina Pro 3 extended) during compose cycles.
+- **HAL plugin shared-memory layout aligned across app + plugin** — `VaxShmBlock` struct was diverging in field order between `hal-plugin/` and `src/audio/`, causing garbled samples on macOS when the app wrote the plugin's read in-flight; now driven from a single shared header. Also: HAL plugin RX ring backlog clamped to prevent laps-reading garble when the app stalls. (Phase 3O Sub-Phase 5)
+- **Speakers-mutex scope narrowed to the push call only** in `AudioEngine` — previously held across format re-negotiation during live-reconfig, producing audible pops when the user switched output devices mid-stream.
+- **Saved speakers device is applied to the engine at startup** — on first-launch-with-saved-config the `AudioEngine` was initialised before the speakers device was re-read from AppSettings; startup path now pulls the saved device before engine init.
+- **VAX selector now lives inside the VAX tab** (was rendering below the tab bar due to a layout-parent mixup); **VAX channel tags refresh on `sliceRemoved`** and **rebind on slice-0 reshuffle** (RX2 enable/disable cycles no longer orphan the VAX combo).
+- **Apply-suggested in the VAX first-run dialog now maps onto the first unassigned slots** instead of overwriting slot 0 every time.
+- **Windows CMake now auto-fetches `libfftw3-3.dll`** via a FetchContent fallback when the system package isn't present, fixing cold-build failures on fresh Windows setups.
+- **About dialog credits g0orx/wdsp** for the POSIX portability shim that made WDSP cross-platform — missed attribution surfaced by the Phase 3P-H discovery-driven corpus refresh.
+
+### Changed
+- **P2RadioConnection** `setReceiverFrequency` / `setTxFrequency` Hz→phase-word conversion now multiplies by `CalibrationController::effectiveFreqCorrectionFactor()` (defaults to 1.0 → byte-identical to pre-cal). Per-MAC freq correction lets users compensate per-radio reference oscillator drift. Ports `NetworkIO.cs:227-254` `FreqCorrectionFactor` + `Freq2PhaseWord()` `[@501e3f5]`. (Phase 3P-G)
+- PA Calibration setup tab renamed to **Calibration**; the existing PA Current (A) group preserved exactly. (Phase 3P-G)
+- `P1CodecHl2` gains I2C intercept mode — when `IoBoardHl2`'s I2C queue has pending transactions, the next C&C frame's 5 bytes are overwritten with the I2C TLV payload (chip-address + control + register address + data) and the txn dequeued. Normal bank compose runs when queue is empty. Per mi0bot `networkproto1.c:898-943`. ep6 read path extended to parse I2C response frames (C0 bit 7 marker) back into IoBoardHl2 register state. (Phase 3P-E)
+- `P1RadioConnection`'s ep6/ep2 packet sizes are now recorded into `HermesLiteBandwidthMonitor`; watchdog tick drives the periodic rate evaluation. The legacy sequence-gap fallback throttle heuristic remains as a safety net when the monitor isn't wired (test seam path). Closes long-open `TODO(3I-T12)` markers at `P1RadioConnection.cpp:892, 939, 1416-1462`. (Phase 3P-E)
+- `RadioModel` now owns the per-connection `IoBoardHl2` and `HermesLiteBandwidthMonitor` instances and pushes them to `P1RadioConnection` at connect time, mirroring the OcMatrix ownership pattern from Phase 3P-D. (Phase 3P-E)
+- `RxApplet` antenna buttons (Ant 1/2/3) now read from `AlexController::txAnt(currentBand)` / `rxAnt(currentBand)` and re-populate on band change. Click-to-select calls the controller setter, respecting Block-TX safety guards. Was: static placeholder buttons. (Phase 3P-F)
+- `RadioModel` now owns `AlexController`, `ApolloController`, `PennyLaneController` instances and pushes MAC + load on connect, mirroring Phase D's OcMatrix and Phase E's IoBoardHl2 + HermesLiteBandwidthMonitor ownership patterns. (Phase 3P-F)
+- `P1RadioConnection` and `P2RadioConnection` now source the OC byte at C&C compose time from `OcMatrix::maskFor(currentBand, mox)` (when the matrix is wired via `setOcMatrix()` — `RadioModel` pushes its `m_ocMatrix` to the connections at connect time) instead of the legacy `m_ocOutput` field. Falls through to legacy when the matrix is unset (test seams). Default state byte-identical: empty matrix → `maskFor()==0` matching legacy `m_ocOutput==0`. Regression-freeze gates (P1 + P2) still PASS byte-for-byte. (Phase 3P-D)
+- `P1RadioConnection`'s C&C compose layer refactored into per-board codec subclasses (`P1CodecStandard`, `P1CodecHl2`, `P1CodecAnvelinaPro3`, `P1CodecRedPitaya`) behind a stable `IP1Codec` interface. Behavior byte-identical for every non-HL2 board (regression-frozen via `tst_p1_regression_freeze` against a pre-refactor JSON baseline). Set `NEREUS_USE_LEGACY_P1_CODEC=1` to revert to the pre-refactor compose path for one release cycle as a rollback hatch.
+- `P2RadioConnection` now calls the shared `AlexFilterMap::computeHpf/Lpf` helpers instead of its own inline copies; byte output unchanged.
+- `BoardCapabilities::Attenuator` extended with `mask`, `enableBit`, and `moxBranchesAtt` fields capturing per-board ATT byte encoding parameters.
+- `P2RadioConnection`'s C&C compose layer refactored into per-board codec subclasses (`P2CodecOrionMkII` for the OrionMKII / 7000D / 8000D / AnvelinaPro3 family, `P2CodecSaturn` extending it for ANAN-G2 / G2-1K with the G8NJJ BPF1 override) behind the new `IP2Codec` interface. Behavior byte-identical to pre-refactor for all captured tuples (`tst_p2_regression_freeze` with 36 tuples). `NEREUS_USE_LEGACY_P2_CODEC=1` env var reverts to the pre-refactor compose path for one release cycle as a rollback hatch. (Phase 3P-B)
+- `BoardCapabilities` extended with `p2SaturnBpf1Edges` (per-band start/end MHz, empty default) and `p2PreampPerAdc` (true for OrionMKII family). `AlexFilterMap` shared between P1 and P2 codecs (was Phase A; Phase B is the first P2 consumer). (Phase 3P-B)
+- `AudioEngine` backend dispatch refactored — the engine holds `IAudioBus` instances rather than a raw `QAudioSink`; platform selection via `Q_OS_*` at startup. Default path (no VAX configuration) falls through to the Qt multimedia output, byte-identical to v0.2.1 audio output. (Phase 3O Sub-Phase 4 + 8.5)
+- **DAX → VAX UI rebrand (app-wide).** All user-facing "DAX" labels, enum values, settings keys, and doc strings renamed to "VAX". `AppSettings` first-launch migration covers persisted pre-rename keys. Internal identifiers (`VaxSlot`, `VaxChannel`, `vaxChannel`) follow the new name. (Phase 3O)
+- **TitleBar relocation**: the 💡 feature-request button moved from the menu-bar corner into the new `TitleBar` strip alongside `MasterOutputWidget` for a consistent top-chrome layout. (Phase 3O Sub-Phase 11)
+- `tune(display)` shipped current spectrum / waterfall defaults (smooth-fall value + Clarity Blue palette) as the out-of-box defaults; earlier v0.2.x installs can reset under Setup → Display.
+
+## [0.2.1] - 2026-04-19
+
+### Features
+- (none)
+
+### Fixes
+- fix(radio-model): stop recalling bandstack on VFO-tune crossings
+- fix(radio-model): guard per-band save/restore lambdas against reentrancy
+
+### Docs
+- (none)
+
+### CI / Build
+- (none)
+
+### Other
+- (none)
+
+### Tests
+- (none)
+
+### Refactors
+- (none)
+
+
+## [0.2.0] - 2026-04-19
+
+### Auto AGC-T (PR #53)
+
+- `NoiseFloorTracker` — lerp-based noise-floor estimator feeding the
+  Auto-threshold timer with MOX guard and `agcCalOffset`.
+- AUTO button on the AGC-T slider row (VfoWidget + RxApplet) toggles
+  auto-mode; periodic NF update keeps the threshold tracking.
+- Right-click on the AGC-T slider opens Setup directly on the AGC/ALC
+  page; Setup page controls wired to SliceModel.
+- Thetis-source tooltips on all four AGC controls + attenuator
+  fast-attack.
+
+### Sample-rate wiring (PR #35)
+
+- Per-MAC persistence of hardware sample rate + active-RX count under
+  `hardware/<mac>/radioInfo/`.
+- Full Thetis-parity rate lists: P1 = 48/96/192 kHz (plus 384 on
+  RedPitaya); P2 = 48/96/192/384/768/1536 kHz. Default 192 kHz.
+- RX2 sample-rate combo stub (disabled, for Phase 3F).
+- Inline reconnect banner on RadioInfoTab when the selected rate
+  differs from the active wire rate.
+
+### Fixes
+
+- **RxDspWorker thread-safety:** buffer-size fields now atomic; audio
+  thread no longer races the main-thread control path.
+- **RxDspWorker accumulator drain** scaled to per-rate `in_size` so
+  DDC sample-rate changes don't starve the WDSP feed.
+- **Setup dialog** no longer overrides `selectPage()` in `showEvent`,
+  so right-click-to-page works as intended.
+
+## [0.1.7] - 2026-04-16
+
+RedPitaya / Hermes P1 protocol fixes driven by pcap analysis in issue #38,
+plus Windows D3D11 container lifecycle fixes from issue #42.
+
+### Fixed
+- **P1 RedPitaya / Hermes family (#38):** restore DDC3 NCO command on the wire.
+  The `kRxC0Address` lookup table was missing the `0x0A` address entry,
+  which caused bank 6 (RX4 / DDC3 frequency) to be dropped and bank 9
+  (RX7 / DDC6) to alias onto bank 10's `0x12` TX-drive slot. Verified
+  byte-for-byte against Thetis `networkproto1.c` cases 6 and 9.
+- **P1 EP2 send cadence (#38):** host→radio packets are now paced by a
+  dedicated 2 ms `Qt::PreciseTimer` with a `QElapsedTimer`-driven catch-up
+  loop, yielding ~200-400 pps (target: Thetis' 380.95 pps from its 48 kHz
+  audio clock). Previously we ran ~40 pps, starving the radio's audio DAC
+  and stretching the 17-bank C&C round-robin to ~213 ms per cycle.
+- **Windows container float/dock rendering** — five interlocking issues in
+  the meter container lifecycle on Windows D3D11 QRhi (#42):
+  - HWND collision on reparent — `E_ACCESSDENIED` →
+    `DXGI_ERROR_DEVICE_REMOVED` cascade from the old `MeterWidget`
+    lingering under the parent HWND during `setParent()`. Old widget now
+    detaches synchronously (`hide()` + `setParent(nullptr)`) before
+    `deleteLater`; `ContainerManager` swaps the meter around each reparent
+    so no `WA_NativeWindow` child is reparented.
+  - First float landed at `(0,0)` behind the main window —
+    `FloatingContainer::ensureVisiblePosition()` centers the form on the
+    anchor's screen when saved geometry is missing, at origin, or
+    off every connected screen.
+  - Use-after-free in `MeterPoller` — raw `MeterWidget*` targets dangled
+    when the reparent-swap destroyed them. Switched to
+    `QVector<QPointer<MeterWidget>>` with null-guarded `poll()`.
+  - Progressive stack compression across reparent cycles —
+    `inferStackFromGeometry` merged touching row intervals into one
+    cluster, collapsing N bar rows onto stack slot 0. Require strict
+    overlap > 0.002 before merging.
+  - Empty band below the meter stack on resizable containers — Thetis's
+    fixed `kNormalRowHNorm = 0.05` assumes fixed-aspect containers; stack
+    now shares `(1 − bandTop)` equally among rows. 24 px floor preserved
+    for small widgets.
+
+### Known issues
+- **ANAN MM preset** still shows empty space below the needle panel when
+  no bar rows are added. Thetis-faithful fix (per-container `AutoHeight`)
+  is scoped in
+  [`docs/architecture/meter-autoheight-plan.md`](docs/architecture/meter-autoheight-plan.md).
+- Exit-time segfault (exit 139) reproducible on close; root cause still
+  unknown, not implicated by the #42 changes.
+- One `QRhiWidget: No QRhi` warning per meter install cycle; benign,
+  under investigation.
+
+## [0.1.7-rc1] - 2026-04-16
+
+Radio model selector and P1 protocol completion for RedPitaya and non-standard
+Hermes devices.
+
+### Added
+- **Radio model selector** — per-MAC model override in ConnectionPanel detail panel;
+  users can select their actual radio model (e.g. "Red Pitaya") when the discovery
+  board byte is ambiguous (e.g. reports "Hermes")
+- **HardwareProfile engine** — port of Thetis clsHardwareSpecific.cs; maps 16
+  HPSDRModel variants to correct ADC count, BPF, supply voltage, and board capabilities
+- **P1 C&C full 17-bank round-robin** — port of Thetis networkproto1.c WriteMainLoop
+  cases 0-17; was only sending 3 of 17 banks with zeros for dither/random/preamp/Alex filters
+- **Radio Setup menu item** wired (was disabled NYI)
+- Auto-reconnect loads persisted model override from AppSettings
+
+### Fixed
+- P1 bank 0 C3/C4 sent all zeros — dither, random, preamp, duplex now populated
+- P1 reconnect log spam (30-80 duplicate "Reconnected" lines per cycle → 1 line)
+- SaturnMKII board byte falls back to Saturn-family model instead of Hermes
+- Null-guard on HardwareProfile caps pointer in P1/P2 connection setup
+
+### Docs
+- Phase 3I-RP design spec and implementation plan
+
+
+## [0.1.6] - 2026-04-16
+
+About dialog and built-in issue reporter.
+
+### Added
+- **About dialog** (Help → About NereusSDR) — version, build info, Qt/WDSP
+  versions, heritage credits, license text, GPG fingerprint. Accessible from
+  the menu bar and wired into the build.
+- **AI-assisted issue reporter** — click the lightbulb (💡) in the menu bar
+  corner to file a bug report or feature request directly from NereusSDR.
+  Structured prompts guide you through the fields; submits to the GitHub
+  issue tracker using the `bug_report.yml` and `feature_request.yml`
+  templates.
+
+### Tests
+- AboutDialog content verification tests
+
+
+## [0.1.5] - 2026-04-16
+
+Major feature release: RX DSP parity, step attenuator, Clarity adaptive display.
+
+### Phase 3G-10: RX DSP Parity + AetherSDR Flag Port (Complete)
+
+- **10 WDSP feature slices wired** end-to-end through SliceModel → RadioModel → RxChannel → WDSP: AGC advanced (threshold/hang/slope/attack/decay), EMNR (NR2), SNB, APF (SPCW module), squelch (SSB/AM/FM 3-variant), mute/audio pan/binaural, NB2 advanced params, RIT/XIT client offset, frequency lock, mode containers (FM OPT/DIG/RTTY)
+- **Per-slice-per-band persistence** via AppSettings (`Slice<N>/Band<key>/*` namespace) with legacy key migration and band-change save/restore cycle
+- **VfoWidget rewrite** — 4-tab layout (Audio/DSP/Mode/X-RIT), 4×2 DSP toggle grid, AGC 5-button row, S-meter level bar with dBm readout and cyan→green gradient, mode containers (FM/DIG/RTTY), tooltip coverage test
+- **AGC-T ↔ RF Gain bidirectional sync** — both control the same WDSP max_gain; `GetRXAAGCTop`/`GetRXAAGCThresh` readback prevents audio-breaking gain runaway
+- **S-meter wired** to VfoWidget via MeterPoller `smeterUpdated` signal
+- **Thetis-first tooltip sweep** — 18 controls updated with verbatim Thetis text and source-line citations
+- 17 new test files, widget library (VfoLevelBar, ScrollableLabel, GuardedComboBox, TriBtn, ResetSlider, CenterMarkSlider)
+
+### Phase 3G-13: Step Attenuator & ADC Overload (PR #34)
+
+- **StepAttenuatorController** with Classic + Adaptive auto-attenuation modes, hysteresis, and per-MAC persistence
+- **P1/P2 ADC overflow detection** — `adcOverflow` signal from frame parsers, OVL status badge in RxApplet
+- **Setup → General → Options** page for step ATT configuration
+- **RxApplet ATT/S-ATT row** with per-model preamp items from Thetis `SetComboPreampForHPSDR`
+- 9 controller tests
+
+### Phase 3G-9: Display Refactor
+
+- **Clarity Blue waterfall palette** — full-spectrum rainbow with deep-black noise floor
+- **ClarityController** with cadence, EWMA, deadband + NoiseFloorEstimator percentile estimator
+- **Reset to Smooth Defaults** button on Setup → Display → Spectrum Defaults
+- **Re-tune button + Clarity status badge** in spectrum overlay panel
+- **Per-band Clarity memory** in BandGridSettings
+- **Zoom persistence** — visible bandwidth saved/restored across restarts
+- Thetis-cited tooltips on 47 Spectrum/Waterfall/Grid setup controls
+- SliderRow/SliderRowD TDD factory helpers for setup pages
+
+### Phase 3G-11: P1 Field Fixes
+
+- **P1 VFO frequency encoding** — encode as raw Hz, not NCO phase word
+
+### Fixes
+
+- Bidirectional AGC-T ↔ RF Gain sync (prevents audio runaway)
+- AGC-T slider direction inverted to match Thetis (right = more gain)
+- RF Gain slider removed (redundant with AGC-T)
+- S-meter continuous gradient cyan→green at S9 boundary
+- S-meter dBm readout with clipping fix
+- NYI overlays removed on live-wired FM/DIG/RTTY containers
+- Mode tab layout matches AetherSDR (combo fills row)
+- DSP grid equal-column stretch eliminates gap
+- AGC-T right-click context menu → Setup dialog
+- Windows linker ODR violation resolved (TriBtn consolidation)
+- Waterfall AGC margin widened 3→12 dB
+
+## [0.1.4] - 2026-04-14
+
+Bug-fix release. Improves Hermes (Protocol 1) startup reliability and
+fixes two Windows-only crashes seen on cold launch / shutdown. Also
+relaxes an over-aggressive board firmware-version gate that rejected
+some legitimate radios.
+
+### Fixes
+- **P1 Hermes DDC priming** — prime the DDC before sending `metis-start`
+  on Hermes-class boards, declare `nddc=2`, and alternate the TX/RX1
+  command banks. Resolves silent RX after connect on Hermes.
+- **Windows startup/shutdown crashes** — fix two latent crashes that
+  surfaced on Windows clean installs (cold-start init order and
+  shutdown teardown ordering).
+- **Connect: drop unattested firmware floors** — remove per-board
+  firmware-version minimums that were never verified against
+  real-world firmware ranges and were blocking valid radios.
+
+
+## [0.1.3] - 2026-04-13
+
+Hotfix for the v0.1.2 Windows artifacts. Linux and macOS builds are
+functionally identical to v0.1.2 — only the Windows installer and
+portable ZIP have changed.
+
+### Fixes
+- **Windows NSIS installer** — fixed missing Qt6 DLL packaging that
+  caused startup crash on clean Windows installs.
+- **Windows portable ZIP** — same DLL fix as installer.
+
+
+## [0.1.2] - 2026-04-13
+
+First full cross-platform alpha release with all 6 build artifacts.
+
+### Added
+- Linux AppImage (x86_64 + aarch64)
+- macOS Apple Silicon DMG
+- Windows portable ZIP + NSIS installer
+- Consolidated `release.yml` CI pipeline
+- `/release` skill for Claude Code
+
+### Fixes
+- Linux: added `qtshadertools` build dependency
+- Linux aarch64: disabled GPU spectrum (no Vulkan in CI container)
+- release.yml: fixed artifact upload paths
+
+
+## [0.1.1] - 2026-04-12
+
+Internal milestone — Phase 3I Radio Connector complete.
+
+## [0.1.0] - 2026-04-10
+
+Initial alpha — RX-only, Protocol 2 (ANAN-G2), spectrum + waterfall,
+container meter system, 12 applets, 47-page setup dialog.

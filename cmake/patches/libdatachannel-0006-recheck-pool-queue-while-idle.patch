@@ -1,0 +1,55 @@
+/**
+ * Copyright (c) 2020 Paul-Louis Ageneau
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+libdatachannel v0.24.5: an idle pool worker looks at the queue again by itself
+
+MPL-2.0, like src/impl/threadpool.cpp above. Modification history
+(NereusSDR): 2026-10-11, J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+Claude Code.
+
+A worker with nothing to run waited on the pool's condition variable with no
+time limit, so a queued task depended on one wake-up reaching a worker. On
+macOS 27.0 a desktop window froze for hours with a peer connection's
+certificate task queued and all 18 workers in that wait, and a test run of
+this pool alone ended the same way after 36.9 million tasks, where one more
+task pushed to the pool did not free it. Why the wake-up reaches no worker
+is not established. Each idle worker now waits at most 100 ms before it
+looks at the queue again, and no longer than that when a later timed task
+is at the head. Task order, timed tasks, joining and the busy-worker count
+are unchanged.
+
+--- a/src/impl/threadpool.cpp
++++ b/src/impl/threadpool.cpp
+@@ -11,6 +11,10 @@
+ 
+ namespace rtc::impl {
+ 
++// NereusSDR: an idle worker looks at the queue again after this long, woken
++// or not, so a task whose wake-up never arrived is still taken.
++const auto IDLE_RECHECK_INTERVAL = std::chrono::milliseconds(100);
++
+ ThreadPool &ThreadPool::Instance() {
+ 	static ThreadPool *instance = new ThreadPool;
+ 	return *instance;
+@@ -86,10 +90,12 @@
+ 		--mBusyWorkers;
+ 		scope_guard guard([&]() { ++mBusyWorkers; });
+ 		mWaitingCondition.notify_all();
+-		if (time)
+-			mTasksCondition.wait_until(lock, *time);
+-		else
+-			mTasksCondition.wait(lock);
++		// NereusSDR: never wait on the notification alone. A wake-up that does
++		// not reach any worker must not leave a queued task waiting for ever.
++		auto deadline = clock::now() + IDLE_RECHECK_INTERVAL;
++		if (time && *time < deadline)
++			deadline = *time;
++		mTasksCondition.wait_until(lock, deadline);
+ 	}
+ 	return nullptr;
+ }

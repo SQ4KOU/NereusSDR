@@ -1,0 +1,1026 @@
+// =================================================================
+// src/gui/TitleBar.cpp  (NereusSDR)
+// =================================================================
+//
+// Ported from AetherSDR source:
+//   src/gui/TitleBar.cpp (especially lines 27-34, 94-104, 282-295)
+//
+// AetherSDR is licensed under the GNU General Public License v3; see
+// https://github.com/ten9876/AetherSDR for the contributor list and
+// project-level LICENSE. NereusSDR is also GPLv3. AetherSDR source
+// files carry no per-file GPL header; attribution is at project level
+// per docs/attribution/HOW-TO-PORT.md rule 6.
+//
+// Upstream reference: AetherSDR v0.8.16 (2026-04).
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-10-12 - JJ's option B: fit small workspace text to the approved
+//                 11 logical-pixel floor. J.J. Boyd (KG4VCF), AI-assisted
+//                 via OpenAI Codex. Classic geometry and colors retained.
+//   2026-04-20 — Ported/adapted in C++20/Qt6 for NereusSDR by J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code. Phase 3O Sub-Phase 10 Task 10c.
+//                 Scoped-down port: master-output strip only. AetherSDR's
+//                 heartbeat / multiFLEX / PC-audio / headphone /
+//                 minimal-mode / feature-request widgets intentionally
+//                 omitted (deferred to separate phases).
+//                 Constructor preserves AetherSDR's 32 px fixed height,
+//                 dark background (#0a0a14) with bottom-border (#203040),
+//                 and the [menu][stretch][app-name][stretch][master]
+//                 layout pattern. `setMenuBar()` is a line-for-line port
+//                 of AetherSDR TitleBar.cpp:282-295 (restyle QMenuBar,
+//                 `m_hbox->insertWidget(0, mb)`). App-name label: text
+//                 "AetherSDR" swapped to "NereusSDR", accent colour
+//                 (#00b4d8), font (14 px bold), and QLabel::AlignCenter
+//                 preserved verbatim.
+//                 Design spec: docs/architecture/2026-04-19-vax-design.md
+//                 §6.3 + §7.3.
+//   2026-04-20 — Task 10d: added the 💡 feature-request button as the
+//                 rightmost element (past MasterOutputWidget, 6 px
+//                 spacing). Button construction (lightbulb painter,
+//                 28×28 sizing, #3a2a00/#806020 dark-amber style) moved
+//                 verbatim from the now-deleted featureBar QToolBar in
+//                 MainWindow.cpp. Emits featureRequestClicked(); MainWindow
+//                 wires that to showFeatureRequestDialog. Matches
+//                 AetherSDR's pattern of the feature button being the
+//                 rightmost strip element.
+//   2026-04-27 — Phase 3Q-6: implemented ConnectionSegment — state dot,
+//                 radio name/IP text, ▲▼ Mbps readout, and 10 Hz
+//                 throttled activity LED. Inserted at position 1 in the
+//                 hbox (just after the menu bar). Design §4.1.
+//   2026-04-30 — Phase 3Q Sub-PR-4 D.1: replaced ConnectionSegment body
+//                 per shell-chrome redesign spec §4.1. See TitleBar.h for
+//                 the full change description.
+//   2026-08-02 — Task A7 (bottom-banner cleanup): single-row UTC clock,
+//                 inserted after MasterOutputWidget and before the 💡
+//                 feature-request button. See TitleBar.h for rationale.
+//   2026-09-30 — Fix wave round 2 (maintainer decision 2026-09-30): the
+//                 gap after the UTC clock is kUtcToMasterGap, 18 px instead
+//                 of 24, so the connection segment keeps all four remote
+//                 groups at a 1440 px window when the header font is
+//                 monospace. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-09-30 — Fix wave round 3: the kUtcToMasterGap comment states
+//                 what was measured instead of naming fonts that were not.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01 — Maintainer decision 2026-10-01: the radio-offline audio
+//                 group reads "Radio offline" instead of "Audio radio
+//                 offline", and the kUtcToMasterGap comment records that
+//                 18 px now covers every audio group in the measured fonts.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-06 - Radio speaker plan Task 5 (R-SPK-19, D7): the feature
+//                 button shows the app's own bulb icon (AppIcon); the
+//                 QPainter lightbulb painter is removed. J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-06 - Radio speaker plan Task 6 (R-SPK-16, R-SPK-17, D1): the
+//                 RADIO group (RadioSpeakerWidget) follows the PC group
+//                 after kPcToRadioGap; setRadioModel() binds it. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-10-06 - Radio speaker plan Task 6, JJ decision 2 (R-SPK-17, D1):
+//                 PC and RADIO sit in one volume group that stacks them
+//                 (layout C) when side by side would leave the connection
+//                 segment less than it asks for, and returns to side by
+//                 side past kSideBySideReturnSpare. J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-07 - ConnectionSegment::setPulsePausedForTest(), a test seam for
+//                 the workspace visual preview tool (tests/visual/).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - The connection segment's dot, latency, rates and audio pip
+//                 read WorkspacePreview::statusColour() (the status colour
+//                 choice). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-10-08 - The indicator tones are the product; the pulse's dimmer
+//                 step of Connected and Link lost mixes the bright tone with
+//                 titlebar-mid, and setPulsePausedForTest() can hold either
+//                 step. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+// =================================================================
+
+#include "TitleBar.h"
+
+#include "StyleConstants.h"
+#include "styles/WorkspacePreview.h"
+#include "styles/WorkspaceStyle.h"
+#include "widgets/AppIcon.h"
+#include "widgets/MasterOutputWidget.h"
+#include "widgets/RadioSpeakerWidget.h"
+
+#include <QDateTime>
+#include <QHBoxLayout>
+#include <QFrame>
+#include <QKeyEvent>
+#include <QIcon>
+#include <QLabel>
+#include <QMenuBar>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPen>
+#include <QPixmap>
+#include <QPolygonF>
+#include <QPushButton>
+#include <QSize>
+#include <QBoxLayout>
+#include <QEvent>
+#include <QLayoutItem>
+#include <QSizePolicy>
+#include <QTimer>
+#include <QVBoxLayout>
+#include <QHostAddress>
+
+#include <cmath>
+
+namespace NereusSDR {
+
+
+namespace {
+
+// Content-margins + spacing from AetherSDR TitleBar.cpp:34-35.
+constexpr int kMarginLeft   = 4;
+constexpr int kMarginTop    = 2;
+constexpr int kMarginRight  = 8;
+constexpr int kMarginBottom = 2;
+constexpr int kSpacing      = 6;
+
+// Gap between the UTC clock and the master output slider. It keeps the
+// clock from reading as part of the slider (a mis-drag there changes the
+// audio level). 18 px rather than 24 gives the connection segment 6 px
+// more at a 1440 px window. Measured offscreen with the header font
+// substituted by monospace fonts (Menlo, Monaco, Courier New, Andale Mono,
+// PT Mono): the fault wording, the longest audio group, needed 4 px more
+// than a 24 px gap allowed, and 18 covers it with 2 px (Menlo) or 3 px
+// (the others) to spare.
+constexpr int kUtcToMasterGap = 18;
+
+// Visible gap between the PC group's readout and the RADIO group's icon
+// in the side-by-side form (R-SPK-17, header-layouts.html layout A): the
+// spacing of the volume group's own layout.
+constexpr int kPcToRadioGap = 16;
+
+// R-SPK-17 (JJ, 2026-10-06): the header shows PC and RADIO side by side
+// (layout A) while that leaves the connection segment the width it asks
+// for (its sizeHint, which covers every remote group plus 14 px beyond
+// what tst_connection_segment_v2 and tst_remote_window_harness require),
+// and stacks them (layout C) otherwise. The decision uses the width the
+// segment WOULD get side by side, whichever form is showing, so the form
+// does not feed back into it; layout A returns only once it leaves this
+// much more than the segment asks for, so readings whose width moves by a
+// few pixels each second cannot flip the form back and forth.
+//
+// Measured 2026-10-06, offscreen, default header font (SF Mono 10
+// DemiBold), real MainWindow remote header connected with all four
+// readouts (Traffic, Audio, Radio, Core RTT; longest text 527 px hint):
+//   1440 px window: side by side would leave the segment 316 px, so the
+//     header stacks; stacked group 159x28, segment 527 px, worst margin
+//     over every audio state +13 px (Menlo -77, Monaco, Courier New,
+//     Andale Mono and PT Mono -76, against Menlo -78 before Task 6;
+//     not chased).
+//   Side by side the volume group is 370 px wide, so with the longest
+//     text the header stacks below a window of about 1651 px and returns
+//     to side by side from about 1667 px (1651 + this spare).
+//   2200 px window: side by side, segment margin +14 px.
+constexpr int kSideBySideReturnSpare = 16;
+
+// Fixed strip height. From AetherSDR TitleBar.cpp:30.
+constexpr int kStripHeight = 32;
+
+} // namespace
+
+// =========================================================================
+// ConnectionSegment implementation  (Phase 3Q Sub-PR-4 D.1)
+// =========================================================================
+
+ConnectionSegment::ConnectionSegment(QWidget* parent)
+    : QWidget(parent)
+{
+    setFixedHeight(30);
+    setMinimumWidth(200);
+    setCursor(Qt::PointingHandCursor);
+    setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true);
+    setAttribute(Qt::WA_StyledBackground, true);
+
+    // Pulse timer — drives the state-dot animation. 750 ms half-period gives
+    // a 1.5 s full cycle: visible and calm for streaming (not frantic).
+    m_pulseTimer.setInterval(750);
+    connect(&m_pulseTimer, &QTimer::timeout, this, [this]() {
+        m_pulseOn = !m_pulseOn;
+        update();
+    });
+    m_pulseTimer.start();
+
+    m_routePopup = new QFrame(this, Qt::Popup);
+    m_routePopup->setObjectName(QStringLiteral("connectionRoutePopup"));
+    m_routePopup->setFocusPolicy(Qt::StrongFocus);
+    m_routePopup->setStyleSheet(QStringLiteral(
+        "QFrame#connectionRoutePopup { background: #101b2a; border: 1px solid #36506a; border-radius: 5px; }"
+        "QLabel { color: #c8d8e8; border: none; }"
+        "QPushButton { color: #66cce6; background: #1b3044; border: 1px solid #36506a; padding: 5px; }"));
+    auto* popupLayout = new QVBoxLayout(m_routePopup);
+    popupLayout->setContentsMargins(14, 12, 14, 12);
+    popupLayout->setSpacing(6);
+    auto* controlsHeading = new QLabel(tr("Controls"), m_routePopup);
+    popupLayout->addWidget(controlsHeading);
+    m_controlsRoute = new QLabel(m_routePopup);
+    m_controlsRoute->setObjectName(QStringLiteral("controlsRoute"));
+    m_controlsRoute->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    popupLayout->addWidget(m_controlsRoute);
+    auto* mediaHeading = new QLabel(tr("Audio/display"), m_routePopup);
+    popupLayout->addWidget(mediaHeading);
+    m_mediaRoute = new QLabel(m_routePopup);
+    m_mediaRoute->setObjectName(QStringLiteral("mediaRoute"));
+    m_mediaRoute->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    popupLayout->addWidget(m_mediaRoute);
+    auto* details = new QPushButton(tr("Open network diagnostics"), m_routePopup);
+    details->setObjectName(QStringLiteral("networkDiagnosticsButton"));
+    popupLayout->addWidget(details);
+    connect(details, &QPushButton::clicked, this, [this] {
+        m_routePopup->hide();
+        emit diagnosticsRequested();
+    });
+    updateRoutePopup();
+}
+
+void ConnectionSegment::setPulsePausedForTest(bool paused, bool brightStep)
+{
+    if (paused) {
+        m_pulseTimer.stop();
+        m_pulseOn = brightStep;
+    } else if (m_state == ConnectionState::Connected   ||
+               m_state == ConnectionState::Probing     ||
+               m_state == ConnectionState::Connecting  ||
+               m_state == ConnectionState::LinkLost) {
+        m_pulseTimer.start();
+    }
+    update();
+}
+
+void ConnectionSegment::setState(ConnectionState s)
+{
+    if (m_state == s) {
+        return;
+    }
+    m_state = s;
+    if (s != ConnectionState::Connected) {
+        m_controlPath.reset();
+        m_mediaPath.reset();
+        updateRoutePopup();
+        m_routePopup->hide();
+    }
+
+    // Pulse while there is interesting transient state to show.
+    if (s == ConnectionState::Connected   ||
+        s == ConnectionState::Probing     ||
+        s == ConnectionState::Connecting  ||
+        s == ConnectionState::LinkLost) {
+        m_pulseTimer.start();
+    } else {
+        m_pulseTimer.stop();
+        m_pulseOn = false;
+    }
+    update();
+}
+
+void ConnectionSegment::setRates(double rxMbps, double txMbps)
+{
+    if (qFuzzyCompare(m_rxMbps + 1.0, rxMbps + 1.0) &&
+        qFuzzyCompare(m_txMbps + 1.0, txMbps + 1.0)) {
+        return;
+    }
+    m_rxMbps = rxMbps;
+    m_txMbps = txMbps;
+    update();
+}
+
+void ConnectionSegment::setRemoteStatusText(const QString& text)
+{
+    if (m_remoteStatusText == text) { return; }
+    m_remoteStatusText = text;
+    setAccessibleName(remotePresentationText());
+    updateGeometry();
+    update();
+}
+
+void ConnectionSegment::setRemoteTelemetryText(const QString& text)
+{
+    if (m_remoteTelemetryText == text) { return; }
+    m_remoteTelemetryText = text;
+    setAccessibleName(remotePresentationText());
+    setAccessibleDescription(text);
+    updateGeometry();
+    update();
+}
+
+void ConnectionSegment::setRemoteMetrics(const QStringList& groups)
+{
+    if (m_remoteMetrics == groups) { return; }
+    m_remoteMetrics = groups;
+    setAccessibleName(remotePresentationText());
+    updateGeometry();
+    update();
+}
+
+namespace {
+QString endpointText(const QString& address, quint16 port)
+{
+    if (address.isEmpty() || port == 0) { return QObject::tr("unavailable"); }
+    QHostAddress numeric;
+    if (!numeric.setAddress(address)) { return QObject::tr("unavailable"); }
+    const QString ip = numeric.toString();
+    return numeric.protocol() == QAbstractSocket::IPv6Protocol
+        ? QStringLiteral("[%1]:%2").arg(ip).arg(port)
+        : QStringLiteral("%1:%2").arg(ip).arg(port);
+}
+}
+
+QString ConnectionSegment::routeText(const std::optional<NetworkPathSnapshot>& path)
+{
+    if (!path) { return tr("Path unavailable"); }
+    QString kind = tr("Path unavailable");
+    if (path->kind == NetworkPathSnapshot::Kind::Direct) { kind = tr("Direct"); }
+    if (path->kind == NetworkPathSnapshot::Kind::Relayed) { kind = tr("Via relay"); }
+    QString carrier;
+    switch (path->carrier) {
+    case NetworkPathSnapshot::Carrier::WebSocket: carrier = tr("WSS"); break;
+    case NetworkPathSnapshot::Carrier::WebRelay: carrier = tr("web relay"); break;
+    case NetworkPathSnapshot::Carrier::Ice: carrier = tr("ICE"); break;
+    }
+    const bool ice = path->endpoints == NetworkPathSnapshot::Endpoints::IceCandidates;
+    const QString endpoints = ice ? tr("ICE candidates") : tr("socket endpoints (may be a proxy hop)");
+    QString text = tr("%1 · %2 · %3\nLocal %4\nRemote %5")
+        .arg(kind, carrier, endpoints,
+             endpointText(path->localAddress, path->localPort),
+             endpointText(path->remoteAddress, path->remotePort));
+    if (ice && (!path->localCandidateType.isEmpty() || !path->remoteCandidateType.isEmpty())) {
+        text += tr("\nCandidate types: local %1, remote %2")
+            .arg(path->localCandidateType.isEmpty() ? tr("unavailable") : path->localCandidateType,
+                 path->remoteCandidateType.isEmpty() ? tr("unavailable") : path->remoteCandidateType);
+    }
+    if (path->mediaRidesControl) { text += tr("\nUses the control connection"); }
+    return text;
+}
+
+QString ConnectionSegment::audioMetricText(std::optional<double> kbps,
+                                           RemoteAudioStatus::State state)
+{
+    using State = RemoteAudioStatus::State;
+    if (state == State::MutedHere) { return tr("Audio muted"); }
+    if (state == State::RadioOffline) { return tr("Radio offline"); }
+    if (state == State::CoreCouldNotStart || state == State::PlaybackProblem) {
+        return tr("Audio unavailable");
+    }
+    QString status;
+    switch (state) {
+    case State::Playing: status = QStringLiteral("▶"); break;
+    case State::WaitingForAudio:
+    case State::Starting:
+    case State::Reconnecting: status = QStringLiteral("…"); break;
+    case State::NotConnected: status = QStringLiteral("■"); break;
+    case State::MutedHere:
+    case State::RadioOffline:
+    case State::CoreCouldNotStart:
+    case State::PlaybackProblem: break;
+    }
+    return tr("Audio %1 kbps %2")
+        .arg(kbps ? QString::number(*kbps, 'f', 1) : QStringLiteral("—"), status);
+}
+
+void ConnectionSegment::setRemotePaths(std::optional<NetworkPathSnapshot> controls,
+                                       std::optional<NetworkPathSnapshot> media)
+{
+    if (m_state != ConnectionState::Connected) {
+        controls.reset();
+        media.reset();
+    }
+    m_controlPath = std::move(controls);
+    m_mediaPath = std::move(media);
+    updateRoutePopup();
+}
+
+void ConnectionSegment::updateRoutePopup()
+{
+    m_controlsRoute->setText(routeText(m_controlPath));
+    m_mediaRoute->setText(routeText(m_mediaPath));
+    m_routePopup->adjustSize();
+}
+
+void ConnectionSegment::showRoutePopup()
+{
+    if (m_state != ConnectionState::Connected) { return; }
+    emit pathsRefreshRequested();
+    updateRoutePopup();
+    m_routePopup->move(mapToGlobal(QPoint(0, height() + 2)));
+    m_routePopup->show();
+    m_routePopup->setFocus();
+}
+
+QWidget* ConnectionSegment::routePopup() const
+{
+    return m_routePopup;
+}
+
+QSize ConnectionSegment::sizeHint() const
+{
+    QFont metricFont(QStringLiteral("SF Mono"), 10, QFont::DemiBold);
+    const QFontMetrics metrics(WorkspacePreview::readableFont(metricFont, this), this);
+    const QString text = remotePresentationText();
+    if (!text.isEmpty()) {
+        // Dot + its gap + text + trailing breathing room. Reserve enough
+        // width for the title bar's layout compression so a persistent audio
+        // status remains visible alongside the other three groups at 1440px.
+        return {8 + 10 + 8 + metrics.horizontalAdvance(text) + 22, 30};
+    }
+    return {200, 30};
+}
+
+QString ConnectionSegment::remotePresentationText() const
+{
+    if (!m_remoteMetrics.isEmpty() && m_state == ConnectionState::Connected) {
+        return m_remoteMetrics.join(QStringLiteral(" · "));
+    }
+    if (m_remoteStatusText.isEmpty()) {
+        return m_remoteTelemetryText;
+    }
+    if (m_remoteTelemetryText.isEmpty()) {
+        return m_remoteStatusText;
+    }
+    return m_remoteStatusText + QStringLiteral("  ·  ") + m_remoteTelemetryText;
+}
+
+QString ConnectionSegment::remoteTextForWidth(int pixels) const
+{
+    const QString full = remotePresentationText();
+    if (m_remoteMetrics.size() != 4 || m_state != ConnectionState::Connected) {
+        return full;
+    }
+    const QFontMetrics metrics(QFont(QStringLiteral("SF Mono"), 10, QFont::DemiBold));
+    if (metrics.horizontalAdvance(full) <= pixels) { return full; }
+    QStringList visible;
+    // Traffic and Core RTT identify the live link first; audio and Core-radio
+    // readings join when there is room. The full four groups remain in the
+    // accessible name even when a narrow window clips the row.
+    for (int index : {0, 3, 1, 2}) {
+        QStringList proposed = visible;
+        proposed << m_remoteMetrics.at(index);
+        if (metrics.horizontalAdvance(proposed.join(QStringLiteral(" · "))) <= pixels) {
+            visible = proposed;
+        }
+    }
+    return visible.isEmpty() ? metrics.elidedText(m_remoteMetrics.first(), Qt::ElideRight, pixels)
+                             : visible.join(QStringLiteral(" · "));
+}
+
+void ConnectionSegment::setRttMs(int ms)
+{
+    // Track the latest raw value so callers can read it back for
+    // diagnostics; the painted value comes from smoothedRttMs().
+    m_rttMs = ms;
+
+    // Negative samples ("no rtt available") clear the smoothing queue
+    // — re-attaching produces "— ms" until real samples flow again.
+    if (ms < 0) {
+        m_rttSamples.clear();
+        update();
+        return;
+    }
+
+    m_rttSamples.enqueue(ms);
+    while (m_rttSamples.size() > kRttSmoothingWindow) {
+        m_rttSamples.dequeue();
+    }
+    update();
+}
+
+int ConnectionSegment::smoothedRttMs() const noexcept
+{
+    if (m_rttSamples.isEmpty()) {
+        return m_rttMs;   // -1 when there's been no real sample yet
+    }
+
+    // Min-filtered RTT — 2nd-smallest of the rolling window.
+    //
+    // The radio sends status packets on its own periodic cadence
+    // (P1: 380.95 pps → 2.6 ms; P2: 100 ms HighPriority status)
+    // independent of our outbound commands. Each measured sample is
+    // therefore  true_RTT + uniform(0, cadence)  — the additive term
+    // is bracket noise from how long the radio waited before its next
+    // status emit. A rolling MEAN preserves that noise and produces
+    // two pathological readings:
+    //   - LAN with sub-ms RTT reads ~half the cadence (P1 floor ~1.3 ms)
+    //   - WAN with cadence-sized RTT becomes random noise — a few
+    //     "lucky" samples where status arrived right after our cmd
+    //     can pull the mean way below true_RTT.
+    //
+    // The MINIMUM across a window approaches true_RTT (the lucky
+    // sample where the radio's cadence noise was ~0). Same technique
+    // TCP BBR uses for its RTT estimator. We use the 2nd-smallest
+    // (rather than the absolute minimum) to winsorize a single
+    // anomalously-low outlier — protects against a transient
+    // sub-millisecond glitch pulling the display below the true RTT.
+    if (m_rttSamples.size() == 1) {
+        return m_rttSamples.first();
+    }
+    QList<int> sorted;
+    sorted.reserve(m_rttSamples.size());
+    for (int s : m_rttSamples) { sorted.append(s); }
+    std::sort(sorted.begin(), sorted.end());
+    return sorted.at(1);
+}
+
+void ConnectionSegment::setAudioFlowState(AudioEngine::FlowState s)
+{
+    if (m_audioFlow == s) {
+        return;
+    }
+    m_audioFlow = s;
+    update();
+}
+
+void ConnectionSegment::frameTick()
+{
+    // Throttled activity tick — for now just nudges a repaint so the
+    // pulse looks "live". The pulse timer above already drives the
+    // animation; this slot exists for future per-frame visual cues.
+    update();
+}
+
+// Workspace preview: the status colours take Longpath's indicator tones
+// (statusColour()), and each pulse keeps a brighter and a dimmer step.
+// The tones make Connected's two steps one colour (live) and Link lost's
+// one colour (measured), so their dimmer step is the bright tone mixed
+// with the title bar's own middle tone, titlebar-mid (kTitleGradMid):
+// the same hue, darker, from colours the palette already holds. With the
+// switch off every step is the legacy colour.
+namespace {
+// About the legacy pulse's step: #3fcf6a is 81 % of #5fff8a's value.
+constexpr double kPulseDimMix = 0.25;
+
+QColor pulseDimStep(const QColor& legacyDim, const char* role)
+{
+    const QColor bright = WorkspacePreview::statusColour(legacyDim, role);
+    if (!WorkspacePreview::enabled()) {
+        return bright;
+    }
+    const QColor bar = WorkspacePreview::roleColour(legacyDim, "titlebar-mid");
+    const auto mix = [](int a, int b) {
+        return static_cast<int>(std::lround(a * (1.0 - kPulseDimMix) + b * kPulseDimMix));
+    };
+    return QColor(mix(bright.red(), bar.red()), mix(bright.green(), bar.green()),
+                  mix(bright.blue(), bar.blue()), bright.alpha());
+}
+} // namespace
+
+QColor ConnectionSegment::stateDotColor() const
+{
+    using WorkspacePreview::statusColour;
+    switch (m_state) {
+        case ConnectionState::Connected:
+            // m_pulseOn alternates → slow green pulse encoding streaming activity
+            return m_pulseOn ? statusColour(QColor("#5fff8a"), "live")
+                             : pulseDimStep(QColor("#3fcf6a"), "ok");
+        case ConnectionState::Probing:
+        case ConnectionState::Connecting:
+            return m_pulseOn ? statusColour(QColor("#5fa8ff"), "accent")
+                             : statusColour(QColor("#3f78cf"), "sel-hover");
+        case ConnectionState::LinkLost:
+            return m_pulseOn ? statusColour(QColor("#ff8c00"), "measured")
+                             : pulseDimStep(QColor("#cf6c00"), "warn");
+        case ConnectionState::Disconnected:
+            return statusColour(QColor("#ff4040"), "danger");
+    }
+    return statusColour(QColor("#607080"), "text-scale");
+}
+
+QColor ConnectionSegment::rttColor(int rttMs) const
+{
+    using WorkspacePreview::statusColour;
+    if (rttMs < 0)    { return statusColour(QColor("#607080"), "text-scale"); }
+    if (rttMs < 50)   { return statusColour(QColor("#5fff8a"), "ok"); }
+    if (rttMs < 150)  { return statusColour(QColor("#ffd700"), "warn"); }
+    return statusColour(QColor("#ff6060"), "danger");
+}
+
+QColor ConnectionSegment::audioPipColor(AudioEngine::FlowState s) const
+{
+    using WorkspacePreview::statusColour;
+    switch (s) {
+        case AudioEngine::FlowState::Healthy:  return statusColour(QColor("#5fa8ff"), "accent");
+        case AudioEngine::FlowState::Underrun: return statusColour(QColor("#ffd700"), "warn");
+        case AudioEngine::FlowState::Stalled:  return statusColour(QColor("#ff6060"), "danger");
+        case AudioEngine::FlowState::Dead:     return statusColour(QColor("#404858"), "text-inactive");
+    }
+    return statusColour(QColor("#404858"), "text-inactive");
+}
+
+QRect ConnectionSegment::rttRect() const
+{
+    return QRect(m_lastRttX1, 0, m_lastRttX2 - m_lastRttX1, height());
+}
+
+QRect ConnectionSegment::audioPipRect() const
+{
+    return QRect(m_lastPipX1, 0, m_lastPipX2 - m_lastPipX1, height());
+}
+
+void ConnectionSegment::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    // Background
+    p.setPen(Qt::NoPen);
+    p.setBrush(WorkspacePreview::roleColour(QColor("#0f1420"), "inset"));
+    p.drawRoundedRect(rect(), 3, 3);
+
+    p.setFont(WorkspacePreview::readableFont(QFont(QStringLiteral("SF Mono"), 10, QFont::DemiBold), this));
+
+    // ── 1. State-encoding dot ──────────────────────────────────────────────
+    const QRect dotRect(8, height() / 2 - 5, 10, 10);
+    p.setBrush(stateDotColor());
+    p.drawEllipse(dotRect);
+
+    int x = dotRect.right() + 8;
+    const int textY = height() / 2 + 4;
+
+    const QString remoteText = remoteTextForWidth(width() - x - 6);
+    if (!remoteText.isEmpty()) {
+        p.setPen(WorkspacePreview::roleColour(QColor("#c8d8e8"), "text"));
+        p.drawText(x, textY, p.fontMetrics().elidedText(
+            remoteText, Qt::ElideRight, width() - x - 6));
+        m_lastRttX1 = x;
+        m_lastRttX2 = width();
+        m_lastPipX1 = m_lastPipX2 = 0;
+        return;
+    }
+
+    if (m_state == ConnectionState::Disconnected) {
+        p.setPen(WorkspacePreview::roleColour(QColor("#607080"), "text-scale"));
+        p.drawText(x, textY, tr("Disconnected — click to connect"));
+        m_lastRttX1 = m_lastRttX2 = 0;
+        m_lastPipX1 = m_lastPipX2 = 0;
+        return;
+    }
+
+    // ── 2. ▲ Mbps — NereusSDR → radio (commands; small, kbps territory) ──
+    // Reads m_txMbps which is the call-site's "client→radio" byte rate
+    // (RadioConnection::txByteRate, recorded per outbound packet at
+    // RadioConnection.cpp:1914 [@HEAD]). Client perspective: ▲ = up
+    // = uploading commands to the radio.
+    //
+    // Glyph is built via QChar(0x25B2) rather than a UTF-8 byte-escape
+    // string passed to QString::asprintf — same fix as ebe9030 applied
+    // to the audio pip. asprintf with a leading "\xe2\x96\xb2" prefix
+    // gets misinterpreted as Latin-1 codepoints on the macOS compile
+    // path, rendering as garbage rather than a triangle.
+    p.setPen(WorkspacePreview::statusColour(QColor("#a0d8a0"), "ok"));
+    const QString tx = QChar(0x25B2) + QString::asprintf(" %.1f Mbps", m_txMbps);
+    p.drawText(x, textY, tx);
+    x += p.fontMetrics().horizontalAdvance(tx) + 10;
+
+    // ── 3. RTT readout (smoothed) — clickable region ──────────────────────
+    // Uses the rolling-mean smoothedRttMs() so the readout calms instead
+    // of jumping per-ping. Color thresholds operate on the smoothed
+    // value too, so the green/yellow/red transitions don't flicker.
+    const int rttDisplay = smoothedRttMs();
+    p.setPen(rttColor(rttDisplay));
+    // QChar(0x2014) for the em-dash placeholder — same byte-escape
+    // misinterpretation risk as the Mbps glyphs above; build via QChar.
+    const QString rttText = (rttDisplay < 0)
+        ? QChar(0x2014) + QStringLiteral(" ms")
+        : QString::asprintf("%d ms", rttDisplay);
+    p.drawText(x, textY, rttText);
+    m_lastRttX1 = x;
+    m_lastRttX2 = x + p.fontMetrics().horizontalAdvance(rttText);
+    x = m_lastRttX2 + 10;
+
+    // ── 4. ▼ Mbps — radio → NereusSDR (I/Q stream; large, Mbps) ──────────
+    // Reads m_rxMbps which is the call-site's "radio→client" byte rate
+    // (RadioConnection::rxByteRate, recorded per inbound packet at
+    // RadioConnection.cpp:1272 [@HEAD]). Client perspective: ▼ = down
+    // = downloading I/Q from the radio.
+    //
+    // QChar(0x25BC) for the same reason as the up-triangle above.
+    p.setPen(WorkspacePreview::statusColour(QColor("#a0d8a0"), "ok"));
+    const QString rx = QChar(0x25BC) + QString::asprintf(" %.1f Mbps", m_rxMbps);
+    p.drawText(x, textY, rx);
+    x += p.fontMetrics().horizontalAdvance(rx) + 10;
+
+    // ── 5. ● audio pip ────────────────────────────────────────────────────
+    // Was: vertical separator "|" + ♪ (U+266A). ♪ is absent in Menlo (the
+    // SF Mono fallback on macOS), rendering as garbage. Replaced with ●
+    // (U+25CF BLACK CIRCLE), universally available in every monospace font.
+    // The circle colour already encodes audio state — semantically cleaner.
+    p.setPen(audioPipColor(m_audioFlow));
+    // Use QChar(0x25CF) directly rather than a byte-escape QStringLiteral —
+    // \xe2\x97\x8f gets misinterpreted as 3 Latin-1 codepoints (â + 2 control
+    // chars) on some compile-paths, rendering as garbage. QChar(0x25CF) is
+    // unambiguous: a single UTF-16 code unit pointing to ● (U+25CF).
+    const QString pip(QChar(0x25CF));   // ● BLACK CIRCLE — color = audio state
+    p.drawText(x, textY, pip);
+    m_lastPipX1 = x;
+    m_lastPipX2 = x + p.fontMetrics().horizontalAdvance(pip);
+}
+
+void ConnectionSegment::mousePressEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::RightButton) {
+        emit contextMenuRequested(event->globalPosition().toPoint());
+        return;
+    }
+    if (event->button() == Qt::LeftButton) {
+        if (!remotePresentationText().isEmpty()) {
+            emit rttClicked();
+            return;
+        }
+        if (rttRect().contains(event->pos())) {
+            emit rttClicked();
+            return;
+        }
+        if (audioPipRect().contains(event->pos())) {
+            emit audioPipClicked();
+            return;
+        }
+        // Disconnected-state: anywhere-click routes to rttClicked so the
+        // host can wire both to the Connect / Diagnostics dialog.
+        if (m_state == ConnectionState::Disconnected) {
+            emit rttClicked();
+            return;
+        }
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void ConnectionSegment::keyPressEvent(QKeyEvent* event)
+{
+    if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter
+         || event->key() == Qt::Key_Space) && m_state == ConnectionState::Connected
+        && !m_remoteStatusText.isEmpty()) {
+        showRoutePopup();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+// =========================================================================
+// TitleBar implementation
+// =========================================================================
+
+TitleBar::TitleBar(AudioEngine* audio, QWidget* parent)
+    : QWidget(parent)
+{
+    setFixedHeight(kStripHeight);
+    // Strip background + bottom border. From AetherSDR TitleBar.cpp:31.
+    setStyleSheet(QStringLiteral("TitleBar { background: %1; border-bottom: 1px solid %2; }")
+                  .arg(QLatin1String(Style::kStatusBarBg),
+                       QLatin1String(Style::kBorderSubtle)));
+    const bool workspaceLook = WorkspacePreview::enabled();
+    if (workspaceLook) {
+        // Workspace preview: the same strip in the Glass and Depth roles.
+        setStyleSheet(QStringLiteral("TitleBar { background: %1; border-bottom: 1px solid %2; }")
+                      .arg(Workspace::role("statusbar-bg", Style::kStatusBarBg),
+                           Workspace::role("border-subtle", Style::kBorderSubtle)));
+    }
+
+    m_hbox = new QHBoxLayout(this);
+    m_hbox->setContentsMargins(kMarginLeft, kMarginTop, kMarginRight, kMarginBottom);
+    m_hbox->setSpacing(kSpacing);
+
+    // Position 0 is reserved for the menu bar (inserted via setMenuBar()).
+    // The ConnectionSegment sits at position 1 (or 0 before the menu is
+    // inserted), between the menu bar and the centre label stretch.
+
+    // ── ConnectionSegment — Phase 3Q-6 ─────────────────────────────────
+    // Inserted as the first item. setMenuBar() will prepend the menu bar
+    // at index 0 pushing this to index 1. Until setMenuBar() runs the
+    // segment sits at index 0 — acceptable; it just moves right once the
+    // menu arrives.
+    m_connectionSegment = new ConnectionSegment(this);
+    m_hbox->addWidget(m_connectionSegment);
+
+    // ── Left stretch ───────────────────────────────────────────────────────
+    m_hbox->addStretch(1);
+
+    // ── App-name label ─────────────────────────────────────────────────────
+    // From AetherSDR TitleBar.cpp:101-104 — text swapped to "NereusSDR".
+    auto* appName = new QLabel(QStringLiteral("NereusSDR"), this);
+    // App-name label. From AetherSDR TitleBar.cpp:102.
+    appName->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 14px; font-weight: bold; }")
+                           .arg(QLatin1String(Style::kAccent)));
+    if (workspaceLook) {
+        appName->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 14px; font-weight: bold; }")
+                               .arg(Workspace::role("accent", Style::kAccent)));
+    }
+    appName->setAlignment(Qt::AlignCenter);
+    m_hbox->addWidget(appName);
+
+    // ── Right stretch ──────────────────────────────────────────────────────
+    m_hbox->addStretch(1);
+
+    // ── UTC clock — Task A7 ─────────────────────────────────────────────────
+    // Single-row UTC, moved here from the bottom banner. Every desktop OS
+    // already puts a clock top-right; the one fact worth duplicating here
+    // is UTC, since it's the one the OS clock doesn't give an operator for
+    // logging. Dropping it from the banner frees that corner for alarms
+    // alone.
+    //
+    // Placed BEFORE MasterOutputWidget, with a deliberate gap after it.
+    // Sitting immediately after the slider it read as part of that control
+    // and invited a mis-drag on a widget where an accidental grab changes
+    // audio level (bench feedback, 2026-08-03).
+    m_utcLabel = new QLabel(this);
+    m_utcLabel->setObjectName(QStringLiteral("utcLabel"));
+    m_utcLabel->setToolTip(tr("UTC time"));
+    m_utcLabel->setStyleSheet(QStringLiteral(
+        "QLabel { color: #8aa8c0; font-size: 11px;"
+        " font-family: 'SF Mono', Menlo, monospace; }"));
+    if (workspaceLook) {
+        // A number: the workspace monospace chain (monoFont's families).
+        m_utcLabel->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 11px; font-family: %2; }")
+            .arg(Workspace::role("text-secondary", "#8aa8c0"),
+                 QLatin1String(Workspace::kMonoQssFamilies)));
+    }
+    m_hbox->addWidget(m_utcLabel);
+    m_hbox->addSpacing(kUtcToMasterGap);
+
+    // ── MasterOutputWidget — Task 10b composite ────────────────────────────
+    // ── Volume group, R-SPK-17: PC then RADIO ───────────────────────────
+    // One box whose direction switches between side by side (layout A)
+    // and stacked (layout C); see updateVolumeForm().
+    m_volumeGroup = new QWidget(this);
+    m_volumeGroup->setObjectName(QStringLiteral("headerVolumeGroup"));
+    m_volumeBox = new QBoxLayout(QBoxLayout::LeftToRight, m_volumeGroup);
+    m_volumeBox->setContentsMargins(0, 0, 0, 0);
+    m_volumeBox->setSpacing(kPcToRadioGap);
+    m_master = new MasterOutputWidget(audio, m_volumeGroup);
+    m_volumeBox->addWidget(m_master);
+    // The RADIO group is built with no model so the strip's order never
+    // changes; it shows no radio connected (disabled, never hidden) until
+    // setRadioModel().
+    m_radioSpeaker = new RadioSpeakerWidget(nullptr, m_volumeGroup);
+    m_volumeBox->addWidget(m_radioSpeaker);
+    m_hbox->addWidget(m_volumeGroup);
+    m_hbox->addSpacing(10);
+
+    auto tickUtc = [this]() {
+        m_utcLabel->setText(QDateTime::currentDateTimeUtc()
+                                .toString(QStringLiteral("hh:mm:ss UTC")));
+    };
+    tickUtc();  // populate before the first timer fire
+    m_utcTimer = new QTimer(this);
+    connect(m_utcTimer, &QTimer::timeout, this, tickUtc);
+    m_utcTimer->start(1000);
+
+    // ── 💡 Feature-request button — Task 10d ───────────────────────────────
+    // Construction moved verbatim from the now-deleted featureBar QToolBar
+    // in MainWindow.cpp (Phase 3G-14). The button lives at the far right
+    // of the TitleBar strip, past the MasterOutputWidget — this matches
+    // AetherSDR's pattern where the feature button is the rightmost strip
+    // element.
+    m_hbox->addSpacing(6);
+
+    m_featureBtn = new QPushButton(this);
+    m_featureBtn->setObjectName(QStringLiteral("featureButton"));
+    // The app's own bulb icon (AppIcon), replacing the QPainter-drawn bulb
+    // so it matches the rest of the icon set (R-SPK-19, D7).
+    AppIcon::apply(m_featureBtn, QStringLiteral("bulb"), 22);
+    m_featureBtn->setFixedSize(28, 28);
+    m_featureBtn->setToolTip(QStringLiteral("Submit a feature request or bug report"));
+    m_featureBtn->setAccessibleName(QStringLiteral("Feature request"));
+    // NereusSDR-original — amber dark for the 💡 feature-request button.
+    // One-off; no palette promotion warranted per §A2 design intent.
+    m_featureBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { background: #3a2a00; border: 1px solid #806020; "
+        "border-radius: 4px; padding: 0; }"
+        "QPushButton:hover { background: #504000; border-color: #a08030; }"));
+    if (workspaceLook) {
+        m_featureBtn->setStyleSheet(QStringLiteral(
+            "QPushButton { background: %1; border: 1px solid %2; "
+            "border-radius: 4px; padding: 0; }"
+            "QPushButton:hover { background: %3; border-color: %4; }")
+            .arg(Workspace::role("measured-bg", "#3a2a00"),
+                 Workspace::role("measured-border", "#806020"),
+                 Workspace::shiftL(QColor(Workspace::role("measured-bg", "#3a2a00")), 10),
+                 Workspace::role("warn", "#a08030")));
+    }
+    connect(m_featureBtn, &QPushButton::clicked,
+            this, &TitleBar::featureRequestClicked);
+    m_hbox->addWidget(m_featureBtn);
+}
+
+void TitleBar::setMenuBar(QMenuBar* mb)
+{
+    // Ported line-for-line from AetherSDR TitleBar.cpp:282-295.
+    if (!mb) {
+        return;
+    }
+    // Menu-bar restyle. From AetherSDR TitleBar.cpp:285-290.
+    mb->setStyleSheet(QStringLiteral(
+        "QMenuBar { background: transparent; color: %1; font-size: 12px; }"
+        "QMenuBar::item { padding: 4px 8px; }"
+        "QMenuBar::item:selected { background: %2; color: #ffffff; }"
+        "QMenu { background: %3; color: %5; border: 1px solid %4; }"
+        "QMenu::item:selected { background: %6; }")
+        .arg(QLatin1String(Style::kTitleText),
+             QLatin1String(Style::kBorderSubtle),
+             QLatin1String(Style::kAppBg),
+             QLatin1String(Style::kOverlayBorder),
+             QLatin1String(Style::kTextPrimary),
+             QLatin1String(Style::kBlueBg)));
+    if (WorkspacePreview::enabled()) {
+        mb->setStyleSheet(QStringLiteral(
+            "QMenuBar { background: transparent; color: %1; font-size: 12px; }"
+            "QMenuBar::item { padding: 4px 8px; }"
+            "QMenuBar::item:selected { background: %2; color: %7; }"
+            "QMenu { background: %3; color: %5; border: 1px solid %4; }"
+            "QMenu::item:selected { background: %6; color: %7; }")
+            .arg(Workspace::role("title-text", Style::kTitleText),
+                 Workspace::role("button-hover", Style::kBorderSubtle),
+                 Workspace::role("panel", Style::kAppBg),
+                 Workspace::role("overlay-border", Style::kOverlayBorder),
+                 Workspace::role("text", Style::kTextPrimary),
+                 Workspace::role("selected-top", Style::kBlueBg),
+                 Workspace::role("selected-text", "#ffffff")));
+    }
+    mb->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
+    m_menuBar = mb;
+    // Insert at position 0 (before the first stretch).
+    m_hbox->insertWidget(0, mb);
+}
+
+void TitleBar::setRadioModel(RadioModel* model)
+{
+    m_radioSpeaker->setRadioModel(model);
+}
+
+bool TitleBar::event(QEvent* event)
+{
+    // The layout has already placed the children for this resize or
+    // layout request (QLayout::widgetEvent runs first), so the stretch
+    // and segment geometry below are current.
+    const bool handled = QWidget::event(event);
+    if (event->type() == QEvent::LayoutRequest || event->type() == QEvent::Resize) {
+        updateVolumeForm();
+    }
+    return handled;
+}
+
+int TitleBar::segmentWidthSideBySide() const
+{
+    // The segment's own width plus the two centre stretches is the room
+    // the segment can have in the form now showing; side by side it has
+    // that, less what the side-by-side group takes beyond this one.
+    int pool = m_connectionSegment->width();
+    for (int i = 0; i < m_hbox->count(); ++i) {
+        QLayoutItem* item = m_hbox->itemAt(i);
+        if (item->spacerItem() && (item->expandingDirections() & Qt::Horizontal)) {
+            pool += item->geometry().width();
+        }
+    }
+    return pool + m_volumeGroup->width() - m_sideBySideGroupWidth;
+}
+
+void TitleBar::updateVolumeForm()
+{
+    if (m_updatingVolumeForm || !isVisible()) {
+        return;
+    }
+    if (!m_stacked) {
+        m_sideBySideGroupWidth = m_volumeGroup->sizeHint().width();
+    }
+    if (m_sideBySideGroupWidth <= 0) {
+        return;
+    }
+    const int need = m_connectionSegment->sizeHint().width();
+    const int sideBySide = segmentWidthSideBySide();
+    const bool stack = m_stacked ? sideBySide < need + kSideBySideReturnSpare
+                                 : sideBySide < need;
+    setVolumeStacked(stack);
+}
+
+void TitleBar::setVolumeStacked(bool stacked)
+{
+    if (stacked == m_stacked) {
+        return;
+    }
+    m_updatingVolumeForm = true;
+    m_stacked = stacked;
+    // Layout C: PC above RADIO, word labels kept at RADIO's width so the
+    // two sliders line up.
+    const int labelWidth = stacked ? m_radioSpeaker->findChild<QLabel*>(
+                                         QStringLiteral("radioLabel"))->sizeHint().width()
+                                   : 0;
+    m_volumeBox->setDirection(stacked ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_volumeBox->setSpacing(stacked ? 0 : kPcToRadioGap);
+    m_master->setStacked(stacked, labelWidth);
+    m_radioSpeaker->setStacked(stacked, labelWidth);
+    m_updatingVolumeForm = false;
+}
+
+QString TitleBar::utcText() const
+{
+    return m_utcLabel ? m_utcLabel->text() : QString();
+}
+
+} // namespace NereusSDR

@@ -1,0 +1,274 @@
+// src/core/audio/VirtualCableDetector.cpp (NereusSDR)
+// Implements VirtualCableDetector: regex product matching + PortAudio scan.
+// NereusSDR-original; no Thetis/AetherSDR port.
+#include "VirtualCableDetector.h"
+#include <QCryptographicHash>
+#include <QLatin1Char>
+#include <QRegularExpression>
+#include <QSet>
+#include <QStringList>
+#include "IAudioDeviceCatalog.h"
+#include "PortAudioBus.h"
+
+using namespace NereusSDR;
+
+namespace {
+
+// Shared SHA-256(deviceName) → 8-hex-char truncation used by both
+// fingerprintCsv() and diffNewCables(). Centralised so the two helpers
+// can't drift (e.g. one switching to MD5 and leaving the other stable
+// would silently break rescan detection).
+QString hashDeviceName(const QString& name)
+{
+    const QByteArray full = QCryptographicHash::hash(name.toUtf8(),
+                                                     QCryptographicHash::Sha256);
+    // First 4 bytes → 8 hex chars. Deterministic across processes.
+    return QString::fromLatin1(full.left(4).toHex());
+}
+
+} // namespace
+
+VirtualCableProduct VirtualCableDetector::matchProduct(const QString& n) {
+    // Rule order is load-bearing:
+    //   - NereusSdrVax first (reserved prefix must not be shadowed by CABLE rules)
+    //   - CABLE-A/B/C/D before CABLE (or the base rule shadows the variants)
+    //   - VbHiFiCable before CABLE (name contains "Hi-Fi Cable", not "CABLE ")
+    // Rules are function-local statics — QRegularExpression constructed once
+    // on first call (thread-safe per C++11).
+    static const struct { QRegularExpression re; VirtualCableProduct p; } rules[] = {
+        { QRegularExpression("^NereusSDR VAX \\d$"),                              VirtualCableProduct::NereusSdrVax },
+        { QRegularExpression("^CABLE-A ",  QRegularExpression::CaseInsensitiveOption), VirtualCableProduct::VbCableA },
+        { QRegularExpression("^CABLE-B ",  QRegularExpression::CaseInsensitiveOption), VirtualCableProduct::VbCableB },
+        { QRegularExpression("^CABLE-C ",  QRegularExpression::CaseInsensitiveOption), VirtualCableProduct::VbCableC },
+        { QRegularExpression("^CABLE-D ",  QRegularExpression::CaseInsensitiveOption), VirtualCableProduct::VbCableD },
+        { QRegularExpression("Hi-?Fi Cable", QRegularExpression::CaseInsensitiveOption), VirtualCableProduct::VbHiFiCable },
+        { QRegularExpression("^CABLE ",    QRegularExpression::CaseInsensitiveOption), VirtualCableProduct::VbCable },
+        { QRegularExpression("Virtual Audio Cable", QRegularExpression::CaseInsensitiveOption), VirtualCableProduct::MuzychenkoVac },
+        // Generic Line N names can be hardware; VAC's documented endpoint has the product suffix.
+        // https://vac.muzychenko.net/en/manual/install.htm (Checking the result)
+        { QRegularExpression("^Line \\d+ \\(Virtual Audio Cable\\)$", QRegularExpression::CaseInsensitiveOption), VirtualCableProduct::MuzychenkoVac },
+        { QRegularExpression("VoiceMeeter", QRegularExpression::CaseInsensitiveOption), VirtualCableProduct::Voicemeeter },
+        { QRegularExpression("^Dante ",    QRegularExpression::CaseInsensitiveOption), VirtualCableProduct::Dante },
+        { QRegularExpression("^DAX Audio", QRegularExpression::CaseInsensitiveOption), VirtualCableProduct::FlexRadioDax },
+    };
+    for (const auto& r : rules) {
+        if (r.re.match(n).hasMatch()) { return r.p; }
+    }
+    return VirtualCableProduct::None;
+}
+
+QString VirtualCableDetector::vendorDisplayName(VirtualCableProduct p) {
+    switch (p) {
+        case VirtualCableProduct::VbCable:
+        case VirtualCableProduct::VbCableA:
+        case VirtualCableProduct::VbCableB:
+        case VirtualCableProduct::VbCableC:
+        case VirtualCableProduct::VbCableD:
+        case VirtualCableProduct::VbHiFiCable:   return QStringLiteral("VB-Audio");
+        case VirtualCableProduct::MuzychenkoVac:  return QStringLiteral("Muzychenko");
+        case VirtualCableProduct::Voicemeeter:    return QStringLiteral("Voicemeeter");
+        case VirtualCableProduct::Dante:          return QStringLiteral("Dante");
+        case VirtualCableProduct::FlexRadioDax:   return QStringLiteral("FlexRadio DAX");
+        case VirtualCableProduct::NereusSdrVax:   return QStringLiteral("NereusSDR");
+        case VirtualCableProduct::None:           return QString();
+    }
+    return QString();
+}
+
+QString VirtualCableDetector::installUrl(VirtualCableProduct p) {
+    switch (p) {
+        case VirtualCableProduct::VbCable:
+        case VirtualCableProduct::VbCableA:
+        case VirtualCableProduct::VbCableB:
+        case VirtualCableProduct::VbCableC:
+        case VirtualCableProduct::VbCableD:
+        case VirtualCableProduct::VbHiFiCable:
+            return "https://vb-audio.com/Cable/";
+        case VirtualCableProduct::MuzychenkoVac:
+            return "https://vac.muzychenko.net/en/";
+        case VirtualCableProduct::Voicemeeter:
+            return "https://voicemeeter.com/";
+        case VirtualCableProduct::Dante:
+            return "https://www.getdante.com/products/software-essentials/dante-virtual-soundcard/";
+        default:
+            return {};
+    }
+}
+
+QVector<DetectedCable> VirtualCableDetector::scan() {
+    QVector<DetectedCable> out;
+    for (const auto& api : PortAudioBus::hostApis()) {
+        for (const auto& dev : PortAudioBus::outputDevicesFor(api.index)) {
+            const auto p = matchProduct(dev.name);
+            if (p != VirtualCableProduct::None) {
+                out.push_back({p, dev.name, false, 0});
+            }
+        }
+        for (const auto& dev : PortAudioBus::inputDevicesFor(api.index)) {
+            const auto p = matchProduct(dev.name);
+            if (p != VirtualCableProduct::None) {
+                out.push_back({p, dev.name, true, 0});
+            }
+        }
+    }
+    return out;
+}
+
+QList<DetectedCable> VirtualCableDetector::detect(const QList<AudioDeviceInfo>& devices)
+{
+    QList<DetectedCable> out;
+    for (const AudioDeviceInfo& dev : devices) {
+        const VirtualCableProduct p = matchProduct(dev.name);
+        if (p == VirtualCableProduct::None) {
+            continue;
+        }
+        DetectedCable cable{p, dev.name, dev.direction == AudioDeviceDirection::Input, 0};
+        cable.deviceId = dev.id;
+        cable.backend = dev.backend;
+        cable.hostApi = dev.hostApi;
+        out.push_back(cable);
+    }
+    return out;
+}
+
+QList<AudioDeviceInfo> VirtualCableDetector::cableSourceDevices(const IAudioDeviceCatalog& catalogue)
+{
+    // Native backends first, PortAudio last, so a name both list keeps the
+    // native entry (settled call: one row per cable end).
+    QList<AudioBackendId> order;
+    for (AudioBackendId id : catalogue.backends()) {
+        if (id == AudioBackendId::Asio || id == AudioBackendId::PortAudio) {
+            continue;
+        }
+        order.push_back(id);
+    }
+    if (catalogue.backends().contains(AudioBackendId::PortAudio)) {
+        order.push_back(AudioBackendId::PortAudio);
+    }
+    QList<AudioDeviceInfo> out;
+    QSet<QString> seen;
+    for (AudioBackendId id : order) {
+        if (!catalogue.backendRunning(id)) {
+            continue;
+        }
+        for (AudioDeviceDirection dir : {AudioDeviceDirection::Output, AudioDeviceDirection::Input}) {
+            for (const AudioDeviceInfo& dev : catalogue.devices(id, dir)) {
+                if (dev.state == AudioDeviceState::NotConnected) {
+                    continue;   // a gone cable is not offered as found
+                }
+                const QString key = QString::number(static_cast<int>(dir)) + QLatin1Char('|') + dev.name;
+                if (seen.contains(key)) {
+                    continue;
+                }
+                seen.insert(key);
+                out.push_back(dev);
+            }
+        }
+    }
+    return out;
+}
+
+QList<DetectedCable> VirtualCableDetector::detect(const IAudioDeviceCatalog& catalogue)
+{
+    return detect(cableSourceDevices(catalogue));
+}
+
+AudioEngineKind VirtualCableDetector::engineFor(const DetectedCable& cable)
+{
+    switch (cable.backend) {
+    case AudioBackendId::PortAudio: return AudioEngineKind::PortAudio;
+    case AudioBackendId::CoreAudio: return AudioEngineKind::CoreAudio;
+    case AudioBackendId::Wasapi: return AudioEngineKind::WindowsShared;
+    case AudioBackendId::Asio: return AudioEngineKind::Asio;
+    case AudioBackendId::PipeWire: return AudioEngineKind::PipeWire;
+    case AudioBackendId::PulseAudio: return AudioEngineKind::PulseAudio;
+    case AudioBackendId::AlsaDirect: return AudioEngineKind::AlsaDirect;
+    }
+    return AudioEngineKind::PortAudio;
+}
+
+QVector<DetectedCable> VirtualCableDetector::filterThirdParty(
+    const QVector<DetectedCable>& all)
+{
+    QVector<DetectedCable> out;
+    out.reserve(all.size());
+    for (const auto& c : all) {
+        if (c.product != VirtualCableProduct::NereusSdrVax) {
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
+QVector<DetectedCable> VirtualCableDetector::scanThirdPartyOnly()
+{
+    return filterThirdParty(scan());
+}
+
+#if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
+// Stub: returns 1 (consumer assumed present) so the amber "override — no
+// consumer" badge in AudioVaxPage never falsely fires in this release.
+// TODO(sub-phase-12-consumer-count-real): replace with real CoreAudio /
+// PipeWire client enumeration. See VirtualCableDetector.h for rationale.
+int VirtualCableDetector::consumerCount(const QString& /*deviceName*/)
+{
+    return 1;
+}
+#endif
+
+QString VirtualCableDetector::fingerprintCsv(const QVector<DetectedCable>& cables)
+{
+    QStringList hashes;
+    hashes.reserve(cables.size());
+    for (const auto& c : cables) {
+        hashes.append(hashDeviceName(c.deviceName));
+    }
+    return hashes.join(QLatin1Char(','));
+}
+
+QVector<DetectedCable> VirtualCableDetector::diffNewCables(
+    const QVector<DetectedCable>& current, const QString& lastCsv)
+{
+    QSet<QString> known;
+    const auto prev = lastCsv.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    for (const auto& h : prev) {
+        known.insert(h);
+    }
+
+    QVector<DetectedCable> fresh;
+    for (const auto& c : current) {
+        const QString h = hashDeviceName(c.deviceName);
+        if (!known.contains(h)) {
+            fresh.push_back(c);
+        }
+    }
+    return fresh;
+}
+
+QString VirtualCableDetector::fingerprintSource(bool fromCatalogue)
+{
+    return fromCatalogue ? QStringLiteral("Catalogue") : QStringLiteral("PortAudio");
+}
+
+QVector<DetectedCable> VirtualCableDetector::newCablesSince(const QVector<DetectedCable>& current,
+                                                            const QString& lastCsv,
+                                                            const QString& lastSource,
+                                                            const QString& source)
+{
+    const QString last = lastSource.isEmpty() ? fingerprintSource(false) : lastSource;
+    if (last != source) {
+        return {};
+    }
+    return diffNewCables(current, lastCsv);
+}
+
+QVector<DetectedCable> VirtualCableDetector::bindableEnds(const QVector<DetectedCable>& cables)
+{
+    QVector<DetectedCable> out;
+    for (const DetectedCable& c : filterThirdParty(cables)) {
+        if (!c.isInput) {
+            out.push_back(c);
+        }
+    }
+    return out;
+}

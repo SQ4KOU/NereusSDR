@@ -1,0 +1,297 @@
+#pragma once
+// no-port-check: NereusSDR-original deterministic speaker sink for remote audio tests.
+#include "core/IAudioBus.h"
+#include <QVector>
+#include <chrono>
+#include <algorithm>
+#include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <mutex>
+#include <vector>
+
+// Modification history (NereusSDR):
+//   2026-10-09: R-R3-21: dry events say whether the writer was running
+//               when the device ran out. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
+//   2026-10-11: a dry event says where its silence began in `heard` and
+//               how long it ran there. It gave only the part render() had
+//               not yet played out, so a test that cut a stall's silence
+//               from what it measured left most of it in. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//
+// R-R3-23: the bus plays in the format it was opened with (48 kHz stereo
+// float when never opened): its queue, clock, capacity and `heard` count
+// frames of that rate and channel count. Its capacity is 100 ms of that
+// format, never less than 4800 frames of 48 kHz stereo: the ring a
+// PortAudio output stream had before its clock matcher (R-AUD-15).
+class PacedAudioBus final : public NereusSDR::IAudioBus {
+public:
+    bool open(const NereusSDR::AudioFormat& f) override { format = f; active = true; return true; }
+    void close() override { active = false; }
+    bool isOpen() const override { return active; }
+    qint64 push(const char* data, qint64 bytes) override {
+        std::lock_guard<std::mutex> lock(mutex);
+        const auto* samples = reinterpret_cast<const float*>(data);
+        const int count = int(bytes / sizeof(float));
+        const int channels = channelsLocked();
+        if (int(queue.size()) - channels * playedAheadFramesLocked() + count
+            > capacityFramesLocked() * channels) { return -1; }
+        if (playClock) {
+            // The device has taken past everything queued: it played silence
+            // meanwhile, so these samples start at its next callback, not in
+            // the past.
+            const qint64 dry = takenFramesLocked() - playedFrames - qint64(queue.size()) / channels;
+            if (dry > 0) {
+                const qint64 heardAt = playedFrames + qint64(queue.size()) / channels;
+                queue.insert(queue.end(), std::size_t(dry * channels), 0.0f);
+                playedDryFrames += dry;
+                // R-R3-21: the writer's look at the queue just before this
+                // push, and the one before that (see DryEvent).
+                DryEvent e{dueFramesLocked(), dry};
+                // The silence began where render() first found the queue
+                // empty, which a caller that renders on a timer reached
+                // long before this push; `dry` is only what it had not yet
+                // played out.
+                e.heardFrame = silentSinceFrame >= 0 ? silentSinceFrame : heardAt;
+                e.heardFrames = heardAt + dry - e.heardFrame;
+                e.wokeAfterDry = lastLook.dry && lastLiveLook.ns >= 0;
+                e.queuedBeforeStall = lastLiveLook.ns >= 0 ? lastLiveLook.queued : -1;
+                e.stallNs = e.wokeAfterDry ? firstDryLookNs - lastLiveLook.ns : -1;
+                dryEvents.push_back(e);
+            }
+        }
+        if (playedDryFramesAtFirstPush < 0) {
+            playedDryFramesAtFirstPush = playedDryFrames;
+            firstPushDueFrame = dueFramesLocked();
+        }
+        queue.insert(queue.end(), samples, samples + count);
+        silentSinceFrame = -1;
+        peakQueued.store(std::max(peakQueued.load(), int(queue.size()) / channels));
+        noteLookLocked();
+        return bytes;
+    }
+    qint64 pull(char*, qint64) override { return 0; }
+    void flush() override { std::lock_guard<std::mutex> lock(mutex); queue.clear(); ++flushes; }
+    std::optional<OutputPacing> outputPacing() const override {
+        std::unique_lock<std::mutex> lock(mutex);
+        ++outputPacingCalls;
+        if (blockOutputPacingAfterCalls >= 0
+            && outputPacingCalls > blockOutputPacingAfterCalls) {
+            pacingGateEntered = true;
+            pacingGateChanged.notify_all();
+            pacingGateChanged.wait(lock, [this] { return releaseOutputPacingGate; });
+        }
+        if (!outputPacingAvailable) { return std::nullopt; }
+        noteLookLocked();
+        const int ahead = playedAheadFramesLocked();
+        return OutputPacing{consumed + quint64(ahead),
+                            std::max(0, int(queue.size()) / channelsLocked() - ahead),
+                            capacityFramesLocked(), callbackFrames, deviceLatencyNs};
+    }
+    // R-R3-35 test device clock. From this call the device plays one frame
+    // every 1/rate s of `clockNs` continuously (its opened rate, R-R3-23),
+    // as hardware does, and it
+    // takes frames from the queue the way the callback device it reports
+    // does: `callbackFrames` at a time, each callback at the instant its
+    // first frame starts to play (no device latency). So the queue and
+    // consumed count it reports drop a callback at a time, following the
+    // clock rather than the render() calls, and renderDue() moves exactly
+    // the frames played so far into `heard`. Heard frame k (counted from
+    // this call) played at playClockOriginNs() + k / rate, however late
+    // the caller's timer runs. Set before any render.
+    void setPlayClockForTesting(std::function<qint64()> clockNs)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        playClock = std::move(clockNs);
+        playOriginNs = playClock();
+        playedFrames = 0;
+    }
+    qint64 playClockOriginNs() const { std::lock_guard<std::mutex> lock(mutex); return playOriginNs; }
+    // Frames the play clock found nothing to play for (the queue ran dry).
+    qint64 playedDryFramesForTesting() const { std::lock_guard<std::mutex> lock(mutex); return playedDryFrames; }
+    // R-R3-21: the dry frames counted by the first push that queued audio,
+    // that is, all the silence played before playback started (-1 before
+    // any push). Recorded under the same lock as the count, so no later
+    // shortfall can fold into it.
+    qint64 playedDryFramesAtFirstPushForTesting() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return playedDryFramesAtFirstPush;
+    }
+    // Each push that found the device had run dry: the play-clock frame of
+    // that push and the frames it had played silent. For failure messages.
+    // R-R3-21: and what the writer did around it, from its looks at the
+    // bus (each outputPacing() read and each push, on the play clock).
+    // queuedBeforeStall: the frames queued (not yet taken) at the writer's
+    // last look while the device still had audio. wokeAfterDry: its next
+    // look (and every one since) found the device already run out, so the
+    // silence started while the writer was not looking at all; stallNs:
+    // the time between those two looks. A writer
+    // that left its full target queued and then woke only after the
+    // device had run dry was not scheduled; one that was awake while the
+    // queue ran down, or left less than its target, ran dry itself.
+    // heardFrames: the whole silence in `heard`, from heardFrame. It is
+    // `frames` plus what render() had already played from an empty queue
+    // before the push: a caller that renders on a timer plays most of a
+    // long silence out before the writer comes back, and `frames` (and
+    // the dry count) hold only the rest.
+    struct DryEvent {
+        qint64 atFrame;
+        qint64 frames;
+        qint64 heardFrame = -1;   // where the silence starts in `heard`
+        qint64 heardFrames = 0;
+        bool wokeAfterDry = false;
+        int queuedBeforeStall = -1;
+        qint64 stallNs = -1;
+    };
+    std::vector<DryEvent> dryEventsForTesting() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return dryEvents;
+    }
+    qint64 firstPushDueFrameForTesting() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return firstPushDueFrame;
+    }
+    // Renders every frame the play clock has reached; returns how many.
+    int renderDue()
+    {
+        int frames = 0;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (!playClock) { return 0; }
+            frames = int(dueFramesLocked() - playedFrames);
+        }
+        if (frames > 0) { render(frames); }
+        return frames;
+    }
+    // Test-only worker gate. Configure it before beginRemotePlayback(); the
+    // first pacing read belongs to that synchronous setup and the receiver
+    // worker blocks on the following read. releaseOutputPacingGateForTesting
+    // must run before a receiver stop joins that worker.
+    void blockOutputPacingAfterCallsForTesting(int calls)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        blockOutputPacingAfterCalls = calls;
+        releaseOutputPacingGate = false;
+        pacingGateEntered = false;
+    }
+    // Re-arms the gate so the next pacing read, from whichever thread, blocks.
+    void blockNextOutputPacingForTesting()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        blockOutputPacingAfterCalls = outputPacingCalls;
+        releaseOutputPacingGate = false;
+        pacingGateEntered = false;
+    }
+    bool waitForOutputPacingGateForTesting(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        return pacingGateChanged.wait_for(lock, timeout, [this] { return pacingGateEntered; });
+    }
+    void releaseOutputPacingGateForTesting()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        releaseOutputPacingGate = true;
+        pacingGateChanged.notify_all();
+    }
+    // Test-only device loss. A speaker that goes away stops reporting its
+    // playback timing: while unavailable, outputPacing() answers nullopt, so
+    // remote playback cannot begin and a playing receiver loses its device
+    // clock through the real AudioEngine path. Callable from any thread.
+    void setOutputPacingAvailableForTesting(bool available)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        outputPacingAvailable = available;
+    }
+    void render(int frames) {
+        std::lock_guard<std::mutex> lock(mutex);
+        for (int i = 0; i < frames * channelsLocked(); ++i) {
+            if (queue.empty() && silentSinceFrame < 0) {
+                silentSinceFrame = playedFrames + i / channelsLocked();
+            }
+            heard.append(queue.empty() ? 0.0f : queue.front());
+            if (!queue.empty()) { queue.pop_front(); }
+        }
+        consumed += frames;
+        playedFrames += frames;
+    }
+    float rxLevel() const override { return 0; }
+    float txLevel() const override { return 0; }
+    QString backendName() const override { return QStringLiteral("PacedTest"); }
+    NereusSDR::AudioFormat negotiatedFormat() const override { return format; }
+    QVector<float> heard;
+    // R-R3-49: written by the playback worker's push()/flush() under the
+    // bus lock and read unlocked by the test's own thread, so atomic.
+    std::atomic<int> flushes{0};
+    std::atomic<int> peakQueued{0};
+    int callbackFrames = 480;
+    // R-R3-35: what this bus reports as its device latency (none: unknown).
+    std::optional<qint64> deviceLatencyNs;
+private:
+    bool active = true;
+    NereusSDR::AudioFormat format;
+    mutable std::mutex mutex;
+    mutable std::condition_variable pacingGateChanged;
+    std::deque<float> queue;
+    quint64 consumed = 0;
+    mutable int outputPacingCalls = 0;
+    int blockOutputPacingAfterCalls = -1;
+    mutable bool pacingGateEntered = false;
+    bool releaseOutputPacingGate = false;
+    bool outputPacingAvailable = true;
+    std::function<qint64()> playClock;
+    qint64 playOriginNs = 0;
+    qint64 playedFrames = 0;
+    qint64 playedDryFrames = 0;
+    qint64 playedDryFramesAtFirstPush = -1;
+    qint64 firstPushDueFrame = -1;
+    // The frame of `heard` where render() first played from an empty queue
+    // since the last push (-1: it has not).
+    qint64 silentSinceFrame = -1;
+    std::vector<DryEvent> dryEvents;
+    // R-R3-21: the writer's looks at the bus (see DryEvent): the last,
+    // the last while the device still had audio, and the first after that.
+    struct Look { qint64 ns = -1; int queued = 0; bool dry = false; };
+    mutable Look lastLook;
+    mutable Look lastLiveLook;
+    mutable qint64 firstDryLookNs = -1;
+    void noteLookLocked() const
+    {
+        if (!playClock) { return; }
+        const int channels = channelsLocked();
+        const qint64 unplayed = playedFrames + qint64(queue.size()) / channels;
+        const qint64 taken = takenFramesLocked();
+        const Look look{playClock(), int(std::max<qint64>(0, unplayed - taken)), taken > unplayed};
+        if (look.dry && !lastLook.dry) { firstDryLookNs = look.ns; }
+        if (!look.dry) { lastLiveLook = look; }
+        lastLook = look;
+    }
+    qint64 dueFramesLocked() const
+    {
+        return playClock ? (playClock() - playOriginNs) * qint64(format.sampleRate)
+                / 1'000'000'000
+                         : 0;
+    }
+    int channelsLocked() const { return std::max(1, format.channels); }
+    int capacityFramesLocked() const
+    {
+        const int ringSamples = std::max(4800 * 2, (format.sampleRate / 10) * channelsLocked());
+        return ringSamples / channelsLocked();
+    }
+    // Frames the device has taken from the queue by now: every callback up
+    // to and including the one that holds the frame now playing.
+    qint64 takenFramesLocked() const
+    {
+        const qint64 perCallback = std::max(1, callbackFrames);
+        return (dueFramesLocked() / perCallback + 1) * perCallback;
+    }
+    // Frames the device has taken that render() has not yet moved.
+    int playedAheadFramesLocked() const
+    {
+        return playClock ? int(std::max<qint64>(0, takenFramesLocked() - playedFrames)) : 0;
+    }
+};

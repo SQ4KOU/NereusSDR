@@ -1,0 +1,609 @@
+// =================================================================
+// src/core/NbFamily.cpp  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis sources:
+//   Project Files/Source/ChannelMaster/cmaster.c, original licence from Thetis source is included below
+//   Project Files/Source/Console/HPSDR/specHPSDR.cs (Copyright (C) 2010-2018 Doug Wigley, GPLv2+)
+//   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
+//   Project Files/Source/Console/setup.cs, original licence from Thetis source is included below
+//
+// See also src/core/NbFamily.h for the nob.h / nobII.h / snb.h upstream
+// attribution blocks (Warren Pratt, NR0V) that cover the WDSP objects this
+// file creates and destroys.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-04-22 — NbFamily lifecycle + tuning implementation.
+//                Authored by J.J. Boyd (KG4VCF), with AI-assisted
+//                transformation via Anthropic Claude Code.
+// =================================================================
+
+// --- From cmaster.c ---
+/*  cmaster.c
+
+This file is part of a program that implements a Software-Defined Radio.
+
+Copyright (C) 2014-2019 Warren Pratt, NR0V
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+warren@wpratt.com
+
+*/
+
+// --- From Project Files/Source/Console/HPSDR/specHPSDR.cs ---
+/*
+*
+* Copyright (C) 2010-2018  Doug Wigley
+*
+* This program is free software; you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation; either version 2 of the License, or
+* (at your option) any later version.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program; if not, write to the Free Software
+* Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+*/
+
+//=================================================================
+// console.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+// Credit is given to Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font.
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to:
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Modifications to support the Behringer Midi controllers
+// by Chris Codella, W2PA, May 2017.  Indicated by //-W2PA comment lines.
+// Modifications for using the new database import function.  W2PA, 29 May 2017
+// Support QSK, possible with Protocol-2 firmware v1.7 (Orion-MkI and Orion-MkII), and later.  W2PA, 5 April 2019
+// Modfied heavily - Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+//=================================================================
+// setup.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to:
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Continual modifications Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//=================================================================
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+#include "NbFamily.h"
+
+#include "AppSettings.h"
+#include "wdsp_api.h"
+
+namespace NereusSDR {
+
+namespace {
+constexpr double kMsToSec = 0.001;
+
+// R-R3-39: the receive-lane key of one NB parameter (FNV-1a of its name).
+constexpr quint64 nbParameter(const char* name)
+{
+    quint64 hash = 1469598103934665603ull;
+    for (const char* c = name; *c != '\0'; ++c) {
+        hash ^= static_cast<unsigned char>(*c);
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+}
+
+NbMode cycleNbMode(NbMode current)
+{
+    // From Thetis console.cs:42476-42482 [v2.10.3.13] — space-bar cycle:
+    //   Unchecked/Indeterminate → Checked
+    //   Checked                 → Unchecked
+    //   (second press path handles Unchecked/Checked → Indeterminate)
+    // Our simpler Off→NB→NB2→Off chain matches the user-visible three-state
+    // rotation from console.cs:43513-43560 without Thetis's two-switch
+    // hidden-state complexity.
+    switch (current) {
+        case NbMode::Off:  return NbMode::NB;
+        case NbMode::NB:   return NbMode::NB2;
+        case NbMode::NB2:  return NbMode::Off;
+    }
+    return NbMode::Off;
+}
+
+// 2026-05-13 (Linux CI #238): mirrors comm.h's #define MAX_CHANNELS 32.
+// Duplicated here because wdsp_api.h doesn't export the constant.  Keep
+// in sync if WDSP raises the channel cap.
+static constexpr int kWdspMaxChannels = 32;
+
+NbFamily::NbFamily(int channelId, int sampleRate, int bufferSize, bool createWdspNow)
+    : m_channelId(channelId)
+    , m_sampleRate(sampleRate)
+    , m_bufferSize(bufferSize)
+    , m_skipWdsp(channelId < 0 || channelId >= kWdspMaxChannels)
+{
+#ifdef HAVE_WDSP
+    // 2026-05-13 (Linux CI #238): when m_skipWdsp is true the channel ID
+    // is outside WDSP's MAX_CHANNELS range and ALL WDSP calls (create,
+    // destroy, all runtime setters) must be skipped.  Test fixtures
+    // (tst_dsp_options_per_mode_apply, tst_transmit_model_compute_audio_volume)
+    // construct RxChannel with channelId=97 for software-only isolation;
+    // the WDSP create_anbEXT call below does
+    //   panb[id] = create_anb(...)   (nob.c:323)
+    // with no internal bounds check, so passing id=97 reads/writes past
+    // the 32-slot panb[] array.  On macOS arm64 this writes into mapped
+    // pages and the OOB is silent; UBSan flags it and Linux x64 may
+    // segfault later (e.g. the destructor's destroy_anbEXT(97) call).
+    // Every WDSP-touching method in this file mirrors this guard.
+    if (m_skipWdsp) {
+        return;
+    }
+
+    // Global defaults from Setup → DSP → NB/SNB. NB tuning is global per
+    // channel (not per-band) per strict Thetis parity; see NbFamily.h for
+    // the derivation of the scaling factors.
+    //
+    // Scaling:
+    //   udDSPNB (1-1000, default 30)           × 0.165       → threshold
+    //   udDSPNBTransition/Lead/Lag (1-200)     × 0.01 ms     → m_tuning *Ms
+    //     (WDSP seconds = slider × 0.01 × 0.001 = slider × 1e-5)
+    //   Nb2DefaultMode (0-2)                   raw           → nb2Mode
+    {
+        auto& s = AppSettings::instance();
+        m_tuning.nbThreshold = 0.165 * s.value(QStringLiteral("NbDefaultThresholdSlider"), 30).toDouble();
+        m_tuning.nbTauMs     = 0.01  * s.value(QStringLiteral("NbDefaultTransition"), 1).toDouble();
+        m_tuning.nbAdvMs     = 0.01  * s.value(QStringLiteral("NbDefaultLead"),       1).toDouble();
+        m_tuning.nbHangMs    = 0.01  * s.value(QStringLiteral("NbDefaultLag"),        1).toDouble();
+        m_tuning.nb2Mode     =         s.value(QStringLiteral("Nb2DefaultMode"),      0).toInt();
+        // nb2Threshold / nb2*Ms stay at NbTuning's struct defaults — Thetis
+        // has no NB2 tuning UI, so there's no upstream override to apply.
+    }
+    // R-R3-39: what the create calls use, fixed here on the owner's thread;
+    // later setters post their own calls after the create.
+    m_createTuning = m_tuning;
+
+    if (createWdspNow) {
+        createWdspObjects();
+    }
+#else
+    Q_UNUSED(createWdspNow);
+#endif
+}
+
+void NbFamily::createWdspObjects()
+{
+#ifdef HAVE_WDSP
+    if (m_skipWdsp || m_wdspCreated) {
+        return;
+    }
+    const NbTuning& t = m_createTuning;
+    const int bufferSize = m_bufferSize.load();
+    const int sampleRate = m_sampleRate.load();
+
+    // From Thetis cmaster.c:43-53 [v2.10.3.13] — NB (anb) create call.
+    //
+    // CRITICAL — pass run=1, not 0:
+    //   xanb() at nob.c:113 gates the ENTIRE blanker body behind
+    //   `if (a->run)`. The mutual-exclusion dispatch lives in
+    //   RxChannel::processIq (switch on m_mode), which only calls
+    //   xanbEXTF when mode==NB; so a->run can safely stay at 1 for the
+    //   whole channel lifetime and the Qt-side mode atomic is what
+    //   actually enables/disables blanking. Shipping with run=0 here
+    //   made the blanker a no-op in the original sub-epic B PR (user
+    //   reported: electric-fence pops weren't blanked even with NB lit).
+    create_anbEXT(
+        m_channelId,
+        /*run=*/1,
+        bufferSize,
+        static_cast<double>(sampleRate),
+        t.nbTauMs    * kMsToSec,
+        t.nbHangMs   * kMsToSec,
+        t.nbAdvMs    * kMsToSec,
+        t.nbBacktau,
+        t.nbThreshold);
+
+    // From Thetis specHPSDR.cs:896-907 [v2.10.3.13] — NB2 P/Invoke 10-arg form:
+    //   (id, run, mode, buffsize, samplerate, tau, hangtime, advtime, backtau, threshold)
+    // This is a reduction of the nobII.c 13-arg C signature. advslewtime and
+    // hangslewtime collapse into a single `tau` arg (SetEXTNOBTau at
+    // nobII.c:686 pushes both simultaneously — see pushAllTuning below).
+    // max_imp_seq_time has no post-create EXT setter and is fixed at create
+    // time per nobII.c defaults. `nb2MaxImpMs` in NbTuning is reserved for a
+    // future direct C-API wrapper and is unused in this path.
+    // Same run=1 rule as create_anbEXT above — xnob() at nobII.c:161
+    // gates on a->run, processIq gates on m_mode. See the note on the
+    // NB (anb) create call for the full rationale.
+    create_nobEXT(
+        m_channelId,
+        /*run=*/1,
+        t.nb2Mode,
+        bufferSize,
+        static_cast<double>(sampleRate),
+        t.nb2SlewMs     * kMsToSec,       // tau  (cmaster.c:62/64 default 0.0001 s)
+        t.nb2HangMs     * kMsToSec,       // hangtime
+        t.nb2AdvMs      * kMsToSec,       // advtime
+        t.nb2Backtau,
+        t.nb2Threshold);
+    // NOTE: SNB (channels[id].rxa.snba) seeding deliberately NOT done here
+    // — it requires OpenChannel to have initialised the RXA channel first,
+    // and NbFamily is constructed in contexts where that may not be true
+    // (e.g. the tst_rxchannel_nb2_polish test uses a fabricated channel id
+    // that never saw OpenChannel). The SNB seed lives in
+    // WdspEngine::createRxChannel (called only from the production path,
+    // after OpenChannel succeeds). See seedSnbFromSettings() below.
+    m_wdspSampleRate = sampleRate;
+    m_wdspBufferSize = bufferSize;
+    m_wdspCreated = true;
+#endif
+}
+
+void NbFamily::seedSnbFromSettings()
+{
+#ifdef HAVE_WDSP
+    // Push persisted SNB Setup defaults to the RXA channel. Callable only
+    // after OpenChannel has initialised rxa[m_channelId].snba — otherwise
+    // WDSP SetRXASNBA* setters null-deref. See the note in NbFamily() ctor.
+    // (Codex review PR #120, P2 — 2026-04-23.)
+    //
+    // SNB raw pass-through per Thetis setup.cs:17609,17617 [v2.10.3.13];
+    // output-BW symmetric around DC (matches our DspSetupPages wiring).
+    auto& s = AppSettings::instance();
+    const double snbK1 = s.value(QStringLiteral("SnbDefaultK1"),  8.0).toDouble();
+    const double snbK2 = s.value(QStringLiteral("SnbDefaultK2"), 20.0).toDouble();
+    const int    snbBw = s.value(QStringLiteral("SnbDefaultOutputBW"), 6000).toInt();
+    // R-R3-39: the settings are read here, the WDSP calls run on the lane.
+    dispatch(0, [this, snbK1, snbK2, snbBw]() {
+        SetRXASNBAk1(m_channelId, snbK1);
+        SetRXASNBAk2(m_channelId, snbK2);
+        const double half = static_cast<double>(snbBw) / 2.0;
+        SetRXASNBAOutputBandwidth(m_channelId, -half, half);
+    });
+#endif
+}
+
+NbFamily::~NbFamily()
+{
+    destroyWdspObjects();
+}
+
+void NbFamily::destroyWdspObjects()
+{
+#ifdef HAVE_WDSP
+    if (m_skipWdsp || !m_wdspCreated) return;
+    // From Thetis cmaster.c:104-105 [v2.10.3.13] — destroy in reverse of create.
+    destroy_nobEXT(m_channelId);
+    destroy_anbEXT(m_channelId);
+    m_wdspCreated = false;
+#endif
+}
+
+void NbFamily::setDispatcher(Dispatcher dispatcher)
+{
+    m_dispatcher = std::move(dispatcher);
+}
+
+void NbFamily::dispatch(quint64 parameter, std::function<void()> job)
+{
+    if (!m_dispatcher) {
+        job();
+        return;
+    }
+    m_dispatcher(parameter, std::move(job));
+}
+
+void NbFamily::setMode(NbMode mode)
+{
+    const NbMode prev = m_mode.exchange(mode, std::memory_order_acq_rel);
+    if (prev == mode) return;
+
+#ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
+    // Flush whichever blanker we just left so its state-machine
+    // (avg, count, ring indices) doesn't carry stale state into the
+    // next time the user returns to that mode. WDSP flush_* functions
+    // reset the anb/nob struct to just-created state without touching
+    // the run flag.
+    //
+    // WDSP: third_party/wdsp/src/nob.c:225  (flush_anb / flush_anbEXT)
+    //       third_party/wdsp/src/nobII.c    (flush_nob / flush_nobEXT)
+    dispatch(0, [this, prev, mode]() {
+        if (prev == NbMode::NB  && mode != NbMode::NB)  flush_anbEXT(m_channelId);
+        if (prev == NbMode::NB2 && mode != NbMode::NB2) flush_nobEXT(m_channelId);
+    });
+#endif
+    // The per-buffer xanbEXTF / xnobEXTF dispatch in RxChannel::processIq()
+    // reads m_mode and picks the right path; no WDSP run-flag toggle needed.
+}
+
+void NbFamily::setSnbEnabled(bool enabled)
+{
+    // Short-circuit on unchanged state. Mirrors the guard in the old
+    // RxChannel::setSnbEnabled() body; avoids redundant SetRXASNBARun
+    // calls when upstream model signals re-fire on unchanged values.
+    if (m_snbEnabled.load(std::memory_order_acquire) == enabled) return;
+    m_snbEnabled.store(enabled, std::memory_order_release);
+#ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
+    // From Thetis console.cs:36347 [v2.10.3.13]
+    //   WDSP.SetRXASNBARun(WDSP.id(0, 0), chkDSPNB2.Checked)
+    // WDSP: third_party/wdsp/src/snb.c
+    dispatch(nbParameter("NbFamily::setSnbEnabled"), [this, enabled]() {
+        SetRXASNBARun(m_channelId, enabled ? 1 : 0);
+    });
+#endif
+}
+
+void NbFamily::setTuning(const NbTuning& tuning)
+{
+    m_tuning = tuning;
+    pushAllTuning();
+}
+
+void NbFamily::setNbThreshold(double threshold)
+{
+    m_tuning.nbThreshold = threshold;
+#ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
+    dispatch(nbParameter("NbFamily::setNbThreshold"), [this, threshold]() { SetEXTANBThreshold(m_channelId, threshold); });
+#endif
+}
+
+void NbFamily::setNbTauMs(double ms)
+{
+    m_tuning.nbTauMs = ms;
+#ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
+    // From Thetis setup.cs:16222 [v2.10.3.13]
+    // Upstream tags preserved: //MW0LGE (from cited setup.cs:16225) [v2.10.3.15]
+    //   NBTau = 0.001 * (double)udDSPNBTransition.Value
+    dispatch(nbParameter("NbFamily::setNbTauMs"), [this, ms]() { SetEXTANBTau(m_channelId, ms * kMsToSec); });
+#endif
+}
+
+void NbFamily::setNbLeadMs(double advMs)
+{
+    m_tuning.nbAdvMs = advMs;
+#ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
+    // From Thetis setup.cs:16229 [v2.10.3.13]
+    // Upstream tags preserved: //MW0LGE (from cited setup.cs:16225) [v2.10.3.15]
+    //   NBAdvTime = 0.001 * (double)udDSPNBLead.Value
+    dispatch(nbParameter("NbFamily::setNbLeadMs"), [this, advMs]() { SetEXTANBAdvtime(m_channelId, advMs * kMsToSec); });
+#endif
+}
+
+void NbFamily::setNbLagMs(double hangMs)
+{
+    m_tuning.nbHangMs = hangMs;
+#ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
+    // From Thetis setup.cs:16236 [v2.10.3.13]
+    //   NBHangTime = 0.001 * (double)udDSPNBLag.Value
+    dispatch(nbParameter("NbFamily::setNbLagMs"), [this, hangMs]() { SetEXTANBHangtime(m_channelId, hangMs * kMsToSec); });
+#endif
+}
+
+void NbFamily::setNb2Mode(int mode)
+{
+    m_tuning.nb2Mode = mode;
+#ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
+    // From Thetis wdsp/nobII.c:658-663 [v2.10.3.15] — SetEXTNOBMode writes
+    // NOB a = pnob[id], the per-receiver noise blanker II instance.
+    dispatch(nbParameter("NbFamily::setNb2Mode"), [this, mode]() { SetEXTNOBMode(m_channelId, mode); });
+#endif
+}
+
+// SNB per-knob setters. Same three WDSP calls seedSnbFromSettings makes, but
+// driven by a value the caller supplies rather than re-read from the old
+// radio-global AppSettings keys, so SliceModel can own this state per slice.
+// Same post-OpenChannel precondition applies: rxa[m_channelId].snba must
+// exist or these null-deref (see the seedSnbFromSettings note above).
+void NbFamily::setSnbK1(double k1)
+{
+#ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
+    // From Thetis setup.cs:17609 [v2.10.3.13] — raw pass-through.
+    dispatch(nbParameter("NbFamily::setSnbK1"), [this, k1]() { SetRXASNBAk1(m_channelId, k1); });
+#else
+    Q_UNUSED(k1);
+#endif
+}
+
+void NbFamily::setSnbK2(double k2)
+{
+#ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
+    // From Thetis setup.cs:17617 [v2.10.3.13] — raw pass-through.
+    dispatch(nbParameter("NbFamily::setSnbK2"), [this, k2]() { SetRXASNBAk2(m_channelId, k2); });
+#else
+    Q_UNUSED(k2);
+#endif
+}
+
+void NbFamily::setSnbOutputBandwidthHz(int bandwidthHz)
+{
+#ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
+    // Symmetric around DC, matching seedSnbFromSettings and the setup page
+    // this replaced. No Thetis Setup control: Thetis picks SNB output
+    // bandwidth per mode at rxa.cs:112-124 [v2.10.3.13].
+    dispatch(nbParameter("NbFamily::setSnbOutputBandwidthHz"), [this, bandwidthHz]() {
+        const double half = static_cast<double>(bandwidthHz) / 2.0;
+        SetRXASNBAOutputBandwidth(m_channelId, -half, half);
+    });
+#else
+    Q_UNUSED(bandwidthHz);
+#endif
+}
+
+// Live sample-rate change. Re-ports the receiver branch of Thetis
+// cmaster.c:464-470 SetXcmInrate [v2.10.3.13]:
+//   SetRCVRANBBuffsize  (0, rx, pcm->xcm_insize[in_id]);
+//   SetRCVRANBSamplerate(0, rx, rate);
+//   SetRCVRNOBBuffsize  (0, rx, pcm->xcm_insize[in_id]);
+//   SetRCVRNOBSamplerate(0, rx, rate);
+// Ordering preserved (buffsize before samplerate) per upstream. The EXT
+// setters are bodily identical to the RCVR setters (nob.c:240-255 vs
+// nob.c:357-373; nobII.c same) — they take a critical section, write the
+// field, call init_nob/initBlanker, release.
+void NbFamily::setSampleRate(int newRateHz, int newBufferSize)
+{
+    if (newRateHz == m_sampleRate.load() && newBufferSize == m_bufferSize.load()) {
+        return;
+    }
+    setSampleRateCarry(newRateHz, newBufferSize);
+    dispatch(0, [this, newRateHz, newBufferSize]() {
+        applySampleRateWdsp(newRateHz, newBufferSize);
+    });
+}
+
+void NbFamily::setSampleRateCarry(int newRateHz, int newBufferSize)
+{
+    m_sampleRate.store(newRateHz);
+    m_bufferSize.store(newBufferSize);
+}
+
+void NbFamily::applySampleRateWdsp(int newRateHz, int newBufferSize)
+{
+#ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
+    if (!m_wdspCreated
+        || (newRateHz == m_wdspSampleRate && newBufferSize == m_wdspBufferSize)) {
+        return;
+    }
+    m_wdspSampleRate = newRateHz;
+    m_wdspBufferSize = newBufferSize;
+    // NB1 (anb)
+    SetEXTANBBuffsize  (m_channelId, newBufferSize);
+    SetEXTANBSamplerate(m_channelId, newRateHz);
+    // NB2 (nob)
+    SetEXTNOBBuffsize  (m_channelId, newBufferSize);
+    SetEXTNOBSamplerate(m_channelId, newRateHz);
+#else
+    Q_UNUSED(newRateHz);
+    Q_UNUSED(newBufferSize);
+#endif
+}
+
+void NbFamily::pushAllTuning()
+{
+#ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
+    dispatch(nbParameter("NbFamily::setTuning"), [this, t = m_tuning]() { pushTuningWdsp(t); });
+#endif
+}
+
+void NbFamily::pushTuningWdsp(const NbTuning& t)
+{
+#ifdef HAVE_WDSP
+    // NB1
+    SetEXTANBTau      (m_channelId, t.nbTauMs  * kMsToSec);
+    SetEXTANBHangtime (m_channelId, t.nbHangMs * kMsToSec);
+    SetEXTANBAdvtime  (m_channelId, t.nbAdvMs  * kMsToSec);
+    SetEXTANBBacktau  (m_channelId, t.nbBacktau);
+    SetEXTANBThreshold(m_channelId, t.nbThreshold);
+
+    // NB2
+    SetEXTNOBMode     (m_channelId, t.nb2Mode);
+    SetEXTNOBTau      (m_channelId, t.nb2SlewMs   * kMsToSec);
+    SetEXTNOBHangtime (m_channelId, t.nb2HangMs   * kMsToSec);
+    SetEXTNOBAdvtime  (m_channelId, t.nb2AdvMs    * kMsToSec);
+    SetEXTNOBBacktau  (m_channelId, t.nb2Backtau);
+    SetEXTNOBThreshold(m_channelId, t.nb2Threshold);
+    // max_imp_seq_time has no post-create setter in Thetis's spec — it is
+    // fixed at create time per cmaster.c:66. Changes require channel re-create.
+#else
+    Q_UNUSED(t);
+#endif
+}
+
+} // namespace NereusSDR

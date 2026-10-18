@@ -1,0 +1,460 @@
+#pragma once
+
+// =================================================================
+// src/core/ReceiverManager.h  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis source:
+//   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code.
+//   2026-09-23 - iqDataForReceiverStamped and enqueueClockNs (monotonic
+//                 enqueue stamp for the DSP input delay bound, R-R3-40) by
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code. NereusSDR-original; no Thetis
+//                 counterpart.
+//   2026-09-23 - hardwareIqDataStamped (the stamped raw hardware-DDC batch
+//                 for the external-diversity input bound, R-R3-40) by J.J.
+//                 Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code. NereusSDR-original.
+//   2026-09-30 - beginIqBatch / endIqBatch: the queued stamped batches of
+//                 one socket drain go to the DSP worker as one post per
+//                 stream, not one per packet, by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+//                 NereusSDR-original.
+//   2026-09-30 - reset() drops a held batch and ends batching. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                 NereusSDR-original.
+//   2026-10-14 - Complete routing-map synchronization and publish control
+//                 snapshots after unlocking, including callback-safe retunes.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//                 NereusSDR-original synchronization logic.
+// =================================================================
+
+//=================================================================
+// console.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems 
+// Copyright (C) 2010-2020  Doug Wigley
+// Credit is given to Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font.
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Modifications to support the Behringer Midi controllers
+// by Chris Codella, W2PA, May 2017.  Indicated by //-W2PA comment lines. 
+// Modifications for using the new database import function.  W2PA, 29 May 2017
+// Support QSK, possible with Protocol-2 firmware v1.7 (Orion-MkI and Orion-MkII), and later.  W2PA, 5 April 2019 
+// Modfied heavily - Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+// Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
+
+#include <QObject>
+#include <QVector>
+#include <QMap>
+#include <QMutex>
+
+#include <array>
+#include <atomic>
+#include <chrono>
+
+#include "codec/CodecContext.h"   // PsDdcConfig + Q_DECLARE_METATYPE
+#include "HpsdrModel.h"           // HPSDRModel
+#include "core/NereusCoreExport.h"
+
+namespace NereusSDR {
+
+class IP1Codec;
+class IP2Codec;
+
+// Per-receiver configuration state.
+struct ReceiverConfig {
+    int receiverIndex{-1};       // Logical receiver index (0-based)
+    int hardwareRx{-1};          // Hardware DDC index (e.g., DDC2 for ANAN-G2 RX1)
+    int wdspChannel{-1};         // WDSP channel number (assigned at creation)
+    int adcIndex{0};             // Which ADC feeds this receiver's DDC (0 or 1)
+    int ddcIndex{-1};            // Explicit DDC mapping (-1 = auto-assign)
+    quint64 frequencyHz{14225000};
+    int sampleRate{48000};
+    bool active{false};
+    bool isDiversity{false};     // Sub-receiver for diversity combining
+    bool isPureSignalFeedback{false}; // Dedicated to PA linearization
+};
+
+// Client-side receiver lifecycle management.
+// Maps logical receivers to hardware DDC channels and (future) WDSP instances.
+// Lives on the main thread; RadioModel owns it.
+class NEREUS_CORE_EXPORT ReceiverManager : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(int activeReceiverCount READ activeReceiverCount
+               NOTIFY activeReceiverCountChanged)
+
+public:
+    explicit ReceiverManager(QObject* parent = nullptr);
+    ~ReceiverManager() override;
+
+    // Monotonic clock (std::chrono::steady_clock, nanoseconds) used to stamp
+    // iqDataForReceiverStamped. RxDspWorker reads the same clock to measure
+    // how long a batch waited before processing (R-R3-40).
+    static qint64 enqueueClockNs() noexcept
+    {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    }
+
+    // --- Configuration ---
+    void setMaxReceivers(int max);
+    int maxReceivers() const;
+
+    // --- Receiver Lifecycle ---
+    // Create a new receiver. Returns the receiver index, or -1 if at max.
+    int createReceiver();
+
+    // Destroy a receiver and release its hardware DDC.
+    void destroyReceiver(int receiverIndex);
+
+    // Drop all receivers and reset the manager to a just-constructed state.
+    // Called by RadioModel::teardownConnection so the next connectToRadio
+    // starts with a fresh index counter; without this, a same-session
+    // disconnect/reconnect leaks receiver 0 and the new createReceiver()
+    // returns 1, colliding on DDC2 for P2 2-ADC boards (issue #75).
+    void reset();
+
+    // Activate/deactivate a receiver.
+    // Activating increments the hardware receiver count sent to the radio.
+    void activateReceiver(int receiverIndex);
+    void deactivateReceiver(int receiverIndex);
+
+    // --- State Queries ---
+    int activeReceiverCount() const;
+    bool isReceiverActive(int receiverIndex) const;
+    ReceiverConfig receiverConfig(int receiverIndex) const;
+
+    // --- DDC frequency lock (CTUN mode) ---
+    // When locked, setReceiverFrequency stores the freq but does NOT
+    // emit hardwareFrequencyChanged. MainWindow manages DDC directly.
+    void setDdcFrequencyLocked(bool locked);
+    bool ddcFrequencyLocked() const;
+
+    // --- Receiver Configuration ---
+    void setReceiverFrequency(int receiverIndex, quint64 frequencyHz);
+    // Force DDC retune even when locked (used by MainWindow CTUN pan drag).
+    // Stores the frequency as well as emitting it, so a later
+    // rebuildHardwareMapping re-emits the DDC's real centre instead of
+    // resurrecting the last allocator-driven one. Does NOT emit
+    // receiverFrequencyChanged: the DDC moved, the receiver's logical
+    // tuning did not.
+    void forceHardwareFrequency(int receiverIndex, quint64 frequencyHz);
+    void setReceiverSampleRate(int receiverIndex, int sampleRate);
+
+    // Set explicit DDC mapping for a receiver.
+    // For ANAN-G2: receiver 0 → DDC 2 (from Thetis UpdateDDCs console.cs:8216).
+    // If ddcIndex = -1, sequential auto-assignment is used.
+    // No-op when the mapping is unchanged — callers republish the same
+    // assignment on every VFO tick, and rebuildHardwareMapping re-emits
+    // every active receiver's frequency (see the change gate comment in
+    // ReceiverManager.cpp).
+    void setDdcMapping(int receiverIndex, int ddcIndex);
+    // Publish a complete codec plan once. A slot swap must never replay
+    // stored frequencies against an intermediate, duplicate receiver map.
+    void applyDdcMapping(const std::array<int, 5>& mapping, quint32 activeStreams);
+    int ddcIndex(int receiverIndex) const;
+
+    // Set which ADC feeds this receiver's DDC (for 2-ADC boards).
+    void setAdcForReceiver(int receiverIndex, int adcIndex);
+
+    // --- I/Q Data Routing ---
+    // Called when I/Q data arrives for a hardware DDC.
+    // Routes to the correct logical receiver.
+    void feedIqData(int hwReceiverIndex, const QVector<float>& samples);
+
+    // One socket drain's worth of I/Q, bracketed by the connection thread
+    // (RadioConnection::iqBatchStarted / iqBatchFinished, DirectConnection).
+    // Between the two, feedIqData still emits iqDataForReceiver and
+    // iqDataForChannel for every packet, but holds the queued stamped
+    // batches (iqDataForReceiverStamped, hardwareIqDataStamped) and joins
+    // each stream's packets, in order, into one batch, emitted at
+    // endIqBatch: one post per stream per drain instead of one per packet.
+    // The samples and their order per stream are unchanged. A stream's
+    // held batch is emitted early once it reaches kIqBatchMaxSamples. Only
+    // the thread that began the batch is held; any other thread's
+    // feedIqData emits at once, as before.
+    void beginIqBatch();
+    void endIqBatch();
+    // Bounds one held batch: about eight 238-sample Protocol 2 packets.
+    // Far below RxDspWorker's kMaxSaneSamplesPerBatch and its diversity
+    // leg backlog, so no joined batch is refused or trimmed there.
+    static constexpr int kIqBatchMaxSamples = 2048;
+
+    // -------------------------------------------------------------------
+    // Phase 3M-4 Task 6: PureSignal DDC orchestration
+    //
+    // Mirrors the per-board switch in Thetis console.cs:8186-8538
+    // UpdateDDCs() [v2.10.3.13] (and mi0bot console.cs:8409-8488
+    // [v2.10.3.13-beta2] for HL2). State-shadowing setters drive the
+    // codec dispatch; the codec layer (Task 5) returns the wire-byte
+    // PsDdcConfig and ReceiverManager re-emits it via ddcConfigChanged
+    // for RadioConnection to consume (the wire-byte writer wiring lands
+    // in Task 7 / a Phase-3F refactor).
+    //
+    // Codec injection is via setter (not constructor) because:
+    //   1. ReceiverManager is constructed in RadioModel's ctor before
+    //      the connected radio's protocol/board is known.  The codec
+    //      selection happens later when applyHardwareInfo() runs.
+    //   2. Two separate setters (P1 / P2) keep the IP1Codec / IP2Codec
+    //      type split clean — RadioModel only ever wires one based on
+    //      the protocol, and the other stays nullptr.
+    //   3. Codec lifetime is owned by the connection (P1/P2RadioConnection
+    //      hold std::unique_ptr<I*Codec>).  ReceiverManager stores a raw
+    //      pointer with non-owning semantics and clears it on reset()
+    //      (RadioModel::teardownConnection clears the codec ptr first).
+    //
+    // The setters are non-owning observers; the caller retains lifetime
+    // ownership.  Pass nullptr to clear (called from reset()).
+    void setP1Codec(IP1Codec* codec);
+    void setP2Codec(IP2Codec* codec);
+
+    // Phase 3F Sub-Epic I Task 7b: non-owning read-back of the injected
+    // codec.  RadioModel::computeDdcAssignment reads the codec from here
+    // when there is no RadioConnection object to ask, which is what makes
+    // the per-stream DDC mapping computable (and unit-testable) without
+    // standing up a UDP socket.  Null before connect and after reset().
+    IP1Codec* p1Codec() const noexcept { return m_p1Codec; }
+    IP2Codec* p2Codec() const noexcept { return m_p2Codec; }
+
+    // The connected radio's HPSDRModel — required because the codec layer
+    // dispatches on this enum (e.g. P1CodecStandard maps multiple HpsdrModel
+    // values to distinct UpdateDDCs branches).
+    void setHpsdrModel(HPSDRModel model);
+    HPSDRModel hpsdrModel() const noexcept { return m_hpsdrModel; }
+
+    // PureSignal master enable (TX-side).  When true and MOX is also true,
+    // the per-board codec emits the PS-on DDC layout (G2: DDC0+DDC2 with
+    // ps_rate=192000; HL2: DDC0 with rx1_rate, etc.).
+    void setPureSignalEnabled(bool on);
+
+    // MOX (transmit) state.  PS DDC layout differs MOX-on vs MOX-off
+    // (cal armed but TX off → DDC2 RX-only; MOX → full PS dual-stream).
+    void setMox(bool on);
+
+    // Diversity master enable.  Combines with PS in some board branches
+    // (G2-class same as no-diversity per console.cs:8267-8277, but other
+    // branches differ).
+    void setDiversityEnabled(bool on);
+
+    // RX1 / RX2 sample rates (Hz).  HL2 uses rx1_rate as PS feedback rate;
+    // G2-class uses ps_rate=192000 regardless.
+    void setRx1Rate(int rateHz);
+    void setRx2Rate(int rateHz);
+
+    // RX2 enable.  When true, additional DDC (DDC3 on G2-class, DDC1 on
+    // HL2 PS-off path) is added to ddcEnable.
+    void setRx2Enabled(bool on);
+
+    /// Phase 3F: whether stream 1 is live. Published by
+    /// RadioModel::invokeCodecDdcAssignment from buildStreamConfigsForCodec().
+    bool rx2Enabled() const { return m_rx2Enabled; }
+
+    // ADC control register shadows.  G2-class PS-on cntrl1 formula is
+    // (rx_adc_ctrl1 & 0xf3) | 0x08 — preserves caller's bits 0,1,4..7,
+    // overrides bits 2-3 with 0x08.  cntrl2 is masked similarly per-codec.
+    void setRxAdcCtrl1(quint8 reg);
+    void setRxAdcCtrl2(quint8 reg);
+    quint8 rxAdcCtrl1() const noexcept { return m_rxAdcCtrl1; }
+    quint8 rxAdcCtrl2() const noexcept { return m_rxAdcCtrl2; }
+
+signals:
+    void activeReceiverCountChanged(int count);
+    void receiverCreated(int receiverIndex);
+    void receiverDestroyed(int receiverIndex);
+    void receiverActivated(int receiverIndex);
+    void receiverDeactivated(int receiverIndex);
+    void receiverFrequencyChanged(int receiverIndex, quint64 frequencyHz);
+
+    // Request RadioConnection to update hardware state.
+    // RadioModel wires these to RadioConnection slots.
+    void hardwareReceiverCountChanged(int count);
+    void hardwareFrequencyChanged(int hardwareRx, quint64 frequencyHz);
+
+    // Which hardware receivers are live after a rebuild: bit n set means an
+    // active receiver sits on hardware index n (the frame slot on Protocol 1,
+    // the DDC on Protocol 2). Emitted before hardwareReceiverCountChanged
+    // on every rebuild, and with 0 on reset.
+    //
+    // A count cannot say this. Protocol 1 routes by frame slot, so closing
+    // slice A leaves slice B on slot 1 (slot 2 on the Orion class) and the
+    // count drops to 1 while slot 1 is still the one carrying audio. The
+    // connection needs the slots themselves to know which receiver stands in
+    // for Thetis's RX1 and how many slots the frame must announce.
+    void hardwareSlotsChanged(quint32 slotMask);
+
+    // I/Q data routed to the appropriate WDSP channel.
+    void iqDataForChannel(int wdspChannel, const QVector<float>& samples);
+
+    // I/Q data routed to the appropriate receiver (by logical index).
+    void iqDataForReceiver(int receiverIndex, const QVector<float>& samples);
+
+    // The same batch, emitted right after iqDataForReceiver with the
+    // enqueueClockNs() time it left this manager. RxDspWorker consumes it
+    // through a queued connection, so the stamp travels with the batch and
+    // the worker can tell how long the batch waited in its queue (R-R3-40).
+    void iqDataForReceiverStamped(int receiverIndex,
+                                  const QVector<float>& samples,
+                                  qint64 enqueuedNs);
+
+    // Every hardware-DDC batch feedIqData receives, before the logical
+    // mapping, with the enqueueClockNs() time it arrived. RxDspWorker's
+    // external-diversity route consumes it through a queued connection:
+    // that route's secondary leg has no logical receiver, and the stamp lets
+    // the worker bound its input delay like any receiver's (R-R3-40).
+    void hardwareIqDataStamped(int hwReceiverIndex,
+                               const QVector<float>& samples,
+                               qint64 enqueuedNs);
+
+    // Phase 3M-4 Task 6: emitted whenever ReceiverManager re-runs the
+    // per-board PS DDC computation (either codec dispatch).  Carries the
+    // wire-byte map; the consumer (RadioConnection follow-up) writes it
+    // to the radio via NetworkIO.EnableRxs / SetDDCRate / SetADC_cntrl*
+    // (per Thetis console.cs:8527-8534 [v2.10.3.13]).
+    void ddcConfigChanged(const NereusSDR::PsDdcConfig& config);
+
+    // A per-board codec was installed or replaced. Distinct from
+    // ddcConfigChanged, which carries the PureSignal wire-byte map and is not
+    // emitted at all when the codec is being cleared.
+    //
+    // RadioModel::computeDdcAssignment reads the codec from here whenever
+    // there is no RadioConnection to ask, so the codec arriving is the moment
+    // a previously unanswerable assignment becomes answerable. connectToRadio
+    // binds the slice pool before wireConnectionSignals installs the codec, so
+    // without this the codec's first real answer waited for whatever moved a
+    // slice next -- in practice the operator's first VFO nudge, which is
+    // exactly the bench symptom in tst_connect_routes_first_iq.
+    //
+    // Deliberately not emitted from reset(), which clears both pointers by
+    // direct field write during teardown: a disconnecting radio has no use
+    // for a fresh assignment, and reset() has already dropped every receiver.
+    void ddcCodecChanged();
+
+private:
+    // Rebuild hardware DDC mapping after receiver changes.
+    struct HardwareMappingSnapshot {
+        int count{0};
+        quint32 slotMask{0};
+        QList<QPair<int, quint64>> frequencies;
+    };
+    // Caller holds m_routingMutex through the state change and snapshot.
+    HardwareMappingSnapshot rebuildHardwareMapping();
+    // Caller has released all routing-mutex ownership before publishing.
+    void publishHardwareMapping(const HardwareMappingSnapshot& snapshot);
+
+    // Phase 3M-4 Task 6: re-runs the per-board PS DDC computation by
+    // dispatching to the injected codec's applyPureSignalDdcConfig() and
+    // re-emitting the result.  Called from every state setter on actual
+    // change.  No-op when no codec is injected (graceful pre-connect path).
+    //
+    // Source: orchestration of Thetis console.cs:8186-8538 UpdateDDCs()
+    // [v2.10.3.13]; the per-board switch lives in the codec layer.
+    void updateDdcAssignment();
+
+    int m_maxReceivers{7};
+    int m_nextWdspChannel{0};
+    bool m_ddcFreqLocked{false};
+
+    // Receivers keyed by logical index
+    QMap<int, ReceiverConfig> m_receivers;
+
+    // Mapping from hardware DDC index to logical receiver index
+    QMap<int, int> m_hwToLogical;
+
+    // Audio-rate-fix 2026-05-24 (Lever 2): feedIqData runs on the radio
+    // Connection thread via Qt::DirectConnection so the I/Q packet path
+    // never touches the main thread.  Main-thread mutations of m_receivers
+    // and m_hwToLogical (createReceiver, destroyReceiver, setMaxReceivers,
+    // rebuildHardwareMapping) need to be serialized against the Connection-
+    // thread read in feedIqData.  Recursive so internal call paths like
+    // destroyReceiver -> rebuildHardwareMapping do not deadlock.  Mutable
+    // so the reader can take it.
+    mutable QRecursiveMutex m_routingMutex;
+
+    // beginIqBatch / endIqBatch state. The mutex is taken on the connection
+    // thread, and by reset() on the owner's thread (never an audio
+    // callback), and never while emitting.
+    struct HeldIqBatch {
+        bool hardware{false};  // hardwareIqDataStamped, else iqDataForReceiverStamped
+        int index{-1};
+        QVector<float> samples;
+    };
+    void flushHeldIq(QVector<HeldIqBatch>& batches);
+    QMutex m_iqBatchMutex;
+    std::atomic<Qt::HANDLE> m_iqBatchThread{nullptr};
+    QVector<HeldIqBatch> m_heldIq;
+
+    // Diagnostic: one-shot logging of first successful and first dropped feedIqData
+    bool m_firstForwardLogged{false};
+    bool m_firstDropLogged{false};
+
+    // -------------------------------------------------------------------
+    // Phase 3M-4 Task 6: PureSignal DDC orchestration state
+    //
+    // Non-owning codec pointers — set by RadioModel post-connect via
+    // setP1Codec / setP2Codec; cleared by reset().  P2 takes precedence
+    // when both are non-null (defensive — RadioModel only sets one).
+    IP1Codec* m_p1Codec{nullptr};
+    IP2Codec* m_p2Codec{nullptr};
+
+    // Connected radio's HPSDRModel — required by codec dispatch.
+    HPSDRModel m_hpsdrModel{HPSDRModel::HPSDR};
+
+    // Shadow of last-emitted live state.  Setters compare against these
+    // and skip the codec dispatch when the new value matches (idempotence).
+    bool   m_psEnabled{false};
+    bool   m_moxState{false};
+    bool   m_diversityEnabled{false};
+    int    m_rx1Rate{48000};
+    int    m_rx2Rate{48000};
+    bool   m_rx2Enabled{false};
+    quint8 m_rxAdcCtrl1{0};
+    quint8 m_rxAdcCtrl2{0};
+
+    static const ReceiverConfig kInvalidConfig;
+};
+
+} // namespace NereusSDR

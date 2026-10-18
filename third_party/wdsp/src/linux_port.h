@@ -1,0 +1,183 @@
+// no-port-check: WDSP upstream header (TAPR v1.29) carrying the
+// NR0V / G0ORX/N6LYT copyright line.  Vendored verbatim with only the
+// cross-platform shim macro tweaks documented in the modification
+// history below; not a Thetis port, attribution already lives in the
+// preserved header copyright block.
+//
+// NereusSDR modification history:
+//   2026-09-23 - Declare the thread-start hook (WDSPSetThreadStartHook) and
+//                the thread kinds it reports, so the application can name,
+//                place and prioritise each channel's worker and flush
+//                threads as they start (R-R3-41). J.J. Boyd (KG4VCF), with
+//                AI assistance from Anthropic Claude Code.
+//   2026-09-23 - WDSP_THREAD_WORKER_EXIT: the hook also hears from a channel
+//                worker just before it ends, so the application forgets
+//                its thread ID (R-R3-41). J.J. Boyd (KG4VCF), with AI
+//                assistance from Anthropic Claude Code.
+
+/*  linux_port.h
+
+This file is part of a program that implements a Software-Defined Radio.
+
+Copyright (C) 2013 Warren Pratt, NR0V and John Melton, G0ORX/N6LYT
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at  
+
+warren@wpratt.com
+john.d.melton@googlemail.com
+
+*/
+
+#if defined(linux) || defined(__APPLE__)
+
+
+#include <pthread.h>
+#include <semaphore.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+#define CRITICAL_SECTION pthread_mutex_t
+typedef pthread_mutex_t *LPCRITICAL_SECTION;
+#define byte unsigned char
+#define String char *
+#define LONG long
+#define DWORD long
+#define HANDLE void *
+#define WINAPI
+#define FALSE 0
+#define TRUE 1
+#define TEXT(x) x
+#define InterlockedIncrement(base) __sync_add_and_fetch(base,1L)
+#define InterlockedDecrement(base) __sync_sub_and_fetch(base,1L)
+
+//#define InterlockedBitTestAndSet(base,bit) __sync_or_and_fetch(base,1L<<bit)
+//#define InterlockedBitTestAndReset(base,bit) __sync_and_and_fetch(base,~(1L<<bit))
+
+#define InterlockedBitTestAndSet(base,bit) __sync_fetch_and_or(base,1L<<bit)
+#define InterlockedBitTestAndReset(base,bit) __sync_fetch_and_and(base,~(1L<<bit))
+
+#define InterlockedExchange(target,value) __sync_lock_test_and_set(target,value)
+#define InterlockedAnd(base,mask) __sync_fetch_and_and(base,mask)
+#define _InterlockedAnd(base,mask) __sync_fetch_and_and(base,mask)
+#define __declspec(x)
+#define __cdecl
+#define __stdcall
+#define __forceinline
+#define _beginthread wdsp_beginthread
+#define _int64 long long
+#define _aligned_malloc(x,y) malloc(x)
+#define _aligned_free(x) do { free(x); } while(0)
+// Windows freopen_s to "conout$" is a no-op on POSIX — stdout works as-is
+#define freopen_s(pFile, name, mode, stream) ((void)0)
+#define min(x,y) (x<y?x:y)
+#define max(x,y) (x<y?y:x)
+#define THREAD_PRIORITY_HIGHEST 0
+
+#define Sleep(ms) usleep(ms*1000)
+
+#define CreateSemaphore(a,b,c,d) LinuxCreateSemaphore(a,b,c,d)
+#define CreateSemaphoreW(a,b,c,d) LinuxCreateSemaphore(a,b,c,0)
+#define WaitForSingleObject(x, y) LinuxWaitForSingleObject(x, y)
+#define WaitForMultipleObjects(n, h, all, ms) LinuxWaitForMultipleObjects(n, h, all, ms)
+#define ReleaseSemaphore(x,y,z) LinuxReleaseSemaphore(x,y,z)
+#define SetEvent(x) LinuxSetEvent(x)
+#define ResetEvent(x) LinuxResetEvent(x)
+
+#define AllocConsole() ((void)0)
+#define FreeConsole()  ((void)0)
+#define OutputDebugStringA(text) fputs((text), stderr)
+
+// Windows AVRT (multimedia thread scheduling) — no-ops on POSIX
+#define AvSetMmThreadCharacteristics(name, idx) ((HANDLE)0)
+#define AvSetMmThreadPriority(h, p) ((void)0)
+#define AvRevertMmThreadCharacteristics(h) ((void)0)
+#define GetCurrentThread() ((HANDLE)0)
+
+// ARM64 has flush-to-zero by default; SSE intrinsics not available
+#ifdef __aarch64__
+#define _MM_SET_FLUSH_ZERO_MODE(x) ((void)0)
+#define _MM_FLUSH_ZERO_ON 0
+#else
+#include <xmmintrin.h>
+#endif
+
+#define INFINITE -1
+#define WAIT_OBJECT_0 0u
+#define WAIT_TIMEOUT 258u
+#define WAIT_FAILED 0xffffffffu
+
+void QueueUserWorkItem(void *function,void *context,int flags);
+
+void InitializeCriticalSectionAndSpinCount(pthread_mutex_t *mutex,int count);
+
+#define InitializeCriticalSection(mutex) InitializeCriticalSectionAndSpinCount((mutex), 0)
+
+void EnterCriticalSection(pthread_mutex_t *mutex);
+
+void LeaveCriticalSection(pthread_mutex_t *mutex);
+
+void DeleteCriticalSection(pthread_mutex_t *mutex);
+
+
+sem_t *LinuxCreateSemaphore(int attributes,int initial_count,int maximum_count,char *name);
+
+int LinuxWaitForSingleObject(sem_t *sem,int x);
+
+unsigned int LinuxWaitForMultipleObjects(unsigned int count, HANDLE* handles,
+	int wait_all, int milliseconds);
+
+void LinuxReleaseSemaphore(sem_t *sem,int release_count, int* previous_count);
+
+sem_t *CreateEvent(void* security_attributes,int bManualReset,int bInitialState,char* name);
+
+void LinuxSetEvent(sem_t* sem);
+
+void LinuxResetEvent(sem_t* sem);
+
+HANDLE wdsp_beginthread( void( __cdecl *start_address )( void * ), unsigned stack_size, void *arglist);
+
+// NereusSDR: the kinds of WDSP thread wdsp_beginthread reports to the
+// thread-start hook. A channel's worker (wdspmain) is reported by the
+// channel's type (1 = TX, anything else = RX); flushChannel is the channel's
+// flush thread. Other WDSP threads are named but not reported. Macros, like
+// the rest of this header, because it has no include guard.
+#define WDSP_THREAD_RX_MAIN 1
+#define WDSP_THREAD_TX_MAIN 2
+#define WDSP_THREAD_FLUSH 3
+// NereusSDR: a channel worker reports this kind, on itself, just after its
+// start routine returns and before the thread ends.
+#define WDSP_THREAD_WORKER_EXIT 4
+
+// NereusSDR: install (or, with 0, remove) a function each reported WDSP
+// thread calls once on itself, before its start routine runs, with its kind
+// and channel; a channel worker calls it once more, with
+// WDSP_THREAD_WORKER_EXIT, after its start routine returns. The hook runs on the new thread; it must not wait for the
+// thread that created it. Not built on Windows, where WDSP threads start
+// through the platform _beginthread.
+void WDSPSetThreadStartHook (void (*hook)(int kind, int channel));
+
+void _endthread();
+
+void SetThreadPriority(HANDLE thread, int priority);
+
+int CloseHandle(HANDLE hObject);
+
+#endif

@@ -1,0 +1,3085 @@
+// 2026-10-02 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex:
+// merge native EQ/CFC transactions with latest Core/remote profile ownership.
+// =================================================================
+// src/models/TransmitModel.h  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis source:
+//   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
+//
+// Ported from mi0bot-Thetis source:
+//   Project Files/Source/Console/console.cs:47660-47673, 47666, 47775-47778
+//     (HL2 setPowerUsingTargetDbm tune-slider sub-step DSP modulation;
+//      setTxPostGenToneMag property/signal; computeAudioVolume HL2 branch)
+//   original licence from mi0bot-Thetis source is included below
+//
+// =================================================================
+// --- From console.cs (Thetis v2.10.3.13) ---
+
+//=================================================================
+// console.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+// Credit is given to Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font.
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to:
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Modifications to support the Behringer Midi controllers
+// by Chris Codella, W2PA, May 2017.  Indicated by //-W2PA comment lines.
+// Modifications for using the new database import function.  W2PA, 29 May 2017
+// Support QSK, possible with Protocol-2 firmware v1.7 (Orion-MkI and Orion-MkII), and later.  W2PA, 5 April 2019
+// Modfied heavily - Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+// Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
+
+// --- From mi0bot-Thetis console.cs [v2.10.3.13-beta2] ---
+
+//=================================================================
+// console.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+// Credit is given to Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font.
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to:
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Modifications to support the Behringer Midi controllers
+// by Chris Codella, W2PA, May 2017.  Indicated by //-W2PA comment lines.
+// Modifications for using the new database import function.  W2PA, 29 May 2017
+// Support QSK, possible with Protocol-2 firmware v1.7 (Orion-MkI and Orion-MkII), and later.  W2PA, 5 April 2019
+// Modfied heavily - Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+// Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
+
+// Modification history (NereusSDR):
+//   2026-10-09 - VAX TX (virtual device) only where a VAX transmit device
+//                exists: greyed on Windows with the PC Mic route, a saved
+//                choice falls back to PC Mic (R-SPK-21, R-AUD-01).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Fix wave GUI-I6: tunePowerForTxBandWriteInFlight, a
+//                window's Tune Power change on its way to the Core.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Fix round 1 (minor 2): the flag's change is signalled
+//                (tunePowerForTxBandWriteInFlightChanged). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - CFC echo: updatePairedCfc / updatePairedCfcArray return
+//                 false for a value the paired curve already holds, so the
+//                 setter's own mirror path decides. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Radio codec: lineInGainIndexForBoost and the line-in
+//                 index default follow Thetis SetMicGain's lineinboost
+//                 table. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-04-26 — tunePowerByBand[14] + per-MAC persistence (G.3, Phase 3M-1a)
+//                 ported by J.J. Boyd (KG4VCF), with AI-assisted transformation
+//                 via Anthropic Claude Code.
+//   2026-04-27 — micGainDb (int) + derived micPreampLinear (double) (C.1, Phase 3M-1b)
+//                 ported by J.J. Boyd (KG4VCF), with AI-assisted transformation
+//                 via Anthropic Claude Code.
+//   2026-04-27 — VOX properties: voxEnabled / voxThresholdDb / voxGainScalar /
+//                 voxHangTimeMs (C.3, Phase 3M-1b) ported by J.J. Boyd (KG4VCF),
+//                 with AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-27 — MON properties: monEnabled / monitorVolume (C.5, Phase 3M-1b)
+//                 ported by J.J. Boyd (KG4VCF), with AI-assisted transformation
+//                 via Anthropic Claude Code.
+//   2026-04-28 — micSource (MicSource::Pc/Radio) property (I.1, Phase 3M-1b)
+//                 NereusSDR-native Setup UI property, J.J. Boyd (KG4VCF),
+//                 with AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-28 — AppSettings per-MAC persistence for 15 mic/VOX/MON properties
+//                 (L.2, Phase 3M-1b): loadFromSettings(mac) / persistToSettings(mac)
+//                 + auto-persist on each setter via persistOne().
+//                 NereusSDR-native persistence glue, J.J. Boyd (KG4VCF),
+//                 with AI-assisted transformation via Anthropic Claude Code.
+//   2026-04-28 — setMicSourceLocked(bool) lock guard (L.3, Phase 3M-1b): HL2
+//                 force-Pc-on-connect model-side lock. When locked,
+//                 setMicSource(MicSource::Radio) silently coerces to Pc.
+//                 NereusSDR-native, J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-04-28 — Two-tone test properties (B.2, Phase 3M-1c): TwoToneFreq1 /
+//                 TwoToneFreq2 / TwoToneLevel / TwoTonePower /
+//                 TwoToneFreq2Delay / TwoToneInvert / TwoTonePulsed (7x).
+//                 Defaults follow option C — Thetis Designer for Freq1/Freq2/
+//                 Invert and ranges, NereusSDR-original safer for Level/Power.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-28 — DrivePowerSource enum + TwoToneDrivePowerSource property
+//                 (B.3, Phase 3M-1c): full 3-value enum (DriveSlider /
+//                 TuneSlider / Fixed) ported from Thetis enums.cs:456-461;
+//                 default DriveSlider per console.cs:46553 [v2.10.3.13].
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-04-30 — txEqParaEqData (QString) opaque blob (Phase 3M-3a-ii
+//                 follow-up Batch 6) — mirror of cfcParaEqData (Batch 2)
+//                 for the TX EQ slot.  ParametricEqWidget produces /
+//                 consumes the inner JSON; MicProfileManager wraps it
+//                 through ParaEqEnvelope (gzip+base64url) before storing
+//                 under the bundle key TXParaEQData.  Empty default.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-05-02 — filterLow / filterHigh + filterChanged signal +
+//                 filterDisplayText helper + per-MAC persistence.
+//                 NereusSDR-original (Plan 4 Cluster A, Task 2/D1).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-05-03 — Phase 3 Agent 3A of issue #167 (PA-cal hotfix scaffolding):
+//                 m_powerByBand[14] (default 50 W; per-band normal-mode
+//                 power array parallel to m_tunePowerByBand) +
+//                 powerForBand / setPowerForBand + powerByBandChanged
+//                 signal; 3 Thetis ATT-on-TX-on-power-change safety
+//                 properties (forceAttwhenPSAoff,
+//                 forceAttwhenPowerChangesWhenPSAon, _anddecreased) +
+//                 m_lastPower (-1 sentinel; runtime-only; resets on
+//                 forceAttwhenPowerChangesWhenPSAon toggle per Thetis
+//                 console.cs:29298 [v2.10.3.13]); pureSignalActive()
+//                 predicate (returns false unconditionally — 3M-4
+//                 PureSignal phase wires the live PS-A check). Math
+//                 kernel itself (computeAudioVolume / setPowerUsingTargetDbm)
+//                 lands in Phases 3B / 3C. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-05-03 — Phase 3 Agent 3B of issue #167: computeAudioVolume()
+//                 math kernel — faithful port of Thetis SetPowerUsingTargetDBM
+//                 dBm-target math (console.cs:46720-46751 [v2.10.3.13])
+//                 with two NereusSDR-original safety short-circuits:
+//                 sliderWatts <= 0 returns 0.0; gbb >= 99.5 returns
+//                 clamp(sliderWatts/100, 0, 1) linear fallback for HL2
+//                 PA-bypass / Bypass profile / out-of-range Band. Pure
+//                 function: no state mutation, no signal emission. Phase
+//                 3C's setPowerUsingTargetDbm wrapper builds on this.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
+//   2026-05-03 — Phase 3 Agent 3C of issue #167: setPowerUsingTargetDbm()
+//                 deep-parity wrapper — full port of Thetis
+//                 SetPowerUsingTargetDBM (console.cs:46645-46762
+//                 [v2.10.3.13]) integrating Phase 3A scaffolding +
+//                 Phase 3B math kernel into the unified API. All three
+//                 txMode branches (0=normal, 1=tune, 2=2-tone) and
+//                 drive-source enum routing for tune/2-tone modes;
+//                 power_by_band write side-effect on txMode 0; bConstrain
+//                 out-param false on Fixed drive source; ATT-on-TX-on-
+//                 power-change safety gate (//[2.10.3.5]MW0LGE tag
+//                 preserved verbatim) — pushes ATT_on_TX=31dB via
+//                 StepAttenuatorController when PS-active + power
+//                 changes.  Adds m_twoToneActive / m_tuneDrivePowerSource
+//                 / m_tunePower fields (matching Thetis chk2TONE,
+//                 _tuneDrivePowerSource, tune_power) and
+//                 audioVolumeChanged signal.  XVTR translation NOT
+//                 ported — sentinel fallback in computeAudioVolume
+//                 catches Band::XVTR.  J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
+//   2026-05-04 — Issue #175: HL2 TX mi0bot parity port.  Declares
+//                 setTxPostGenToneMag property + signal; declares
+//                 m_hpsdrModel field + setHpsdrModel/hpsdrModel
+//                 accessors used by polymorphic [0, 99] HL2 clamp in
+//                 setTunePowerForBand and (post-review) setTunePower /
+//                 load.  Cites mi0bot-Thetis console.cs:47660-47673 +
+//                 47775-47778 [v2.10.3.13-beta2].  J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-05-04 — Issue #175 review fix: declares the global Fixed-mode
+//                 setTunePower clamp now polymorphs (impl in .cpp).
+//                 Multi-source NereusSDR header block above + appended
+//                 mi0bot console.cs verbatim header below complete the
+//                 GPL attribution.  J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-05-07 — Phase 3M-3a-iv post-bench refactor (Option A): dropped
+//                 antiVoxSourceVax property + setter + signal + member +
+//                 persistence (NereusSDR-architectural divergence from
+//                 Thetis chkAntiVoxSource at setup.designer.cs:44646-44657
+//                 [v2.10.3.13]).  VAX is a digital-mode app bus with no
+//                 mic-feedback path, so the audio output device is the only
+//                 valid anti-VOX cancellation reference; there is no user
+//                 choice to expose.  J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 fix wave: setHpsdrModel moved out of line; the
+//                 tune power is clamped at the settings load (2026-09-24).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): the TX and Phone/CW applets'
+//                 settings as mirrored Q_PROPERTYs (transmitSettingsVersion
+//                 2), the Core's tune power for its transmit band
+//                 (tunePowerForTxBand, setTunePowerForTxBand) and the tune
+//                 drive source on the link, and settingRangeRefusal().
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): the radio microphone settings as
+//                 mirrored Q_PROPERTYs (transmitSettingsVersion 3) and the
+//                 Core's TX profiles (activeTxProfile, txProfilesJson).
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 4): TX EQ, CFC, phase rotator,
+//                 CESSB, leveler and ALC settings as mirrored Q_PROPERTYs
+//                 (transmitSettingsVersion 4), the band arrays as JSON on
+//                 the link, and txEqUseLegacy (Thetis EQUseLegacy, the TX
+//                 EQ dialog's Legacy EQ box, eqform.cs:988 and setup.cs:
+//                 3615, 9318 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 5): Setup > Transmit > Power,
+//                 DEXP/VOX and Test > Two-Tone IMD settings as mirrored
+//                 Q_PROPERTYs (transmitSettingsVersion 5): the per-band
+//                 power and tune power as JSON objects keyed by band,
+//                 the DEXP timing, look-ahead and side-channel filter, the
+//                 anti-VOX gain and the two-tone settings; the tune drive
+//                 source becomes writable. NereusSDR-original. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13):
+//                 voxEnabled is a Q_PROPERTY, mirrored both ways. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - iPhone app plan Task 40: micMuted, the mic mute as a
+//                 Q_PROPERTY (true = muted), mirrored both ways; muting
+//                 zeroes the mic preamp as Thetis setAudioMicGain does.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: txEqCurve, the read-only curve the
+//                 Core derives from txEqParaEqData (ParaEqCurve::
+//                 txEqCurveJson), declared last. Sent only to a peer that
+//                 declared txEqCurve (txEqCurveVersion 1). NereusSDR-
+//                 original. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 (transmitSettingsVersion 15): cfcProfile, the
+//                 read-only CFC band editor the Core derives from
+//                 cfcParaEqData or the ten-band values (CfcProfile::
+//                 publishedJson), declared last. Sent only to a peer that
+//                 declared cfcProfile. NereusSDR-original. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49: the per-band PWR and tune slider limits and
+//                 FM TX offsets from Thetis console.cs:1824-1841, 17539-17550
+//                 [v2.10.3.15]; setPowerUsingTargetDbm constrains the drive
+//                 to the slider limit (ConstrainAValue). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: tuneTxBandKnown() for the TX
+//                 applet's Tune Power slider. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review: the first transmit band
+//                 repaints the tune power (tunePowerForTxBandChanged) even
+//                 when unchanged; clearTuneTxBand() forgets it at a
+//                 disconnect. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-29 - Two-tone PA wiring: powerSliderLimitEnabled (Thetis
+//                 PWRSliderLimitEnabled, console.cs:30237 [v2.10.3.15]),
+//                 honoured by setPowerUsingTargetDbm's constrain on the PWR
+//                 slider. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+// =================================================================
+#pragma once
+
+#include "core/NereusCoreExport.h"
+#include "Band.h"
+#include "core/HpsdrModel.h"
+#include "core/WdspTypes.h"
+#include "core/audio/CompositeTxMicRouter.h"
+
+#include <QByteArray>
+#include <QMetaType>
+#include <QObject>
+#include <QScopeGuard>
+#include "core/CfcEditProfile.h"
+#include <QString>
+#include <QStringList>
+#include <QVariant>
+#include <array>
+#include <atomic>
+#include <cmath>
+
+namespace NereusSDR {
+
+class PaProfile;
+class PureSignal;
+class StepAttenuatorController;
+
+// VAX slot: which audio source owns the transmitter.
+// MicDirect = hardware mic, Vax1–Vax4 = virtual audio crossbar slots.
+enum class VaxSlot {
+    None = 0,
+    MicDirect,
+    Vax1,
+    Vax2,
+    Vax3,
+    Vax4
+};
+
+QString vaxSlotToString(VaxSlot s);
+VaxSlot vaxSlotFromString(const QString& s);
+
+// Drive-power source for the two-tone IMD test (and TUN button).
+//
+// From Thetis enums.cs:456-461 [v2.10.3.13]:
+//   public enum DrivePowerSource { DRIVE_SLIDER = 0, TUNE_SLIDER = 1, FIXED = 2 }
+//
+// Selects which power slider drives the radio during a two-tone test:
+//   DriveSlider — the regular drive-power slider (PWR).
+//   TuneSlider  — the dedicated tune-power slider (matches TUN behaviour).
+//   Fixed       — Setup-page-fixed power; saves PWR pre-MOX, applies the
+//                 fixed value during the test, restores PWR on stop.
+//
+// Default is DriveSlider per Thetis console.cs:46553 [v2.10.3.13]:
+//   private DrivePowerSource _2ToneDrivePowerSource = DRIVE_SLIDER;
+//
+// Phase 3M-1c B.3 ports the enum + a TransmitModel property; the actual
+// power-source-driven MOX behaviour wires up in Phase I (two-tone handler).
+enum class DrivePowerSource : int {
+    DriveSlider = 0,  ///< Drive (PWR) slider
+    TuneSlider  = 1,  ///< Tune slider
+    Fixed       = 2,  ///< Setup-page-fixed power; saves+restores PWR
+};
+
+QString drivePowerSourceToString(DrivePowerSource s);
+DrivePowerSource drivePowerSourceFromString(const QString& s);
+
+// Transmit state management.
+// Includes MOX, tune, TX frequency, power, mic gain, and PureSignal state.
+class NEREUS_CORE_EXPORT TransmitModel : public QObject {
+    Q_OBJECT
+
+    Q_PROPERTY(bool   mox       READ isMox       WRITE setMox       NOTIFY moxChanged)
+    Q_PROPERTY(bool   tune      READ isTune      WRITE setTune      NOTIFY tuneChanged)
+    Q_PROPERTY(int    power     READ power       WRITE setPower     NOTIFY powerChanged)
+    Q_PROPERTY(float  micGain   READ micGain     WRITE setMicGain   NOTIFY micGainChanged)
+    Q_PROPERTY(bool   pureSig   READ pureSigEnabled WRITE setPureSigEnabled NOTIFY pureSigChanged)
+    Q_PROPERTY(int filterLow  READ filterLow  WRITE setFilterLow  NOTIFY filterChanged)
+    Q_PROPERTY(int filterHigh READ filterHigh WRITE setFilterHigh NOTIFY filterChanged)
+    Q_PROPERTY(int  lineInGain READ lineInGain WRITE setLineInGain NOTIFY lineInGainChanged)
+    Q_PROPERTY(int  userDigOut READ userDigOut WRITE setUserDigOut NOTIFY userDigOutChanged)
+
+    // ── PA-calibration safety hotfix (#167 Phase 3A) ──────────────────────
+    // Three ATT-on-TX-on-power-change safety properties.  Defaults match
+    // Thetis console.cs:29285-29310 [v2.10.3.13].
+    Q_PROPERTY(bool forceAttwhenPSAoff
+        READ forceAttwhenPSAoff WRITE setForceAttwhenPSAoff
+        NOTIFY forceAttwhenPSAoffChanged)
+    Q_PROPERTY(bool forceAttwhenPowerChangesWhenPSAon
+        READ forceAttwhenPowerChangesWhenPSAon
+        WRITE setForceAttwhenPowerChangesWhenPSAon
+        NOTIFY forceAttwhenPowerChangesWhenPSAonChanged)
+    Q_PROPERTY(bool forceAttwhenPowerChangesWhenPSAonAndDecreased
+        READ forceAttwhenPowerChangesWhenPSAonAndDecreased
+        WRITE setForceAttwhenPowerChangesWhenPSAonAndDecreased
+        NOTIFY forceAttwhenPowerChangesWhenPSAonAndDecreasedChanged)
+
+public:
+    explicit TransmitModel(QObject* parent = nullptr);
+    ~TransmitModel() override;
+
+    bool isMox() const { return m_mox; }
+    void setMox(bool mox);
+
+    bool isTune() const { return m_tune; }
+    void setTune(bool tune);
+
+    int power() const { return m_power; }
+    void setPower(int power);
+
+    float micGain() const { return m_micGain; }
+    void setMicGain(float gain);
+
+    bool pureSigEnabled() const { return m_pureSigEnabled; }
+    void setPureSigEnabled(bool enabled);
+
+    /// SWR-protection foldback multiplier applied to TX drive scaling.
+    /// 1.0 = no foldback (default).  Reduced by SwrProtectionController
+    /// when reflected power is high; protects the PA from running at
+    /// full drive into a high-SWR load.
+    ///
+    /// Source: mi0bot NetworkIO.cs:209-211 [v2.10.3.14-beta1]
+    ///   int i = (int)(255 * f * _swr_protect);   // f normalised 0..1,
+    ///                                            // _swr_protect ≤ 1.0
+    ///   NetworkIO.SetOutputPowerFactor(i);
+    ///
+    /// Runtime-only: not persisted.  SwrProtectionController will drive
+    /// this value on each TX cycle in a follow-up task; for now the
+    /// factor is fixed at 1.0 and observable wire bytes are identical
+    /// to the prior `(power * 255) / 100` formula.
+    float swrProtectFactor() const { return m_swrProtectFactor; }
+
+    /// Set the foldback multiplier.  Clamps to [0.0, 1.0].  Silently
+    /// no-ops if the clamped value matches the current value (avoids
+    /// redundant signal emissions during SwrProtectionController's
+    /// per-sample rate).
+    void setSwrProtectFactor(float f);
+
+    VaxSlot txOwnerSlot() const { return m_txOwnerSlot.load(std::memory_order_acquire); }
+    void setTxOwnerSlot(VaxSlot s);
+
+    void loadFromSettings();
+
+    // ── Per-band tune power (G.3) ─────────────────────────────────────────
+    //
+    // Porting from Thetis console.cs:12094 [v2.10.3.13]:
+    //   private int[] tunePower_by_band;
+    //
+    // Default 50W per band on first init:
+    //   console.cs:1819-1820 [v2.10.3.13]:
+    //     tunePower_by_band = new int[(int)Band.LAST];
+    //     for (int i = 0; i < (int)Band.LAST; i++) tunePower_by_band[i] = 50;
+    //
+    // NereusSDR uses scalar per-band AppSettings keys instead of Thetis's
+    // pipe-delimited string (console.cs:3087-3091 save, :4904-4910 restore).
+
+    /// Return the tune-power value (watts) for the given band.
+    /// Default 50W on first init.  Returns 50 as a safe fallback for
+    /// out-of-range band values.
+    int tunePowerForBand(Band band) const;
+
+    /// Set the tune-power value (watts) for the given band.
+    /// Clamp ceiling polymorphs by SKU: HERMESLITE [0,99], others [0,100].
+    /// Emits tunePowerByBandChanged when the value actually changes.
+    /// No-op for out-of-range band values.
+    void setTunePowerForBand(Band band, int watts);
+
+    /// Return the connected radio model (defaults to HPSDRModel::FIRST).
+    /// Used to polymorph SKU-specific behaviour (e.g. tune-power clamp
+    /// ceiling, HL2 sub-step DSP modulation).
+    HPSDRModel hpsdrModel() const noexcept { return m_hpsdrModel; }
+
+    /// Set the connected radio model.  Call before setTunePowerForBand or
+    /// setPowerUsingTargetDbm to engage SKU-specific behaviour.
+    /// No signal needed for Task 6 — wired from RadioModel in Task 10.
+    /// R-R3-46: sets the model only. The tune power (fixed and per band)
+    /// is clamped to it, and saved for that radio, when the radio's
+    /// settings load (loadFromSettings, load), which a connect runs after
+    /// this. A remote window's copy (the Core's values) is left alone.
+    void setHpsdrModel(HPSDRModel m);
+
+    /// Set the per-MAC AppSettings scope.  Must be called before load() / save().
+    /// Mirrors the AlexController::setMacAddress() pattern.
+    void setMacAddress(const QString& mac);
+
+    // ── Per-band normal-mode power (#167 Phase 3A) ────────────────────────
+    //
+    // Parallel to the existing tunePowerForBand() pair: while
+    // tunePower_by_band carries the TUNE-button per-band power, this array
+    // carries the regular drive-slider per-band power that
+    // SetPowerUsingTargetDBM (#167 Phase 3C) writes back into on a
+    // txMode 0 (normal-mode) commit.
+    //
+    // From Thetis console.cs:1813-1814 [v2.10.3.13]:
+    //     power_by_band = new int[(int)Band.LAST];
+    //     for (int i = 0; i < (int)Band.LAST; i++) power_by_band[i] = 50;
+    // (Thetis safety-first default: users dial up from 50 per band.
+    // limitPower_by_band is the separate band-max ceiling array; see
+    // limitPowerForBand below.  Phase 3C's setPowerUsingTargetDbm txMode 0
+    // branch writes back into m_powerByBand[band] via setPower side-effect.)
+    //
+    // HF amateur + GEN/WWV/XVTR and 2 m (the per-band state slots).  Phase 3L
+    // SWL bands inherit ham-band values — no separate per-SWL TX power.
+
+    /// Return the normal-mode power value (watts) for the given band.
+    /// Default 50 W on first init (Thetis power_by_band parity).
+    /// Returns 50 as a safe fallback for out-of-range band values.
+    int  powerForBand(Band band) const;
+
+    /// Set the normal-mode power value (watts) for the given band.
+    /// Clamped to [0, 100].  Emits powerByBandChanged when the value
+    /// actually changes.  No-op for out-of-range band values.
+    /// Auto-persists to AppSettings under
+    ///   hardware/<mac>/powerByBand/<bandKeyName>
+    /// (mirrors the per-MAC tx/ namespace pattern).
+    void setPowerForBand(Band band, int watts);
+
+    // ── Per-band slider limits and FM TX offset (R-R3-49) ─────────────────
+    //
+    // The rest of the Thetis TXBand setter's power half
+    // (console.cs:17511-17580 [v2.10.3.15]):
+    //   ptbPWR.LimitValue = limitPower_by_band[(int)value];
+    //   ptbTune.LimitValue = limitTunePower_by_band[(int)value]; //MW0LGE_22b
+    //   ...
+    //   FMTXOffsetMHz = fm_tx_offset_by_band_mhz[(int)value]; //MW0LGE_21k9
+    // Defaults (console.cs:1824-1841 [v2.10.3.15]): limits 100 on every
+    // band; FM offset 1 MHz on 6 m, 0.1 MHz elsewhere.  Persisted per radio
+    // under hardware/<mac>/limitPowerByBand/, limitTunePowerByBand/ and
+    // fmTxOffsetByBandMhz/ (Thetis saves pipe-delimited strings,
+    // console.cs:3101-3115 save, 4921-4944 load).
+
+    /// PWR slider limit (watts, 0..100) stored for a band.  100 for an
+    /// out-of-range band.
+    int  limitPowerForBand(Band band) const;
+    /// Store a band's PWR slider limit, clamped to 0..100 (PrettyTrackBar's
+    /// LimitValue setter clamps to the slider's Min/Max).
+    void setLimitPowerForBand(Band band, int watts);
+    /// Tune slider limit (watts, 0..100) stored for a band.
+    int  limitTunePowerForBand(Band band) const;
+    /// Store a band's tune slider limit, clamped to 0..100.
+    void setLimitTunePowerForBand(Band band, int watts);
+
+    /// The PWR slider's current limit (ptbPWR.LimitValue).  The band change
+    /// assigns it from limitPowerForBand; setPowerUsingTargetDbm constrains
+    /// the drive to it.
+    int  powerLimit() const noexcept { return m_powerLimit; }
+    void setPowerLimit(int watts);
+    /// Whether the PWR slider limit applies (Thetis PWRSliderLimitEnabled,
+    /// ptbPWR.LimitEnabled; on by default).  The two-tone test turns it off
+    /// around its FIXED drive source and back on at the stop.
+    bool powerSliderLimitEnabled() const noexcept { return m_powerSliderLimitEnabled; }
+    void setPowerSliderLimitEnabled(bool enabled) noexcept { m_powerSliderLimitEnabled = enabled; }
+    /// The tune slider's current limit (ptbTune.LimitValue).
+    int  tunePowerLimit() const noexcept { return m_tunePowerLimit; }
+    void setTunePowerLimit(int watts);
+
+    /// The FM TX offset in MHz for the transmit band (Thetis
+    /// fm_tx_offset_mhz, initially 0).
+    double fmTxOffsetMhz() const noexcept { return m_fmTxOffsetMhz; }
+    /// Set the FM TX offset.  A value outside udFMOffset's 0..50 MHz range
+    /// is ignored, as in Thetis's FMTXOffsetMHz setter.
+    void   setFmTxOffsetMhz(double mhz);
+    /// FM TX offset (MHz) stored for a band.
+    double fmTxOffsetForBandMhz(Band band) const;
+    /// Store a band's FM TX offset (MHz). A value outside 0..50 MHz keeps
+    /// the band's previous value.
+    void   setFmTxOffsetForBandMhz(Band band, double mhz);
+
+    // ── ATT-on-TX-on-power-change safety properties (#167 Phase 3A) ──────
+    //
+    // Three flags governing the StepAttenuatorController override that
+    // fires when the user changes TX power while PureSignal is active.
+    //
+    // From Thetis console.cs:29285-29310 [v2.10.3.13]:
+    //     private bool _forceATTwhenPSAoff = true;                     //MW0LGE [2.9.0.7] added
+    //     private bool _forceATTwhenPowerChangesWhenPSAon = true;       //MW0LGE [2.9.3.5] added
+    //     private float _lastPower = -1;
+    //     ... ForceATTwhenOutputPowerChangesWhenPSAon setter resets
+    //         _lastPower to -1 when the value changes (line 29298) ...
+    //     private bool _forceATTwhenPowerChangesWhenPSAon_anddecreased = false;
+    //
+    // All 3 are persisted per-MAC under hardware/<mac>/tx/ via the existing
+    // L.2 auto-persist pattern.  m_lastPower is RUNTIME-only (matches Thetis
+    // ephemeral _lastPower); not persisted.
+
+    /// MW0LGE [2.9.0.7] — Force step-attenuator engagement when PureSignal
+    /// is OFF (PS-Off path).  Default TRUE.
+    bool forceAttwhenPSAoff() const noexcept { return m_forceAttwhenPSAoff; }
+    void setForceAttwhenPSAoff(bool on);
+
+    /// MW0LGE [2.9.3.5] — Force step-attenuator engagement when TX power
+    /// changes while PureSignal is ON (PS-On path).  Default TRUE.
+    /// CRITICAL: setter resets m_lastPower to -1 when the value changes
+    /// (Thetis console.cs:29298 [v2.10.3.13]).
+    bool forceAttwhenPowerChangesWhenPSAon() const noexcept {
+        return m_forceAttwhenPowerChangesWhenPSAon;
+    }
+    void setForceAttwhenPowerChangesWhenPSAon(bool on);
+
+    /// Companion flag: also fire the gate when the new power is LESS than
+    /// the last known power (otherwise the gate only fires on increase).
+    /// Default FALSE.
+    bool forceAttwhenPowerChangesWhenPSAonAndDecreased() const noexcept {
+        return m_forceAttwhenPowerChangesWhenPSAonAndDecreased;
+    }
+    void setForceAttwhenPowerChangesWhenPSAonAndDecreased(bool on);
+
+    /// _lastPower sentinel for the ATT-on-TX gate.  Mirrors Thetis
+    /// `private float _lastPower = -1;` (console.cs:29292 [v2.10.3.13]).
+    /// NereusSDR uses int (the slider is int [0, 100]); the -1 sentinel
+    /// is preserved.  Phase 3C's setPowerUsingTargetDbm reads + writes
+    /// this; rarely called externally.  Runtime-only — NOT persisted.
+    int  lastPower() const noexcept { return m_lastPower; }
+    void setLastPower(int value);
+
+    /// PureSignal-active predicate.  Reads the live PureSignal coordinator
+    /// (3M-4 Task 7) when wired via setPureSignal(); falls back to the
+    /// test-seam override (NEREUS_BUILD_TESTS only) for unit tests that
+    /// don't construct a full RadioModel + PureSignal.  When neither is
+    /// set, returns false (matches Phase 3A pre-3M-4 behaviour: gate
+    /// dormant but present).
+    ///
+    /// "Active" tracks PureSignal::correctionsBeingApplied — true ⟺ calcc
+    /// has a valid correction set in flight (PSForm.cs:1100-1102
+    /// CorrectionsBeingApplied [v2.10.3.13]).  Mirrors Thetis's
+    /// chkFWCATUBypass.Checked-and-actively-correcting semantics.
+    bool pureSignalActive() const noexcept;
+
+    /// Inject the PureSignal coordinator (Phase 3M-4 Task 7).  Non-owning
+    /// pointer; RadioModel owns via std::unique_ptr.  Pass nullptr to
+    /// detach (e.g. on disconnect).  When non-null, pureSignalActive()
+    /// reads PureSignal::correctionsBeingApplied().
+    void setPureSignal(PureSignal* ps) noexcept { m_pureSignal = ps; }
+    PureSignal* pureSignal() const noexcept { return m_pureSignal; }
+
+    /// Compute the normalized audio output level for the given (band,
+    /// sliderWatts) using the supplied active PA profile.
+    ///
+    /// Faithful port of the math kernel from Thetis SetPowerUsingTargetDBM
+    /// (console.cs:46720-46751 [v2.10.3.13]):
+    ///
+    ///   target_dbm   = 10 * log10(sliderWatts * 1000)
+    ///   gbb          = profile.getGainForBand(band, sliderWatts)
+    ///   target_dbm  -= gbb
+    ///   target_volts = sqrt(10^(target_dbm * 0.1) * 0.05)   // E = sqrt(P*R), R=50
+    ///   audio_volume = min(target_volts / 0.8, 1.0)
+    ///
+    /// Three short-circuits (in evaluation order):
+    ///   1. sliderWatts <= 0 -> returns 0.0 (Thetis console.cs:46749-46751).
+    ///   2. gbb >= 99.5      -> NereusSDR-original deviation: returns
+    ///                          clamp(sliderWatts / 100.0, 0, 1) linear
+    ///                          fallback.  Catches HL2 PA-bypass HF bands
+    ///                          (gbb=100 sentinel per mi0bot
+    ///                          clsHardwareSpecific.cs:484
+    ///                          [v2.10.3.13-beta2] "100 is no output
+    ///                          power"), the NereusSDR Bypass profile,
+    ///                          AND out-of-range Bands (PaProfile::
+    ///                          getGainForBand sentinel = 1000).
+    ///                          Preserves pre-v0.3.2 transmit behavior on
+    ///                          these paths so the hotfix doesn't regress
+    ///                          HL2 users.
+    ///   3. otherwise         -> Thetis dBm-target math.
+    ///
+    /// Pure function: no side-effects, no signal emission, no state
+    /// mutation.  Caller composes:
+    ///   wire_byte = clamp(int(audio_volume * 1.02 * 255), 0, 255)
+    ///                                                    // audio.cs:268
+    ///   iq_gain   = audio_volume * swrProtect            // cmaster.cs:1117
+    ///
+    /// Range: [0.0, 1.0].  Always finite (no NaN / Inf even for
+    /// pathological inputs like INT_MAX / INT_MIN).
+    ///
+    /// `const` even though it doesn't read any TransmitModel state —
+    /// placement on TransmitModel matches Thetis topology
+    /// (Console::SetPowerUsingTargetDBM is a Console method) and lets
+    /// Phase 3C's setPowerUsingTargetDbm wrapper call it inline.
+    /// `model` selects between the legacy NereusSDR-original sentinel-fallback
+    /// path and mi0bot's HL2-specific audio-volume formula
+    /// ((hl2Power * gbb/100) / 93.75 — see implementation comment).
+    /// Defaults to HPSDRModel::FIRST so the legacy 3-arg call sites keep
+    /// working unchanged; HL2 callers (RadioModel TX path) thread the live
+    /// hardware model through.  Issue #175 Task 5.
+    double computeAudioVolume(const PaProfile& profile,
+                              Band band,
+                              int sliderWatts,
+                              HPSDRModel model = HPSDRModel::FIRST) const noexcept;
+
+    // ── Two-tone active state (#167 Phase 3C scaffolding) ────────────────
+    //
+    // Mirrors Thetis chk2TONE.Checked at console.cs:46653, 46667-46668
+    // [v2.10.3.13].  TwoToneController owns the live state machine; this
+    // mirror property exists so setPowerUsingTargetDbm can resolve
+    // txMode == 2 without coupling TransmitModel to TwoToneController.
+    // RadioModel wires TwoToneController::twoToneActiveChanged into
+    // TransmitModel::setTwoToneActive (deferred wiring; tests drive it
+    // directly).
+    bool isTwoToneActive() const noexcept { return m_twoToneActive; }
+    void setTwoToneActive(bool active);
+
+    // ── Tune drive-power source (#167 Phase 3C) ───────────────────────────
+    //
+    // Mirrors Thetis _tuneDrivePowerSource at console.cs:46552
+    // [v2.10.3.13]:
+    //   private DrivePowerSource _tuneDrivePowerSource = DrivePowerSource.DRIVE_SLIDER;
+    // Default DriveSlider.  Used by setPowerUsingTargetDbm txMode 1
+    // (tune) branch — drives whether the slider value comes from PWR,
+    // TUN, or the FIXED setup-page value.
+    //
+    // Persisted per-MAC under hardware/<mac>/tx/TuneDrivePowerOrigin
+    // (mirrors the existing TwoToneDrivePowerOrigin key).
+    DrivePowerSource tuneDrivePowerSource() const noexcept {
+        return m_tuneDrivePowerSource;
+    }
+    void setTuneDrivePowerSource(DrivePowerSource source);
+
+    // ── R-R3-49 (parity Task 2): tune power for the transmit band ─────────
+    //
+    // The band the Core transmits on (its transmit slice's band, as the
+    // TUNE path reads it), set by RadioModel. tunePowerForTxBand() is that
+    // band's tunePowerForBand(); in a remote window it is the Core's value,
+    // applied by applyStationValue(). NereusSDR-original.
+    int  tunePowerForTxBand() const noexcept { return m_tunePowerForTxBand; }
+    /// True once RadioModel has set the transmit band (setTuneTxBand).
+    bool tuneTxBandKnown() const noexcept { return m_tuneTxBandKnown; }
+    void setTuneTxBand(Band band);
+    /// Forget the transmit band (a disconnect); tuneTxBandKnown() is false
+    /// until the next setTuneTxBand.
+    void clearTuneTxBand();
+    /// What the TX applet's Tune Power slider does locally: the transmit
+    /// band's tune power, and the tune drive source to TuneSlider. False,
+    /// changing nothing, before the transmit band is known.
+    bool setTunePowerForTxBand(int watts);
+    /// The Tune Power range for this radio: 0 to 99 on a Hermes Lite 2,
+    /// else 0 to 100 (setTunePower / setTunePowerForBand).
+    int  tunePowerMax() const noexcept;
+    /// A window: the Core's tunePowerForTxBand or tuneDrivePowerSource as
+    /// it reported them. A plain state apply; nothing is saved or sent.
+    bool applyStationValue(const QByteArray& propertyName, const QVariant& value);
+    /// A window: the Core refused a Tune Power change; the slider shows the
+    /// Core's value again.
+    void reportTunePowerForTxBandRefused();
+    /// Fix wave GUI-I6: a window's Tune Power change is on its way to the
+    /// Core (sent, not yet answered). StationClient sets it; the TX applet
+    /// does not show the Core's older value over the operator's meanwhile.
+    void setTunePowerForTxBandWriteInFlight(bool inFlight)
+    {
+        if (m_tunePowerWriteInFlight == inFlight) { return; }
+        m_tunePowerWriteInFlight = inFlight;
+        emit tunePowerForTxBandWriteInFlightChanged(inFlight);
+    }
+    bool tunePowerForTxBandWriteInFlight() const { return m_tunePowerWriteInFlight; }
+    /// The plain words a Core gives for a value outside a mirrored
+    /// setting's range, or empty when `value` is in range (or the property
+    /// has no range here). `propertyName` is the property's name on the
+    /// link; the range is the setter's own.
+    QString settingRangeRefusal(const QByteArray& propertyName, const QVariant& value) const;
+    bool cfcProfileRestoreInProgress() const noexcept { return m_cfcProfileRestoreDepth != 0 || m_cfcProfileUpdateDepth != 0; }
+    bool cfcProfileMutationInProgress() const noexcept {
+        return cfcProfileRestoreInProgress() || m_projectingPairedCfc;
+    }
+    void beginCfcProfileRestore() noexcept;
+    void endCfcProfileRestore() noexcept;
+    CfcEditProfile effectiveCfcProfile() const;
+    bool setCfcProfile(const CfcEditProfile& profile);
+    void beginCfcProfileUpdate();
+    void endCfcProfileUpdate();
+    [[nodiscard]] auto scopedTxEqProfileUpdate() { beginTxEqProfileUpdate(); return qScopeGuard([this] { endTxEqProfileUpdate(); }); }
+
+    // ── R-R3-49 (parity Task 3): the Core's TX profiles on the link ───────
+    //
+    // The active profile's name and the profile list as a JSON array of
+    // names. The Core sets both from its MicProfileManager; a window has
+    // them from the Core (applyStationValue). NereusSDR-original.
+    QString activeTxProfile() const { return m_activeTxProfile; }
+    QString txProfilesJson() const { return m_txProfilesJson; }
+    /// The Core: its MicProfileManager's active profile and list.
+    void setStationTxProfiles(const QString& active, const QStringList& names);
+    /// The names in txProfilesJson(), in order (empty when it is not a
+    /// JSON array of strings).
+    static QStringList txProfileNamesFromJson(const QString& json);
+
+    // ── Fixed tune power (#167 Phase 3C) ──────────────────────────────────
+    //
+    // Mirrors Thetis tune_power at console.cs:17229-17242 [v2.10.3.13]:
+    //   private int tune_power;  // power setting to use when TUN button is pressed
+    // The fixed-mode tune power slot.  Used by setPowerUsingTargetDbm
+    // txMode 1 branch when _tuneDrivePowerSource == FIXED — bypasses
+    // both PWR and TUN sliders for a setup-page-fixed value (e.g. 10 W
+    // for low-power tune).
+    //
+    // Range clamped to [0, 100].  Persisted per-MAC under
+    // hardware/<mac>/tx/FixedTunePower.
+    //
+    // Default 10 W (NereusSDR-original safer default; Thetis Designer
+    // defaults to 0 which is non-functional).
+    int  tunePower() const noexcept { return m_tunePower; }
+    void setTunePower(int watts);
+
+    // ── HL2 sub-step DSP audio-gain modulation (#175 Task 3) ─────────────────
+    //
+    // From mi0bot-Thetis console.cs:47666 [v2.10.3.13-beta2]:
+    //   SetTXAPostGenToneMag(0, postGenToneMag);
+    // HL2 sub-step DSP audio-gain modulation parameter. Set by
+    // setPowerUsingTargetDbm in HL2 tune-slider mode. Propagates to
+    // WDSP via TxChannel::setPostGenToneMag (Task 10). Range 0.4..0.9999 on
+    // HL2 sub-step path; 1.0 means "no modulation" (default, used on non-HL2).
+    double txPostGenToneMag() const noexcept { return m_txPostGenToneMag; }
+    void   setTxPostGenToneMag(double mag);
+
+    /// Inject the StepAttenuatorController for the ATT-on-TX safety gate.
+    /// nullptr -> gate becomes no-op (used in tests + before RadioModel
+    /// wires up).  Caller retains ownership; TransmitModel does not
+    /// take ownership.  Mirrors RadioModel's stepAttController() pattern.
+    void setStepAttenuatorController(StepAttenuatorController* ctrl);
+
+    /// Result struct mirroring Thetis SetPowerUsingTargetDBM return +
+    /// out-params.
+    ///
+    /// From Thetis console.cs:46645 [v2.10.3.13]:
+    ///   public int SetPowerUsingTargetDBM(out bool bConstrain,
+    ///                                     out double targetdBm,
+    ///                                     bool bSetPower,
+    ///                                     bool bFromTune,
+    ///                                     bool bTwoTone)
+    /// returns int (the constrained slider value); also stores
+    /// audioVolume for the caller to compose wire_byte and iq_gain.
+    struct TxPowerResult {
+        int    newPower;     ///< Thetis return: constrained slider value (0..100).
+        double targetDbm;    ///< Thetis out double: dBm target.
+        bool   bConstrain;   ///< Thetis out bool: false on FIXED drive source.
+        double audioVolume;  ///< Composed audio output level [0, 1.0].
+    };
+
+    /// Deep-parity port of Thetis SetPowerUsingTargetDBM (console.cs:46645-46762
+    /// [v2.10.3.13]). Routes all three txMode branches (normal / tune / 2tone)
+    /// and both drive-source enums through the unified math kernel.
+    ///
+    /// Inputs:
+    ///   - profile:    The active PA gain profile (owned by PaProfileManager;
+    ///                 caller resolves via paProfileManager()->activeProfile()).
+    ///   - currentBand: Current TX band; identifies the per-band gain row +
+    ///                  the slot to write back to on txMode 0.
+    ///   - bSetPower: When false, returns the constrained newPower without
+    ///                applying audio_volume side-effects (caller is just
+    ///                probing the math — Thetis console.cs:46738).
+    ///   - bFromTune: Caller is the TUN button handler (txMode = 1 outside
+    ///                of MOX).  Thetis console.cs:46655.
+    ///   - bTwoTone:  Caller is the 2-tone test (txMode = 2 outside of MOX).
+    ///                Thetis console.cs:46657.
+    ///
+    /// Side-effects when bSetPower is true:
+    ///   1. txMode 0: writes back into m_powerByBand[currentBand]
+    ///      (matches console.cs:46676).
+    ///   2. ATT-on-TX safety gate: if pureSignalActive() &&
+    ///      forceAttwhenPowerChangesWhenPSAon && (new_pwr > m_lastPower ||
+    ///      _anddecreased), pushes ATT_on_TX = 31 dB via
+    ///      stepAttenuatorController->setAttOnTxValue(31).  Updates
+    ///      m_lastPower (console.cs:46740-46748 [v2.10.3.13]
+    ///      //[2.10.3.5]MW0LGE).
+    ///   3. Emits audioVolumeChanged(audio_volume) signal so RadioModel
+    ///      call sites can pump it to TxChannel + RadioConnection.
+    ///
+    /// The drive is constrained to the active slider's limit (powerLimit,
+    /// or tunePowerLimit on the tune-slider source) unless the source is
+    /// FIXED.
+    ///
+    /// XVTR translation NOT ported (NereusSDR has only one XVTR slot;
+    /// sentinel fallback in computeAudioVolume catches that case).
+    ///
+    /// Caller composes:
+    ///   wire_byte = clamp(int(audioVolume * 1.02 * 255), 0, 255)
+    ///                                                    // audio.cs:268
+    ///   iq_gain   = audioVolume * swrProtect             // cmaster.cs:1117
+    /// `model` selects radio-specific TUNE_SLIDER behavior (Issue #175 Task 4).
+    /// HERMESLITE engages the mi0bot HL2 sub-step DSP audio-gain modulation
+    /// path (console.cs:47660-47673 [v2.10.3.13-beta2]); every other value
+    /// (default FIRST = -1 sentinel) leaves the slider value untouched.
+    TxPowerResult setPowerUsingTargetDbm(const PaProfile& activeProfile,
+                                         Band currentBand,
+                                         bool bSetPower,
+                                         bool bFromTune,
+                                         bool bTwoTone,
+                                         HPSDRModel model = HPSDRModel::FIRST);
+
+    /// Restore all per-band tune-power values from AppSettings under the
+    /// current MAC scope.  No-op when no MAC has been set.
+    /// Cite: console.cs:4904-4910 [v2.10.3.13] — Thetis pipe-delimited
+    /// format; NereusSDR uses per-band scalar keys.
+    void load();
+
+    /// Flush all per-band tune-power values to AppSettings under the
+    /// current MAC scope.  No-op when no MAC has been set.
+    /// Cite: console.cs:3087-3091 [v2.10.3.13].
+    void save();
+
+    // ── Per-MAC mic/VOX/MON persistence (3M-1b L.2) ──────────────────────
+    //
+    // NereusSDR-native persistence glue.  Persists 15 mic/VOX/MON properties
+    // under hardware/<mac>/tx/<key>.  Three properties are intentionally
+    // excluded (per plan §0 rows 8/9):
+    //   - voxEnabled  → always loads false (safety: VOX always starts OFF)
+    //   - monEnabled  → always loads false (safety: MON always starts OFF)
+    //   - micMute     → always loads true  (safety: mic in use on startup)
+    //
+    // The auto-persist pattern: once loadFromSettings(mac) is called, every
+    // property setter invokes persistOne(key, value) to write the new value
+    // immediately.  This means no explicit flush is needed on each change;
+    // persistToSettings(mac) is bulk-write used at disconnect as insurance.
+    //
+    // Key namespace: hardware/<mac>/tx/<propertyName>
+    // (consistent with hardware/<mac>/tunePowerByBand/ and cal/ namespaces).
+
+    /// Load 15 per-MAC mic/VOX/MON properties from AppSettings.
+    /// Sets m_persistMac so subsequent setters auto-persist changes.
+    /// voxEnabled, monEnabled, and micMute are NEVER loaded — they always
+    /// start at their safety defaults regardless of any stored value.
+    /// micGainDb defaults to -6 on first run (plan §0 row 11).
+    void loadFromSettings(const QString& mac);
+
+    /// Bulk-write all 15 persisted mic/VOX/MON properties to AppSettings.
+    /// (Excluding voxEnabled, monEnabled, micMute — never persisted.)
+    /// Used at disconnect as defense-in-depth; auto-persist should have
+    /// flushed each change already.
+    void persistToSettings(const QString& mac) const;
+
+    // ── Mic gain (3M-1b C.1) ──────────────────────────────────────────────
+    //
+    // Porting from Thetis console.cs:28805-28817 [v2.10.3.13]:
+    //   private void setAudioMicGain(double gain_db)
+    //   {
+    //       if (chkMicMute.Checked) // although it is called chkMicMute, checked = mic in use
+    //       {
+    //           Audio.MicPreamp = Math.Pow(10.0, gain_db / 20.0); // convert to scalar
+    //           _mic_muted = false;
+    //       }
+    //       else
+    //       {
+    //           Audio.MicPreamp = 0.0;
+    //           _mic_muted = true;
+    //       }
+    //   }
+    //
+    // C.1 implements the unconditional dB→linear path only.  The
+    // chkMicMute-gated zero-fill is C.2's responsibility (micMute property
+    // and mute-zeroing logic arrive in C.2).
+    //
+    // Default -6 dB is a NereusSDR-original safety addition (not from
+    // Thetis — Thetis defaults vary by board).  Conservative starting
+    // point against ALC overdrive at 100 W PA per plan §0 row 11.
+    //
+    // micPreampLinear is a derived read-only computed property; it
+    // recomputes on every setMicGainDb() call and emits its own signal
+    // for downstream subscribers (TxChannel::recomputeTxAPanelGain1
+    // arrives in D.6).
+    //
+    // Range clamped to kMicGainDbMin / kMicGainDbMax.
+    // Thetis console.cs:19151-19171 [v2.10.3.13] shows mic_gain_min = -40
+    // and mic_gain_max = 10 as runtime defaults, but setup.designer.cs shows
+    // the spinboxes allow Minimum = -96, Maximum = 70.  The NereusSDR model
+    // uses [-50, 70] as a conservative fixed range per plan §C.1.
+    //
+    // TODO [3M-1b L.x]: read range from BoardCapabilities once per-board
+    // mic-gain fields land (HL2 range differs from ANAN range).
+    //
+    // Persistence per-MAC arrives in L.2.
+
+    /// Return the user-facing mic gain in dB.
+    int    micGainDb()       const noexcept { return m_micGainDb; }
+    /// Return the derived linear scalar: pow(10, micGainDb / 20).
+    double micPreampLinear() const noexcept { return m_micPreampLinear; }
+
+    // Hardcoded range per plan §C.1.
+    // Thetis console.cs:19151-19171 [v2.10.3.13]: mic_gain_min = -40 /
+    // mic_gain_max = 10 are runtime defaults; setup.designer.cs shows the
+    // spinboxes allow down to -96 and up to 70.  NereusSDR uses [-50, 70].
+    static constexpr int kMicGainDbMin = -50;
+    static constexpr int kMicGainDbMax =  70;
+
+    // ── Mic-jack flag properties (3M-1b C.2) ──────────────────────────────
+    //
+    // Porting from Thetis console.cs:13213-13260 [v2.10.3.13]:
+    //   LineIn / LineInBoost / MicBoost / MicXlr property block;
+    //   console.cs:28752 [v2.10.3.13]: MicMute "NOTE: although called
+    //   MicMute, true = mic in use";
+    //   console.cs:19757-19766 [v2.10.3.13]: MicPTTDisabled;
+    //   setup.designer.cs:8683 [v2.10.3.13]: radOrionMicTip.Checked = true;
+    //   setup.designer.cs:8779 [v2.10.3.13]: radOrionBiasOff.Checked = true.
+    //
+    // Wire-bit setters (RadioConnection::setMic*) arrive in Phase G.
+    // Persistence per-MAC arrives in L.2.
+
+    /// Mic mute toggle.  Counter-intuitive naming preserved from Thetis.
+    ///
+    /// **NOTE: although called MicMute, true = mic in use**
+    /// (Thetis console.cs:28752 [v2.10.3.13] verbatim comment.)
+    ///
+    /// FALSE means the mic is muted (chkMicMute unchecked); TRUE means the
+    /// mic is in use (chkMicMute checked).  The mute action is implemented
+    /// via SetTXAPanelGain1(0) — see Phase D Task D.6 for the WDSP wiring.
+    ///
+    /// Default TRUE: from console.designer.cs:2029-2030 [v2.10.3.13]:
+    ///   "Checked = true; CheckState = Checked"
+    bool micMute() const noexcept { return m_micMute; }
+    /// iPhone app plan Task 40: true while the mic is muted (!micMute()).
+    bool micMuted() const noexcept { return !m_micMute; }
+
+    /// 20 dB hardware microphone preamp enable.
+    /// From Thetis console.cs:13237 [v2.10.3.13]: private bool mic_boost = true;
+    /// Default TRUE: 20 dB preamp on by default in Thetis.
+    bool micBoost() const noexcept { return m_micBoost; }
+
+    /// XLR jack select (Saturn G2 only; FALSE = 3.5mm TRS jack).
+    /// From Thetis console.cs:13249 [v2.10.3.13]: private bool mic_xlr = true;
+    /// Default TRUE: XLR selected on boards that have the XLR jack.
+    /// HL2 / Hermes / Atlas have no XLR hardware; the UI gates this on
+    /// BoardCapabilities::hasXlrMic (Phase I wiring).
+    bool micXlr() const noexcept { return m_micXlr; }
+
+    /// Line-in input select.  TRUE = use line-in instead of mic input.
+    /// From Thetis console.cs:13213 [v2.10.3.13]: private bool line_in = false;
+    /// Default FALSE: microphone input active by default.
+    bool lineIn() const noexcept { return m_lineIn; }
+
+    /// Line-in boost in dB.  Clamped to [kLineInBoostMin, kLineInBoostMax].
+    /// From Thetis console.cs:13225 [v2.10.3.13]: private double line_in_boost = 0.0;
+    /// Range from setup.designer.cs:46898-46907 [v2.10.3.13]:
+    ///   udLineInBoost.Minimum = -34.5, udLineInBoost.Maximum = 12.0
+    ///   (decoded from C# decimal int[4] format).
+    double lineInBoost() const noexcept { return m_lineInBoost; }
+
+    /// Mic jack tip/ring polarity.  TRUE = Tip is mic (NereusSDR intuitive).
+    /// NereusSDR-original semantic; wire-bit polarity inversion happens at
+    /// RadioConnection::setMicTipRing (Phase G).
+    /// Thetis default: radOrionMicTip.Checked = true (setup.designer.cs:8683
+    /// [v2.10.3.13]) → Tip selected by default.
+    bool micTipRing() const noexcept { return m_micTipRing; }
+
+    /// Mic jack bias voltage enable.
+    /// NereusSDR-original: FALSE = bias off by default (safe default for
+    /// dynamic microphones that don't need phantom power).
+    /// Thetis default: radOrionBiasOff.Checked = true (setup.designer.cs:8779
+    /// [v2.10.3.13]) → bias off by default.
+    bool micBias() const noexcept { return m_micBias; }
+
+    /// Mic jack PTT disable flag.  TRUE = mic PTT disabled, FALSE = enabled.
+    /// Also counter-intuitive (Thetis-consistent): the flag name is "Disabled"
+    /// but FALSE is the active/enabled state.
+    /// From Thetis console.cs:19757 [v2.10.3.13]:
+    // Upstream tags preserved: //MW0LGE (from cited console.cs:19758) [v2.10.3.15]
+    ///   private bool mic_ptt_disabled = false;
+    ///   ... NetworkIO.SetMicPTT(Convert.ToInt32(value));
+    /// Default FALSE: PTT enabled by default (sensible safety default).
+    bool micPttDisabled() const noexcept { return m_micPttDisabled; }
+
+    // ── line_in_gain + user_dig_out (Task 2.4 of P1 full-parity epic) ────
+    //
+    // These two fields are the model layer for the wire-bit setters added in
+    // Tasks 2.1 (setLineInGain) and 2.2 (setUserDigOut).  RadioModel wires
+    // lineInGainChanged / userDigOutChanged into the matching RadioConnection
+    // setters at connectToRadio time, plus an initial push so the first
+    // connection state matches model state without waiting for a user change.
+    //
+    // Source: Thetis ChannelMaster/networkproto1.c:600-601 [v2.10.3.13]
+    //   case 11:
+    //     C2 = (prn->mic.line_in_gain & 0b00011111) | ((prn->puresignal_run & 1) << 6);
+    //     C3 = prn->user_dig_out & 0b00001111;
+    //
+    // Both clamp/mask at the model boundary so the stored state matches the
+    // wire byte 1:1.  user_dig_out is a P1/Penny-only feature with no P2
+    // wire equivalent (the P2 setter stores it for symmetric API only).
+
+    /// Line-in input gain.  Clamped to [0, 31].
+    /// Default 0 = no line-in attenuation.
+    int  lineInGain() const { return m_lineInGain; }
+
+    /// User digital outputs.  Masked to [0, 15] (low 4 bits).
+    /// Drives the 4 user-controllable digital pins on the Penny/Hermes
+    /// Ctrl accessory header.  Default 0 = all pins low.
+    int  userDigOut() const { return m_userDigOut; }
+
+    // Line-in boost range constants.
+    // From Thetis setup.designer.cs:46898-46907 [v2.10.3.13]:
+    //   udLineInBoost.Minimum decoded from decimal{345,0,0,-2147418112} = -34.5
+    //   udLineInBoost.Maximum decoded from decimal{12,0,0,0} = 12.0
+    static constexpr double kLineInBoostMin = -34.5;
+    static constexpr double kLineInBoostMax =  12.0;
+    // From Thetis setup.designer.cs:47007-47011 [v2.10.3.15]:
+    //   udLineInBoost.Increment = decimal{15,0,0,65536} = 1.5
+    static constexpr double kLineInBoostStep = 1.5;
+    // The last index of Thetis's lineinboost[32] table (MakeLineInList,
+    // console.cs:40900-40912 [v2.10.3.15]); the wire field is 5 bits.
+    static constexpr int kLineInGainIndexMax = 31;
+
+    /// The line-in gain index Thetis SetMicGain sends for a Line In Gain
+    /// value in dB: its position in the -34.5..+12 dB table in 1.5 dB steps
+    /// (0.0 dB is 23). A value between steps takes the nearest entry.
+    static int lineInGainIndexForBoost(double dB) noexcept;
+
+    // ── Anti-VOX properties (3M-1b C.4) ──────────────────────────────────────
+    //
+    // Porting from Thetis setup.designer.cs:44699-44728 [v2.10.3.13]:
+    //   udAntiVoxGain.Minimum = decimal{60,0,0,-2147483648} = -60
+    //   udAntiVoxGain.Maximum = decimal{60,0,0,0}           = +60
+    //   (DecimalPlaces=1; display unit is x0.1 dB; NereusSDR stores as int dB.)
+    //
+    // Porting from Thetis setup.cs:18986-18989 [v2.10.3.13]:
+    //   cmaster.SetAntiVOXGain(0, Math.Pow(10.0, (double)udAntiVoxGain.Value / 20.0));
+    //   (WDSP wiring arrives in Phase H.3; model just stores + signals.)
+    //
+    // AppSettings persistence arrives in Phase L.2.
+    //
+    // 3M-3a-iv post-bench refactor (Option A): the source-selector property
+    // (antiVoxSourceVax) and its associated plumbing have been removed.
+    // Thetis chkAntiVoxSource at setup.designer.cs:44646-44657 [v2.10.3.13]
+    // selects between RX and VAC as the anti-VOX cancellation reference;
+    // that choice does not map to NereusSDR's architecture, where VAX is
+    // a digital-mode app bus with no mic-feedback path and the audio output
+    // device is therefore the only valid anti-VOX source.  See commit message
+    // and DexpVoxPage info-row for the architectural rationale.
+
+    /// Anti-VOX gain in dB.  Clamped to [kAntiVoxGainDbMin, kAntiVoxGainDbMax].
+    /// Default 0 dB -- NereusSDR-original safe starting point.
+    /// (Thetis udAntiVoxGain designer default is 1.0 dB per
+    ///  setup.designer.cs:44723-44727 [v2.10.3.13]: Value = decimal{10,0,0,0}
+    ///  with DecimalPlaces=1.)
+    ///
+    /// Range from Thetis setup.designer.cs:44708-44717 [v2.10.3.13]:
+    ///   udAntiVoxGain.Minimum = -60, udAntiVoxGain.Maximum = 60.
+    int antiVoxGainDb() const noexcept { return m_antiVoxGainDb; }
+
+    // Anti-VOX gain range constants.
+    // From Thetis setup.designer.cs:44708-44717 [v2.10.3.13]:
+    //   udAntiVoxGain.Minimum = decimal{60,0,0,-2147483648} = -60
+    //   udAntiVoxGain.Maximum = decimal{60,0,0,0}           = +60
+    //   (DecimalPlaces=1; display unit is x0.1 dB; NereusSDR stores as int dB.)
+    static constexpr int kAntiVoxGainDbMin = -60;
+    static constexpr int kAntiVoxGainDbMax =  60;
+
+    // ── Anti-VOX detector smoothing tau (Phase 3M-3a-iv Task 8) ──────────
+    //
+    // Porting from Thetis setup.designer.cs:44661-44688 [v2.10.3.13]
+    // (udAntiVoxTau):
+    //   udAntiVoxTau.Minimum   = decimal{1,0,0,0}   = 1
+    //   udAntiVoxTau.Maximum   = decimal{500,0,0,0} = 500
+    //   udAntiVoxTau.Increment = decimal{1,0,0,0}   = 1
+    //   udAntiVoxTau.Value     = decimal{20,0,0,0}  = 20
+    //   ToolTip: "Time-constant used in smoothing Anti-VOX data"
+    //
+    // The model stores the detector smoothing time-constant in milliseconds.
+    // RadioModel wires antiVoxTauMsChanged → MoxController::setAntiVoxTau in
+    // Task 9; MoxController converts to seconds (×1e-3) and forwards to the
+    // TX worker thread which calls the WDSP DEXP detector setter.
+    static constexpr int kAntiVoxTauMsMin     = 1;
+    static constexpr int kAntiVoxTauMsMax     = 500;
+    static constexpr int kAntiVoxTauMsDefault = 20;
+
+    Q_PROPERTY(int antiVoxTauMs READ antiVoxTauMs WRITE setAntiVoxTauMs
+                                NOTIFY antiVoxTauMsChanged)
+
+    /// Anti-VOX detector smoothing time-constant in ms.
+    /// Clamped to [kAntiVoxTauMsMin, kAntiVoxTauMsMax].
+    /// Default kAntiVoxTauMsDefault matches Thetis udAntiVoxTau.Value=20
+    /// (setup.designer.cs:44682 [v2.10.3.13]).
+    int antiVoxTauMs() const noexcept { return m_antiVoxTauMs; }
+
+    // ── Anti-VOX run flag (3M-3a-iv scope-expansion) ──────────────────────
+    //
+    // From Thetis setup.designer.cs:44740-44751 [v2.10.3.13]: chkAntiVoxEnable
+    // is the master enable for the WDSP DEXP anti-VOX detector.  Default
+    // unchecked (no .Checked= setter in Designer).
+    //
+    // Handler at setup.cs:18980-18984 [v2.10.3.13]:
+    //   private void chkAntiVoxEnable_CheckedChanged(object sender, EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked);
+    //   }
+    //
+    // Persistence: per-MAC key AntiVox_Enable (default False).
+    // RadioModel wires antiVoxRunChanged → MoxController::setAntiVoxRun.
+    //
+    // 3M-3a-iv post-bench refactor (Option A): chkAntiVoxSource (the source
+    // toggle in Thetis) has been removed entirely; this run flag is now the
+    // only anti-VOX user toggle in NereusSDR.  See commit message for the
+    // architectural rationale.
+
+    Q_PROPERTY(bool antiVoxRun READ antiVoxRun WRITE setAntiVoxRun
+                               NOTIFY antiVoxRunChanged)
+
+    /// Anti-VOX master run flag.
+    /// false (default) = anti-VOX detector OFF.  true = detector running.
+    bool antiVoxRun() const noexcept { return m_antiVoxRun; }
+
+    // ── PA settings bypass (D4: ANAN-G2E port) ───────────────────────────────
+    //
+    // From Thetis setup.cs:19921 [v2.10.3.15] //N1GP G2E added:
+    //   chkBypassANANPASettings.Visible = true;  (in ANAN_G2E case)
+    // From Thetis setup.designer.cs:49237-49245 [v2.10.3.15] //N1GP G2E added:
+    //   chkBypassANANPASettings declaration + tooltip "BP PA".
+    //
+    // Thetis ground-truth: chkBypassANANPASettings is a UI-only declaration in
+    // Thetis v2.10.3.15 — no _CheckedChanged handler dispatches any behavior
+    // when the checkbox is toggled.  NereusSDR mirrors this exactly: the
+    // checkbox surface + this property + AppSettings persistence are all wired,
+    // but no consumer currently alters PA gain dispatch when toggled.  If a
+    // future Thetis release adds the dispatch, NereusSDR should match.
+    //
+    // false (default) = use the board-specific PA calibration table (normal
+    //   operation for all SKUs, including G2E out of the box).
+    // true  = operator override; intended future semantic mirrors Thetis intent.
+    //
+    // The checkbox is only shown when BoardCapabilities::showsBypassPaSettingsUi
+    // is true (G2E-group SKUs).  On all other boards the property is still
+    // writable (no harm) but the UI surface is hidden.
+    //
+    // Persistence: per-MAC key PaSettingsBypass (default False).
+
+    Q_PROPERTY(bool paSettingsBypass READ paSettingsBypass WRITE setPaSettingsBypass
+                                     NOTIFY paSettingsBypassChanged)
+
+    // ── R-R3-49 (parity Task 2): the TX and Phone/CW applets' settings ────
+    //
+    // Mirrored on the `transmit` object (transmitSettingsVersion 2), each
+    // under its setter's name and type and NOTIFY on its existing signal.
+    // Declared after paSettingsBypass so the earlier ordinals stay put. A
+    // window writes them while the Core's radio is off the air; the Core
+    // refuses a value outside the setter's range (settingRangeRefusal) and
+    // any write while it is on the air. None keys the radio.
+    Q_PROPERTY(int   tunePower      READ tunePower      WRITE setTunePower
+                                    NOTIFY tunePowerChanged)
+    Q_PROPERTY(int   voxThresholdDb READ voxThresholdDb WRITE setVoxThresholdDb
+                                    NOTIFY voxThresholdDbChanged)
+    Q_PROPERTY(int   voxHangTimeMs  READ voxHangTimeMs  WRITE setVoxHangTimeMs
+                                    NOTIFY voxHangTimeMsChanged)
+    Q_PROPERTY(bool  monEnabled     READ monEnabled     WRITE setMonEnabled
+                                    NOTIFY monEnabledChanged)
+    Q_PROPERTY(float monitorVolume  READ monitorVolume  WRITE setMonitorVolume
+                                    NOTIFY monitorVolumeChanged)
+    Q_PROPERTY(bool  txLevelerOn    READ txLevelerOn    WRITE setTxLevelerOn
+                                    NOTIFY txLevelerOnChanged)
+    Q_PROPERTY(bool  txEqEnabled    READ txEqEnabled    WRITE setTxEqEnabled
+                                    NOTIFY txEqEnabledChanged)
+    Q_PROPERTY(bool  cfcEnabled     READ cfcEnabled     WRITE setCfcEnabled
+                                    NOTIFY cfcEnabledChanged)
+    Q_PROPERTY(bool  cpdrOn         READ cpdrOn         WRITE setCpdrOn
+                                    NOTIFY cpdrOnChanged)
+    Q_PROPERTY(int   cpdrLevelDb    READ cpdrLevelDb    WRITE setCpdrLevelDb
+                                    NOTIFY cpdrLevelDbChanged)
+    Q_PROPERTY(int   amCarrierLevel READ amCarrierLevel WRITE setAmCarrierLevel
+                                    NOTIFY amCarrierLevelChanged)
+    Q_PROPERTY(bool  dexpEnabled    READ dexpEnabled    WRITE setDexpEnabled
+                                    NOTIFY dexpEnabledChanged)
+    Q_PROPERTY(int   micGainDb      READ micGainDb      WRITE setMicGainDb
+                                    NOTIFY micGainDbChanged)
+    // The Core's tune power for its transmit band (the band of the slice
+    // that transmits), which the TX applet's Tune Power slider shows, and
+    // the tune drive source. No WRITE: both change only through the
+    // setTunePowerForTxBand command, which sets them together as the local
+    // slider does.
+    Q_PROPERTY(int tunePowerForTxBand READ tunePowerForTxBand
+                                      NOTIFY tunePowerForTxBandChanged)
+    // R-R3-49 (parity Task 5, transmitSettingsVersion 5): the drive source
+    // is also Setup > Transmit > Power's Tune group, so it is writable.
+    Q_PROPERTY(NereusSDR::DrivePowerSource tuneDrivePowerSource
+               READ tuneDrivePowerSource WRITE setTuneDrivePowerSource
+               NOTIFY tuneDrivePowerSourceChanged)
+
+    // ── R-R3-49 (parity Task 3): the radio's microphone input, TX profiles ─
+    //
+    // Mirrored on `transmit` (transmitSettingsVersion 3), after
+    // tuneDrivePowerSource so the earlier ordinals stay put. The seven
+    // microphone settings are Setup > Audio > TX Input's radio microphone
+    // groups, under their setters' names and types (lineInBoost is the
+    // setter's double, in dB). None keys the radio.
+    Q_PROPERTY(bool   micBoost       READ micBoost       WRITE setMicBoost
+                                     NOTIFY micBoostChanged)
+    Q_PROPERTY(bool   micXlr         READ micXlr         WRITE setMicXlr
+                                     NOTIFY micXlrChanged)
+    Q_PROPERTY(bool   micTipRing     READ micTipRing     WRITE setMicTipRing
+                                     NOTIFY micTipRingChanged)
+    Q_PROPERTY(bool   micBias        READ micBias        WRITE setMicBias
+                                     NOTIFY micBiasChanged)
+    Q_PROPERTY(bool   micPttDisabled READ micPttDisabled WRITE setMicPttDisabled
+                                     NOTIFY micPttDisabledChanged)
+    Q_PROPERTY(bool   lineIn         READ lineIn         WRITE setLineIn
+                                     NOTIFY lineInChanged)
+    Q_PROPERTY(double lineInBoost    READ lineInBoost    WRITE setLineInBoost
+                                     NOTIFY lineInBoostChanged)
+    // The Core's active TX profile and its profile list (a JSON array of
+    // names, in the Core's order). No WRITE: they change through the
+    // txProfile.select / save / delete commands. On the Core, RadioModel
+    // keeps them from its MicProfileManager (setStationTxProfiles); in a
+    // window they are the Core's report (applyStationValue).
+    Q_PROPERTY(QString activeTxProfile READ activeTxProfile
+                                       NOTIFY activeTxProfileChanged)
+    Q_PROPERTY(QString txProfilesJson  READ txProfilesJson
+                                       NOTIFY txProfilesJsonChanged)
+
+    // ── R-R3-49 (parity Task 4): TX EQ, CFC, phase rotator, CESSB, leveler
+    // and ALC ────────────────────────────────────────────────────────────
+    //
+    // Mirrored on `transmit` (transmitSettingsVersion 4), after
+    // txProfilesJson so the earlier ordinals stay put, each under its
+    // setter's name and type. The ten-value bands go on the link as a
+    // compact JSON array of whole numbers (txEqBandsJson and the rest),
+    // refused whole when it is the wrong length or a value is out of range
+    // (settingRangeRefusal). txEqUseLegacy is the TX EQ dialog's Legacy EQ
+    // box, which Thetis keeps with the TX profile (EQUseLegacy). None keys
+    // the radio.
+    Q_PROPERTY(bool    txEqUseLegacy         READ txEqUseLegacy         WRITE setTxEqUseLegacy
+                                             NOTIFY txEqUseLegacyChanged)
+    Q_PROPERTY(int     txEqPreamp            READ txEqPreamp            WRITE setTxEqPreamp
+                                             NOTIFY txEqPreampChanged)
+    Q_PROPERTY(QString txEqBandsJson         READ txEqBandsJson         WRITE setTxEqBandsJson
+                                             NOTIFY txEqBandsJsonChanged)
+    Q_PROPERTY(QString txEqFreqsJson         READ txEqFreqsJson         WRITE setTxEqFreqsJson
+                                             NOTIFY txEqFreqsJsonChanged)
+    Q_PROPERTY(int     txEqNc                READ txEqNc                WRITE setTxEqNc
+                                             NOTIFY txEqNcChanged)
+    Q_PROPERTY(bool    txEqMp                READ txEqMp                WRITE setTxEqMp
+                                             NOTIFY txEqMpChanged)
+    Q_PROPERTY(int     txEqCtfmode           READ txEqCtfmode           WRITE setTxEqCtfmode
+                                             NOTIFY txEqCtfmodeChanged)
+    Q_PROPERTY(int     txEqWintype           READ txEqWintype           WRITE setTxEqWintype
+                                             NOTIFY txEqWintypeChanged)
+    Q_PROPERTY(QString txEqParaEqData        READ txEqParaEqData        WRITE setTxEqParaEqData
+                                             NOTIFY txEqParaEqDataChanged)
+    Q_PROPERTY(QString cfcCompressionJson    READ cfcCompressionJson    WRITE setCfcCompressionJson
+                                             NOTIFY cfcCompressionJsonChanged)
+    Q_PROPERTY(QString cfcEqFreqJson         READ cfcEqFreqJson         WRITE setCfcEqFreqJson
+                                             NOTIFY cfcEqFreqJsonChanged)
+    Q_PROPERTY(QString cfcPostEqBandGainJson READ cfcPostEqBandGainJson WRITE setCfcPostEqBandGainJson
+                                             NOTIFY cfcPostEqBandGainJsonChanged)
+    Q_PROPERTY(bool    cfcPostEqEnabled      READ cfcPostEqEnabled      WRITE setCfcPostEqEnabled
+                                             NOTIFY cfcPostEqEnabledChanged)
+    Q_PROPERTY(int     cfcPostEqGainDb       READ cfcPostEqGainDb       WRITE setCfcPostEqGainDb
+                                             NOTIFY cfcPostEqGainDbChanged)
+    Q_PROPERTY(int     cfcPrecompDb          READ cfcPrecompDb          WRITE setCfcPrecompDb
+                                             NOTIFY cfcPrecompDbChanged)
+    Q_PROPERTY(QString cfcParaEqData         READ cfcParaEqData         WRITE setCfcParaEqData
+                                             NOTIFY cfcParaEqDataChanged)
+    Q_PROPERTY(bool    phaseRotatorEnabled   READ phaseRotatorEnabled   WRITE setPhaseRotatorEnabled
+                                             NOTIFY phaseRotatorEnabledChanged)
+    Q_PROPERTY(int     phaseRotatorFreqHz    READ phaseRotatorFreqHz    WRITE setPhaseRotatorFreqHz
+                                             NOTIFY phaseRotatorFreqHzChanged)
+    Q_PROPERTY(int     phaseRotatorStages    READ phaseRotatorStages    WRITE setPhaseRotatorStages
+                                             NOTIFY phaseRotatorStagesChanged)
+    Q_PROPERTY(bool    phaseReverseEnabled   READ phaseReverseEnabled   WRITE setPhaseReverseEnabled
+                                             NOTIFY phaseReverseEnabledChanged)
+    Q_PROPERTY(bool    cessbOn               READ cessbOn               WRITE setCessbOn
+                                             NOTIFY cessbOnChanged)
+    Q_PROPERTY(int     txLevelerMaxGain      READ txLevelerMaxGain      WRITE setTxLevelerMaxGain
+                                             NOTIFY txLevelerMaxGainChanged)
+    Q_PROPERTY(int     txLevelerDecay        READ txLevelerDecay        WRITE setTxLevelerDecay
+                                             NOTIFY txLevelerDecayChanged)
+    Q_PROPERTY(int     txAlcMaxGain          READ txAlcMaxGain          WRITE setTxAlcMaxGain
+                                             NOTIFY txAlcMaxGainChanged)
+    Q_PROPERTY(int     txAlcDecay            READ txAlcDecay            WRITE setTxAlcDecay
+                                             NOTIFY txAlcDecayChanged)
+
+    // ── R-R3-49 (parity Task 5): Power, DEXP/VOX and two-tone settings ────
+    //
+    // Mirrored on `transmit` (transmitSettingsVersion 5), after txAlcDecay
+    // so the earlier ordinals stay put, each under its setter's name and
+    // its getter's type. The per-band power and tune power go on the link
+    // as a compact JSON object of whole watts keyed by band (bandKeyName:
+    // "160m" .. "6m", "GEN", "WWV", "XVTR", "2m"), all 15 bands in every
+    // write, or the 14 without "2m" from a peer built before 2 m (which
+    // keeps 2 m's value); refused whole otherwise. None keys the radio: the two-tone
+    // settings are read when a two-tone test starts, which stays with
+    // remote transmit (twoToneActive is in the keying set).
+    Q_PROPERTY(QString powerByBandJson       READ powerByBandJson       WRITE setPowerByBandJson
+                                             NOTIFY powerByBandJsonChanged)
+    Q_PROPERTY(QString tunePowerByBandJson   READ tunePowerByBandJson   WRITE setTunePowerByBandJson
+                                             NOTIFY tunePowerByBandJsonChanged)
+    Q_PROPERTY(double  dexpAttackTimeMs      READ dexpAttackTimeMs      WRITE setDexpAttackTimeMs
+                                             NOTIFY dexpAttackTimeMsChanged)
+    Q_PROPERTY(double  dexpDetectorTauMs     READ dexpDetectorTauMs     WRITE setDexpDetectorTauMs
+                                             NOTIFY dexpDetectorTauMsChanged)
+    Q_PROPERTY(double  dexpExpansionRatioDb  READ dexpExpansionRatioDb  WRITE setDexpExpansionRatioDb
+                                             NOTIFY dexpExpansionRatioDbChanged)
+    Q_PROPERTY(double  dexpHighCutHz         READ dexpHighCutHz         WRITE setDexpHighCutHz
+                                             NOTIFY dexpHighCutHzChanged)
+    Q_PROPERTY(double  dexpHysteresisRatioDb READ dexpHysteresisRatioDb WRITE setDexpHysteresisRatioDb
+                                             NOTIFY dexpHysteresisRatioDbChanged)
+    Q_PROPERTY(bool    dexpLookAheadEnabled  READ dexpLookAheadEnabled  WRITE setDexpLookAheadEnabled
+                                             NOTIFY dexpLookAheadEnabledChanged)
+    Q_PROPERTY(double  dexpLookAheadMs       READ dexpLookAheadMs       WRITE setDexpLookAheadMs
+                                             NOTIFY dexpLookAheadMsChanged)
+    Q_PROPERTY(double  dexpLowCutHz          READ dexpLowCutHz          WRITE setDexpLowCutHz
+                                             NOTIFY dexpLowCutHzChanged)
+    Q_PROPERTY(double  dexpReleaseTimeMs     READ dexpReleaseTimeMs     WRITE setDexpReleaseTimeMs
+                                             NOTIFY dexpReleaseTimeMsChanged)
+    Q_PROPERTY(bool    dexpSideChannelFilterEnabled READ dexpSideChannelFilterEnabled
+                                             WRITE setDexpSideChannelFilterEnabled
+                                             NOTIFY dexpSideChannelFilterEnabledChanged)
+    Q_PROPERTY(int     antiVoxGainDb         READ antiVoxGainDb         WRITE setAntiVoxGainDb
+                                             NOTIFY antiVoxGainDbChanged)
+    Q_PROPERTY(int     twoToneFreq1          READ twoToneFreq1          WRITE setTwoToneFreq1
+                                             NOTIFY twoToneFreq1Changed)
+    Q_PROPERTY(int     twoToneFreq2          READ twoToneFreq2          WRITE setTwoToneFreq2
+                                             NOTIFY twoToneFreq2Changed)
+    Q_PROPERTY(double  twoToneLevel          READ twoToneLevel          WRITE setTwoToneLevel
+                                             NOTIFY twoToneLevelChanged)
+    Q_PROPERTY(int     twoTonePower          READ twoTonePower          WRITE setTwoTonePower
+                                             NOTIFY twoTonePowerChanged)
+    Q_PROPERTY(bool    twoTonePulsed         READ twoTonePulsed         WRITE setTwoTonePulsed
+                                             NOTIFY twoTonePulsedChanged)
+    Q_PROPERTY(bool    twoToneInvert         READ twoToneInvert         WRITE setTwoToneInvert
+                                             NOTIFY twoToneInvertChanged)
+    Q_PROPERTY(int     twoToneFreq2Delay     READ twoToneFreq2Delay     WRITE setTwoToneFreq2Delay
+                                             NOTIFY twoToneFreq2DelayChanged)
+    Q_PROPERTY(NereusSDR::DrivePowerSource twoToneDrivePowerSource
+               READ twoToneDrivePowerSource WRITE setTwoToneDrivePowerSource
+               NOTIFY twoToneDrivePowerSourceChanged)
+    // iPhone app plan (desktop remote transmit, Task 40's name): VOX on the
+    // link as `transmit.voxEnabled`, so a remote window arms the Core's VOX
+    // as a local window arms its own. Declared last so every earlier
+    // property keeps its wire ordinal. Still never persisted: VOX always
+    // starts off.
+    Q_PROPERTY(bool voxEnabled READ voxEnabled WRITE setVoxEnabled NOTIFY voxEnabledChanged)
+    // iPhone app plan Task 40: the mic mute on the link as
+    // `transmit.micMuted`, true while the mic is muted (the inverse of
+    // micMute(), whose Thetis name reads true = mic in use), so a phone or
+    // a remote window mutes the Core's mic as a local window would.
+    // Declared after voxEnabled so every earlier ordinal stays. Never
+    // persisted: the mic always starts in use.
+    Q_PROPERTY(bool micMuted READ micMuted WRITE setMicMuted NOTIFY micMuteChanged)
+    // R-IOS-13 / R-R3-49: the TX EQ parametric curve as a documented,
+    // read-only value (the station link document, "The TX EQ curve"),
+    // derived from txEqParaEqData, which stays as Thetis saves it. No
+    // WRITE: nothing sets it but the blob. Declared last so every earlier
+    // property keeps its wire ordinal.
+    Q_PROPERTY(QString txEqCurve READ txEqCurve NOTIFY txEqCurveChanged)
+    // R-R3-49 (transmitSettingsVersion 15): the CFC band editor as a
+    // documented, read-only value (the station link document, "The CFC
+    // band editor"), derived from cfcParaEqData or, where that holds no
+    // curve the Core reads, the ten-band values. cfc.setProfile changes it.
+    // Declared last so every earlier property keeps its wire ordinal.
+    Q_PROPERTY(QString cfcProfile READ cfcProfile NOTIFY cfcProfileChanged)
+
+    /// Bypass PA settings flag. false (default) = use board-specific table.
+    bool paSettingsBypass() const noexcept { return m_paSettingsBypass; }
+
+    // ── MON properties (3M-1b C.5) ────────────────────────────────────────
+    //
+    // Porting from Thetis audio.cs:406 [v2.10.3.13]:
+    //   private bool mon = false;
+    //
+    // Porting from Thetis audio.cs:417 [v2.10.3.13]:
+    //   cmaster.SetAAudioMixVol((void*)0, 0, WDSP.id(1, 0), 0.5);
+    //   The 0.5 literal is a fixed mix coefficient in Thetis; NereusSDR
+    //   repurposes it as the user-volume default for the monitorVolume property.
+    //
+    // monEnabled does NOT persist — plan §0 row 9: safety, loads OFF at
+    // startup to prevent unexpected headphone audio.
+    // monitorVolume DOES persist — AppSettings persistence arrives in Phase L.2.
+    // AudioEngine integration (setTxMonitorEnabled / setTxMonitorVolume)
+    // arrives in Phase E.2-E.3.  MOX-fold (RX-leak gate) in Phase E.4.
+    //
+    // monitorVolume range [kMonitorVolumeMin, kMonitorVolumeMax] = [0.0f, 1.0f]
+    // (normalized volume scalar; no Thetis spinbox needed — master design and
+    //  pre-code review §4.2 + §12.5 consistently use 0..1 normalized).
+
+    /// MON (TX monitor) enable.  When true, TXA siphon (Stage::Sip1) audio
+    /// is mixed into MasterMixer at monitorVolume during MOX so the user
+    /// hears themselves.
+    ///
+    /// Default false.  Per plan §0 row 9, does NOT persist — loads OFF at
+    /// startup (safety: prevents unexpected headphone audio).
+    ///
+    /// AudioEngine integration arrives in Phase E.2-E.3.
+    /// MOX-fold (RX-leak gate) integrates with this in Phase E.4.
+    ///
+    /// Source: Thetis audio.cs:406 [v2.10.3.13] (mon default off).
+    bool monEnabled() const noexcept { return m_monEnabled; }
+
+    /// MON volume scalar (0.0..1.0).  Default 0.5f matches Thetis literal
+    /// mix coefficient at audio.cs:417 [v2.10.3.13]:
+    ///   cmaster.SetAAudioMixVol((void*)0, 0, WDSP.id(1, 0), 0.5);
+    ///
+    /// AppSettings persistence arrives in Phase L.2 (this property persists,
+    /// unlike monEnabled).
+    float monitorVolume() const noexcept { return m_monitorVolume; }
+
+    // MON volume range constants.
+    // Normalized volume scalar [0.0f, 1.0f].
+    // 0.5f default matches Thetis audio.cs:417 [v2.10.3.13] literal coefficient.
+    static constexpr float kMonitorVolumeMin = 0.0f;
+    static constexpr float kMonitorVolumeMax = 1.0f;
+
+    // ── VOX properties (3M-1b C.3) ────────────────────────────────────────
+    //
+    // Porting from Thetis audio.cs:167-202 [v2.10.3.13]:
+    //   private static bool vox_enabled = false;
+    //   public static bool VOXEnabled { get { return vox_enabled; } set { vox_enabled = value; ... } }
+    //   private static float vox_gain = 1.0f;
+    //   public static float VOXGain { get { return vox_gain; } set { vox_gain = value; } }
+    //
+    // Porting from Thetis console.cs:14707-14716 [v2.10.3.13]:
+    //   public double VOXHangTime { get { return vox_hang_time; }
+    //                               set { vox_hang_time = value;
+    //                                     if (!IsSetupFormNull) SetupForm.VOXHangTime = (int)value; } }
+    // Mapped to setup.cs:4865-4876 / setup.designer.cs:45005-45024 [v2.10.3.13]:
+    //   udDEXPHold.Minimum=1, udDEXPHold.Maximum=2000, udDEXPHold.Value=500 ms.
+    //
+    // voxThresholdDb range from console.Designer.cs:6018-6019 [v2.10.3.13]:
+    //   ptbVOX.Maximum=0, ptbVOX.Minimum=-80  (display unit is dB).
+    //
+    // WDSP wiring (SetDEXPRunVox, SetDEXPAttackThreshold, SetDEXPHoldTime)
+    // arrives in Phase D and Phase H.
+    // AppSettings persistence arrives in Phase L.2; voxEnabled does NOT persist
+    // (safety: VOX always loads OFF — plan §0 row 8).
+    //
+    // voxGainScalar: Thetis has no explicit clamp on VOXGain; NereusSDR adds a
+    // sane guard [0.0f, 100.0f].  A scalar of 0.0 disables the mic-boost
+    // scaling effect; 100.0 is an extreme upper bound that avoids silent
+    // overflow.  Callers should use values in [0.0f, 10.0f] for normal use.
+
+    /// VOX enable toggle.  Default FALSE — safety rule: VOX always starts OFF
+    /// (plan §0 row 8; prevents unintended TX on startup).
+    ///
+    /// Mode-gating (VOX fires only in voice modes) is wired in Phase H Task H.1
+    /// via CMSetTXAVoxRun mode-gate logic.
+    ///
+    /// From Thetis audio.cs:167 [v2.10.3.13]:
+    ///   private static bool vox_enabled = false;
+    bool voxEnabled() const noexcept { return m_voxEnabled; }
+
+    /// VOX detection threshold in dB.  Clamped to [kVoxThresholdDbMin, kVoxThresholdDbMax].
+    /// Default −40 dB (NereusSDR-original conservative starting point; Thetis
+    /// ptbVOX.Value defaults to −20 per console.Designer.cs:6024 [v2.10.3.13]).
+    ///
+    /// Range from console.Designer.cs:6018-6019 [v2.10.3.13]:
+    ///   ptbVOX.Maximum = 0, ptbVOX.Minimum = -80
+    int voxThresholdDb() const noexcept { return m_voxThresholdDb; }
+
+    /// Mic-boost-aware VOX threshold scaler.  Applied in CMSetTXAVoxThresh when
+    /// MicBoost is on: threshold *= voxGainScalar.  Clamped to
+    /// [kVoxGainScalarMin, kVoxGainScalarMax].
+    ///
+    /// Full mic-boost-aware scaling is wired in Phase H Task H.2.
+    ///
+    /// From Thetis audio.cs:194 [v2.10.3.13]:
+    ///   private static float vox_gain = 1.0f;
+    ///
+    /// Thetis has no explicit clamp on VOXGain.  NereusSDR adds a sane upper
+    /// guard of 100.0f to prevent silent float overflow.
+    float voxGainScalar() const noexcept { return m_voxGainScalar; }
+
+    /// VOX hang time in milliseconds: delay from signal-drop to gain recovery.
+    /// Clamped to [kVoxHangTimeMsMin, kVoxHangTimeMsMax].
+    /// Default 500 ms (NereusSDR-original; matches Thetis udDEXPHold.Value=500
+    /// per setup.designer.cs:45020-45024 [v2.10.3.13]).
+    ///
+    /// Full DEXP knob set (attack, release, hysteresis, expansion ratio) lives
+    /// in the Setup DEXP page and is deferred to Phase 3M-3a-iii.
+    ///
+    /// From Thetis console.cs:14707 [v2.10.3.13] / setup.cs:4865 [v2.10.3.13].
+    // Upstream tags preserved: //W4TME (from cited console.cs:14704) [v2.10.3.15]
+    int voxHangTimeMs() const noexcept { return m_voxHangTimeMs; }
+
+    // VOX threshold range constants.
+    // From Thetis console.Designer.cs:6018-6019 [v2.10.3.13]:
+    //   ptbVOX.Maximum = 0, ptbVOX.Minimum = -80
+    static constexpr int kVoxThresholdDbMin = -80;
+    static constexpr int kVoxThresholdDbMax =   0;
+
+    // VOX gain scalar range constants.
+    // NereusSDR sane guard; Thetis Audio.VOXGain has no explicit clamp.
+    static constexpr float kVoxGainScalarMin =   0.0f;
+    static constexpr float kVoxGainScalarMax = 100.0f;
+
+    // VOX hang time range constants.
+    // From Thetis setup.designer.cs:45005-45013 [v2.10.3.13]:
+    //   udDEXPHold.Maximum = 2000, udDEXPHold.Minimum = 1  (units: ms)
+    static constexpr int kVoxHangTimeMsMin =    1;
+    static constexpr int kVoxHangTimeMsMax = 2000;
+
+    // ── DEXP envelope properties (3M-3a-iii Task 7) ──────────────────────
+    //
+    // Downward expander envelope controls.  Bound to Setup -> Audio -> VOX/DEXP
+    // (grpDEXPVOX on tpDSPVOXDE) per Thetis setup.Designer.cs:44820+ [v2.10.3.13].
+    //
+    // Persistence policy departure from voxEnabled: dexpEnabled IS persisted.
+    // The 3M-1b safety carve-out (voxEnabled always loads OFF to prevent
+    // keying on background noise at startup) does NOT apply to DEXP — the
+    // downward expander only gates audio that is already being processed; it
+    // cannot accidentally PTT the radio.  All four envelope properties persist.
+    //
+    // WDSP wiring lives in TxChannel (Tasks 1-2): setDexpRun, setDexpDetectorTau,
+    // setDexpAttackTime, setDexpReleaseTime.  Setup-page binding lands in Task 14.
+
+    /// DEXP enable toggle.  Default FALSE — Thetis chkDEXPEnable has no explicit
+    /// `Checked = true` setter, so the default is the WinForms CheckBox false.
+    /// (See setup.Designer.cs:45140-45151 [v2.10.3.13].)
+    ///
+    /// Unlike voxEnabled, this property IS persisted (no PTT safety concern).
+    bool dexpEnabled() const noexcept { return m_dexpEnabled; }
+
+    /// DEXP detector low-pass filter time-constant in milliseconds.  Clamped to
+    /// [kDexpDetectorTauMsMin, kDexpDetectorTauMsMax].  Default 20.0 ms.
+    ///
+    /// From Thetis setup.Designer.cs:45093 [v2.10.3.13] — udDEXPDetTau.Value=20.
+    /// Range from setup.Designer.cs:45078-45087 [v2.10.3.13]:
+    ///   udDEXPDetTau.Maximum=100, udDEXPDetTau.Minimum=1.
+    double dexpDetectorTauMs() const noexcept { return m_dexpDetectorTauMs; }
+
+    /// DEXP attack time in milliseconds: time from low to high gain.  Clamped to
+    /// [kDexpAttackTimeMsMin, kDexpAttackTimeMsMax].  Default 2.0 ms.
+    ///
+    /// From Thetis setup.Designer.cs:45050 [v2.10.3.13] — udDEXPAttack.Value=2.
+    /// Range from setup.Designer.cs:45035-45044 [v2.10.3.13]:
+    ///   udDEXPAttack.Maximum=100, udDEXPAttack.Minimum=2.
+    double dexpAttackTimeMs() const noexcept { return m_dexpAttackTimeMs; }
+
+    /// DEXP release time in milliseconds: time from high to low gain.  Clamped to
+    /// [kDexpReleaseTimeMsMin, kDexpReleaseTimeMsMax].  Default 100.0 ms.
+    ///
+    /// From Thetis setup.Designer.cs:44990 [v2.10.3.13] — udDEXPRelease.Value=100.
+    /// Range from setup.Designer.cs:44975-44984 [v2.10.3.13]:
+    ///   udDEXPRelease.Maximum=1000, udDEXPRelease.Minimum=2.
+    double dexpReleaseTimeMs() const noexcept { return m_dexpReleaseTimeMs; }
+
+    // DEXP envelope range constants.
+    // From Thetis setup.Designer.cs [v2.10.3.13]:
+    //   udDEXPDetTau:  Min=1,  Max=100  (line 45078-45087)
+    //   udDEXPAttack:  Min=2,  Max=100  (line 45035-45044)
+    //   udDEXPRelease: Min=2,  Max=1000 (line 44975-44984)
+    static constexpr double kDexpDetectorTauMsMin  =    1.0;
+    static constexpr double kDexpDetectorTauMsMax  =  100.0;
+    static constexpr double kDexpAttackTimeMsMin   =    2.0;
+    static constexpr double kDexpAttackTimeMsMax   =  100.0;
+    static constexpr double kDexpReleaseTimeMsMin  =    2.0;
+    static constexpr double kDexpReleaseTimeMsMax  = 1000.0;
+
+    // ── DEXP gate-ratio properties (3M-3a-iii Task 8) ─────────────────────
+    //
+    // Downward-expander gate ratios.  Bound to grpDEXPVOX in Setup -> Audio ->
+    // VOX/DEXP per Thetis setup.Designer.cs:44820+ [v2.10.3.13].
+    //
+    // Both properties persist (no PTT-safety carve-out).
+    //
+    // The TxChannel wrapper for hysteresis applies a NEGATIVE Math.Pow exponent
+    // internally (per Batch B finding); the model layer just stores the dB
+    // value as the user sees it in Setup.  Wrapper conversion is in TxChannel
+    // setDexpHysteresisRatio (Task 3).
+
+    /// DEXP expansion ratio in dB.  Clamped to
+    /// [kDexpExpansionRatioDbMin, kDexpExpansionRatioDbMax].  Default 10.0 dB.
+    ///
+    /// From Thetis setup.Designer.cs:44900-44904 [v2.10.3.13]:
+    ///   udDEXPExpansionRatio.Value = 10
+    /// Range from setup.Designer.cs:44885-44894 [v2.10.3.13]:
+    ///   udDEXPExpansionRatio.Maximum = 30, udDEXPExpansionRatio.Minimum = 0
+    double dexpExpansionRatioDb() const noexcept { return m_dexpExpansionRatioDb; }
+
+    /// DEXP hysteresis ratio in dB.  Clamped to
+    /// [kDexpHysteresisRatioDbMin, kDexpHysteresisRatioDbMax].  Default 2.0 dB.
+    ///
+    /// From Thetis setup.Designer.cs:44869-44873 [v2.10.3.13]:
+    ///   udDEXPHysteresisRatio.Value = 20 (with DecimalPlaces=1, scale 65536)
+    ///   -- displayed as 2.0
+    /// Range from setup.Designer.cs:44854-44863 [v2.10.3.13]:
+    ///   udDEXPHysteresisRatio.Maximum = 10, udDEXPHysteresisRatio.Minimum = 0
+    double dexpHysteresisRatioDb() const noexcept { return m_dexpHysteresisRatioDb; }
+
+    // DEXP gate-ratio range constants.
+    // From Thetis setup.Designer.cs [v2.10.3.13]:
+    //   udDEXPExpansionRatio:  Min=0, Max=30 (line 44885-44894)
+    //   udDEXPHysteresisRatio: Min=0, Max=10 (line 44854-44863)
+    static constexpr double kDexpExpansionRatioDbMin  =  0.0;
+    static constexpr double kDexpExpansionRatioDbMax  = 30.0;
+    static constexpr double kDexpHysteresisRatioDbMin =  0.0;
+    static constexpr double kDexpHysteresisRatioDbMax = 10.0;
+
+    // ── DEXP look-ahead properties (3M-3a-iii Task 9) ─────────────────────
+    //
+    // Audio look-ahead controls.  Bound to grpDEXPLookAhead in Setup -> Audio ->
+    // VOX/DEXP per Thetis setup.Designer.cs:44755+ [v2.10.3.13].
+    //
+    // The look-ahead engages the WDSP audio buffer so VOX can fire just before
+    // the first syllable instead of clipping it.  Both properties persist.
+    //
+    // dexpLookAheadEnabled is the only DEXP boolean that ships TRUE.
+
+    /// DEXP audio look-ahead enable toggle.  Default TRUE per Thetis
+    /// chkDEXPLookAheadEnable.Checked=true at setup.Designer.cs:44808 [v2.10.3.13].
+    bool dexpLookAheadEnabled() const noexcept { return m_dexpLookAheadEnabled; }
+
+    /// DEXP audio look-ahead time in milliseconds.  Clamped to
+    /// [kDexpLookAheadMsMin, kDexpLookAheadMsMax].  Default 60.0 ms.
+    ///
+    /// From Thetis setup.Designer.cs:44788 [v2.10.3.13] - udDEXPLookAhead.Value=60.
+    /// Range from setup.Designer.cs:44773-44782 [v2.10.3.13]:
+    ///   udDEXPLookAhead.Maximum=999, udDEXPLookAhead.Minimum=10.
+    double dexpLookAheadMs() const noexcept { return m_dexpLookAheadMs; }
+
+    // DEXP look-ahead range constants.
+    // From Thetis setup.Designer.cs:44773-44782 [v2.10.3.13]:
+    //   udDEXPLookAhead: Min=10, Max=999 (units: ms)
+    static constexpr double kDexpLookAheadMsMin =  10.0;
+    static constexpr double kDexpLookAheadMsMax = 999.0;
+
+    // ── DEXP side-channel filter properties (3M-3a-iii Task 10) ───────────
+    //
+    // Side-channel HP/LP filter trio used by the DEXP detector to gate which
+    // audio frequencies trigger VOX/DEXP.  Bound to grpSCF in Setup -> Audio ->
+    // VOX/DEXP per Thetis setup.Designer.cs:45153+ [v2.10.3.13].
+    //
+    // Plan scope correction (2026-05-03): originally these were planned as
+    // model-only / no-UI properties, but a source-first re-read by the Batch B
+    // agent surfaced grpSCF on tpDSPVOXDE — so they DO get UI binding
+    // (lands in Task 14, the DexpVoxPage Setup-page work).  Defaults below
+    // therefore match the Thetis Designer values verbatim.
+    //
+    // All three persist.
+
+    /// DEXP side-channel filter low cut-off frequency in Hz.  Clamped to
+    /// [kDexpFilterCutHzMin, kDexpFilterCutHzMax].  Default 500.0 Hz.
+    ///
+    /// From Thetis setup.Designer.cs:45240 [v2.10.3.13] - udSCFLowCut.Value=500.
+    /// Range from setup.Designer.cs:45225-45234 [v2.10.3.13]:
+    ///   udSCFLowCut.Maximum=10000, udSCFLowCut.Minimum=100.
+    double dexpLowCutHz() const noexcept { return m_dexpLowCutHz; }
+
+    /// DEXP side-channel filter high cut-off frequency in Hz.  Clamped to
+    /// [kDexpFilterCutHzMin, kDexpFilterCutHzMax].  Default 1500.0 Hz.
+    ///
+    /// From Thetis setup.Designer.cs:45210 [v2.10.3.13] - udSCFHighCut.Value=1500.
+    /// Range from setup.Designer.cs:45195-45204 [v2.10.3.13]:
+    ///   udSCFHighCut.Maximum=10000, udSCFHighCut.Minimum=100.
+    double dexpHighCutHz() const noexcept { return m_dexpHighCutHz; }
+
+    /// DEXP side-channel filter enable toggle.  Default TRUE per Thetis
+    /// chkSCFEnable.Checked=true at setup.Designer.cs:45250 [v2.10.3.13].
+    bool dexpSideChannelFilterEnabled() const noexcept { return m_dexpSideChannelFilterEnabled; }
+
+    // DEXP side-channel filter range constants.
+    // From Thetis setup.Designer.cs [v2.10.3.13]:
+    //   udSCFLowCut + udSCFHighCut both: Min=100, Max=10000 (units: Hz)
+    //   (lines 45195-45234)
+    // Range matches Task 4 wrapper clamps in TxChannel::setDexpLowCut/HighCut.
+    static constexpr double kDexpFilterCutHzMin =   100.0;
+    static constexpr double kDexpFilterCutHzMax = 10000.0;
+
+    // ── Mic source (3M-1b I.1) ────────────────────────────────────────────────
+    //
+    // NereusSDR-native property — Thetis bakes mic-source selection directly
+    // into audio.cs rather than using the strategy pattern.  This property
+    // drives AudioTxInputPage (Setup → Audio → TX Input) and is consumed by
+    // CompositeTxMicRouter::setActiveSource() once that wiring lands in F.3.
+    //
+    // Default MicSource::Pc — PC microphone is always safe and available.
+    // Radio is opt-in (unavailable on HL2: hasMicJack == false).
+    //
+    // AppSettings persistence (per-MAC) is deferred to Phase L.2.
+    // CompositeTxMicRouter wiring arrives in Phase F.3.
+
+    /// Active mic source: Pc (PC host-audio) or Radio (radio mic-jack).
+    /// Default MicSource::Pc. Radio is gated by BoardCapabilities::hasMicJack.
+    MicSource micSource() const noexcept { return m_micSource; }
+
+    // ── PC Mic session state (3M-1b I.2) ─────────────────────────────────────
+    //
+    // NereusSDR-native PC Mic device selection.
+    //
+    // R-R3-36 (2026-09-22): these three properties are projections of the
+    // single AudioEngine TX input config (AudioDeviceConfig persisted under
+    // audio/TxInput, edited by Setup → Audio → Devices and TX Input).
+    // RadioModel mirrors that config into them on every
+    // AudioEngine::txInputConfigChanged, and a setter call here is
+    // forwarded by RadioModel to AudioEngine::setTxInputConfig (persisted
+    // under audio/TxInput). A TransmitModel with no RadioModel keeps the
+    // defaults below and forwards nothing.
+    //
+    // pcMicHostApiIndex: PortAudio host API index (-1 = PA default; on
+    //   macOS this will be the CoreAudio index, on Linux PipeWire/Pulse,
+    //   on Windows WASAPI).  Default -1 means "let AudioEngine pick the
+    //   OS default" — the Setup page UI resolves -1 to the current OS
+    //   default at display time.
+    //
+    // pcMicDeviceName: display name of the chosen capture device within
+    //   the selected host API.  Empty = use the PA default device for
+    //   that host API.
+    //
+    // pcMicBufferSamples: capture buffer size in samples per channel.
+    //   Default 512 samples (~10.7 ms @ 48 kHz).  The UI exposes a
+    //   power-of-2 list (64/128/256/512/1024/2048/4096/8192).
+
+    /// PortAudio host API index for PC Mic capture.  -1 = OS default.
+    /// Projection of the audio/TxInput config (R-R3-36).
+    int pcMicHostApiIndex() const noexcept { return m_pcMicHostApiIndex; }
+
+    /// Device name for PC Mic capture within the selected host API.
+    /// Empty = use the PA default device for that host API.
+    /// Projection of the audio/TxInput config (R-R3-36).
+    QString pcMicDeviceName() const noexcept { return m_pcMicDeviceName; }
+
+    /// Capture buffer size in samples per channel for PC Mic.
+    /// Default 512 samples (~10.7 ms @ 48 kHz reference rate) until
+    /// RadioModel mirrors the config.  Projection of audio/TxInput (R-R3-36).
+    int pcMicBufferSamples() const noexcept { return m_pcMicBufferSamples; }
+
+    // ── Two-tone test properties (3M-1c B.2) ─────────────────────────────────
+    //
+    // Per-MAC AppSettings persistence with Thetis column names per design
+    // spec §4.4 / pre-code review §2.3.  Drives Setup → Test → Two-Tone page
+    // (chunk 2 part — Phase H) and the TxApplet 2-TONE button (Phase J).
+    //
+    // Default values follow option C (JJ 2026-04-28):
+    //   - Freq1 (700 Hz) / Freq2 (1900 Hz) — match Thetis Designer
+    //     + btnTwoToneF_defaults preset (setup.cs:34226-34227 [v2.10.3.13]).
+    //   - Level (-6 dB) / Power (50 %) — NereusSDR-original safer defaults
+    //     (Thetis Designer ships 0 dB / 10 %).
+    //   - Freq2Delay (0 ms) — matches Thetis Designer
+    //     (setup.Designer.cs:61943-61947 [v2.10.3.13]).
+    //   - Invert (true) — matches Thetis Designer chkInvertTones.Checked = true
+    //     (setup.Designer.cs:61963 [v2.10.3.13]); functionally correct on
+    //     LSB/CWL/DIGL per setup.cs:11058 [v2.10.3.13] conditional sign-flip.
+    //   - Pulsed (false) — matches Thetis Designer (no Checked= line at
+    //     setup.Designer.cs:61643-61653 [v2.10.3.13]).
+    //
+    // All ranges match Thetis Designer.  WDSP setters
+    // (TXPostGenMode / TXPostGenTTFreq1/2 / TXPostGenTTMag1/2 + pulse-profile)
+    // arrive in Phase E.  The two-tone activation handler (mode-aware invert,
+    // power-source enum, MOX engage) arrives in Phase I.
+
+    /// First test tone frequency (Hz).  Negative values valid; range matches
+    /// Thetis udTestIMDFreq1.Min/Max.
+    int twoToneFreq1() const noexcept { return m_twoToneFreq1; }
+
+    /// Second test tone frequency (Hz).
+    int twoToneFreq2() const noexcept { return m_twoToneFreq2; }
+
+    /// Two-tone test magnitude (dB).  Used in setup.cs:11056 [v2.10.3.13]:
+    ///   ttmag1 = ttmag2 = 0.49999 * pow(10, level / 20)
+    /// Default 0 dB (matches Thetis Designer udTwoToneLevel.Value = 0).
+    /// PR #212 follow-up bench: an earlier NereusSDR-original default of
+    /// -6 dB halved the 2-tone envelope (peak 0.5 vs 1.0) which starved
+    /// calcc LCOLLECT bin filling on HL2 — psHWPeak=0.233 expects peak
+    /// envelope to reach ~0.234, but at -6 dB it tops out at ~0.117 →
+    /// only bins 0-7 fill, full_ints stuck at 8, state never advances
+    /// past LCOLLECT.  The -6 dB default was corrected to 0 dB in the
+    /// load() default earlier; legacy persisted -6 dB values from
+    /// pre-fix sessions stay until the user opens Setup → Test/2-Tone
+    /// and re-saves.  No auto-migration to keep the setting honest as
+    /// a user preference.
+    double twoToneLevel() const noexcept { return m_twoToneLevel; }
+
+    /// TX power (%) used during the two-tone test when
+    /// DrivePowerSource::Fixed (Phase B.3 enum) is active.
+    /// NereusSDR default 50 % (Thetis Designer udTestIMDPower.Value = 10 %).
+    int twoTonePower() const noexcept { return m_twoTonePower; }
+
+    /// Delay (ms) before Freq2 magnitude is applied during a two-tone run.
+    /// Defeats amplifier frequency-counters that latch on the first tone.
+    /// 0 = both tones applied simultaneously.
+    int twoToneFreq2Delay() const noexcept { return m_twoToneFreq2Delay; }
+
+    /// Whether to negate Freq1/Freq2 in LS modes (LSB/CWL/DIGL).  When true,
+    /// tones land at +Freq1/+Freq2 in the audio band on LSB; when false,
+    /// they appear mirrored at -Freq1/-Freq2.  Default true per
+    /// setup.Designer.cs:61963 [v2.10.3.13].
+    bool twoToneInvert() const noexcept { return m_twoToneInvert; }
+
+    /// Pulsed two-tone mode toggle.  When true, Phase I selects
+    /// TXPostGenMode=7 (pulsed) + setupTwoTonePulse() profile setters;
+    /// when false, TXPostGenMode=1 (continuous).
+    bool twoTonePulsed() const noexcept { return m_twoTonePulsed; }
+
+    /// Power-source selection for the two-tone test (Phase 3M-1c B.3).
+    /// Default DriveSlider matches Thetis console.cs:46553 [v2.10.3.13]:
+    ///   private DrivePowerSource _2ToneDrivePowerSource = DRIVE_SLIDER;
+    /// Phase I (two-tone activation handler) consumes this to decide
+    /// whether to save+override PWR (Fixed) or honor the user slider
+    /// (DriveSlider / TuneSlider) per setup.cs:11111-11119 [v2.10.3.13].
+    DrivePowerSource twoToneDrivePowerSource() const noexcept {
+        return m_twoToneDrivePowerSource;
+    }
+
+    // Two-tone range constants — all match Thetis Designer.
+    static constexpr int    kTwoToneFreq1HzMin      = -20000;  // setup.Designer.cs:62122-62126
+    static constexpr int    kTwoToneFreq1HzMax      =  20000;  // setup.Designer.cs:62117-62121
+    static constexpr int    kTwoToneFreq2HzMin      = -20000;  // setup.Designer.cs:62040-62044
+    static constexpr int    kTwoToneFreq2HzMax      =  20000;  // setup.Designer.cs:62035-62039
+    static constexpr double kTwoToneLevelDbMin      =  -96.0;  // setup.Designer.cs:61999-62003
+    static constexpr double kTwoToneLevelDbMax      =    0.0;  // setup.Designer.cs:61994-61998
+    static constexpr int    kTwoTonePowerMin        =      0;  // setup.Designer.cs:62069-62073
+    static constexpr int    kTwoTonePowerMax        =    100;  // setup.Designer.cs:62064-62068
+    static constexpr int    kTwoToneFreq2DelayMsMin =      0;  // setup.Designer.cs:61933-61937
+    static constexpr int    kTwoToneFreq2DelayMsMax =   1000;  // setup.Designer.cs:61928-61932
+
+    // ── CFC / CPDR / CESSB / Phase Rotator properties (3M-3a-ii Batch 2) ─
+    //
+    // 15 new properties for the TXA dynamics section:
+    //
+    //   Phase Rotator (4 — deferred from 3M-3a-i §7.1):
+    //     phaseRotatorEnabled (bool)  — CFCPhaseRotatorEnabled
+    //     phaseReverseEnabled (bool)  — CFCPhaseReverseEnabled
+    //     phaseRotatorFreqHz  (int)   — CFCPhaseRotatorFreq, default 338
+    //     phaseRotatorStages  (int)   — CFCPhaseRotatorStages, default 8
+    //
+    //   CFC (8):
+    //     cfcEnabled              (bool)             — CFCEnabled
+    //     cfcPostEqEnabled        (bool)             — CFCPostEqEnabled
+    //     cfcPrecompDb            (int)              — CFCPreComp scalar
+    //     cfcPostEqGainDb         (int)              — CFCPostEqGain scalar
+    //     cfcEqFreqHz[10]         (array<int,10>)    — CFCEqFreq0..9
+    //     cfcCompressionDb[10]    (array<int,10>)    — CFCPreComp0..9 (per-band G[])
+    //     cfcPostEqBandGainDb[10] (array<int,10>)    — CFCPostEqGain0..9 (per-band E[])
+    //     cfcParaEqData           (QString)          — CFCParaEQData (opaque blob)
+    //
+    //   CPDR (2):
+    //     cpdrOn      (bool)  — global console state, NOT in TXProfile
+    //     cpdrLevelDb (int)   — CompanderLevel
+    //
+    //   CESSB (1):
+    //     cessbOn (bool)      — CESSB_On
+    //
+    // Defaults sourced from Thetis database.cs:4724-4768 [v2.10.3.13]
+    // (TXProfile factory) except cpdrOn which comes from console.cs:36430
+    // [v2.10.3.13] (SetGeneralSetting → OtherButtonId.COMP — global console
+    // state).  WDSP boot default for compressor.run is 0 (TXA.c:253).
+    //
+    // Range clamps from Thetis Designer (setup.Designer.cs and
+    // frmCFCConfig.Designer.cs [v2.10.3.13]).
+    //
+    // 14 of these 15 properties round-trip via TXProfile bundle (Batch 4).
+    // cpdrOn lives outside the profile (global console state) — persisted at
+    // hardware/<mac>/tx/cpdr/on, not in the per-profile namespace.
+
+    // ── Phase Rotator getters ─────────────────────────────────────────────
+    bool phaseRotatorEnabled() const noexcept { return m_phaseRotatorEnabled; }
+    bool phaseReverseEnabled() const noexcept { return m_phaseReverseEnabled; }
+    int  phaseRotatorFreqHz() const noexcept  { return m_phaseRotatorFreqHz; }
+    int  phaseRotatorStages() const noexcept  { return m_phaseRotatorStages; }
+
+    // ── CFC scalar getters ────────────────────────────────────────────────
+    bool cfcEnabled() const noexcept       { return m_cfcEnabled; }
+    bool cfcPostEqEnabled() const noexcept { return m_cfcPostEqEnabled; }
+    int  cfcPrecompDb() const noexcept     { return m_cfcPrecompDb; }
+    int  cfcPostEqGainDb() const noexcept  { return m_cfcPostEqGainDb; }
+
+    /// Per-band CFC EQ frequency (Hz) at index 0..9.  Returns 0 for out-of-range.
+    int cfcEqFreq(int index) const noexcept;
+    /// Per-band CFC compression amount (dB) at index 0..9.  Returns 0 for out-of-range.
+    int cfcCompression(int index) const noexcept;
+    /// Per-band CFC post-EQ gain (dB) at index 0..9.  Returns 0 for out-of-range.
+    int cfcPostEqBandGain(int index) const noexcept;
+
+    /// Opaque parametric-EQ blob.  No setter validation — pass-through for
+    /// forward-compat round-trip with imported Thetis profiles (Batch 4).
+    const QString& cfcParaEqData() const noexcept { return m_cfcParaEqData; }
+
+    // ── CPDR getters ──────────────────────────────────────────────────────
+    /// CPDR global on/off (NOT in TXProfile).  See header comment.
+    bool cpdrOn() const noexcept       { return m_cpdrOn; }
+    int  cpdrLevelDb() const noexcept  { return m_cpdrLevelDb; }
+
+    // ── AM carrier level getter (AM / SAM / DSB TX) ───────────────────────
+    /// Carrier level in percent (0..100).  Thetis TXProfile "AM_Carrier_Level"
+    /// (database.cs AddTXProfileTable, default 100); setup.cs:9965 maps it to
+    /// WDSP as sqrt(0.01 * pct) * 0.5 via SetTXAAMCarrierLevel.
+    int  amCarrierLevel() const noexcept { return m_amCarrierLevel; }
+
+    // ── CESSB getters ─────────────────────────────────────────────────────
+    bool cessbOn() const noexcept      { return m_cessbOn; }
+
+    // ── Range constants (Thetis Designer [v2.10.3.13]) ────────────────────
+    //
+    // Phase Rotator FREQ: 10..2000 Hz
+    // From Thetis setup.Designer.cs:46250-46259 [v2.10.3.13] — udPhRotFreq.
+    static constexpr int kPhaseRotatorFreqHzMin = 10;
+    static constexpr int kPhaseRotatorFreqHzMax = 2000;
+    // Phase Rotator STAGES: 2..16
+    // From Thetis setup.Designer.cs:46209-46218 [v2.10.3.13] — udPHROTStages.
+    static constexpr int kPhaseRotatorStagesMin = 2;
+    static constexpr int kPhaseRotatorStagesMax = 16;
+
+    // CFC pre-comp scalar: 0..16 dB
+    // From Thetis frmCFCConfig.Designer.cs:408-422 [v2.10.3.13] — nudCFC_precomp.
+    static constexpr int kCfcPrecompDbMin = 0;
+    static constexpr int kCfcPrecompDbMax = 16;
+    // CFC post-EQ gain scalar: -24..+24 dB
+    // From Thetis frmCFCConfig.Designer.cs:337-351 [v2.10.3.13] — nudCFC_posteqgain.
+    // The Designer encodes -24 via the C# decimal sign-bit (4th int = -2147483648),
+    // which means Maximum=24, Minimum=-24.
+    static constexpr int kCfcPostEqGainDbMin = -24;
+    static constexpr int kCfcPostEqGainDbMax =  24;
+    // CFC EQ frequency (per-band): 0..20000 Hz
+    // From Thetis frmCFCConfig.Designer.cs:267-286 [v2.10.3.13] — nudCFC_f.
+    static constexpr int kCfcEqFreqHzMin = 0;
+    static constexpr int kCfcEqFreqHzMax = 20000;
+    // CFC compression (per-band): 0..16 dB
+    // From Thetis frmCFCConfig.Designer.cs:217-236 [v2.10.3.13] — nudCFC_c.
+    // Naming note: Thetis stores these in CFCPreComp0..9 columns but the
+    // values are the per-band compression amounts (WDSP G[] vector).
+    static constexpr int kCfcCompressionDbMin = 0;
+    static constexpr int kCfcCompressionDbMax = 16;
+    // CFC post-EQ band gain (per-band): -24..+24 dB
+    // From Thetis frmCFCConfig.Designer.cs:564-583 [v2.10.3.13] — nudCFC_gain.
+    // Same C# decimal sign-bit encoding as nudCFC_posteqgain above.
+    // These are the per-band post-EQ gains (WDSP E[] vector).
+    static constexpr int kCfcPostEqBandGainDbMin = -24;
+    static constexpr int kCfcPostEqBandGainDbMax =  24;
+
+    // CPDR level: 0..20 dB
+    // From Thetis console.Designer.cs:6042-6043 [v2.10.3.13] — ptbCPDR
+    // (Maximum=20, Minimum=0).  setup.cs:9307 reads CompanderLevel into
+    // console.CPDRLevel which is the ptbCPDR value (console.cs:15683-15695).
+    static constexpr int kCpdrLevelDbMin = 0;
+    static constexpr int kCpdrLevelDbMax = 20;
+
+    // AM carrier level range per Thetis setup.Designer.cs udTXAMCarrierLevel
+    // (Minimum 0, Maximum 100, percent).
+    static constexpr int kAmCarrierLevelMin = 0;
+    static constexpr int kAmCarrierLevelMax = 100;
+
+    // ── TX EQ + Leveler + ALC properties (3M-3a-i Task C) ───────────────
+    //
+    // 28 new properties (23 TXProfile + 5 stand-alone + 4 globals):
+    //   TX EQ (TXProfile, 23 keys):
+    //     txEqEnabled (bool)         — TXEQEnabled
+    //     txEqNumBands (int RO=10)   — TXEQNumBands
+    //     txEqPreamp (int dB)        — TXEQPreamp
+    //     txEqBand[i] (10 int dB)    — TXEQ1..TXEQ10
+    //     txEqFreq[i] (10 int Hz)    — TxEqFreq1..TxEqFreq10
+    //
+    //   TX Leveler (TXProfile, 3 keys):
+    //     txLevelerOn (bool)        — Lev_On
+    //     txLevelerMaxGain (int dB) — Lev_MaxGain
+    //     txLevelerDecay (int ms)   — Lev_Decay
+    //
+    //   TX ALC (TXProfile, 2 keys):
+    //     txAlcMaxGain (int dB)     — ALC_MaximumGain
+    //     txAlcDecay (int ms)       — ALC_Decay
+    //
+    //   TX EQ globals (NOT in TXProfile, 4 keys under hardware/<mac>/tx/):
+    //     txEqNc (int)              — eq/nc       default 2048
+    //     txEqMp (bool)             — eq/mp       default false
+    //     txEqCtfmode (int)         — eq/ctfmode  default 0
+    //     txEqWintype (int)         — eq/wintype  default 0
+    //
+    // ALC Run is locked-on per Thetis schema — no txAlcOn property is exposed.
+    // Phase Rotator is intentionally out of scope (deferred to 3M-3a-ii because
+    // its CFC* persistence keys belong with the CFC tab).
+    //
+    // Defaults from Thetis database.cs:4552-4594 [v2.10.3.13] (TXProfile schema)
+    // and WDSP TXA.c:111-128 [v2.10.3.13] (create_eqp G[]/F[] vectors).
+    //
+    // Range clamps from Thetis Designer (setup.Designer.cs:38710-38866 [v2.10.3.13]).
+    // 3M-3a-i Batch 2+ wires TransmitModel signals into TxChannel via RadioModel.
+
+    // ── Number of EQ bands.  Read-only constant per Thetis 10-band UI. ──
+    int  txEqNumBands() const noexcept { return 10; }
+
+    // ── TX EQ enable + preamp ──
+    bool txEqEnabled() const noexcept { return m_txEqEnabled; }
+    int  txEqPreamp() const noexcept  { return m_txEqPreamp; }
+
+    /// Per-band gain (dB) at index 0..9.  Returns 0 for out-of-range index.
+    int txEqBand(int index) const noexcept;
+    /// Per-band frequency (Hz) at index 0..9.  Returns 0 for out-of-range index.
+    int txEqFreq(int index) const noexcept;
+
+    // ── TX Leveler ──
+    bool txLevelerOn() const noexcept       { return m_txLevelerOn; }
+    int  txLevelerMaxGain() const noexcept  { return m_txLevelerMaxGain; }
+    int  txLevelerDecay() const noexcept    { return m_txLevelerDecay; }
+
+    // ── TX ALC (Run is locked-on; no getter exposed) ──
+    int  txAlcMaxGain() const noexcept      { return m_txAlcMaxGain; }
+    int  txAlcDecay() const noexcept        { return m_txAlcDecay; }
+
+    // ── TX EQ globals (radio-wide DSP settings) ──
+    int  txEqNc() const noexcept            { return m_txEqNc; }
+    bool txEqMp() const noexcept            { return m_txEqMp; }
+    int  txEqCtfmode() const noexcept       { return m_txEqCtfmode; }
+    int  txEqWintype() const noexcept       { return m_txEqWintype; }
+
+    /// Opaque parametric-EQ blob for the TX EQ (separate from CFC's
+    /// CFCParaEQData blob).  No setter validation — pass-through for
+    /// forward-compat round-trip with imported Thetis profiles.
+    /// ParametricEqWidget produces / consumes the inner JSON;
+    /// MicProfileManager wraps it through ParaEqEnvelope before
+    /// storing under the bundle key TXParaEQData.
+    /// Phase 3M-3a-ii follow-up Batch 6 — mirrors cfcParaEqData()
+    /// (3M-3a-ii Batch 2) for the TX EQ slot in TXProfile.
+    const QString& txEqParaEqData() const noexcept { return m_txEqParaEqData; }
+    /// The curve txEqParaEqData holds, as ParaEqCurve::txEqCurveJson gives
+    /// it: compact JSON with "state" "saved", "default" (an empty value)
+    /// or "unavailable" (a value the Core cannot read). Follows every
+    /// change of txEqParaEqData.
+    const QString& txEqCurve() const noexcept { return m_txEqCurve; }
+    /// The CFC band editor, as CfcProfile::publishedJson gives it: "state"
+    /// "saved" (cfcParaEqData) or "legacy" (the ten-band values), with a
+    /// "revision" cfc.setProfile checks. Follows every CFC change once a
+    /// profile restore has finished.
+    const QString& cfcProfile() const noexcept { return m_cfcProfile; }
+
+    // ── R-R3-49 (parity Task 4): the Legacy EQ box and the band arrays ────
+    //
+    /// The TX EQ dialog's Legacy EQ box: true, the ten-band EQ reaches the
+    /// TX channel; false, the parametric curve in txEqParaEqData does.
+    /// Default true, as Thetis chkLegacyEQ.Checked = true at eqform.cs:988
+    /// [v2.10.3.15]; saved with the TX profile (EQUseLegacy).
+    bool txEqUseLegacy() const noexcept { return m_txEqUseLegacy; }
+    /// The ten TX EQ band gains / centres, and the ten CFC compression
+    /// levels / centres / post-EQ gains, as a compact JSON array of whole
+    /// numbers (the link's form). NereusSDR-original.
+    QString txEqBandsJson() const;
+    QString txEqFreqsJson() const;
+    QString cfcCompressionJson() const;
+    QString cfcEqFreqJson() const;
+    QString cfcPostEqBandGainJson() const;
+    /// R-R3-49 (parity Task 5): the per-band power and tune power as the
+    /// link's compact JSON object of whole watts keyed by bandKeyName, for
+    /// the 14 bands 160m .. XVTR. NereusSDR-original.
+    QString powerByBandJson() const;
+    QString tunePowerByBandJson() const;
+
+    // ── Range constants (Thetis Designer setup.Designer.cs [v2.10.3.13]) ──
+    //
+    // Leveler MaxGain: 0..20 dB (udDSPLevelerThreshold:38718-38738).
+    static constexpr int kTxLevelerMaxGainDbMin  =    0;
+    static constexpr int kTxLevelerMaxGainDbMax  =   20;
+    // Leveler Decay: 1..5000 ms (udDSPLevelerDecay:38744-38772).
+    static constexpr int kTxLevelerDecayMsMin    =    1;
+    static constexpr int kTxLevelerDecayMsMax    = 5000;
+    // ALC MaxGain: 0..120 dB (udDSPALCMaximumGain:38814-38833).
+    static constexpr int kTxAlcMaxGainDbMin      =    0;
+    static constexpr int kTxAlcMaxGainDbMax      =  120;
+    // ALC Decay: 1..50 ms (udDSPALCDecay:38845-38866).
+    static constexpr int kTxAlcDecayMsMin        =    1;
+    static constexpr int kTxAlcDecayMsMax        =   50;
+    // EQ preamp: NereusSDR clamp [-12, 15] dB (matches Thetis EQ preamp slider
+    // precedent — eqx.cs:btnReset preset clears preamp to 0; spinbox accepts
+    // ±dB but no formal Designer Min/Max is exposed for the integer column).
+    static constexpr int kTxEqPreampDbMin        =  -12;
+    static constexpr int kTxEqPreampDbMax        =   15;
+    // EQ band gain: same clamp as preamp (the per-band slider uses the same
+    // ±dB range as the preamp slider).
+    static constexpr int kTxEqBandDbMin          =  -12;
+    static constexpr int kTxEqBandDbMax          =   15;
+    // EQ band frequency: WDSP eq_impulse accepts up to Nyquist (24 kHz at
+    // 48 kHz dsp_rate); 22 kHz UI cap is conservative.  Min 10 Hz protects
+    // FFT-bin boundary math; Thetis itself sets defaults from 32 Hz.
+    static constexpr int kTxEqFreqHzMin          =   10;
+    static constexpr int kTxEqFreqHzMax          = 22000;
+    // R-R3-49 (parity Task 4): the ranges a window may send for the EQ
+    // settings whose setters do not clamp, from the TX EQ dialog's own
+    // controls (Nc spin box 32 to 8192; the Cutoff and Window combos'
+    // two items). Thetis does not show these on TX.
+    static constexpr int kTxEqNcMin              =   32;
+    static constexpr int kTxEqNcMax              = 8192;
+    static constexpr int kTxEqCtfmodeMax         =    1;
+    static constexpr int kTxEqWintypeMax         =    1;
+
+public slots:
+    void setTxEqEnabled(bool on);
+    void setTxEqPreamp(int dB);
+    /// Set per-band gain (dB) at index 0..9.  No-op if index out of range.
+    void setTxEqBand(int index, int dB);
+    /// Set per-band frequency (Hz) at index 0..9.  No-op if index out of range.
+    void setTxEqFreq(int index, int hz);
+    void setTxLevelerOn(bool on);
+    void setTxLevelerMaxGain(int dB);
+    void setTxLevelerDecay(int ms);
+    void setTxAlcMaxGain(int dB);
+    void setTxAlcDecay(int ms);
+    void setTxEqNc(int nc);
+    void setTxEqMp(bool mp);
+    void setTxEqCtfmode(int mode);
+    void setTxEqWintype(int wintype);
+    /// Opaque parametric-EQ blob for the TX EQ (3M-3a-ii follow-up Batch 6).
+    /// No validation — pass-through for round-trip.  Mirrors setCfcParaEqData.
+    void setTxEqParaEqData(const QString& data);
+    /// R-R3-49 (parity Task 4): the Legacy EQ box (see txEqUseLegacy()).
+    void setTxEqUseLegacy(bool on);
+    /// R-R3-49 (parity Task 4): all ten values from the link's JSON array,
+    /// each through its per-band setter. A value that is not a JSON array of
+    /// ten whole numbers changes nothing (the Core refuses it first with
+    /// settingRangeRefusal).
+    void setTxEqBandsJson(const QString& json);
+    void setTxEqFreqsJson(const QString& json);
+    void setCfcCompressionJson(const QString& json);
+    void setCfcEqFreqJson(const QString& json);
+    void setCfcPostEqBandGainJson(const QString& json);
+    /// R-R3-49 (parity Task 5): every band from the link's JSON object,
+    /// through setPowerForBand / setTunePowerForBand. A value that is not a
+    /// JSON object of the 14 band keys, each a whole number, changes
+    /// nothing (the Core refuses it first with settingRangeRefusal).
+    void setPowerByBandJson(const QString& json);
+    void setTunePowerByBandJson(const QString& json);
+
+    // ── Phase Rotator setters (3M-3a-ii Batch 2) ─────────────────────────
+    void setPhaseRotatorEnabled(bool on);
+    void setPhaseReverseEnabled(bool on);
+    void setPhaseRotatorFreqHz(int hz);
+    void setPhaseRotatorStages(int stages);
+
+    // ── CFC setters (3M-3a-ii Batch 2) ────────────────────────────────────
+    void setCfcEnabled(bool on);
+    void setCfcPostEqEnabled(bool on);
+    void setCfcPrecompDb(int dB);
+    void setCfcPostEqGainDb(int dB);
+    /// Per-band CFC EQ frequency (Hz) at index 0..9.  No-op if index out of range.
+    void setCfcEqFreq(int index, int hz);
+    /// Per-band CFC compression amount (dB) at index 0..9.  No-op if index out of range.
+    void setCfcCompression(int index, int dB);
+    /// Per-band CFC post-EQ gain (dB) at index 0..9.  No-op if index out of range.
+    void setCfcPostEqBandGain(int index, int dB);
+    /// Opaque parametric-EQ blob.  No validation — pass-through for round-trip.
+    void setCfcParaEqData(const QString& data);
+
+    // ── CPDR setters (3M-3a-ii Batch 2) ───────────────────────────────────
+    void setCpdrOn(bool on);
+    void setCpdrLevelDb(int dB);
+
+    // ── AM carrier level setter ───────────────────────────────────────────
+    void setAmCarrierLevel(int percent);
+
+    // ── CESSB setters (3M-3a-ii Batch 2) ──────────────────────────────────
+    void setCessbOn(bool on);
+
+    // ── TX filter bandwidth (Plan 4 D1) ────────────────────────────────────
+    //
+    // NereusSDR-native properties. FilterLow/FilterHigh represent the
+    // DSP bandpass filter edges (Hz) fed to WDSP SetTXABandpassFreqs (Plan 4
+    // D8). Values are per-profile — MicProfileManager bundles them under
+    // "FilterLow" / "FilterHigh" keys added in Plan 4 Cluster A.
+    //
+    // Defaults 100/2900 — USB voice typical SSB (NereusSDR-original; see Plan
+    // 4 spec §Task 2). Per-profile activation overrides via MicProfileManager.
+    //
+    // Swap-on-commit invariant: if setFilterLow(hz) is called with hz >
+    // m_filterHigh, the two values are swapped before assignment (and vice
+    // versa for setFilterHigh). This prevents an inverted filter range from
+    // reaching WDSP.
+    //
+    // Per-MAC persistence: hardware/<mac>/tx/FilterLow and FilterHigh, same
+    // namespace as the other 15 mic/VOX/MON keys (L.2 pattern).
+
+    int filterLow()  const noexcept { return m_filterLow; }
+    int filterHigh() const noexcept { return m_filterHigh; }
+
+    void setFilterLow(int hz);
+    void setFilterHigh(int hz);
+
+    /// Returns a human-readable filter bandwidth description.
+    /// Symmetric modes (AM/SAM/DSB/FM): "±NNNN Hz · X.Xk BW"
+    /// Asymmetric modes (USB/LSB/DIGU/DIGL/etc.): "NN-NNNN Hz · X.Xk BW"
+    QString filterDisplayText(DSPMode mode) const;
+
+signals:
+    void cfcEditProfileChanged(const CfcEditProfile& profile);
+    void txEqProfileChanged(const QList<int>& frequenciesHz, const QList<int>& gainsDb);
+    void cfcProfileRestored();
+    void cfcSettingsReloaded();
+    // ── TX filter bandwidth (Plan 4 D1) ────────────────────────────────────
+    /// Emitted when filterLow or filterHigh changes.  Carries both values
+    /// so subscribers don't need a second getter call.
+    void filterChanged(int low, int high);
+
+    void txEqEnabledChanged(bool on);
+    void txEqPreampChanged(int dB);
+    /// Emitted when any individual band gain changes; carries index + new value.
+    void txEqBandChanged(int index, int dB);
+    /// Emitted when any individual band frequency changes; carries index + new value.
+    void txEqFreqChanged(int index, int hz);
+    void txLevelerOnChanged(bool on);
+    void txLevelerMaxGainChanged(int dB);
+    void txLevelerDecayChanged(int ms);
+    void txAlcMaxGainChanged(int dB);
+    void txAlcDecayChanged(int ms);
+    void txEqNcChanged(int nc);
+    void txEqMpChanged(bool mp);
+    void txEqCtfmodeChanged(int mode);
+    void txEqWintypeChanged(int wintype);
+    /// 3M-3a-ii follow-up Batch 6 — TX EQ parametric blob round-trip.
+    void txEqParaEqDataChanged(const QString& data);
+    void txEqCurveChanged(const QString& curve);
+    void cfcProfileChanged(const QString& profile);
+    // R-R3-49 (parity Task 4): the Legacy EQ box and the link's arrays
+    // (emitted beside the per-band signals).
+    void txEqUseLegacyChanged(bool on);
+    void txEqBandsJsonChanged(const QString& json);
+    void txEqFreqsJsonChanged(const QString& json);
+    void cfcCompressionJsonChanged(const QString& json);
+    void cfcEqFreqJsonChanged(const QString& json);
+    void cfcPostEqBandGainJsonChanged(const QString& json);
+    // R-R3-49 (parity Task 5): emitted beside powerByBandChanged /
+    // tunePowerByBandChanged, and after a load() restores the arrays.
+    void powerByBandJsonChanged(const QString& json);
+    void tunePowerByBandJsonChanged(const QString& json);
+
+    // ── Phase Rotator signals (3M-3a-ii Batch 2) ─────────────────────────
+    void phaseRotatorEnabledChanged(bool on);
+    void phaseReverseEnabledChanged(bool on);
+    void phaseRotatorFreqHzChanged(int hz);
+    void phaseRotatorStagesChanged(int stages);
+
+    // ── CFC signals (3M-3a-ii Batch 2) ────────────────────────────────────
+    void cfcEnabledChanged(bool on);
+    void cfcPostEqEnabledChanged(bool on);
+    void cfcPrecompDbChanged(int dB);
+    void cfcPostEqGainDbChanged(int dB);
+    /// Emitted when a per-band CFC EQ freq changes; carries index + new value.
+    void cfcEqFreqChanged(int index, int hz);
+    /// Emitted when a per-band CFC compression changes; carries index + new value.
+    void cfcCompressionChanged(int index, int dB);
+    /// Emitted when a per-band CFC post-EQ gain changes; carries index + new value.
+    void cfcPostEqBandGainChanged(int index, int dB);
+    void cfcParaEqDataChanged(const QString& data);
+
+    // ── CPDR signals (3M-3a-ii Batch 2) ───────────────────────────────────
+    void cpdrOnChanged(bool on);
+    void cpdrLevelDbChanged(int dB);
+
+    // ── AM carrier level signal ───────────────────────────────────────────
+    void amCarrierLevelChanged(int percent);
+
+    // ── CESSB signals (3M-3a-ii Batch 2) ──────────────────────────────────
+    void cessbOnChanged(bool on);
+
+public:
+
+public slots:
+    void setMicGainDb(int dB);
+
+    // ── Mic source setter (3M-1b I.1) ─────────────────────────────────────────
+    /// Select the active mic source (Pc or Radio).  Idempotent: no signal
+    /// when the value is unchanged.
+    ///
+    /// When locked via setMicSourceLocked(true), calling setMicSource(Radio)
+    /// silently coerces the value to Pc.  This is the HL2 force-Pc-on-connect
+    /// model-side lock (L.3): HL2 has no radio-side mic jack so MicSource::Radio
+    /// must never be active on that board.
+    void setMicSource(MicSource source);
+
+    /// Returns the most recent non-VAX source the user has selected.
+    /// Tracked automatically by setMicSource() whenever a non-VAX source
+    /// is written. Default Pc on first run.
+    MicSource previousNonVaxMicSource() const noexcept { return m_previousNonVaxMicSource; }
+
+    // ── Mic source lock guard (3M-1b L.3) ────────────────────────────────────
+    //
+    // NereusSDR-native. When lock is true, setMicSource(MicSource::Radio)
+    // silently coerces to MicSource::Pc.  This is the model-side complement
+    // of the UI-side lock (AudioTxInputPage disables the Radio Mic radio button
+    // when BoardCapabilities::hasMicJack == false).
+    //
+    // RadioModel::connectToRadio() calls setMicSourceLocked(!caps.hasMicJack)
+    // after loadFromSettings() so the lock is active for the lifetime of the
+    // connection.  On disconnect, RadioModel calls setMicSourceLocked(false)
+    // (teardownConnection) so a subsequent reconnect to a different radio with
+    // hasMicJack=true can use Radio again.
+    //
+    // The lock is NOT persisted — it is a runtime capability constraint, not
+    // a user preference.  It is never stored in AppSettings.
+
+    /// Install or release the HL2 mic-source lock.
+    /// When lock is true, setMicSource(MicSource::Radio) is silently coerced
+    /// to MicSource::Pc.  Call with false to release the lock (e.g. after
+    /// teardown, before a non-HL2 reconnect).
+    void setMicSourceLocked(bool lock);
+
+    /// Return true when the mic-source lock is active (hasMicJack == false).
+    bool isMicSourceLocked() const noexcept { return m_micSourceLocked; }
+
+public:
+    // ── VAX TX availability (R-SPK-21, R-AUD-01) ────────────────
+    //
+    // NereusSDR-native. The VAX transmit device exists only where the
+    // engine builds a VAX TX bus (AudioEngine::makeVaxTxBus: macOS and
+    // Linux); Windows has none, so MicSource::Vax would transmit silence.
+    // While unavailable, setMicSource(MicSource::Vax) is coerced to
+    // MicSource::Pc, the way the HL2 lock coerces Radio, and a VAX choice
+    // already active (a saved one) falls back to Pc the same way. The
+    // default is this system's; the setter exists for tests. Not persisted.
+    static constexpr bool kVaxSourceAvailableOnThisSystem =
+#if defined(Q_OS_WIN)
+        false;
+#else
+        true;
+#endif
+    void setVaxSourceAvailable(bool available);
+    bool vaxSourceAvailable() const noexcept { return m_vaxSourceAvailable; }
+    /// The reason a greyed VAX TX choice shows (Windows).
+    static QString vaxSourceUnavailableReason();
+
+public slots:
+
+    /// Quick toggle wired to the PhoneCwApplet VAX button. on=true sets
+    /// MicSource::Vax. on=false restores previousNonVaxMicSource() (which
+    /// the lock guard in setMicSource will coerce to Pc on HL2).
+    void toggleVaxSource(bool on);
+
+    // ── PC Mic session-state setters (3M-1b I.2) ─────────────────────────────
+    /// Set the PortAudio host API index for PC Mic capture.  Idempotent.
+    /// -1 = let AudioEngine resolve the OS default.
+    /// RadioModel forwards the change to AudioEngine::setTxInputConfig.
+    void setPcMicHostApiIndex(int index);
+
+    /// Set the device name for PC Mic capture within the selected host API.
+    /// Empty string = use the PA default device for that host API.
+    /// Idempotent; RadioModel forwards the change to the TX input config.
+    void setPcMicDeviceName(const QString& name);
+
+    /// Set the capture buffer size in samples per channel for PC Mic.
+    /// No clamping — caller is responsible for valid power-of-2 values.
+    /// Idempotent; RadioModel forwards the change to the TX input config.
+    void setPcMicBufferSamples(int samples);
+
+    // ── Mic-jack flag setters (3M-1b C.2) ─────────────────────────────────
+    void setMicMute(bool on);
+    /// iPhone app plan Task 40: setMicMute(!muted).
+    void setMicMuted(bool muted);
+    void setMicBoost(bool on);
+    void setMicXlr(bool on);
+    void setLineIn(bool on);
+    void setLineInBoost(double dB);
+    void setMicTipRing(bool tipIsMic);
+    void setMicBias(bool on);
+    void setMicPttDisabled(bool disabled);
+
+    // ── line_in_gain + user_dig_out setters (Task 2.4) ──────────────────
+    /// Set line-in gain.  Clamped to [0, 31] (5 bits).
+    void setLineInGain(int gain);
+    /// Set user digital outputs.  Int parameter for Q_PROPERTY compatibility;
+    /// masked to [0, 15] (low 4 bits) at the use site.
+    void setUserDigOut(int dig);
+
+    // ── Anti-VOX setters (3M-1b C.4) ─────────────────────────────────────────
+    // 3M-3a-iv post-bench refactor (Option A): setAntiVoxSourceVax dropped.
+    // See commit message and class comment block for architectural rationale.
+    void setAntiVoxGainDb(int dB);
+
+    // ── Anti-VOX detector tau setter (Phase 3M-3a-iv Task 8) ─────────────────
+    // Sets the smoothing time-constant in ms; clamps to [1, 500] per Thetis
+    // udAntiVoxTau range (setup.designer.cs:44661-44688 [v2.10.3.13]).
+    void setAntiVoxTauMs(int ms);
+
+    // ── Anti-VOX run flag setter (3M-3a-iv scope-expansion) ──────────────────
+    // Sets the master enable.  Idempotent guard.  Auto-persists.
+    // Mirrors Thetis chkAntiVoxEnable_CheckedChanged at setup.cs:18980-18984
+    // [v2.10.3.13]: cmaster.SetAntiVOXRun(0, chkAntiVoxEnable.Checked).
+    void setAntiVoxRun(bool run);
+
+    // ── PA settings bypass setter (D4: ANAN-G2E port) ───────────────────────
+    // From Thetis setup.cs:19921 [v2.10.3.15] //N1GP G2E added.
+    // Thetis has no CheckedChanged handler (chkBypassANANPASettings is UI-only
+    // in v2.10.3.15); NereusSDR wires the state explicitly for persistence.
+    void setPaSettingsBypass(bool bypass);
+
+    // ── MON setters (3M-1b C.5) ──────────────────────────────────────────────
+    void setMonEnabled(bool on);
+    void setMonitorVolume(float volume);
+
+    // ── VOX setters (3M-1b C.3) ────────────────────────────────────────────
+    void setVoxEnabled(bool on);
+    void setVoxThresholdDb(int dB);
+    void setVoxGainScalar(float scalar);
+    void setVoxHangTimeMs(int ms);
+
+    // ── DEXP envelope setters (3M-3a-iii Task 7) ───────────────────────────
+    void setDexpEnabled(bool on);
+    void setDexpDetectorTauMs(double ms);
+    void setDexpAttackTimeMs(double ms);
+    void setDexpReleaseTimeMs(double ms);
+
+    // ── DEXP gate-ratio setters (3M-3a-iii Task 8) ─────────────────────────
+    void setDexpExpansionRatioDb(double dB);
+    void setDexpHysteresisRatioDb(double dB);
+
+    // ── DEXP look-ahead setters (3M-3a-iii Task 9) ─────────────────────────
+    void setDexpLookAheadEnabled(bool on);
+    void setDexpLookAheadMs(double ms);
+
+    // ── DEXP side-channel filter setters (3M-3a-iii Task 10) ───────────────
+    void setDexpLowCutHz(double hz);
+    void setDexpHighCutHz(double hz);
+    void setDexpSideChannelFilterEnabled(bool on);
+
+    // ── Two-tone setters (3M-1c B.2) ───────────────────────────────────────
+    void setTwoToneFreq1(int hz);
+    void setTwoToneFreq2(int hz);
+    void setTwoToneFrequencies(int freq1Hz, int freq2Hz);
+    void setTwoToneLevel(double db);
+    void setTwoTonePower(int pct);
+    void setTwoToneFreq2Delay(int ms);
+    void setTwoToneInvert(bool on);
+    void setTwoTonePulsed(bool on);
+
+    // ── Two-tone drive-power source (3M-1c B.3) ───────────────────────────
+    void setTwoToneDrivePowerSource(DrivePowerSource source);
+
+signals:
+    void moxChanged(bool mox);
+    void tuneChanged(bool tune);
+    void powerChanged(int power);
+    void micGainChanged(float gain);
+    void pureSigChanged(bool enabled);
+    /// Emitted when swrProtectFactor changes.  Source: mi0bot
+    /// NetworkIO.cs:209-211 [v2.10.3.14-beta1].  Runtime-only — not
+    /// persisted; SwrProtectionController drives the value (follow-up).
+    void swrProtectFactorChanged(float factor);
+    void txOwnerSlotChanged(VaxSlot s);
+
+    /// Emitted when a per-band tune-power value changes.
+    void tunePowerByBandChanged(Band band, int watts);
+
+    // ── PA-cal hotfix scaffolding signals (#167 Phase 3A) ─────────────────
+    /// Emitted when a per-band normal-mode power value changes.
+    void powerByBandChanged(Band band, int watts);
+    /// MW0LGE [2.9.0.7] — see Thetis console.cs:29285 [v2.10.3.13].
+    void forceAttwhenPSAoffChanged(bool on);
+    /// MW0LGE [2.9.3.5] — see Thetis console.cs:29291 [v2.10.3.13].
+    void forceAttwhenPowerChangesWhenPSAonChanged(bool on);
+    /// See Thetis console.cs:29302 [v2.10.3.13].
+    void forceAttwhenPowerChangesWhenPSAonAndDecreasedChanged(bool on);
+
+    // ── PA-cal hotfix Phase 3C signals ────────────────────────────────────
+    /// Emitted when isTwoToneActive() changes.  Mirrors Thetis chk2TONE
+    /// CheckedChanged at console.cs:30000-30002 [v2.10.3.13].
+    void twoToneActiveChanged(bool active);
+    /// Emitted when tuneDrivePowerSource() changes.  Mirrors Thetis
+    /// TuneDrivePowerOrigin setter at console.cs:46554-46575 [v2.10.3.13].
+    void tuneDrivePowerSourceChanged(NereusSDR::DrivePowerSource source);
+    /// R-R3-49 (parity Task 2): tunePowerForTxBand() changed (a new
+    /// transmit band, that band's tune power, or the Core's report).
+    void tunePowerForTxBandChanged(int watts);
+    /// Fix round 1 (minor 2): tunePowerForTxBandWriteInFlight() changed.
+    void tunePowerForTxBandWriteInFlightChanged(bool inFlight);
+    /// R-R3-49 (parity Task 3): the Core's active TX profile or its profile
+    /// list changed.
+    void activeTxProfileChanged(const QString& name);
+    void txProfilesJsonChanged(const QString& json);
+    /// Emitted when tunePower() (fixed) changes.  Mirrors Thetis
+    /// tune_power setter at console.cs:17229-17242 [v2.10.3.13].
+    void tunePowerChanged(int watts);
+    /// Emitted when txPostGenToneMag() changes.  From mi0bot-Thetis
+    /// console.cs:47666 [v2.10.3.13-beta2].  Wired to
+    /// TxChannel::setPostGenToneMag in Task 10.
+    void txPostGenToneMagChanged(double mag);
+    /// Emitted by setPowerUsingTargetDbm when bSetPower=true.
+    /// Caller (RadioModel drive-slider lambda + TUNE handler) pumps:
+    ///   wire_byte = clamp(int(volume * 1.02 * 255), 0, 255) -> setTxDrive
+    ///   iq_gain   = volume * swrProtect                       -> TxChannel::setTxFixedGain
+    void audioVolumeChanged(double volume);
+
+    // ── Mic gain signals (3M-1b C.1) ──────────────────────────────────────
+    /// Emitted when micGainDb changes (carries the clamped dB value).
+    void micGainDbChanged(int dB);
+    /// Emitted when micPreampLinear changes (carries the new linear scalar).
+    void micPreampChanged(double linear);
+
+    // ── Mic-jack flag signals (3M-1b C.2) ─────────────────────────────────
+    void micMuteChanged(bool on);
+    void micBoostChanged(bool on);
+    void micXlrChanged(bool on);
+    void lineInChanged(bool on);
+    void lineInBoostChanged(double dB);
+    void micTipRingChanged(bool tipIsMic);
+    void micBiasChanged(bool on);
+    void micPttDisabledChanged(bool disabled);
+
+    // ── line_in_gain + user_dig_out signals (Task 2.4) ──────────────────
+    void lineInGainChanged(int gain);
+    void userDigOutChanged(int dig);
+
+    // ── Anti-VOX signals (3M-1b C.4) ─────────────────────────────────────────
+    // 3M-3a-iv post-bench refactor (Option A): antiVoxSourceVaxChanged dropped.
+    void antiVoxGainDbChanged(int dB);
+
+    // ── Anti-VOX detector tau signal (Phase 3M-3a-iv Task 8) ────────────────
+    // RadioModel wires this to MoxController::setAntiVoxTau in Task 9.
+    void antiVoxTauMsChanged(int ms);
+
+    // ── Anti-VOX run flag signal (3M-3a-iv scope-expansion) ─────────────────
+    // RadioModel wires antiVoxRunChanged → MoxController::setAntiVoxRun;
+    // MoxController emits antiVoxRunRequested → TxWorkerThread::setAntiVoxRun
+    // (which forwards to TxChannel::setAntiVoxRun AND flips the worker's
+    //  m_antiVoxRun atomic gate).
+    void antiVoxRunChanged(bool run);
+
+    // ── PA settings bypass signal (D4: ANAN-G2E port) ───────────────────────
+    // From Thetis setup.cs:19921 [v2.10.3.15] //N1GP G2E added.
+    void paSettingsBypassChanged(bool bypass);
+
+    // ── MON signals (3M-1b C.5) ──────────────────────────────────────────────
+    void monEnabledChanged(bool on);
+    void monitorVolumeChanged(float volume);
+
+    // ── VOX signals (3M-1b C.3) ────────────────────────────────────────────
+    void voxEnabledChanged(bool on);
+    void voxThresholdDbChanged(int dB);
+    void voxGainScalarChanged(float scalar);
+    void voxHangTimeMsChanged(int ms);
+
+    // ── DEXP envelope signals (3M-3a-iii Task 7) ──────────────────────────
+    void dexpEnabledChanged(bool on);
+    void dexpDetectorTauMsChanged(double ms);
+    void dexpAttackTimeMsChanged(double ms);
+    void dexpReleaseTimeMsChanged(double ms);
+
+    // ── DEXP gate-ratio signals (3M-3a-iii Task 8) ────────────────────────
+    void dexpExpansionRatioDbChanged(double dB);
+    void dexpHysteresisRatioDbChanged(double dB);
+
+    // ── DEXP look-ahead signals (3M-3a-iii Task 9) ────────────────────────
+    void dexpLookAheadEnabledChanged(bool on);
+    void dexpLookAheadMsChanged(double ms);
+
+    // ── DEXP side-channel filter signals (3M-3a-iii Task 10) ──────────────
+    void dexpLowCutHzChanged(double hz);
+    void dexpHighCutHzChanged(double hz);
+    void dexpSideChannelFilterEnabledChanged(bool on);
+
+    // ── Mic source signals (3M-1b I.1) ────────────────────────────────────────
+    /// Emitted when micSource changes. Not emitted on idempotent calls.
+    void micSourceChanged(MicSource source);
+
+    // ── PC Mic session-state signals (3M-1b I.2) ─────────────────────────────
+    /// Emitted when pcMicHostApiIndex changes. Not emitted on idempotent calls.
+    void pcMicHostApiIndexChanged(int index);
+    /// Emitted when pcMicDeviceName changes. Not emitted on idempotent calls.
+    void pcMicDeviceNameChanged(const QString& name);
+    /// Emitted when pcMicBufferSamples changes. Not emitted on idempotent calls.
+    void pcMicBufferSamplesChanged(int samples);
+
+    // ── Two-tone signals (3M-1c B.2) ───────────────────────────────────────
+    void twoToneFreq1Changed(int hz);
+    void twoToneFreq2Changed(int hz);
+    void twoToneFrequenciesChanged(int freq1Hz, int freq2Hz);
+    void twoToneLevelChanged(double db);
+    void twoTonePowerChanged(int pct);
+    void twoToneFreq2DelayChanged(int ms);
+    void twoToneInvertChanged(bool on);
+    void twoTonePulsedChanged(bool on);
+
+    // ── Two-tone drive-power source signal (3M-1c B.3) ─────────────────────
+    void twoToneDrivePowerSourceChanged(NereusSDR::DrivePowerSource source);
+
+private:
+    enum class CfcField { Frequency, Compression, PostEqBandGain, Precomp, PostEqGlobal };
+    // Returns true when a valid paired curve owns CFC, including when the
+    // requested legacy edit is invalid and must leave it unchanged. False
+    // when there is no paired curve, or when the curve already holds the
+    // value (rounded): the setter's own mirror path then decides.
+    bool updatePairedCfc(CfcField field, int index, double value);
+    bool updatePairedCfcArray(CfcField field, const std::array<int, 10>& values);
+    bool m_mox{false};
+    bool m_tune{false};
+    int m_power{100};
+
+    // ── TX filter bandwidth (Plan 4 D1) ────────────────────────────────────
+    // Defaults 100/2900 — USB voice typical SSB (NereusSDR-original, Plan 4
+    // spec §Task 2). Persisted under hardware/<mac>/tx/FilterLow and FilterHigh.
+    int m_filterLow{100};
+    int m_filterHigh{2900};
+    float m_micGain{0.0f};
+    bool m_pureSigEnabled{false};
+    // SWR-foldback multiplier; default 1.0 = no foldback.  Clamped 0..1
+    // by setSwrProtectFactor().  Runtime-only (not persisted).
+    // Source: mi0bot NetworkIO.cs:209-211 [v2.10.3.14-beta1].
+    float m_swrProtectFactor{1.0f};
+    std::atomic<VaxSlot> m_txOwnerSlot{VaxSlot::MicDirect};  // Atomic for lock-free reads from the audio thread.
+
+    // Connected radio model.  Defaults to HPSDRModel::FIRST (non-HL2 path).
+    // Injected by RadioModel via setHpsdrModel() on connect (Task 10).
+    // Used to polymorph: tune-power clamp ceiling (#175 Task 6) and
+    // HL2 sub-step DSP modulation (#175 Task 4).
+    HPSDRModel m_hpsdrModel{HPSDRModel::FIRST};
+
+    // Per-band tune power storage.  NereusSDR-original per-band extension:
+    // Thetis console.cs:12094 [v2.10.3.13] declares a flat tunePower_by_band[]
+    // but persists/restores it as a pipe-delimited block (console.cs:3087-3091
+    // save, :4904-4910 restore) — NereusSDR uses scalar per-band AppSettings
+    // keys instead.  Clamp ceiling polymorphs by SKU in setTunePowerForBand
+    // (#175 Task 6); Thetis has no equivalent polymorphic clamp.
+    // Initialised to 50W per band in the constructor
+    // (Thetis console.cs:1819-1820 [v2.10.3.13]).
+    // HF amateur + GEN/WWV/XVTR and 2 m (the per-band state slots).  Phase 3L
+    // SWL bands inherit ham-band values — no separate per-SWL TX power.
+    std::array<int, static_cast<std::size_t>(kPerBandStateCount)> m_tunePowerByBand{};  // per-band state slots (2 m at 14)
+    // R-R3-49 (parity Task 2): the transmit band and its tune power.
+    // m_tuneTxBandKnown is false until RadioModel sets the band (always, on
+    // a window), so a window's own per-band copy never overwrites the
+    // Core's value.
+    Band m_tuneTxBand{Band::Band20m};
+    bool m_tuneTxBandKnown{false};
+    int  m_tunePowerForTxBand{50};
+    bool m_tunePowerWriteInFlight{false};  // fix wave GUI-I6
+    // R-R3-49 (parity Task 3): the Core's TX profiles (see activeTxProfile).
+    QString m_activeTxProfile;
+    QString m_txProfilesJson{QStringLiteral("[]")};
+    void refreshTunePowerForTxBand();
+
+    // Per-band normal-mode power storage.
+    // From Thetis console.cs:1813-1814 [v2.10.3.13] — power_by_band default
+    // 50 W per band (Thetis safety-first).  Used as the slider source for
+    // the dBm compensator (Phase 3A scaffolding for #167 Phase 3C math
+    // kernel).  Initialised in the constructor.
+    std::array<int, static_cast<std::size_t>(kPerBandStateCount)> m_powerByBand{};  // per-band state slots (2 m at 14)
+
+    // R-R3-49: per-band slider limits and FM TX offsets, and the current
+    // slider limits and offset (see limitPowerForBand).  Filled in the
+    // constructor from console.cs:1824-1841 [v2.10.3.15].
+    std::array<int, static_cast<std::size_t>(kPerBandStateCount)> m_limitPowerByBand{};
+    std::array<int, static_cast<std::size_t>(kPerBandStateCount)> m_limitTunePowerByBand{};
+    std::array<double, static_cast<std::size_t>(kPerBandStateCount)> m_fmTxOffsetByBandMhz{};
+    // Thetis's Designer gives both sliders LimitValue = 50
+    // (console.Designer.cs:3688, 3944 [v2.10.3.15]), but the initializing
+    // TXBand pass assigns limitPower_by_band (100 by default) before any
+    // drive is computed, so the effective start value is 100.
+    int    m_powerLimit{100};
+    // ptbPWR.LimitEnabled (console.Designer.cs:3686 [v2.10.3.15]): true.
+    bool   m_powerSliderLimitEnabled{true};
+    int    m_tunePowerLimit{100};
+    double m_fmTxOffsetMhz{0.0};
+
+    // ── ATT-on-TX-on-power-change safety state (#167 Phase 3A) ────────────
+    // From Thetis console.cs:29285-29310 [v2.10.3.13].  Defaults match
+    // upstream: PSAoff=true (MW0LGE [2.9.0.7]), PSAon=true (MW0LGE
+    // [2.9.3.5]), PSAonAndDecreased=false.  m_lastPower is the runtime-only
+    // sentinel (-1).
+    bool m_forceAttwhenPSAoff{true};                          //MW0LGE [2.9.0.7]
+    bool m_forceAttwhenPowerChangesWhenPSAon{true};            //MW0LGE [2.9.3.5]
+    bool m_forceAttwhenPowerChangesWhenPSAonAndDecreased{false};
+    int  m_lastPower{-1};
+
+    // ── PA-cal hotfix Phase 3C state ──────────────────────────────────────
+    //
+    // Two-tone active mirror of TwoToneController state.  Mirrors Thetis
+    // chk2TONE.Checked.  Set externally via setTwoToneActive (RadioModel
+    // wires TwoToneController::twoToneActiveChanged in production; tests
+    // drive directly).
+    bool m_twoToneActive{false};
+    // Tune drive-power source.  Default DriveSlider per Thetis
+    // console.cs:46552 [v2.10.3.13]:
+    //   private DrivePowerSource _tuneDrivePowerSource = DRIVE_SLIDER;
+    DrivePowerSource m_tuneDrivePowerSource{DrivePowerSource::DriveSlider};
+    // Fixed tune power slot.  Mirrors Thetis tune_power (console.cs:17229
+    // [v2.10.3.13]).  Default 10 W (NereusSDR-original safer; Thetis
+    // Designer ships 0).
+    int  m_tunePower{10};
+    // HL2 sub-step DSP audio-gain modulation parameter (#175 Task 3).
+    // From mi0bot-Thetis console.cs:47666 [v2.10.3.13-beta2].
+    // Default 1.0 = no modulation (non-HL2 path).  HL2 path writes
+    // 0.4..0.9999 per mi0bot formula.  Wired to TxChannel::setPostGenToneMag
+    // in Task 10.
+    double m_txPostGenToneMag{1.0};
+    // StepAttenuatorController for ATT-on-TX safety gate (#167 Phase 3C).
+    // Non-owning pointer; nullptr until RadioModel injects via
+    // setStepAttenuatorController(); when nullptr the gate becomes a no-op.
+    StepAttenuatorController* m_stepAttCtrl{nullptr};
+
+    // 3M-4 Task 7: live PureSignal coordinator.  Non-owning view; owned by
+    // RadioModel via std::unique_ptr.  Read by pureSignalActive() — the
+    // ATT-on-TX-on-power-change gate inside setPowerUsingTargetDbm uses
+    // this to decide whether the safety force-31-dB lift fires.  When
+    // null (pre-connect or post-teardown), pureSignalActive() falls back
+    // to the test seam (NEREUS_BUILD_TESTS) or returns false (production).
+    PureSignal* m_pureSignal{nullptr};
+
+#ifdef NEREUS_BUILD_TESTS
+    // Test seam (Phase 3C) — overrides pureSignalActive() return when set.
+    // Phase 3A's predicate returns false unconditionally; this seam lets
+    // tests flip it to true to exercise the ATT-on-TX gate without the
+    // 3M-4 PureSignal feedback DDC wiring in place.  The seam is
+    // intentionally a tri-state (-1 = no override; 0 = false; 1 = true)
+    // so the default unset state preserves Phase 3A semantics in
+    // production-style code paths that compile in NEREUS_BUILD_TESTS
+    // mode (e.g. a unit test that doesn't care about PS state).
+public:
+    void setPureSignalActiveForTest(bool on) noexcept {
+        m_pureSignalActiveOverride = on ? 1 : 0;
+    }
+    void clearPureSignalActiveForTest() noexcept {
+        m_pureSignalActiveOverride = -1;
+    }
+private:
+    int m_pureSignalActiveOverride{-1};
+#endif
+
+    // Per-MAC AppSettings scope (mirrors AlexController pattern).
+    QString m_mac;
+
+    // Per-MAC scope for mic/VOX/MON auto-persist (L.2).
+    // Empty until loadFromSettings(mac) is called; setters no-op their
+    // persistOne() call when this is empty.
+    QString m_persistMac;
+
+    /// Write a single key under hardware/<m_persistMac>/tx/<key> to AppSettings.
+    /// No-op when m_persistMac is empty (before loadFromSettings is called).
+    void persistOne(const QString& key, const QVariant& value) const;
+
+    // ── Mic gain (3M-1b C.1) ──────────────────────────────────────────────
+    // From Thetis console.cs:28805-28817 [v2.10.3.13] (setAudioMicGain).
+    // Default -6 dB per plan §0 row 11 (NereusSDR safety addition).
+    // m_micPreampLinear is derived: pow(10, m_micGainDb / 20.0).
+    int    m_micGainDb       = -6;
+    // pow(10, -6/20) ≈ 0.501187233627272
+    double m_micPreampLinear = std::pow(10.0, -6.0 / 20.0);
+
+    // ── Mic-jack flag properties (3M-1b C.2) ──────────────────────────────
+    // From Thetis console.cs:13213-13260 [v2.10.3.13] and related sources.
+    // NOTE: m_micMute = true means the mic IS in use (Thetis counter-intuitive
+    // naming preserved — see MicMute getter doc-comment above).
+    bool   m_micMute        = true;   // console.designer.cs:2029-2030: Checked=true
+    bool   m_micBoost       = true;   // console.cs:13237: mic_boost = true
+    bool   m_micXlr         = true;   // console.cs:13249: mic_xlr = true
+    bool   m_lineIn         = false;  // console.cs:13213: line_in = false
+    double m_lineInBoost    = 0.0;    // console.cs:13225: line_in_boost = 0.0
+    bool   m_micTipRing     = true;   // setup.designer.cs:8683: radOrionMicTip.Checked=true
+    bool   m_micBias        = false;  // setup.designer.cs:8779: radOrionBiasOff.Checked=true
+    bool   m_micPttDisabled = false;  // console.cs:19757: mic_ptt_disabled = false
+
+    // ── line_in_gain + user_dig_out (Task 2.4) ───────────────────────────
+    // Source: Thetis ChannelMaster/networkproto1.c:600-601 [v2.10.3.13].
+    // bank 11 C2 low 5 bits, range [0, 31]. Follows m_lineInBoost; its
+    // default is the index Thetis SetMicGain sends for line_in_boost = 0.0
+    // (console.cs:13247, 40928-40932 [v2.10.3.15]): 0.0 is entry 23.
+    int    m_lineInGain     = 23;
+    int    m_userDigOut     = 0;      // bank 11 C3 low 4 bits, range [0, 15]
+
+    // ── Anti-VOX properties (3M-1b C.4) ──────────────────────────────────
+    // From Thetis setup.designer.cs:44699-44728 [v2.10.3.13] (udAntiVoxGain
+    // range -60..60).  3M-3a-iv post-bench refactor (Option A) dropped the
+    // m_antiVoxSourceVax companion field — see header comment block on the
+    // anti-VOX getter for rationale.
+    int  m_antiVoxGainDb    = 0;      // NereusSDR-original default; range [-60,60]
+    // ── Anti-VOX detector tau (Phase 3M-3a-iv Task 8) ────────────────────
+    // From Thetis setup.designer.cs:44661-44688 [v2.10.3.13] (udAntiVoxTau):
+    //   Min=1, Max=500, Default=20 (ms).
+    int  m_antiVoxTauMs     = kAntiVoxTauMsDefault;
+    // ── Anti-VOX run flag (3M-3a-iv scope-expansion) ─────────────────────
+    // From Thetis setup.designer.cs:44740-44751 [v2.10.3.13]: chkAntiVoxEnable
+    // has no .Checked= setter -> default false.
+    bool m_antiVoxRun       = false;
+    // ── PA settings bypass (D4: ANAN-G2E port) ───────────────────────────
+    // From Thetis setup.cs:19921 [v2.10.3.15] //N1GP G2E added.
+    // Defaults false (normal operation; user must explicitly enable bypass).
+    bool m_paSettingsBypass = false;
+
+    // ── MON properties (3M-1b C.5) ────────────────────────────────────────
+    // From Thetis audio.cs:406 [v2.10.3.13]: private bool mon = false;
+    // From Thetis audio.cs:417 [v2.10.3.13]: SetAAudioMixVol(0.5) literal.
+    // m_monEnabled intentionally NOT persisted — safety: MON loads OFF always
+    // (plan §0 row 9).  m_monitorVolume persists (Phase L.2).
+    bool  m_monEnabled     = false;  // audio.cs:406: mon = false
+    float m_monitorVolume  = 0.5f;   // matches Thetis audio.cs:417 literal coefficient
+
+    // ── VOX properties (3M-1b C.3) ──────────────────────────────────────
+    // From Thetis audio.cs:167-202 [v2.10.3.13].
+    // m_voxEnabled intentionally NOT persisted — safety: VOX loads OFF always.
+    bool  m_voxEnabled     = false;  // audio.cs:167: vox_enabled = false
+    int   m_voxThresholdDb = -40;    // NereusSDR-original default; ptbVOX range [-80,0]
+    float m_voxGainScalar  = 1.0f;   // audio.cs:194: vox_gain = 1.0f
+    int   m_voxHangTimeMs  = 500;    // udDEXPHold.Value=500 (setup.designer.cs:45020-45024)
+
+    // ── DEXP envelope properties (3M-3a-iii Task 7) ─────────────────────
+    // From Thetis setup.Designer.cs [v2.10.3.13]:
+    //   chkDEXPEnable: no Checked= setter -> default false (line 45140-45151)
+    //   udDEXPDetTau.Value=20   (line 45093)
+    //   udDEXPAttack.Value=2    (line 45050)
+    //   udDEXPRelease.Value=100 (line 44990)
+    // ALL four properties persist (no PTT-safety carve-out, unlike voxEnabled).
+    bool   m_dexpEnabled         = false;
+    double m_dexpDetectorTauMs   =  20.0;
+    double m_dexpAttackTimeMs    =   2.0;
+    double m_dexpReleaseTimeMs   = 100.0;
+
+    // ── DEXP gate-ratio properties (3M-3a-iii Task 8) ───────────────────
+    // From Thetis setup.Designer.cs [v2.10.3.13]:
+    //   udDEXPExpansionRatio.Value=10  (line 44900-44904)
+    //   udDEXPHysteresisRatio.Value=20 with DecimalPlaces=1, scale=65536
+    //                                   -- displayed as 2.0 (line 44869-44873)
+    // Both persist.
+    double m_dexpExpansionRatioDb  = 10.0;
+    double m_dexpHysteresisRatioDb =  2.0;
+
+    // ── DEXP look-ahead properties (3M-3a-iii Task 9) ────────────────────
+    // From Thetis setup.Designer.cs [v2.10.3.13]:
+    //   chkDEXPLookAheadEnable.Checked=true (line 44808)
+    //                  -- the only DEXP boolean defaulting true
+    //   udDEXPLookAhead.Value=60            (line 44788)
+    // Both persist.
+    bool   m_dexpLookAheadEnabled = true;
+    double m_dexpLookAheadMs      = 60.0;
+
+    // ── DEXP side-channel filter properties (3M-3a-iii Task 10) ──────────
+    // From Thetis setup.Designer.cs [v2.10.3.13]:
+    //   udSCFLowCut.Value=500   (line 45240)
+    //   udSCFHighCut.Value=1500 (line 45210)
+    //   chkSCFEnable.Checked=true (line 45250)
+    // All three persist.
+    double m_dexpLowCutHz                  =  500.0;
+    double m_dexpHighCutHz                 = 1500.0;
+    bool   m_dexpSideChannelFilterEnabled  = true;
+
+    // ── Mic source (3M-1b I.1 + L.3) ───────────────────────────────────
+    // NereusSDR-native. Default Pc (always available; Radio is opt-in).
+    // m_micSourceLocked: L.3 HL2 force. When true, setMicSource(Radio)
+    // silently coerces to Pc.  Runtime capability constraint; not persisted.
+    MicSource m_micSource{MicSource::Pc};
+    bool      m_micSourceLocked{false};  // L.3: set by RadioModel per hasMicJack
+    bool      m_vaxSourceAvailable{kVaxSourceAvailableOnThisSystem};  // R-SPK-21
+    MicSource m_previousNonVaxMicSource{MicSource::Pc};
+
+    // ── PC Mic session state (3M-1b I.2) ─────────────────────────────────
+    // NereusSDR-native transient session state. AppSettings persistence
+    // deferred to Phase L.2. Survives Setup dialog close/reopen in session.
+    int     m_pcMicHostApiIndex  = -1;      // -1 = OS default (PA resolves)
+    QString m_pcMicDeviceName;              // empty = default device for host API
+    int     m_pcMicBufferSamples = 512;     // ~10.7 ms @ 48 kHz reference rate
+
+    // ── Two-tone test properties (3M-1c B.2) ─────────────────────────────
+    // Defaults per design spec §4.4 / pre-code review §2.3 (option C).
+    int    m_twoToneFreq1      =   700;   // Designer + Defaults preset
+    int    m_twoToneFreq2      =  1900;   // Designer + Defaults preset
+    // From Thetis setup.Designer.cs:61994-62003 [v2.10.3.13] udTwoToneLevel:
+    //   Maximum = 0, Minimum = -96, Value = 0.
+    // Phase 3M-4 Task 17 (2026-05-06): previously NereusSDR-original -6 dB
+    // which under-drove the 2-tone envelope by 6 dB.  Result on bench:
+    // pscc() saw txEnvMax=0.306 instead of Thetis's ~0.6+, calcc LCOLLECT
+    // never filled past bin 2-3 (out of 16), state machine stuck.
+    // Restoring Thetis-faithful 0 dB default so PureSignal calibration
+    // converges on a fresh 2-Tone test.  See docs/architecture/
+    // phase3m-4-handoff-bench-debug.md "Round 2 / Task 17 status".
+    double m_twoToneLevel      =   0.0;
+    // ANAN-G2E bench-fix 2026-05-23 (JJ Boyd): default fixed from
+    // NereusSDR-original 50 to Thetis source-first 10.  From Thetis
+    // setup.designer.cs:62236 [v2.10.3.13]:
+    //   this.udTestIMDPower.Value = new decimal(new int[] { 10, 0, 0, 0 });
+    // and console.cs:22920 [v2.10.3.13]:
+    //   console.TwoToneTunePower = (int)udTestIMDPower.Value;
+    // Comment on the prior 50 default explicitly noted "Designer = 10 %"
+    // but the value never got corrected.  Setting our default to 50 made
+    // our PS test run at 5x Thetis's nominal test power, which along with
+    // the WDSP-side baseband amplitude factors caused FB ADC overload and
+    // prevented calcc from converging.
+    int    m_twoTonePower      =    10;   // Thetis setup.designer.cs:62236
+    int    m_twoToneFreq2Delay =     0;   // matches Thetis Designer
+    bool   m_twoToneInvert     =  true;   // setup.Designer.cs:61963 [v2.10.3.13]
+    bool   m_twoTonePulsed     = false;   // setup.Designer.cs:61643-61653 (default)
+
+    // ── Two-tone drive-power source (3M-1c B.3) ──────────────────────────
+    // Default DriveSlider per Thetis console.cs:46553 [v2.10.3.13]:
+    //   private DrivePowerSource _2ToneDrivePowerSource = DRIVE_SLIDER;
+    DrivePowerSource m_twoToneDrivePowerSource{DrivePowerSource::DriveSlider};
+
+    // ── TX EQ + Leveler + ALC properties (3M-3a-i Task C) ────────────────
+    //
+    // Defaults sourced from Thetis database.cs:4552-4594 [v2.10.3.13]
+    // (TXProfile schema) and WDSP TXA.c:111-128 [v2.10.3.13] (create_eqp).
+
+    // EQ enable + preamp.  database.cs:4553-4554 [v2.10.3.13].
+    bool m_txEqEnabled  = false;   // dr["TXEQEnabled"] = false;
+    int  m_txEqPreamp   = 0;       // dr["TXEQPreamp"]  = 0;
+
+    // Per-band gains and frequencies.  Defaults from WDSP TXA.c:112-113
+    // [v2.10.3.13] — default_F[1..10] and default_G[1..10].
+    //   default_F[11] = {0.0, 32, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000};
+    //   default_G[11] = {0.0, -12, -12, -12, -1, +1, +4, +9, +12, -10, -10};
+    //   //double default_G[11] =   {0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,    0.0,    0.0,    0.0,     0.0};
+    std::array<int, 10> m_txEqBand = {-12, -12, -12, -1, 1, 4, 9, 12, -10, -10};
+    std::array<int, 10> m_txEqFreq = {32, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000};
+
+    // Leveler.  database.cs:4584-4588 [v2.10.3.13].
+    bool m_txLevelerOn      = true;  // dr["Lev_On"]      = true;
+    int  m_txLevelerMaxGain = 15;    // dr["Lev_MaxGain"] = 15;
+    int  m_txLevelerDecay   = 100;   // dr["Lev_Decay"]   = 100;
+
+    // ALC.  database.cs:4592-4594 [v2.10.3.13].
+    int  m_txAlcMaxGain = 3;     // dr["ALC_MaximumGain"] = 3;
+    int  m_txAlcDecay   = 10;    // dr["ALC_Decay"]       = 10;
+
+    // EQ globals (radio-wide DSP).  Defaults from WDSP TXA.c:118-127 [v2.10.3.13].
+    int  m_txEqNc      = 2048;  // max(2048, ch[].dsp_size)
+    bool m_txEqMp      = false; // minimum-phase flag = 0
+    int  m_txEqCtfmode = 0;     // cutoff mode = 0
+    int  m_txEqWintype = 0;     // window type = 0
+
+    // Opaque parametric-EQ blob for the TX EQ (3M-3a-ii follow-up Batch 6).
+    // Empty by default (no Thetis database.cs default — TXProfile column
+    // ships empty until the ucParametricEq dialog populates it).
+    QString m_txEqParaEqData;
+    QString m_txEqCurve;   // derived from m_txEqParaEqData
+    QString m_cfcProfile;  // derived from the CFC values (refreshCfcProfile)
+    void refreshCfcProfile();
+    bool    m_txEqUseLegacy = true;  // R-R3-49 (parity Task 4); eqform.cs:988
+
+    // ── CFC / CPDR / CESSB / Phase Rotator (3M-3a-ii Batch 2) ────────────
+    //
+    // Defaults sourced from Thetis database.cs:4724-4768 [v2.10.3.13]
+    // (TXProfile factory) except cpdrOn (console.cs:36430 — global).
+
+    // Phase Rotator.  database.cs:4726-4730 [v2.10.3.13].
+    bool m_phaseRotatorEnabled = false;  // dr["CFCPhaseRotatorEnabled"] = false;
+    bool m_phaseReverseEnabled = false;  // dr["CFCPhaseReverseEnabled"] = false;
+    int  m_phaseRotatorFreqHz  = 338;    // dr["CFCPhaseRotatorFreq"]    = 338;
+    int  m_phaseRotatorStages  = 8;      // dr["CFCPhaseRotatorStages"]  = 8;
+
+    // CFC scalars.  database.cs:4724-4733 [v2.10.3.13].
+    bool m_cfcEnabled       = false;  // dr["CFCEnabled"]       = false;
+    bool m_cfcPostEqEnabled = false;  // dr["CFCPostEqEnabled"] = false;
+    int  m_cfcPrecompDb     = 0;      // dr["CFCPreComp"]       = 0;
+    int  m_cfcPostEqGainDb  = 0;      // dr["CFCPostEqGain"]    = 0;
+
+    // CFC per-band frequencies.  database.cs:4757-4766 [v2.10.3.13]:
+    //   CFCEqFreq0..9 = {0, 125, 250, 500, 1000, 2000, 3000, 4000, 5000, 10000}.
+    std::array<int, 10> m_cfcEqFreqHz = {0, 125, 250, 500, 1000, 2000, 3000, 4000, 5000, 10000};
+
+    // CFC per-band compression amounts (WDSP G[] vector, stored under
+    // CFCPreComp0..9 columns).  database.cs:4735-4744 [v2.10.3.13]: all 5.
+    std::array<int, 10> m_cfcCompressionDb = {5, 5, 5, 5, 5, 5, 5, 5, 5, 5};
+
+    // CFC per-band post-EQ gains (WDSP E[] vector).  database.cs:4746-4755
+    // [v2.10.3.13]: all 0.
+    std::array<int, 10> m_cfcPostEqBandGainDb = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+    // Opaque parametric-EQ blob.  database.cs:4768 [v2.10.3.13]:
+    //   dr["CFCParaEQData"] = "";
+    QString m_cfcParaEqData;
+    std::optional<CfcEditProfile> m_activeCfcProfile;
+    int m_cfcProfileUpdateDepth = 0;
+    bool m_cfcProfileDirty = false;
+    void notifyCfcProfileChange();
+    void beginTxEqProfileUpdate();
+    void endTxEqProfileUpdate();
+    void publishTxEqProfile();
+    int m_txEqProfileUpdateDepth = 0;
+    int m_txEqProfileStartPreamp = 0;
+    std::array<int, 10> m_txEqProfileStartBands{};
+    std::array<int, 10> m_txEqProfileStartFreqs{};
+    int m_cfcProfileRestoreDepth = 0;
+    bool m_projectingPairedCfc = false;
+    quint64 m_cfcProfileGeneration = 0;
+
+    // CPDR.  cpdrOn is global console state (NOT in TXProfile) — Thetis
+    // wires it via SetGeneralSetting(0, OtherButtonId.COMP, ...) at
+    // console.cs:36430 [v2.10.3.13].  WDSP boot default
+    // txa[ch].compressor.run = 0 (TXA.c:253 [v2.10.3.13]).
+    bool m_cpdrOn      = false;
+    // CPDR level: database.cs:4339 + 4580 [v2.10.3.13]:
+    //   dr["CompanderLevel"] = 2;
+    int  m_cpdrLevelDb = 2;
+
+    // AM carrier level (percent).  Thetis database.cs AddTXProfileTable:
+    //   dr["AM_Carrier_Level"] = 100;
+    int  m_amCarrierLevel = 100;
+
+    // CESSB.  database.cs:4689 [v2.10.3.13]:
+    //   dr["CESSB_On"] = false;
+    bool m_cessbOn = false;
+};
+
+} // namespace NereusSDR

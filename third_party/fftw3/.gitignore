@@ -1,0 +1,6 @@
+# FFTW3 pre-built binaries (download from https://fftw.org/install/windows.html)
+# Only needed on Windows - Linux/macOS use system packages
+*.dll
+*.lib
+*.def
+*.exe

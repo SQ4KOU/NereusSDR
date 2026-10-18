@@ -1,0 +1,157 @@
+#pragma once
+
+#include <QChar>
+#include <QPointer>
+#include <QString>
+#include <QWidget>
+#include "gui/NereusGuiExport.h"
+
+class QLabel;
+class QPushButton;
+
+class QHBoxLayout;
+class QLabel;
+class QVBoxLayout;
+
+namespace NereusSDR {
+
+class SliceModel;
+class StatusBadge;
+
+// RxDashboard — dense glance dashboard for the ACTIVE slice's RX state.
+//
+// Renders a single dense row: slice tag, mode, filter, AGC, NR, NB, APF,
+// SQL. No per-badge borders, no BadgePair stacking.
+//
+// The frequency display lived here in earlier revisions but moved to the
+// VFO Flag (2026-04-30) — there's no need to repeat it in the chrome.
+//
+// Layout decisions (fold/drop under width pressure) no longer live here.
+// ChromeBarController (Task A8) owns folding and calls badgeForRung() to
+// register each foldable badge individually at its rung. Mode and filter
+// never fold, so they are not on the ladder.
+//
+// Task A8 fix round 1: the on*Changed handlers below no longer call
+// setVisible() on the pills directly. ChromeBarController::addItem's
+// contract requires it to be the sole writer of a registered widget's
+// visibility; a pill also directly setVisible()'d from here would desync
+// from the controller's next relayout(), which force-asserts visibility
+// for every registered item on any rung change with no knowledge of
+// DSP-active state. Each handler instead emits badgeAvailabilityChanged,
+// which MainWindow forwards to ChromeBarController::setItemAvailable (and
+// reports the badge's new width via setNaturalWidth, since
+// StatusBadge::setLabel changes its own minimum width live).
+//
+// Signal-name notes (verified against SliceModel.h 2026-04-30):
+//   - dspModeChanged(DSPMode)         — typed enum
+//   - filterChanged(int low, int high) — two params
+//   - agcModeChanged(AGCMode)         — typed enum
+//   - activeNrChanged(NrSlot)         — NrSlot enum (Off/NR1/NR2/...MNR)
+//   - nbModeChanged(NbMode)           — tri-state Off/NB/NB2
+//   - apfEnabledChanged(bool)         — Auto-Notch Filter (closest to ANF)
+//   - ssqlEnabled/amsqEnabled/fmsqEnabled — per-mode squelch; ssql as indicator
+//
+// Phase 3Q Sub-PR-5/6 (E.1 + F.1) + 2026-04-30 dashboard polish +
+// 2026-08-02 bottom-banner cleanup (Task A5): follows the active slice
+// instead of slice 0, dense single row replaces the 3-stage responsive
+// ladder. See docs/architecture/2026-08-02-bottom-banner-and-pan-menu-design.md §4.2.
+class NEREUS_GUI_EXPORT RxDashboard : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit RxDashboard(QWidget* parent = nullptr);
+
+    void bindSlice(SliceModel* slice);
+    SliceModel* slice() const noexcept { return m_slice.data(); }
+
+    /// Slice this dashboard is describing. Prepended to the row so a
+    /// multi-pan operator can tell which slice the readings belong to.
+    void setSliceLetter(QChar letter);
+    QChar sliceLetter() const noexcept { return m_sliceLetter; }
+
+    /// Mode badge text, for tests and for the overflow tooltip.
+    QString modeText() const;
+
+    /// Slice control plan Task 13: the picker's words beside the letter
+    /// ("You control", "Listening", "Choose a slice" with none), and the
+    /// picker itself, which opens the all-slice chooser.
+    void setChooserState(const QString& words);
+    QString chooserState() const;
+    QPushButton* chooserButton() const noexcept { return m_picker; }
+
+    /// Badge that folds at this rung, or nullptr if the rung is not ours.
+    /// 5 SQL, 6 APF, 7 NB, 8 NR, 9 AGC. Mode and filter never fold.
+    StatusBadge* badgeForRung(int rung) const;
+
+    /// Width NOT covered by the five individually-registered pills
+    /// (badgeForRung rungs 5-9): the slice tag plus the mode and filter
+    /// badges, plus this row's own contents margins and internal gaps.
+    /// MainWindow registers the whole row with ChromeBarController at
+    /// rung 0 (it never folds) but overrides the auto-measured width with
+    /// this number via setNaturalWidth, refreshed on every
+    /// residualWidthChanged(). Registering the row's raw sizeHint()
+    /// instead would double-count AGC -- always visible, and already
+    /// counted separately at rung 9 -- and would have to be re-measured
+    /// on every pill toggle, which is exactly the live-sizeHint feedback
+    /// path this architecture exists to remove (final-fix-wave finding 5;
+    /// design doc §5.1 invariant 2).
+    int residualWidth() const;
+
+    /// R-R3-21: which badge was clicked. MainWindow opens the matching
+    /// tab of the slice's VFO flag.
+    enum class Badge { Mode, Filter, Agc, Nr, Nb, Apf, Squelch };
+
+signals:
+    /// Slice control plan Task 13: the picker was clicked.
+    void chooserRequested();
+
+    /// R-R3-21: a badge was left-clicked.
+    void badgeClicked(NereusSDR::RxDashboard::Badge badge);
+
+    /// A pill's DSP-active state (and/or its content, hence its width)
+    /// just changed. rung matches badgeForRung's mapping (5 SQL .. 9 AGC).
+    /// available is the badge's new should-show state; AGC has no "off"
+    /// state and always reports true, purely so its width is re-checked
+    /// too (StatusBadge::setLabel changes minimum width live). The
+    /// receiver (MainWindow) is expected to resolve the widget via
+    /// badgeForRung(rung) and forward both facts to
+    /// ChromeBarController::setItemAvailable / setNaturalWidth.
+    void badgeAvailabilityChanged(int rung, bool available);
+
+    /// The slice tag, mode badge or filter badge just changed content, so
+    /// residualWidth()'s return value is stale. Mode and filter never
+    /// fold (badgeForRung only covers rungs 5-9), so this is the only
+    /// width-change notice they need; the receiver is expected to call
+    /// setNaturalWidth(rxDashRowWidget, residualWidth()) and relayout().
+    void residualWidthChanged();
+
+private slots:
+    void onModeChanged(int mode);
+    void onFilterChanged(int low, int high);
+    void onAgcChanged(int agcMode);
+    void onNrChanged(int nrSlot);
+    // R-R3-40: the NR badge warns while the Core holds NNR below the saved
+    // choice, with the reason as its tooltip.
+    void onNnrLimitChanged(int limit);
+    void onNbChanged(int nbMode);
+    void onApfChanged(bool active);
+    void onSsqlChanged(bool active);
+
+private:
+    void buildUi();
+
+    QChar        m_sliceLetter{QLatin1Char('A')};
+    QLabel*      m_sliceTag{nullptr};
+    QPushButton* m_picker{nullptr};
+    QLabel*      m_pickerState{nullptr};
+    QPointer<SliceModel> m_slice;
+    StatusBadge* m_modeBadge{nullptr};
+    StatusBadge* m_filterBadge{nullptr};
+    StatusBadge* m_agcBadge{nullptr};
+    StatusBadge* m_nrBadge{nullptr};
+    StatusBadge* m_nbBadge{nullptr};
+    StatusBadge* m_apfBadge{nullptr};
+    StatusBadge* m_sqlBadge{nullptr};
+};
+
+} // namespace NereusSDR

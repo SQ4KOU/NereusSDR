@@ -1,0 +1,19 @@
+# Saturn (ANAN-G2) P2 discovery reply — fw 26 (0x1A), free (0x02), MAC bb:cc:dd:77:88:99
+# Hand-crafted — no live P2 capture available. Layout verified against:
+#   mi0bot clsRadioDiscovery.cs:1201-1226 (parseDiscoveryReply P2 branch)
+#   RadioDiscovery.cpp parseP2Reply() (verified working for Saturn in production)
+#
+# P2 reply byte layout (clsRadioDiscovery.cs:1146 detection condition):
+#   [0-3]  00 00 00 00  — P2 magic (all-zero preamble)
+#   [4]    02           — status: 02 = available, 03 = busy (cs:1204)
+#   [5-10] BB CC DD 77 88 99  — MAC (Array.Copy data,5,mac,0,6 — cs:1207)
+#   [11]   0A           — DeviceType = 0x0A = 10 = Saturn (cs:1210; HPSDRHW cast directly)
+#   [12]   02           — ProtocolSupported (cs:1211)
+#   [13]   1A           — CodeVersion = 26 decimal (cs:1212)
+#   [14-19] 00*6        — Mercury/Penny/Metis versions (cs:1217-1222)
+#   [20]   07           — NumRxs = 7 (cs:1223)
+#   [21-63] 00*43       — zero pad to 64 bytes
+0000000002BBCCDD7788990A021A0000
+00000000070000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000

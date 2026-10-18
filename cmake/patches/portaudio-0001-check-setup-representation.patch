@@ -1,0 +1,109 @@
+diff --git a/src/common/pa_process.c b/src/common/pa_process.c
+--- a/src/common/pa_process.c
++++ b/src/common/pa_process.c
+@@ -37,6 +37,12 @@
+  * license above.
+  */
+
++/* Modification history (NereusSDR):
++ * 2026-10-14: J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
++ * Reject setup sizes unrepresentable by the existing byte arithmetic;
++ * retain the pinned upstream license and all original inline comments.
++ */
++
+ /** @file
+  @ingroup common_src
+
+@@ -49,6 +55,7 @@
+
+ #include "pa_process.h"
+ #include "pa_util.h"
++#include "portaudio-bounds.h"
+
+
+ #define PA_FRAMES_PER_TEMP_BUFFER_WHEN_HOST_BUFFER_SIZE_IS_UNKNOWN_    1024
+@@ -198,6 +205,43 @@
+     bp->framesInTempInputBuffer = bp->initialFramesInTempInputBuffer;
+     bp->framesInTempOutputBuffer = bp->initialFramesInTempOutputBuffer;
+
++
++    /* NereusSDR: preflight both sides before the first allocation. Actual
++     * framesPerTempBuffer already includes unspecified-user-buffer host
++     * selection. PaUtil_AllocateMemory takes signed long on every platform.
++     */
++    if (inputChannelCount > 0) {
++        bytesPerSample = Pa_GetSampleSize(hostInputSampleFormat);
++        if (bytesPerSample <= 0) {
++            return bytesPerSample;
++        }
++        bytesPerSample = Pa_GetSampleSize(userInputSampleFormat);
++        if (bytesPerSample <= 0) {
++            return bytesPerSample;
++        }
++        if (!nereusPaBufferSizesFit(bp->framesPerTempBuffer, bytesPerSample,
++                inputChannelCount, sizeof(PaUtilChannelDescriptor),
++                (userInputSampleFormat & paNonInterleaved) != 0,
++                (unsigned long)LONG_MAX)) {
++            return paInsufficientMemory;
++        }
++    }
++    if (outputChannelCount > 0) {
++        bytesPerSample = Pa_GetSampleSize(hostOutputSampleFormat);
++        if (bytesPerSample <= 0) {
++            return bytesPerSample;
++        }
++        bytesPerSample = Pa_GetSampleSize(userOutputSampleFormat);
++        if (bytesPerSample <= 0) {
++            return bytesPerSample;
++        }
++        if (!nereusPaBufferSizesFit(bp->framesPerTempBuffer, bytesPerSample,
++                outputChannelCount, sizeof(PaUtilChannelDescriptor),
++                (userOutputSampleFormat & paNonInterleaved) != 0,
++                (unsigned long)LONG_MAX)) {
++            return paInsufficientMemory;
++        }
++    }
+
+     if( inputChannelCount > 0 )
+     {
+diff --git a/src/hostapi/alsa/pa_linux_alsa.c b/src/hostapi/alsa/pa_linux_alsa.c
+--- a/src/hostapi/alsa/pa_linux_alsa.c
++++ b/src/hostapi/alsa/pa_linux_alsa.c
+@@ -49,7 +49,15 @@
+
+ #define ALSA_PCM_NEW_HW_PARAMS_API
+ #define ALSA_PCM_NEW_SW_PARAMS_API
++/* Modification history (NereusSDR):
++ * 2026-10-14: J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
++ * Reject setup sizes unrepresentable by the existing byte arithmetic;
++ * retain the pinned upstream license and all original inline comments.
++ */
++
+ #include <alsa/asoundlib.h>
++#include <stdint.h>
++#include "portaudio-bounds.h"
+ #undef ALSA_PCM_NEW_HW_PARAMS_API
+ #undef ALSA_PCM_NEW_SW_PARAMS_API
+
+@@ -2055,6 +2063,21 @@
+         PA_ENSURE( paUnanticipatedHostError );
+     }
+
++    /* NereusSDR: channel adaptation uses signed-int byte offsets for
++     * host/user strides as well as its unused-channel memset. Validate the
++     * native width before narrowing, then the complete per-frame layout.
++     */
++    if (self->streamDir == StreamDirection_Out && self->hostInterleaved) {
++        const intmax_t sampleBytes = alsa_snd_pcm_format_size(self->nativeFormat, 1);
++        if (sampleBytes <= 0 || sampleBytes > INT_MAX) {
++            PA_ENSURE(paSampleFormatNotSupported);
++        }
++        if (!nereusPaHostChannelBytesFit(self->numHostChannels,
++                self->numUserChannels, (int)sampleBytes)) {
++            PA_ENSURE(paInvalidChannelCount);
++        }
++    }
++
+     ENSURE_( alsa_snd_pcm_hw_params_set_channels( pcm, hwParams, self->numHostChannels ), paInvalidChannelCount );
+
+     *sampleRate = sr;

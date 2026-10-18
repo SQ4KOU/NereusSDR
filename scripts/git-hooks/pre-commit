@@ -1,0 +1,379 @@
+#!/usr/bin/env bash
+# Pre-commit hook: run the attribution verifiers before every commit.
+#
+# This is Ring 2 of the attribution-gap-closure scheme (CLAUDE.md
+# "Pre-port checklist" is Ring 1; CI is Ring 3). Catches missing
+# headers / unregistered ports before they leave your laptop.
+#
+# Activation:
+#   bash scripts/install-hooks.sh
+# (sets git config core.hooksPath to scripts/git-hooks/)
+#
+# Bypass: do NOT use --no-verify. If a verifier fails, fix the
+# attribution. Per CLAUDE.md "License rules for ported code
+# (non-negotiable)" — that is the rule, not a suggestion.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+# Capture Git errors separately and consume all names: grep -q can close the
+# pipe early, making Git fail with SIGPIPE under pipefail on large commits.
+# Only grep's no-match status may skip a gate; detector errors block commits.
+has_staged_match() {
+    local staged_files status
+    if ! staged_files="$(git diff --cached --name-only --diff-filter="$1")"; then
+        echo "[pre-commit] BLOCKED: cannot list staged files." >&2
+        exit 1
+    fi
+    if grep -E "$2" <<<"$staged_files" >/dev/null; then
+        return 0
+    else
+        status="$?"
+    fi
+    if [ "$status" -eq 1 ]; then
+        return 1
+    fi
+    echo "[pre-commit] BLOCKED: staged-file detector failed." >&2
+    exit "$status"
+}
+
+# R-R3-50: every shipped library has its licence text. Runs ahead of the
+# source-file gate below because what it guards (CMake files, third_party/,
+# the licence folder) is mostly not source. Fast: no build, no clone.
+if has_staged_match ACMRD \
+     '(^|/)CMakeLists\.txt$|\.cmake$|^third_party/|^packaging/third-party-licenses/|^scripts/check-third-party-licenses\.py$'; then
+    echo "[pre-commit] check-third-party-licenses.py"
+    if ! python3 scripts/check-third-party-licenses.py; then
+        echo
+        echo "[pre-commit] BLOCKED: a shipped library is missing its licence"
+        echo "             text or its row. Add the upstream licence file byte"
+        echo "             for byte to packaging/third-party-licenses/ and a row"
+        echo "             in its README.md (see the sources table there)."
+        exit 1
+    fi
+fi
+
+# PR #327 (2026-09-27): a sharded CI configure skips most tests, so a
+# set_tests_properties() on a test nereus_add_test() skipped stops CMake.
+# Every statement naming a test must sit inside if(TEST <name>) or its
+# add_test()'s own branches. Fast: a parse of tests/CMakeLists.txt only.
+if has_staged_match ACMRD \
+     '^tests/CMakeLists\.txt$|^scripts/verify-test-registration\.py$'; then
+    echo "[pre-commit] verify-test-registration.py"
+    if ! python3 scripts/verify-test-registration.py; then
+        echo
+        echo "[pre-commit] BLOCKED: tests/CMakeLists.txt names a test that a"
+        echo "             sharded configure may not define. Wrap the statement"
+        echo "             in if(TEST <name>) ... endif()."
+        exit 1
+    fi
+fi
+
+# Skip if no source files are staged — these hooks only care about
+# source / docs provenance.
+if ! has_staged_match ACMR \
+     '\.(cpp|h|hpp|cc|c|hxx|md|py)$'; then
+    exit 0
+fi
+
+echo "[pre-commit] verify-thetis-headers.py"
+if ! python3 scripts/verify-thetis-headers.py; then
+    echo
+    echo "[pre-commit] BLOCKED: header verifier failed."
+    echo "             Fix the headers, then re-stage and re-commit."
+    exit 1
+fi
+
+echo "[pre-commit] verify-freedv-headers.py"
+if ! python3 scripts/verify-freedv-headers.py; then
+    echo
+    echo "[pre-commit] BLOCKED: freedv-gui header verifier failed."
+    echo "             Fix the headers, then re-stage and re-commit."
+    echo "             See docs/attribution/FREEDV-GUI-PROVENANCE.md."
+    exit 1
+fi
+
+echo "[pre-commit] check-new-ports.py (diff)"
+if ! CHECK_NEW_PORTS_BASE_REF="${CHECK_NEW_PORTS_BASE_REF:-origin/main}" \
+     python3 scripts/check-new-ports.py; then
+    echo
+    echo "[pre-commit] BLOCKED: new-port detector flagged a file."
+    echo "             Either register it in THETIS-PROVENANCE.md +"
+    echo "             add the verbatim upstream header, or add the"
+    echo "             'Independently implemented from <upstream>' or"
+    echo "             'no-port-check: <reason>' marker if genuinely"
+    echo "             not a port. See docs/attribution/HOW-TO-PORT.md."
+    exit 1
+fi
+
+echo "[pre-commit] check-new-ports.py (full-tree)"
+if ! CHECK_NEW_PORTS_FULL=1 python3 scripts/check-new-ports.py; then
+    echo
+    echo "[pre-commit] BLOCKED: full-tree port detector flagged a file."
+    echo "             Historical gap case — a file contains Thetis or"
+    echo "             AetherSDR tells but isn't registered anywhere."
+    echo "             Cure the same way as the diff-mode failure above."
+    exit 1
+fi
+
+# Compliance Plan Task 16: parity with ci.yml compliance job.
+# Added 2026-04-18 alongside the new audit scripts from Tasks 7–11.
+# Runs after the attribution gates above because a pristine header is
+# a prerequisite for meaningful inventory / cite-stamp checks.
+
+echo "[pre-commit] verify-thetis-headers.py --all-kinds (AetherSDR + WDSP)"
+if ! python3 scripts/verify-thetis-headers.py --all-kinds >/dev/null; then
+    # Re-run with output so the user sees the failures
+    python3 scripts/verify-thetis-headers.py --all-kinds || true
+    echo
+    echo "[pre-commit] BLOCKED: AetherSDR or WDSP header markers missing."
+    echo "             Cure by adding the project-level attribution (AetherSDR)"
+    echo "             or preserving the upstream GPL header (WDSP)."
+    exit 1
+fi
+
+echo "[pre-commit] verify-inline-cites.py (baseline regression gate)"
+if ! python3 scripts/verify-inline-cites.py >/dev/null 2>&1; then
+    python3 scripts/verify-inline-cites.py || true
+    echo
+    echo "[pre-commit] BLOCKED: unstamped '// From Thetis ...' cite added."
+    echo "             Append [vX.Y.Z.W] or [@shortsha] per"
+    echo "             docs/attribution/HOW-TO-PORT.md §Inline cite versioning."
+    echo "             If this is a bulk upstream pull, recapture the baseline"
+    echo "             with 'python3 scripts/verify-inline-cites.py --baseline'"
+    echo "             and commit tests/compliance/inline-cites-baseline.json."
+    exit 1
+fi
+
+echo "[pre-commit] compliance-inventory.py --fail-on-unclassified"
+if ! python3 scripts/compliance-inventory.py --fail-on-unclassified >/dev/null; then
+    python3 scripts/compliance-inventory.py --fail-on-unclassified || true
+    echo
+    echo "[pre-commit] BLOCKED: inventory flagged missing markers."
+    echo "             Add the required header markers or register the file"
+    echo "             in the appropriate provenance doc."
+    exit 1
+fi
+
+# Phase 3F Sub-Epic J Task 11: architecture gate, not an attribution check,
+# but wired in beside them since it is the same shape (whole-tree sweep,
+# no upstream clone needed) and belongs in the fast path ahead of the
+# Thetis-clone-dependent steps below.
+echo "[pre-commit] verify-no-gui-dsp-access.py"
+if ! python3 scripts/verify-no-gui-dsp-access.py; then
+    echo
+    echo "[pre-commit] BLOCKED: see the check output above. That script runs"
+    echo "             two checks and either can fail it. Check 1: GUI code"
+    echo "             calls rxChannel() directly; route through SliceModel,"
+    echo "             RadioModel pushes to the right channel. Check 2: the"
+    echo "             rxChannelForSlice() call-site inventory drifted; those"
+    echo "             calls are allowed, so update the inventory in"
+    echo "             scripts/verify-no-gui-dsp-access.py."
+    exit 1
+fi
+
+echo "[pre-commit] verify-no-captured-slice-spectrum-wiring.py"
+if ! python3 scripts/verify-no-captured-slice-spectrum-wiring.py; then
+    echo
+    echo "[pre-commit] BLOCKED: a spectrum slice control is wired to"
+    echo "             activeSpectrumWidget(), which is pan-0 forever."
+    echo "             Wire it in MainWindow::wireSpectrumSliceControls, which"
+    echo "             resolves the slice per signal via sliceForPan(panId)."
+    echo "             See scripts/verify-no-captured-slice-spectrum-wiring.py."
+    exit 1
+fi
+
+echo "[pre-commit] verify-no-image-cursors.py"
+if ! python3 scripts/verify-no-image-cursors.py; then
+    echo
+    echo "[pre-commit] BLOCKED: a cursor shape Qt draws from an image is back"
+    echo "             in src/ (SizeAllCursor, WaitCursor, BusyCursor or a"
+    echo "             bitmap cursor). Qt 6.11.0 crashes drawing these on"
+    echo "             macOS. Use a native shape, or mark a justified use with"
+    echo "             'native-cursor-ok: <reason>' on the line."
+    echo "             See scripts/verify-no-image-cursors.py."
+    exit 1
+fi
+
+echo "[pre-commit] verify-inline-tag-preservation.py (author-tag check)"
+# Auto-locate upstream clones. Search order:
+#   1. $NEREUS_<NAME>_DIR (explicit override)
+#   2. every ancestor of the working tree, nearest first
+#   3. every ancestor of the main checkout, so a linked worktree made
+#      anywhere (`git worktree add /private/tmp/...`) still finds the
+#      clones that sit beside NereusSDR
+# CI sets the env vars explicitly; this logic is for local dev.
+#
+# The ancestor walk replaces a fixed ../, ../../, ../../../ probe list
+# (2026-07-28). That list stopped one level short of a linked worktree
+# under .claude/worktrees/<name>, where the sibling clone sits four
+# levels up, so the hook printed "no Thetis clone found locally" and
+# skipped the check for anyone working in a worktree. The same
+# off-by-depth bug existed independently in
+# verify-inline-tag-preservation.py; both now walk ancestors so neither
+# has to know how deeply it is nested.
+MAIN_CHECKOUT="$(cd "$(git rev-parse --git-common-dir)/.." 2>/dev/null && pwd -P || true)"
+
+find_upstream() {
+    local name="$1"
+    local override="$2"
+    if [ -n "$override" ] && [ -d "$override" ]; then
+        echo "$override"
+        return 0
+    fi
+    local start dir
+    for start in "$(pwd -P)" "$MAIN_CHECKOUT"; do
+        if [ -z "$start" ]; then
+            continue
+        fi
+        dir="$start"
+        while [ "$dir" != "/" ]; do
+            if [ -d "$dir/$name" ]; then
+                echo "$dir/$name"
+                return 0
+            fi
+            dir="$(dirname "$dir")"
+        done
+    done
+    if [ -d "/$name" ]; then
+        echo "/$name"
+    fi
+    # Not found must still return 0; empty output is the "not found"
+    # signal. The hook runs under set -e, so a non-zero status here ends
+    # it at the X_LOCAL="$(find_upstream ...)" assignment below with no
+    # message. The walk as first written (b8fd5a6c, 2026-07-28) ended on
+    # `[ -d "/$name" ] && echo "/$name"` and did exactly that: a checkout
+    # missing any one clone could not commit a source or docs change, and
+    # nothing said why. tests/compliance/test_pre_commit_upstream_lookup.py
+    # covers it.
+    return 0
+}
+
+THETIS_LOCAL="$(find_upstream Thetis "${NEREUS_THETIS_DIR:-}")"
+THETIS_V21015_LOCAL="$(find_upstream Thetis-v2.10.3.15 "${NEREUS_THETIS_V21015_DIR:-}")"
+THETIS_V21013_LOCAL="$(find_upstream Thetis-v2.10.3.13 "${NEREUS_THETIS_V21013_DIR:-}")"
+MI0BOT_LOCAL="$(find_upstream mi0bot-Thetis "${NEREUS_MI0BOT_DIR:-}")"
+DESKHPSDR_LOCAL="$(find_upstream deskhpsdr "${NEREUS_DESKHPSDR_DIR:-}")"
+FREEDV_LOCAL="$(find_upstream freedv-gui "${NEREUS_FREEDV_DIR:-}")"
+
+# A commit that stages C or C++ needs every clone. The check compares
+# each ported comment with the upstream lines its cite names, so a
+# missing clone leaves those cites unchecked while the commit goes
+# through looking verified. A missing Thetis used to print "SKIPPED" and
+# pass, and a missing mi0bot-Thetis, Thetis-v2.10.3.15, Thetis-v2.10.3.13,
+# deskhpsdr or freedv-gui left its cites as upstream-not-found warnings that pass
+# (JJ, 2026-10-06: make sure the repo is there, never skip).
+#
+# Ported comments live only in C and C++ files, so a commit that stages
+# none (docs, scripts) cannot drop one. It runs the check with the clones
+# it finds, skips it when Thetis is missing, and names what is missing,
+# so a docs contributor is not made to clone every upstream first (JJ,
+# 2026-10-06: require the clones only for C++ commits).
+MISSING=""
+note_missing() {
+    MISSING="${MISSING}             ../$1  (set $2 to use another path)
+               $3
+"
+}
+if [ -z "$THETIS_LOCAL" ]; then
+    note_missing Thetis NEREUS_THETIS_DIR \
+        "git clone --branch v2.10.3.15 https://github.com/ramdor/Thetis.git"
+fi
+if [ -z "$THETIS_V21015_LOCAL" ]; then
+    note_missing Thetis-v2.10.3.15 NEREUS_THETIS_V21015_DIR \
+        "git clone --branch v2.10.3.15 https://github.com/ramdor/Thetis.git Thetis-v2.10.3.15"
+fi
+if [ -z "$THETIS_V21013_LOCAL" ]; then
+    note_missing Thetis-v2.10.3.13 NEREUS_THETIS_V21013_DIR \
+        "git clone https://github.com/ramdor/Thetis.git Thetis-v2.10.3.13 && git -C Thetis-v2.10.3.13 checkout 501e3f5"
+fi
+if [ -z "$MI0BOT_LOCAL" ]; then
+    note_missing mi0bot-Thetis NEREUS_MI0BOT_DIR \
+        "git clone https://github.com/mi0bot/OpenHPSDR-Thetis.git mi0bot-Thetis"
+fi
+if [ -z "$DESKHPSDR_LOCAL" ]; then
+    note_missing deskhpsdr NEREUS_DESKHPSDR_DIR \
+        "git clone https://github.com/dl1bz/deskhpsdr.git"
+fi
+if [ -z "$FREEDV_LOCAL" ]; then
+    note_missing freedv-gui NEREUS_FREEDV_DIR \
+        "git clone https://github.com/drowe67/freedv-gui.git"
+fi
+
+print_searched() {
+    echo "             Searched every folder above $(pwd -P)"
+    if [ -n "$MAIN_CHECKOUT" ] && [ "$MAIN_CHECKOUT" != "$(pwd -P)" ]; then
+        echo "             and every folder above $MAIN_CHECKOUT"
+    fi
+}
+
+# Exports the clones found (an empty override would read as a path) and
+# runs the tag check, blocking on a dropped tag.
+run_tag_check() {
+    export NEREUS_THETIS_DIR="$THETIS_LOCAL"
+    if [ -n "$THETIS_V21015_LOCAL" ]; then
+        export NEREUS_THETIS_V21015_DIR="$THETIS_V21015_LOCAL"
+    fi
+    if [ -n "$THETIS_V21013_LOCAL" ]; then
+        export NEREUS_THETIS_V21013_DIR="$THETIS_V21013_LOCAL"
+    fi
+    if [ -n "$MI0BOT_LOCAL" ]; then
+        export NEREUS_MI0BOT_DIR="$MI0BOT_LOCAL"
+    fi
+    if [ -n "$DESKHPSDR_LOCAL" ]; then
+        export NEREUS_DESKHPSDR_DIR="$DESKHPSDR_LOCAL"
+    fi
+    if [ -n "$FREEDV_LOCAL" ]; then
+        export NEREUS_FREEDV_DIR="$FREEDV_LOCAL"
+    fi
+    if ! python3 scripts/verify-inline-tag-preservation.py >/dev/null 2>&1; then
+        python3 scripts/verify-inline-tag-preservation.py || true
+        echo
+        echo "[pre-commit] BLOCKED: dropped developer-attribution tag in ported code."
+        echo "             CLAUDE.md §'Inline comment preservation' — this is a"
+        echo "             GPL attribution bug, not a style nit. Re-insert the"
+        echo "             verbatim //Author tag from the cited upstream source at"
+        echo "             the port line above."
+        exit 1
+    fi
+}
+
+# The C and C++ suffixes of the source-file gate near the top.
+STAGES_C_OR_CXX=""
+if has_staged_match ACMR '\.(cpp|h|hpp|cc|c|hxx)$'; then
+    STAGES_C_OR_CXX=1
+fi
+
+if [ -n "${NEREUS_SKIP_TAG_CHECK:-}" ]; then
+    echo "[pre-commit] tag-preservation SKIPPED (NEREUS_SKIP_TAG_CHECK set)"
+elif [ -n "$MISSING" ] && [ -n "$STAGES_C_OR_CXX" ]; then
+    echo
+    echo "[pre-commit] BLOCKED: upstream clone missing, so ported comments"
+    echo "             cannot be checked against the source they cite."
+    echo "             Clone each one beside NereusSDR:"
+    printf '%s' "$MISSING"
+    print_searched
+    exit 1
+elif [ -n "$MISSING" ]; then
+    if [ -z "$THETIS_LOCAL" ]; then
+        echo "[pre-commit] tag-preservation SKIPPED (no Thetis clone found locally;"
+        echo "             no C or C++ file is staged, so no ported comment"
+        echo "             can change.)"
+    else
+        echo "[pre-commit] tag-preservation running without every upstream clone;"
+        echo "             no C or C++ file is staged, so no ported comment"
+        echo "             can change."
+    fi
+    echo "             A commit that stages C or C++ needs these clones:"
+    printf '%s' "$MISSING"
+    print_searched
+    if [ -n "$THETIS_LOCAL" ]; then
+        run_tag_check
+    fi
+else
+    run_tag_check
+fi
+
+exit 0

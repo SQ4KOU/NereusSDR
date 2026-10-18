@@ -1,0 +1,334 @@
+#pragma once
+
+// =================================================================
+// src/gui/TitleBar.h  (NereusSDR)
+// =================================================================
+//
+// Ported from AetherSDR source:
+//   src/gui/TitleBar.h
+//   src/gui/TitleBar.cpp
+//
+// AetherSDR is licensed under the GNU General Public License v3; see
+// https://github.com/ten9876/AetherSDR for the contributor list and
+// project-level LICENSE. NereusSDR is also GPLv3. AetherSDR source
+// files carry no per-file GPL header; attribution is at project level
+// per docs/attribution/HOW-TO-PORT.md rule 6.
+//
+// Upstream reference: AetherSDR v0.8.16 (2026-04).
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-04-20 — Ported/adapted in C++20/Qt6 for NereusSDR by J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code. Phase 3O Sub-Phase 10 Task 10c.
+//                 Scoped-down port: master-output strip only. AetherSDR's
+//                 heartbeat / multiFLEX / PC-audio / headphone / minimal-
+//                 mode / feature-request widgets are intentionally omitted
+//                 (deferred to separate NereusSDR phases — 3G-14 plans the
+//                 💡 feature-request widget; headphone devices land in
+//                 Sub-Phase 12 Setup → Audio → Devices; connection-state
+//                 UI is already served elsewhere).
+//                 Hosts `MasterOutputWidget` (Task 10b) on the right edge;
+//                 `setMenuBar()` pattern copied from AetherSDR
+//                 `src/gui/TitleBar.cpp:282-295` (re-style QMenuBar,
+//                 `m_hbox->insertWidget(0, mb)`). Strip geometry and
+//                 background (#0a0a14, 32 px, `border-bottom: 1px solid
+//                 #203040`) follow AetherSDR `TitleBar.cpp:30-31`. App-
+//                 name label colour and font follow AetherSDR
+//                 `TitleBar.cpp:101-103` with the literal "AetherSDR"
+//                 replaced by "NereusSDR".
+//                 Design spec: docs/architecture/2026-04-19-vax-design.md
+//                 §6.3 + §7.3.
+//   2026-04-20 — Task 10d: consolidated the 💡 feature-request button
+//                 (previously hosted by a separate `featureBar` QToolBar
+//                 in MainWindow) into TitleBar's far-right slot, past the
+//                 MasterOutputWidget. Emits `featureRequestClicked()`;
+//                 MainWindow wires that to its existing
+//                 showFeatureRequestDialog slot. Matches AetherSDR's
+//                 pattern of the feature button as the rightmost element.
+//   2026-04-27 — Phase 3Q-6: added ConnectionSegment — always-visible
+//                 connection state widget (dot + radio name/IP + Mbps +
+//                 activity LED). Inserted between menu bar and the
+//                 centre stretch. Design §4.1.
+//   2026-04-30 — Phase 3Q Sub-PR-4 D.1: rewrote ConnectionSegment per
+//                 shell-chrome redesign spec §4.1. New form: state-encoding
+//                 dot (color=state, pulse=activity), ▲ Mbps, RTT readout
+//                 (clickable, color-thresholded), ▼ Mbps, ♪ audio pip.
+//                 Removed setRadio()/name+IP API (STATION block carries
+//                 radio identity, sub-PR-7). Removed activity LED (state dot
+//                 encodes activity via pulse). Added signals: rttClicked(),
+//                 audioPipClicked(), contextMenuRequested(QPoint).
+//   2026-08-02 — Task A7 (bottom-banner cleanup): added a single-row UTC
+//                 clock (`utcText()`) past the MasterOutputWidget. Replaces
+//                 the two-row UTC+date/local clock deleted from the bottom
+//                 banner in the same commit; the date/local row is dropped
+//                 because local time already sits in the menu bar and the
+//                 date is not an operator-facing fact worth the pixels.
+//                 NereusSDR-original UI, not a Thetis/AetherSDR port.
+//   2026-10-06 - Radio speaker plan Task 6 (R-SPK-16, R-SPK-17, D1): the
+//                 RADIO group (RadioSpeakerWidget) sits beside the PC group
+//                 (MasterOutputWidget), 16 px apart, before the feature
+//                 button; setRadioModel() hands it the model. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-10-06 - Radio speaker plan Task 6, JJ decision 2 (R-SPK-17, D1):
+//                 PC and RADIO sit in one volume group that stacks them
+//                 (layout C) when side by side would leave the connection
+//                 segment less than it asks for, and returns to side by
+//                 side past kSideBySideReturnSpare. J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-07 - ConnectionSegment::setPulsePausedForTest(): holds the
+//                 state dot still so the workspace visual preview tool
+//                 (tests/visual/) captures the same pixels on every run.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08 - setPulsePausedForTest() can hold the brighter step.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// =================================================================
+
+#include "core/AudioEngine.h"
+#include "core/ConnectionState.h"
+#include "core/session/NetworkPathSnapshot.h"
+#include "gui/RemoteAudioStatus.h"
+#include "gui/NereusGuiExport.h"
+
+#include <QQueue>
+#include <QSize>
+#include <QTimer>
+#include <QWidget>
+#include <QStringList>
+#include <optional>
+
+class QBoxLayout;
+class QEvent;
+class QHBoxLayout;
+class QLabel;
+class QMenuBar;
+class QPushButton;
+class QFrame;
+class QKeyEvent;
+
+namespace NereusSDR {
+
+class MasterOutputWidget;
+class RadioModel;
+class RadioSpeakerWidget;
+
+// ConnectionSegment — always-visible connection-state indicator living
+// in the TitleBar, between the menu bar and the centre "NereusSDR" label.
+//
+// Visual layout (left → right within the segment):
+//   [state dot]  [▲ Mbps]  [RTT ms (color-coded, clickable)]  [▼ Mbps]  [|]  [♪ pip]
+//   — or when Disconnected:
+//   [state dot]  ["Disconnected — click to connect"]
+//
+// State dot color encodes connection state; pulse animation encodes
+// radio/streaming activity. No separate activity LED.
+//
+// RTT readout: color-coded green/yellow/red (<50/<150/≥150 ms). Remote
+// connected click opens the route popup; local connected click opens
+// NetworkDiagnosticsDialog. Disconnected click requests a connection.
+//
+// ♪ pip: audio pipeline health. Color: blue=Healthy, yellow=Underrun,
+// red=Stalled, dim=Dead.
+//
+// Phase 3Q Sub-PR-4 D.1.
+class NEREUS_GUI_EXPORT ConnectionSegment : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit ConnectionSegment(QWidget* parent = nullptr);
+
+    void setState(ConnectionState s);
+    void setRates(double rxMbps, double txMbps);
+    void setRttMs(int ms);
+    void setAudioFlowState(AudioEngine::FlowState s);
+
+    ConnectionState          state() const noexcept { return m_state; }
+    int                      rttMs() const noexcept { return m_rttMs; }
+    AudioEngine::FlowState   audioFlowState() const noexcept { return m_audioFlow; }
+
+    // Smoothed RTT — 2nd-smallest of the rolling N-sample window
+    // (min-filter approximation of true network round-trip time). See
+    // smoothedRttMs() impl for the rationale. Returns the latest sample
+    // if only one sample has been seen, or -1 if no samples at all.
+    int                      smoothedRttMs() const noexcept;
+
+    // Test seam: stop the state-dot pulse and hold it in its resting colour
+    // (paused), or resume it as setState() would (unpaused). The visual
+    // preview tool uses it so two captures of one scene match pixel for pixel.
+    // `brightStep` holds the pulse's brighter step instead of its resting one.
+    void setPulsePausedForTest(bool paused, bool brightStep = false);
+
+    // Hit-test rect accessors — populated after the first paintEvent.
+    // Exposed publicly so callers can verify click regions (e.g. in tests).
+    QRect rttRect() const;
+    QRect audioPipRect() const;
+    // Remote mode reports Core session state; local-radio rates are unavailable.
+    void setRemoteStatusText(const QString& text);
+    QString remoteStatusText() const { return m_remoteStatusText; }
+    // Telemetry supplements the remote session status. It intentionally does
+    // not replace it: authentication/session state and measurements answer
+    // different operator questions.
+    void setRemoteTelemetryText(const QString& text);
+    QString remoteTelemetryText() const { return m_remoteTelemetryText; }
+    void setRemoteMetrics(const QStringList& groups);
+    QString remotePresentationText() const;
+    QString remoteTextForWidth(int pixels) const;
+    void setRemotePaths(std::optional<NetworkPathSnapshot> controls,
+                        std::optional<NetworkPathSnapshot> media);
+    static QString routeText(const std::optional<NetworkPathSnapshot>& path);
+    static QString audioMetricText(std::optional<double> kbps, RemoteAudioStatus::State state);
+    void showRoutePopup();
+    QWidget* routePopup() const;
+
+    QSize sizeHint() const override;
+
+public slots:
+    // Throttled activity tick — nudges a repaint so the pulse looks "live".
+    // The pulse timer in the ctor already drives the animation; this slot
+    // exists for future per-frame visual cues.
+    void frameTick();
+
+signals:
+    void rttClicked();
+    void audioPipClicked();
+    void contextMenuRequested(const QPoint& globalPos);
+    void diagnosticsRequested();
+    void pathsRefreshRequested();
+
+protected:
+    void mousePressEvent(QMouseEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
+
+private:
+    QColor stateDotColor() const;
+    QColor rttColor(int rttMs) const;
+    QColor audioPipColor(AudioEngine::FlowState s) const;
+    void updateRoutePopup();
+
+    ConnectionState         m_state{ConnectionState::Disconnected};
+    QString                 m_remoteStatusText;
+    QString                 m_remoteTelemetryText;
+    QStringList             m_remoteMetrics;
+    std::optional<NetworkPathSnapshot> m_controlPath;
+    std::optional<NetworkPathSnapshot> m_mediaPath;
+    QFrame*                 m_routePopup{nullptr};
+    QLabel*                 m_controlsRoute{nullptr};
+    QLabel*                 m_mediaRoute{nullptr};
+    double                  m_rxMbps{0.0};
+    double                  m_txMbps{0.0};
+    int                     m_rttMs{-1};
+    AudioEngine::FlowState  m_audioFlow{AudioEngine::FlowState::Dead};
+    QTimer                  m_pulseTimer;
+    bool                    m_pulseOn{false};
+
+    // RTT smoothing — rolling window of the last N samples. setRttMs()
+    // pushes; the painter and color-threshold both consume a min-filter
+    // of the window via smoothedRttMs() (2nd-smallest). The min-filter
+    // approximates true round-trip time despite the radio's periodic
+    // status-packet cadence adding bracket noise to each raw sample;
+    // a window of 10 gives us ~10 s of history at the 1 Hz sample rate,
+    // long enough to capture a "lucky" sample where the cadence noise
+    // happened to be near zero.
+    static constexpr int kRttSmoothingWindow = 10;
+    QQueue<int>           m_rttSamples;
+
+    // Stored during paintEvent so mousePressEvent can hit-test without
+    // re-computing geometry. Mutable because they are written inside const-
+    // eligible paint logic; paintEvent itself is not const in Qt.
+    mutable int m_lastRttX1{0};
+    mutable int m_lastRttX2{0};
+    mutable int m_lastPipX1{0};
+    mutable int m_lastPipX2{0};
+};
+
+// TitleBar — thin 32 px host strip at the top of the main window.
+//
+// Layout (left → right):
+//   [menuBar, inserted at position 0 via setMenuBar()]
+//   [ConnectionSegment — state dot + radio info + activity LED]
+//   [stretch]
+//   [NereusSDR app-name label]
+//   [stretch]
+//   [UTC clock]
+//   [18 px gap]
+//   [MasterOutputWidget, the PC group: icon + "PC" + slider + readout]
+//   [16 px gap]
+//   [RadioSpeakerWidget, the RADIO group: icon + "RADIO" + slider + readout]
+//   [spacing]
+//   [💡 feature-request button]
+//
+// macOS caveat: embedding the QMenuBar inside a custom widget prevents Qt
+// from promoting it to the native global menu bar at the top of the
+// screen. The menus render in-window instead. This is the explicit design
+// choice per user-approved Sub-Phase 10 decision (option D); the
+// MasterOutputWidget master-volume controls MUST be visible at all times
+// alongside the menus, and the native global bar cannot host them.
+class NEREUS_GUI_EXPORT TitleBar : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit TitleBar(AudioEngine* audio, QWidget* parent = nullptr);
+
+    // Re-style `mb` and insert it at position 0 of the hbox layout.
+    // Pattern from AetherSDR TitleBar.cpp:282. Caller must ensure `mb`
+    // is fully populated with actions BEFORE invoking this — otherwise
+    // the menu bar's size policy negotiation happens on an empty widget.
+    void setMenuBar(QMenuBar* mb);
+
+    // Non-owning accessor so MainWindow can wire the device-picker
+    // signal into AudioEngine::setSpeakersConfig.
+    MasterOutputWidget* masterOutput() const { return m_master; }
+
+    // R-SPK-17: the RADIO group. It reads as no radio connected until
+    // setRadioModel() hands it the window's model.
+    RadioSpeakerWidget* radioSpeaker() const { return m_radioSpeaker; }
+    void setRadioModel(RadioModel* model);
+
+    // R-SPK-17: true while the PC and RADIO groups are stacked (layout C)
+    // because side by side (layout A) would not leave the connection
+    // segment the width it asks for.
+    bool volumeStacked() const { return m_stacked; }
+
+protected:
+    bool event(QEvent* event) override;
+
+public:
+
+    // Non-owning accessor so MainWindow can wire connection-state signals
+    // and the activity LED. Phase 3Q-6.
+    ConnectionSegment* connectionSegment() const { return m_connectionSegment; }
+
+    /// Single-row UTC, "23:59:59 UTC". Time lives where every OS puts it,
+    /// which also frees the banner's bottom-right corner for alarms alone.
+    QString utcText() const;
+
+signals:
+    // Emitted when the 💡 feature-request button is clicked. MainWindow
+    // connects this to its showFeatureRequestDialog slot.
+    void featureRequestClicked();
+
+private:
+    QHBoxLayout*        m_hbox{nullptr};
+    QMenuBar*           m_menuBar{nullptr};
+    ConnectionSegment*  m_connectionSegment{nullptr};
+    MasterOutputWidget* m_master{nullptr};
+    RadioSpeakerWidget* m_radioSpeaker{nullptr};
+    QWidget*            m_volumeGroup{nullptr};
+    QBoxLayout*         m_volumeBox{nullptr};
+    bool                m_stacked{false};
+    bool                m_updatingVolumeForm{false};
+    int                 m_sideBySideGroupWidth{0};
+
+    // The width the connection segment would have side by side.
+    int segmentWidthSideBySide() const;
+    // Chooses side by side or stacked from the room the header has.
+    void updateVolumeForm();
+    void setVolumeStacked(bool stacked);
+    QPushButton*        m_featureBtn{nullptr};
+    QLabel*             m_utcLabel{nullptr};
+    QTimer*             m_utcTimer{nullptr};
+};
+
+} // namespace NereusSDR

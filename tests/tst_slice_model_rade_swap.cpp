@@ -1,0 +1,609 @@
+// no-port-check: NereusSDR-original unit-test file.  RADE channel-swap
+// is a NereusSDR-native extension; no Thetis equivalent.
+// =================================================================
+// tests/tst_slice_model_rade_swap.cpp  (NereusSDR)
+// =================================================================
+//
+// Phase 3R Task J3 + K-bench unit tests: SliceModel::setDspMode
+// channel-additive lifecycle and the RxChannel::wdspModeFor mapping
+// at the WDSP API boundary.
+//
+// K-bench contract (replaces original J3 destroy-and-replace design):
+//   - The WDSP RxChannel for the slice is created once at connect
+//     time and stays alive in every mode (USB, LSB, RADE_U, RADE_L,
+//     …).  WDSP serves as the SSB demod front-end and produces
+//     decoded audio that drives S-meter / spectrum / AGC every tick.
+//   - RadeChannel is created ALONGSIDE RxChannel in RADE_U /
+//     RADE_L only.  It consumes WDSP's decoded audio (downsampled
+//     to 24 kHz, real=audio, imag=0) and owns the speaker path
+//     while active.
+//   - The WDSP-facing mode is mapped at the RxChannel boundary:
+//     RxChannel::wdspModeFor(RADE_U) -> USB,
+//     RxChannel::wdspModeFor(RADE_L) -> LSB.
+//     The slice-facing mode (what RxChannel::mode() returns and
+//     what RxChannel emits on modeChanged) is the original RADE_U /
+//     RADE_L; only the int passed to SetRXAMode is mapped.
+//
+// On the transition into either RADE sideband (DSPMode::RADE_U or
+// DSPMode::RADE_L), setDspMode:
+//   1. Creates a new RadeChannel via WdspEngine (RxChannel left
+//      alone).
+//   2. Calls RadeChannel::setSideband(true) for RADE_U or
+//      setSideband(false) for RADE_L.
+//   3. Calls RadioModel::wireRadeChannel(sliceId, channel, slice).
+//   4. Starts the RadeChannel with the configured model path (or
+//      the "dummy" librade sentinel if no path is set).
+//
+// On the reverse transition out of either RADE sideband, setDspMode:
+//   1. Destroys the slice's RadeChannel.
+//   2. (RxChannel is NOT touched - it was alive the whole time.)
+//
+// On a RADE_U <-> RADE_L transition (sideband flip), setDspMode:
+//   1. Destroys the slice's RadeChannel.
+//   2. Creates a fresh RadeChannel with the new sideband flag.
+//
+// The tests below reach the WdspEngine via the friend-access trick
+// (NEREUS_BUILD_TESTS) to set m_initialized = true synchronously so
+// createRxChannel does not error out on its !m_initialized guard.
+// createRadeChannel does NOT require m_initialized (it is pure C++
+// object management, no WDSP-side state).
+//
+// Test cases (9):
+//   1. switchToRadeUpperKeepsRxChannelAndAddsRadeChannel
+//   2. switchToRadeLowerKeepsRxChannelAndAddsRadeChannel
+//   3. switchFromRadeUpperKeepsRxChannelAndDropsRadeChannel
+//   4. switchFromRadeLowerKeepsRxChannelAndDropsRadeChannel
+//   5. switchToRadeUpperSetsSidebandFlag
+//   6. switchToRadeLowerSetsSidebandFlag
+//   7. switchRadeUpperToLowerFlipsSidebandKeepsRxChannel
+//   8. switchToSameModeIsNoOp
+//   9. wdspModeForMapsRadeToSsb
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-05-11 - New test file for Phase 3R Task J3.  J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
+//   2026-05-11 - Split RADE into RADE_U / RADE_L; covered both
+//                 sidebands + the U <-> L recreate path.  J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
+//   2026-05-12 - Rewritten against K-bench RADE-additive contract:
+//                 RxChannel stays alive in every mode; RadeChannel
+//                 is created alongside; WDSP-facing mode is mapped
+//                 RADE_U->USB / RADE_L->LSB at the RxChannel
+//                 boundary.  Closes PR #238 review P1 #1 + #2.
+//                 J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
+// =================================================================
+
+#include <QtTest/QtTest>
+#include <QSignalSpy>
+#include <QScopeGuard>
+#include <QFile>
+#include <QtEndian>
+#include <algorithm>
+#include <cmath>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+
+#include "models/RxDspWorker.h"
+
+#include "core/RadeChannel.h"
+#include "core/RadeRxWorker.h"
+#include "core/RxChannel.h"
+#include "core/WdspEngine.h"
+#include "core/WdspTypes.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
+
+using namespace NereusSDR;
+
+class TestSliceModelRadeSwap : public QObject {
+    Q_OBJECT
+
+    // RAII helper that wraps a stack-allocated RadioModel + primed
+    // WdspEngine + seeded RxChannel.  Each test method constructs one,
+    // exercises the swap, then the destructor unwinds the engine on
+    // scope exit.  Stack-allocation keeps the engine lifetime
+    // strictly within one test method so the global WDSP impulse-cache
+    // tear-down (~WdspEngine -> shutdown -> destroy_impulse_cache)
+    // runs at most once per method instead of accumulating.
+    struct RadioFixture {
+        RadioModel  radio;
+        WdspEngine* engine{nullptr};
+        SliceModel* slice{nullptr};
+
+        RadioFixture()
+        {
+            engine = radio.wdspEngine();
+            engine->m_initialized = true;  // friend access (NEREUS_BUILD_TESTS)
+
+            // Seed slice 0 with a default RxChannel so the K-bench
+            // contract has a channel to keep alive across mode swaps.
+            engine->createRxChannel(0);
+
+            const int sliceIdx = radio.addSlice();
+            Q_ASSERT(sliceIdx == 0);
+            slice = radio.sliceById(0);
+            Q_ASSERT(slice != nullptr);
+        }
+    };
+
+private slots:
+    void earlyCallbackRetiresLiveRadeLifecycle_data()
+    {
+        QTest::addColumn<bool>("fromCallsign");
+        QTest::addColumn<DSPMode>("finalMode");
+        QTest::addColumn<bool>("awayAndBack");
+        for (bool callsign : {true,false}) {
+            for (DSPMode mode : {DSPMode::AM,DSPMode::RADE_U,DSPMode::RADE_L,DSPMode::RADE2_U,DSPMode::RADE2_L}) {
+                const QByteArray name=(callsign ? QByteArray("callsign-") : QByteArray("sync-"))+SliceModel::modeName(mode).toUtf8();
+                QTest::newRow(name.constData()) << callsign << mode << false;
+            }
+            const QByteArray name=callsign ? QByteArray("callsign-ABA") : QByteArray("sync-ABA");
+            QTest::newRow(name.constData()) << callsign << DSPMode::RADE_U << true;
+        }
+    }
+    void earlyCallbackRetiresLiveRadeLifecycle()
+    {
+        QFETCH(bool,fromCallsign); QFETCH(DSPMode,finalMode); QFETCH(bool,awayAndBack);
+        RxDspWorker worker;
+        RadioFixture fx;
+        fx.radio.attachDspWorkerForTest(&worker);
+        const auto detach=qScopeGuard([&] { fx.radio.attachDspWorkerForTest(nullptr); });
+        RxChannel* const originalRx=fx.engine->rxChannel(0);
+        fx.slice->setDspMode(DSPMode::RADE_U);
+        QPointer<RadeChannel> retired(fx.engine->radeChannel(0));
+        QVERIFY(retired && retired->isActive());
+        QCoreApplication::sendPostedEvents(&worker,QEvent::MetaCall);
+        QCOMPARE(worker.radeRxRouteCount(),1);
+        fx.slice->setLastRadeRxCallsign(QStringLiteral("KG4VCF"));
+        fx.slice->setRadeSynced(true);
+        QObject observations;
+        bool nested=false;
+        int acceptedFilterNotifications=0;
+        QSignalSpy filterSpy(fx.slice,&SliceModel::filterChanged);
+        const auto supersede=[&] {
+            if (!nested) {
+                nested=true;
+                if (awayAndBack) { fx.slice->setDspMode(DSPMode::AM); }
+                fx.slice->setDspMode(finalMode);
+                fx.slice->setFilter(431,2345);
+                acceptedFilterNotifications=filterSpy.count();
+            }
+        };
+        if (fromCallsign) {
+            connect(fx.slice,&SliceModel::lastRadeRxCallsignChanged,&observations,[&](const QString& callsign) {
+                if (callsign.isEmpty()) { supersede(); }
+            });
+        } else {
+            connect(fx.slice,&SliceModel::radeSyncedChanged,&observations,[&](bool synced) {
+                if (!synced) { supersede(); }
+            });
+        }
+        QSignalSpy modeSpy(fx.slice,&SliceModel::dspModeChanged);
+        fx.slice->setDspMode(DSPMode::LSB);
+        QVERIFY(nested);
+        QCOMPARE(fx.slice->dspMode(),finalMode);
+        QCOMPARE(modeSpy.count(),awayAndBack ? 2 : 1);
+        QCOMPARE(fx.slice->filterLow(),431);
+        QCOMPARE(fx.slice->filterHigh(),2345);
+        QCOMPARE(filterSpy.count(),acceptedFilterNotifications);
+        QVERIFY(fx.slice->lastRadeRxCallsign().isEmpty());
+        QVERIFY(!fx.slice->radeSynced());
+        QCOMPARE(fx.engine->rxChannel(0),originalRx);
+        QCoreApplication::sendPostedEvents(&worker,QEvent::MetaCall);
+        const bool finalRade=finalMode==DSPMode::RADE_U || finalMode==DSPMode::RADE_L
+            || finalMode==DSPMode::RADE2_U || finalMode==DSPMode::RADE2_L;
+        QCOMPARE(worker.radeRxRouteCount(),finalRade ? 1 : 0);
+        QVERIFY2(!retired,"The superseded old RADE channel must retire its actual decoder and route.");
+        RadeChannel* const replacement=fx.engine->radeChannel(0);
+        if (finalRade) {
+            QVERIFY(replacement && replacement->isActive());
+            QCOMPARE(replacement->sidebandUpper(),finalMode==DSPMode::RADE_U || finalMode==DSPMode::RADE2_U);
+            QCOMPARE(replacement->version(),finalMode==DSPMode::RADE2_U || finalMode==DSPMode::RADE2_L
+                ? RadeChannel::Version::V2 : RadeChannel::Version::V1);
+        } else {
+            QVERIFY(replacement==nullptr);
+        }
+    }
+
+
+    // ── Test 1: switchToRadeUpperKeepsRxChannelAndAddsRadeChannel ──────
+    //
+    // K-bench: setDspMode(RADE_U) creates a RadeChannel ALONGSIDE the
+    // RxChannel.  RxChannel is not destroyed (WDSP keeps demodulating
+    // for S-meter / spectrum / AGC and feeds audio to RADE).
+    void switchToRadeUpperKeepsRxChannelAndAddsRadeChannel() {
+        RadioFixture fx;
+
+        QVERIFY(fx.engine->rxChannel(0) != nullptr);
+        QVERIFY(fx.engine->radeChannel(0) == nullptr);
+
+        fx.slice->setDspMode(DSPMode::RADE_U);
+
+        QVERIFY2(fx.engine->rxChannel(0) != nullptr,
+                 "K-bench: RxChannel must stay alive across RADE entry "
+                 "(WDSP is the SSB demod front-end feeding RADE)");
+        QVERIFY2(fx.engine->radeChannel(0) != nullptr,
+                 "setDspMode(RADE_U) must create a RadeChannel alongside RxChannel");
+    }
+
+    // ── Test 2: switchToRadeLowerKeepsRxChannelAndAddsRadeChannel ──────
+    //
+    // Same as Test 1 but for the lower-sideband variant.
+    void switchToRadeLowerKeepsRxChannelAndAddsRadeChannel() {
+        RadioFixture fx;
+
+        QVERIFY(fx.engine->rxChannel(0) != nullptr);
+        QVERIFY(fx.engine->radeChannel(0) == nullptr);
+
+        fx.slice->setDspMode(DSPMode::RADE_L);
+
+        QVERIFY2(fx.engine->rxChannel(0) != nullptr,
+                 "K-bench: RxChannel must stay alive across RADE entry");
+        QVERIFY2(fx.engine->radeChannel(0) != nullptr,
+                 "setDspMode(RADE_L) must create a RadeChannel alongside RxChannel");
+    }
+
+    // ── Test 3: switchFromRadeUpperKeepsRxChannelAndDropsRadeChannel ───
+    //
+    // K-bench: round trip into RADE_U and back to USB destroys the
+    // RadeChannel but RxChannel was never touched.
+    void switchFromRadeUpperKeepsRxChannelAndDropsRadeChannel() {
+        RadioFixture fx;
+
+        RxChannel* rxBefore = fx.engine->rxChannel(0);
+        QVERIFY(rxBefore != nullptr);
+
+        fx.slice->setDspMode(DSPMode::RADE_U);
+        QVERIFY(fx.engine->radeChannel(0) != nullptr);
+        QVERIFY2(fx.engine->rxChannel(0) == rxBefore,
+                 "RADE entry must not destroy or replace the RxChannel");
+
+        fx.slice->setDspMode(DSPMode::USB);
+        QVERIFY2(fx.engine->radeChannel(0) == nullptr,
+                 "setDspMode(<non-RADE>) must destroy the slice's RadeChannel");
+        QVERIFY2(fx.engine->rxChannel(0) == rxBefore,
+                 "K-bench: same RxChannel instance persists across the round trip");
+    }
+
+    // ── Test 4: switchFromRadeLowerKeepsRxChannelAndDropsRadeChannel ───
+    //
+    // Same as Test 3 but for the lower-sideband variant.
+    void switchFromRadeLowerKeepsRxChannelAndDropsRadeChannel() {
+        RadioFixture fx;
+
+        RxChannel* rxBefore = fx.engine->rxChannel(0);
+        QVERIFY(rxBefore != nullptr);
+
+        fx.slice->setDspMode(DSPMode::RADE_L);
+        QVERIFY(fx.engine->radeChannel(0) != nullptr);
+        QVERIFY2(fx.engine->rxChannel(0) == rxBefore,
+                 "RADE entry must not destroy or replace the RxChannel");
+
+        fx.slice->setDspMode(DSPMode::LSB);
+        QVERIFY2(fx.engine->radeChannel(0) == nullptr,
+                 "setDspMode(<non-RADE>) must destroy the slice's RadeChannel");
+        QVERIFY2(fx.engine->rxChannel(0) == rxBefore,
+                 "K-bench: same RxChannel instance persists across the round trip");
+    }
+
+    // ── Test 5: switchToRadeUpperSetsSidebandFlag ──────────────────────
+    //
+    // After setDspMode(RADE_U), the created RadeChannel's sideband flag
+    // is set to upper (true).
+    void switchToRadeUpperSetsSidebandFlag() {
+        RadioFixture fx;
+
+        fx.slice->setDspMode(DSPMode::RADE_U);
+
+        RadeChannel* ch = fx.engine->radeChannel(0);
+        QVERIFY(ch != nullptr);
+        QVERIFY2(ch->sidebandUpper(),
+                 "setDspMode(RADE_U) must set RadeChannel::sidebandUpper()=true");
+    }
+
+    // ── Test 6: switchToRadeLowerSetsSidebandFlag ──────────────────────
+    //
+    // After setDspMode(RADE_L), the created RadeChannel's sideband flag
+    // is set to lower (false).
+    void switchToRadeLowerSetsSidebandFlag() {
+        RadioFixture fx;
+
+        fx.slice->setDspMode(DSPMode::RADE_L);
+
+        RadeChannel* ch = fx.engine->radeChannel(0);
+        QVERIFY(ch != nullptr);
+        QVERIFY2(!ch->sidebandUpper(),
+                 "setDspMode(RADE_L) must set RadeChannel::sidebandUpper()=false");
+    }
+
+    // ── Test 7: switchRadeUpperToLowerFlipsSidebandKeepsRxChannel ──────
+    //
+    // RADE_U <-> RADE_L is a destroy-and-recreate of the RadeChannel
+    // (sideband flag is set on construction).  RxChannel stays
+    // alive (K-bench).  Recreate verified via post-state because the
+    // allocator may reuse the same memory location.
+    void switchRadeUpperToLowerFlipsSidebandKeepsRxChannel() {
+        RadioFixture fx;
+
+        RxChannel* rxBefore = fx.engine->rxChannel(0);
+        QVERIFY(rxBefore != nullptr);
+
+        fx.slice->setDspMode(DSPMode::RADE_U);
+        QVERIFY(fx.engine->radeChannel(0) != nullptr);
+        QVERIFY(fx.engine->radeChannel(0)->sidebandUpper());
+        QVERIFY2(fx.engine->rxChannel(0) == rxBefore,
+                 "RADE_U entry must not touch the RxChannel");
+
+        // RADE_U -> RADE_L: sideband flag must flip to lower.
+        fx.slice->setDspMode(DSPMode::RADE_L);
+        RadeChannel* afterDown = fx.engine->radeChannel(0);
+        QVERIFY(afterDown != nullptr);
+        QVERIFY2(!afterDown->sidebandUpper(),
+                 "RADE_U -> RADE_L must flip the sideband flag to lower");
+        QVERIFY2(afterDown->isActive(),
+                 "After RADE_U -> RADE_L the new RadeChannel must be active");
+        QVERIFY2(fx.engine->rxChannel(0) == rxBefore,
+                 "RADE_U <-> RADE_L must not touch the RxChannel");
+
+        // And back the other way: RADE_L -> RADE_U flips sideband to
+        // upper.  Same recreate contract.
+        fx.slice->setDspMode(DSPMode::RADE_U);
+        RadeChannel* afterUp = fx.engine->radeChannel(0);
+        QVERIFY(afterUp != nullptr);
+        QVERIFY2(afterUp->sidebandUpper(),
+                 "RADE_L -> RADE_U must flip the sideband flag to upper");
+        QVERIFY2(afterUp->isActive(),
+                 "After RADE_L -> RADE_U the new RadeChannel must be active");
+        QVERIFY2(fx.engine->rxChannel(0) == rxBefore,
+                 "RADE_L <-> RADE_U must not touch the RxChannel");
+    }
+
+    // ── Test 8: switchToSameModeIsNoOp ─────────────────────────────────
+    //
+    // Calling setDspMode with the current mode is a no-op: no channel
+    // teardown / construction, no signal emission.
+    void switchToSameModeIsNoOp() {
+        RadioFixture fx;
+
+        // Slice starts at USB (SliceModel::m_dspMode default).
+        // Capture baseline RxChannel pointer.
+        RxChannel* before = fx.engine->rxChannel(0);
+        QVERIFY(before != nullptr);
+
+        QSignalSpy modeSpy(fx.slice, &SliceModel::dspModeChanged);
+        fx.slice->setDspMode(DSPMode::USB);  // same mode
+
+        QCOMPARE(modeSpy.count(), 0);
+        QCOMPARE(fx.engine->rxChannel(0), before);
+        QVERIFY(fx.engine->radeChannel(0) == nullptr);
+    }
+
+    // ── Test 9: wdspModeForMapsRadeToSsb ───────────────────────────────
+    //
+    // K-bench: RxChannel::wdspModeFor maps RADE_U -> USB and
+    // RADE_L -> LSB at the WDSP API boundary so SetRXAMode never sees
+    // a raw enum 12/13 (review finding 2026-05-12, PR #238).  All
+    // other modes pass through unchanged.
+    void realSpeechLoopback_data()
+    {
+        QTest::addColumn<int>("modeId");
+        QTest::addColumn<int>("expectedTxCalls");
+        // rade_c src/rade_api.c + rade_tx_v2.c: V1 consumes 12 and V2 4
+        // 10 ms feature frames per call. Four seconds gives 33 or 100 calls.
+        QTest::newRow("V1") << 12 << 33;
+        QTest::newRow("V2") << 14 << 100;
+    }
+
+    void realSpeechLoopback()
+    {
+        QFETCH(int, modeId);
+        QFETCH(int, expectedTxCalls);
+        RadioFixture txFixture;
+        RadeChannel receiver;
+        txFixture.slice->setDspMode(static_cast<DSPMode>(modeId));
+        RadeChannel* tx = txFixture.engine->radeChannel(0);
+        RadeChannel* rx = &receiver;
+        QVERIFY(tx != nullptr);
+        receiver.setVersion(modeId == 14 ? RadeChannel::Version::V2 : RadeChannel::Version::V1);
+        QCOMPARE(tx->version(), receiver.version());
+        QVERIFY(receiver.start(QStringLiteral("dummy")));
+        QVERIFY(tx->isActive());
+        QVERIFY(rx->isActive());
+
+        QFile fixture(QFINDTESTDATA("../third_party/rade/wav/brian_g8sez.wav"));
+        QVERIFY(fixture.open(QIODevice::ReadOnly));
+        const QByteArray wav = fixture.readAll();
+        QCOMPARE(wav.left(4), QByteArrayLiteral("RIFF"));
+        QCOMPARE(wav.mid(8, 4), QByteArrayLiteral("WAVE"));
+        QByteArray speech;
+        bool pcm16Mono = false;
+        for (qsizetype offset = 12; offset + 8 <= wav.size();) {
+            const quint32 length = qFromLittleEndian<quint32>(wav.constData() + offset + 4);
+            QVERIFY(length <= quint32(wav.size() - offset - 8));
+            if (wav.mid(offset, 4) == QByteArrayLiteral("fmt ")) {
+                QVERIFY(length >= 16);
+                const char* format = wav.constData() + offset + 8;
+                pcm16Mono = qFromLittleEndian<quint16>(format) == 1
+                    && qFromLittleEndian<quint16>(format + 2) == 1
+                    && qFromLittleEndian<quint32>(format + 4) == 16000
+                    && qFromLittleEndian<quint16>(format + 14) == 16;
+            } else if (wav.mid(offset, 4) == QByteArrayLiteral("data")) {
+                speech = wav.mid(offset + 8, std::min<qsizetype>(length, 4 * 16000 * 2));
+            }
+            offset += 8 + length + (length & 1);
+        }
+        QVERIFY(pcm16Mono);
+        QCOMPARE(speech.size(), 4 * 16000 * 2);
+#if Q_BYTE_ORDER == Q_BIG_ENDIAN
+        for (qsizetype offset = 0; offset < speech.size(); offset += 2) {
+            std::swap(speech[offset], speech[offset + 1]);
+        }
+#endif
+        QByteArray air;
+        connect(tx, &RadeChannel::txModemReady, this,
+                [&air](const QByteArray& modem) { air.append(modem); });
+        tx->txEncode(speech);
+        QCOMPARE(tx->radeTxCallCountForTest(), expectedTxCalls);
+        QVERIFY(tx->queueEndOfOver(QStringLiteral("KG4VCF")));
+        QVERIFY(tx->endOfOverQueued());
+        // Flush the existing resamplers and allow the EOO detector to finish.
+        air.append(QByteArray(2 * 24000 * 2 * sizeof(float), '\0'));
+        QSignalSpy syncSpy(rx, &RadeChannel::syncChanged);
+        QSignalSpy textSpy(rx, &RadeChannel::rxTextDecoded);
+        bool finite = true;
+        int nonzeroSpeechSamples = 0;
+        connect(rx, &RadeChannel::rxSpeechReady, this,
+                [&](const QByteArray& pcm) {
+                    const float* samples = reinterpret_cast<const float*>(pcm.constData());
+                    for (qsizetype i = 0; i < pcm.size() / qsizetype(sizeof(float)); ++i) {
+                        finite = finite && std::isfinite(samples[i]);
+                        if (std::abs(samples[i]) > 1e-6f) {
+                            ++nonzeroSpeechSamples;
+                        }
+                    }
+                });
+        const float* stereo = reinterpret_cast<const float*>(air.constData());
+        const int frames = int(air.size() / (2 * sizeof(float)));
+        for (int offset = 0; offset < frames; offset += 2048) {
+            const int count = std::min(2048, frames - offset);
+            QByteArray iq(count * 2 * sizeof(float), Qt::Uninitialized);
+            float* output = reinterpret_cast<float*>(iq.data());
+            for (int i = 0; i < count; ++i) {
+                output[2 * i] = stereo[2 * (offset + i)];
+                output[2 * i + 1] = 0.0f;
+            }
+            rx->processIq(iq);
+        }
+        QVERIFY(finite);
+        QVERIFY(nonzeroSpeechSamples > 24000);
+        bool acquiredSync = false;
+        for (const QList<QVariant>& event : syncSpy) {
+            acquiredSync = acquiredSync || event.first().toBool();
+        }
+        QVERIFY(acquiredSync);
+        QVERIFY(!rx->isSynced());
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        if (modeId == 12) {
+            QCOMPARE(textSpy.count(), 1);
+            QCOMPARE(textSpy.first().first().toString(), QStringLiteral("KG4VCF"));
+        } else {
+            QCOMPARE(textSpy.count(), 0);
+        }
+    }
+
+    void versionSwitchRetiresPendingDecode()
+    {
+        RadioFixture fx;
+        fx.slice->setDspMode(DSPMode::RADE_U);
+        RadeChannel* channel = fx.engine->radeChannel(0);
+        QVERIFY(channel != nullptr);
+        QPointer<RadeChannel> retired(channel);
+        fx.slice->setLastRadeRxCallsign(QStringLiteral("KG4VCF"));
+        std::mutex gateMutex;
+        std::condition_variable gateCv;
+        bool released = false;
+        std::atomic<bool> entered{false};
+        const auto release = [&] {
+            {
+                std::lock_guard<std::mutex> lock(gateMutex);
+                released = true;
+            }
+            gateCv.notify_all();
+        };
+        QObject observer;
+        const auto releaseOnExit = qScopeGuard([&] {
+            release();
+            if (retired) {
+                retired->stopRxWorker();
+                retired->setRxDecodeLockedHookForTest({});
+            }
+        });
+        channel->setRxDecodeLockedHookForTest([&] {
+            std::unique_lock<std::mutex> lock(gateMutex);
+            entered.store(true);
+            gateCv.wait(lock, [&] { return released; });
+        });
+        channel->setRxGated(false);
+        channel->startRxWorker();
+        QVERIFY(!channel->rxGated());
+        const auto bridge = channel->rxBridge();
+        std::vector<float> iq(2048 * 2, 0.0f);
+        QVERIFY(bridge->pushInput(bridge->nextEpoch(), 0, iq.data(), 2048));
+        RadeRxWorker::wake(*bridge);
+        QTRY_VERIFY_WITH_TIMEOUT(entered.load(), 5000);
+        // The ordinary mode transition clears old text before joining the
+        // worker. Release that pending real decode at this observed boundary.
+        connect(fx.slice, &SliceModel::lastRadeRxCallsignChanged, &observer,
+                [&](const QString& callsign) {
+                    if (callsign.isEmpty()) {
+                        release();
+                    }
+                });
+        fx.slice->setDspMode(static_cast<DSPMode>(14));
+        QVERIFY(retired.isNull());
+        RadeChannel* replacement = fx.engine->radeChannel(0);
+        QVERIFY(replacement != nullptr);
+        QCOMPARE(replacement->version(), RadeChannel::Version::V2);
+        QVERIFY(replacement->isActive());
+        QVERIFY(fx.slice->lastRadeRxCallsign().isEmpty());
+        QVERIFY(replacement->rxBridge() != bridge);
+    }
+
+    void experimentalModesKeepRxAndCreateDecoder() {
+        RadioFixture fx;
+        RxChannel* original = fx.engine->rxChannel(0);
+        fx.slice->setDspMode(static_cast<DSPMode>(14));
+        RadeChannel* upper = fx.engine->radeChannel(0);
+        QVERIFY(upper != nullptr);
+        QVERIFY(upper->isActive());
+        QCOMPARE(upper->version(), RadeChannel::Version::V2);
+        QVERIFY(upper->sidebandUpper());
+        QCOMPARE(fx.engine->rxChannel(0), original);
+        fx.slice->setDspMode(static_cast<DSPMode>(15));
+        RadeChannel* lower = fx.engine->radeChannel(0);
+        QVERIFY(lower != nullptr);
+        QVERIFY(lower->isActive());
+        QCOMPARE(lower->version(), RadeChannel::Version::V2);
+        QVERIFY(!lower->sidebandUpper());
+        QCOMPARE(fx.engine->rxChannel(0), original);
+        fx.slice->setDspMode(DSPMode::RADE_U);
+        QVERIFY(fx.engine->radeChannel(0) != nullptr);
+        QCOMPARE(fx.engine->radeChannel(0)->version(), RadeChannel::Version::V1);
+        QCOMPARE(fx.engine->rxChannel(0), original);
+        fx.slice->setDspMode(DSPMode::USB);
+        QVERIFY(fx.engine->radeChannel(0) == nullptr);
+    }
+
+    void experimentalRxModesMapToSsb() {
+        QCOMPARE(RxChannel::wdspModeFor(static_cast<DSPMode>(14)), DSPMode::USB);
+        QCOMPARE(RxChannel::wdspModeFor(static_cast<DSPMode>(15)), DSPMode::LSB);
+    }
+
+    void wdspModeForMapsRadeToSsb() {
+        // RADE sidebands map to their SSB equivalents.
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::RADE_U), DSPMode::USB);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::RADE_L), DSPMode::LSB);
+
+        // Standard WDSP modes are pass-through.
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::LSB),  DSPMode::LSB);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::USB),  DSPMode::USB);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::DSB),  DSPMode::DSB);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::CWL),  DSPMode::CWL);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::CWU),  DSPMode::CWU);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::FM),   DSPMode::FM);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::AM),   DSPMode::AM);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::DIGU), DSPMode::DIGU);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::SPEC), DSPMode::SPEC);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::DIGL), DSPMode::DIGL);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::SAM),  DSPMode::SAM);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::DRM),  DSPMode::DRM);
+    }
+};
+
+QTEST_GUILESS_MAIN(TestSliceModelRadeSwap)
+#include "tst_slice_model_rade_swap.moc"

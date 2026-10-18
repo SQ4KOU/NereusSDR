@@ -1,0 +1,2539 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Display pill: live mockup</title>
+<style>
+/* Colors, sizes and radii follow the app: src/gui/StyleConstants.h, the pill in
+   src/gui/SpectrumOverlayPanel.cpp (268 wide, 22 tab, 18 control, 14 slider) and
+   the Setup pages. The dashed box at the top is the mockup's own, as in the
+   other mockups under docs/architecture. */
+:root{--page:#05050c;--app:#0f0f1a;--panel:#0a0a18;--txt:#c8d8e8;--dim:#8090a0;--mut:#708090;--accent:#00b4d8;--title:#8aa8c0;--border:#304050;--amber:#ffb800}
+*{box-sizing:border-box}
+body{background:var(--page);color:var(--txt);font:12px -apple-system,system-ui,"Segoe UI",sans-serif;margin:0;padding:16px;user-select:none;-webkit-user-select:none}
+.demo{background:#14141f;border:1px dashed #3a3a55;border-radius:6px;padding:8px 10px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;color:#aab;max-width:1420px}
+.demo b{color:#dde;font-weight:600}
+.demo select,.demo button{background:#1c1c2c;color:#dde;border:1px solid #3a3a55;border-radius:3px;padding:2px 6px;font-size:12px}
+.demo label{display:inline-flex;gap:5px;align-items:center}
+.try{color:#99a;font-size:11px;width:100%;line-height:1.5}
+.try b{color:#ccd}
+.stage{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}
+.where{color:var(--title);font-size:11px;margin:0 0 5px 2px;letter-spacing:.03em;height:14px;white-space:nowrap}
+.win{border:1px solid #203040;border-radius:6px;overflow:hidden;background:var(--app)}
+.wtitle{height:26px;background:#1b1b28;display:flex;align-items:center;justify-content:center;color:#aab;font-size:12px;border-bottom:1px solid #000;position:relative}
+.wtitle i{position:absolute;left:10px;top:8px;width:10px;height:10px;border-radius:5px;background:#ff5f57;box-shadow:16px 0 0 #febc2e,32px 0 0 #28c840}
+
+/* ---------- main window ---------- */
+.main{width:716px;overflow:visible}
+#mainwhere{max-width:716px;overflow:hidden;text-overflow:ellipsis}
+.pans{padding:6px 6px 0}
+.pan{border:1px solid #203040;margin-bottom:6px;position:relative;background:var(--panel)}
+.pan.sel{border-color:#0090e0}
+.phead{height:18px;display:flex;align-items:center;gap:8px;padding:0 6px;font-size:10px;color:var(--dim);border-bottom:1px solid #182430}
+.phead b{color:var(--txt)}
+.phead .flag{margin-left:auto;color:#ffb800;font-weight:700}
+.txb{background:#c02020;color:#fff;border-radius:2px;padding:0 4px;font-weight:700}
+.pan canvas{display:block}
+.ovl{position:absolute;left:4px;top:24px;display:flex;flex-direction:column;gap:2px}
+.ob{height:18px;width:52px;background:rgba(20,30,45,.94);border:1px solid rgba(255,255,255,.157);border-radius:2px;color:var(--txt);font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:default}
+.ob.fake{color:#607080}
+.ob.on{background:rgba(0,112,192,.706);border-color:#0090e0;color:#fff}
+.ann{font-size:10px;color:#99a;font-style:italic;padding:3px 6px 4px;border-top:1px dashed #2a2a40;background:#101018}
+.ann.stand{border:1px dashed #2a2a40;margin-bottom:6px;line-height:13px}
+.nopan{height:150px;display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:12px;border:1px solid #203040;margin-bottom:6px;background:var(--panel)}
+.flynone{padding:14px 12px;color:#99a;font-size:10px;font-style:italic;line-height:14px}
+
+/* ---------- pill flyout ---------- */
+.fly{width:268px;background:rgba(15,15,26,.96);border:1px solid var(--border);border-radius:3px}
+.fly.flash,.win.flash{animation:fl .9s}
+@keyframes fl{0%{box-shadow:0 0 0 2px #ffb800}100%{box-shadow:0 0 0 2px transparent}}
+.tabs{display:flex;gap:2px;padding:6px 8px 0}
+.tab{flex:1 1 auto;padding:0 5px;height:22px;background:rgba(20,30,45,.94);border:1px solid rgba(255,255,255,.157);border-radius:2px;color:var(--txt);font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:default}
+.tab.on{background:rgba(0,112,192,.706);border-color:#0090e0;color:#fff}
+.grid{display:grid;grid-template-columns:70px 22px 1fr 54px;column-gap:4px;row-gap:4px;padding:6px 8px;align-items:center}
+.lbl{color:var(--dim);font-size:10px;white-space:nowrap;height:18px;display:flex;align-items:center;position:relative}
+/* A label's dot sits in the pill's left margin, so the label keeps its whole column and does not move when the dot comes or goes. */
+.lbl .dot,.seg .dot{position:absolute;left:-8px;top:50%;margin:-3.5px 0 0;box-shadow:none}
+.val{color:var(--txt);font-size:10px;text-align:right;white-space:nowrap}
+.lbl.dis,.val.dis{color:#4a5a6a}
+.val.vbox{height:16px;background:#1a2a3a;border:1px solid var(--border);border-radius:2px;padding:0 3px;display:flex;align-items:center;justify-content:flex-end}
+.val.vbox.dis{background:#141e28;border-color:#243444}
+.dot{width:7px;height:7px;border-radius:4px;background:var(--amber);margin-right:4px;flex:none;cursor:pointer;box-shadow:0 0 0 2px rgba(255,184,0,.18)}
+.hdr{grid-column:1/5;display:flex;align-items:center;gap:6px;margin-top:8px;min-height:12px}
+.hdr.first{margin-top:0}
+.hdr .t{color:var(--accent);font-size:9px;font-weight:700;letter-spacing:.9px;text-transform:uppercase}
+.hdr .line{flex:1;height:1px;background:var(--border)}
+.hdr .scope{color:var(--mut);font-size:9px;font-weight:700;letter-spacing:.4px}
+.sl{position:relative;height:14px;cursor:pointer}
+.sl .g{position:absolute;left:0;right:0;top:5px;height:4px;background:#203040;border-radius:2px}
+.sl .h{position:absolute;top:2px;width:10px;height:10px;margin-left:-5px;background:var(--accent);border-radius:5px}
+.sl.dis{cursor:default}.sl.dis .h{background:#3a4a5a}.sl.dis .g{background:#1a2430}
+.sl.noh .h{display:none}
+.pill{height:18px;min-width:36px;padding:0 6px;display:inline-flex;align-items:center;justify-content:center;background:#1a2a3a;border:1px solid #205070;border-radius:3px;color:var(--txt);font-size:10px;font-weight:700;white-space:nowrap;cursor:default;position:relative}
+.pill.on{background:#006040;color:#00ff88;border-color:#00a060}
+.pill.dis{background:#141e28;color:#4a5a6a;border-color:#243444}
+.pill.dis.on{color:#4f7a66}
+.pill.mini{min-width:0;width:22px;padding:0;font-size:9px;justify-self:center}
+.pill .dot{position:absolute;right:-4px;top:-4px;margin:0}
+.pills{grid-column:1/5;display:flex;flex-wrap:wrap;gap:4px}
+.cmb{grid-column:2/5;height:18px;background:#1a2a3a;border:1px solid var(--border);border-radius:3px;color:var(--txt);font-size:10px;padding:0 6px;display:flex;align-items:center;justify-content:space-between;cursor:default}
+.cmb.c2{grid-column:3/5}
+.cmb.dis{background:#141e28;color:#4a5a6a;border-color:#243444}
+.arr{color:var(--mut);font-size:8px}
+.sw{width:18px;height:12px;border:1px solid #607080;border-radius:2px;cursor:pointer;justify-self:center}
+.sw.dis{opacity:.3;cursor:default}
+.swc{position:relative;justify-self:center;display:flex}
+.swc .dot{position:absolute;right:-4px;top:-4px;margin:0}
+.btn{height:18px;padding:0 8px;background:#1a3050;color:var(--txt);border:1px solid var(--border);border-radius:2px;font-size:10px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;cursor:default}
+.btn.dis{background:#141e28;color:#4a5a6a;border-color:#243444}
+.note{grid-column:1/5;color:var(--mut);font-size:9px;line-height:12px}
+.note.hi{color:var(--title)}
+.note.amber,.snote.amber{color:var(--amber)}
+.note.two{min-height:24px}
+.note.dim{color:#4a5a6a}
+.snote.dim,.snote.plain.dim{color:#556070}
+.chip{display:inline-block;width:22px;height:10px;border:1px solid #607080;border-radius:2px;vertical-align:-1px}
+.noteb{grid-column:1/5;display:flex;gap:6px;align-items:flex-start;min-height:24px}
+.noteb .note{flex:1}
+.brow{grid-column:2/5;display:flex;gap:4px}
+.lnk{color:var(--accent);cursor:pointer;white-space:nowrap}
+.why{grid-column:1/5;color:var(--mut);font-size:9px;line-height:12px;height:41px;overflow:hidden;margin-top:6px;padding-top:4px;border-top:1px solid #1c2836}
+.why.amber{color:var(--amber)}
+.sep{grid-column:1/5;height:1px;background:var(--border);margin:0 0 2px}
+.foot{grid-column:1/5;display:flex;align-items:center;justify-content:space-between}
+/* One width, wide enough for the longest count, so the button does not change size when a dot comes or goes. */
+.foot .btn{width:120px;padding:0}
+.link{color:var(--accent);font-size:10px;cursor:pointer}
+.seg{grid-column:1/5;display:flex;gap:2px;align-items:center;position:relative}
+.seg .s{flex:1;height:18px;background:rgba(20,30,45,.94);border:1px solid rgba(255,255,255,.157);border-radius:2px;color:var(--txt);font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:default;white-space:nowrap}
+.seg .s.on{background:rgba(0,112,192,.706);border-color:#0090e0;color:#fff}
+.seg.dis .s{background:#141e28;color:#4a5a6a;border-color:#243444}
+.seg.dis .s.on{background:#243444;color:#8090a0}
+
+/* ---------- Setup ---------- */
+.setupw{width:664px}
+.dlg{display:flex;min-height:600px}
+.tree{width:136px;flex:none;background:#131326;padding:4px 0;border-right:3px solid var(--border);font-size:12px;color:#9aa8b8}
+.tree div{padding:2px 8px;min-height:19px;line-height:15px;white-space:nowrap}
+.tree .cat::before{content:"\25B8  ";color:var(--title)}.tree .cat.open::before{content:"\25BE  "}
+.tree .leaf{padding-left:24px;cursor:pointer}
+.tree .leaf.sel{background:#00b4d8;color:#fff}
+.spage{flex:1;padding:10px 12px 14px;min-width:0}
+.spage h1{font-size:15px;font-weight:700;margin:0 0 8px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.for{display:flex;align-items:center;gap:3px;margin-bottom:6px}
+.forl{font-size:12px;color:var(--txt);margin-right:4px;white-space:nowrap}
+.ft{position:relative;height:32px;padding:0 8px;white-space:nowrap;background:#1a2a3a;border:1px solid var(--border);border-radius:3px;font-size:12px;line-height:13px;color:var(--txt);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:default}
+.ft.off{color:#5a6a7a;border-style:dashed}
+.ft.on{background:#0070c0;border-color:#0090e0;color:#fff;font-weight:600}
+.ft .d{position:absolute;right:-3px;top:-3px;width:7px;height:7px;border-radius:4px;background:var(--amber)}
+.ft .sl2{font-size:10px;line-height:11px;opacity:.75;font-weight:400}
+.banner{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;padding:6px 8px;border:1px solid var(--border);border-radius:3px;background:var(--panel);font-size:11.5px;color:var(--txt);min-height:36px}
+.banner.pan{border-color:#906000}
+.gb{position:relative;border:1px solid #205070;border-radius:4px;margin-top:16px;padding:14px 10px 8px}
+.gb>.gt{position:absolute;top:-8px;left:8px;background:var(--app);padding:0 4px;font-size:11px;font-weight:700;color:var(--title)}
+.gb>.gtag{position:absolute;top:-7px;right:8px;background:var(--app);padding:0 4px;font-size:9px;font-weight:700;color:var(--mut);letter-spacing:.4px}
+.srow{display:grid;grid-template-columns:118px minmax(0,1fr) 72px 176px;column-gap:8px;align-items:center;min-height:26px;margin-bottom:2px}
+.srow .l{font-size:12px;color:var(--txt);display:flex;align-items:center;white-space:nowrap}
+.srow.dis .l{color:#556070}
+.ssl{position:relative;height:16px;cursor:pointer}
+.ssl .g{position:absolute;left:0;right:0;top:6px;height:4px;background:#1a2a3a;border-radius:2px}
+.ssl .f{position:absolute;left:0;top:6px;height:4px;background:var(--accent);border-radius:2px}
+.ssl .h{position:absolute;top:2px;width:12px;height:12px;margin-left:-6px;background:var(--accent);border-radius:6px}
+.srow.dis .ssl{cursor:default}.srow.dis .ssl .f,.srow.dis .ssl .h{background:#3a4a5a}
+.ssl.noh .h,.ssl.noh .f{display:none}
+.spin{height:24px;background:#1a2a3a;border:1px solid var(--border);border-radius:3px;font-size:12px;color:var(--txt);display:flex;align-items:center;justify-content:flex-end;padding:0 8px;white-space:nowrap}
+.srow.dis .spin{background:#1a1a2a;color:#556070;border-color:#2a3040}
+.spin.cmbx{justify-content:space-between;grid-column:2/4;cursor:default}
+.whyc{font-size:10.5px;color:var(--mut);line-height:12px;padding:1px 0}
+.srow.dis .whyc{color:#9a8450}
+.ownline{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-1px 0 5px 14px;font-size:11px;line-height:14px;color:var(--amber)}
+.ownline .sbtn{flex:none}
+.sbtn{height:22px;padding:0 9px;background:#1a2a3a;border:1px solid var(--border);border-radius:3px;font-size:11px;color:var(--txt);display:inline-flex;align-items:center;white-space:nowrap;cursor:default}
+.sbtn.dis{background:#1a1a2a;color:#556070;border-color:#2a3040}
+.sseg{display:flex;gap:2px;margin:0 0 5px;align-items:center}
+.sseg .s{flex:1;height:24px;background:#1a2a3a;border:1px solid var(--border);border-radius:3px;font-size:12px;color:var(--txt);display:flex;align-items:center;justify-content:center;cursor:default;white-space:nowrap}
+.sseg .s.on{background:#0070c0;border-color:#0090e0;color:#fff;font-weight:600}
+.sseg.dis .s{background:#1a1a2a;color:#556070;border-color:#2a3040}
+.sseg.dis .s.on{background:#2a3a4a;color:#8090a0}
+.snote{font-size:11px;color:var(--title);margin:0 0 6px;line-height:15px}
+.snote.plain{color:var(--mut)}
+.mnote{font-size:10px;color:#99a;font-style:italic;margin:2px 0 4px}
+.cbadge{flex:none;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #243444;border-radius:2px;background:#141e28;color:#4a5a6a;font-size:10px;font-weight:700;cursor:default}
+.cbadge.act{background:#006040;color:#00ff88;border-color:#00a060}
+.cbadge.pau{background:#4a3800;color:#ffcc44;border-color:#d4a017}
+.spin.box{grid-column:2/4;width:118px;justify-content:space-between;gap:6px;padding-right:4px}
+.spin.box .st{display:flex;flex-direction:column;font-size:7px;line-height:9px;color:var(--mut)}
+.spin.box .st span{cursor:pointer;padding:0 3px}
+.srow.dis .spin.box .st span{cursor:default}
+.rdo{font-size:12px;color:var(--txt);margin:0 0 6px;display:flex;gap:18px}
+.rdo b{font-weight:400;background:#0a0a18;border:1px solid var(--border);border-radius:2px;padding:1px 8px;margin-left:6px;color:#ffe4c4}
+.chk{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--txt);min-height:22px;cursor:default;grid-column:2/4}
+.chk i{width:14px;height:14px;background:#1a2a3a;border:1px solid var(--border);border-radius:2px;display:inline-block;flex:none}
+.chk.on i{background:var(--accent);border-color:var(--accent)}
+.srow.dis .chk{color:#556070}
+.srow.dis .chk i{background:#1a1a2a;border-color:#2a3040}
+.srow.dis .chk.on i{background:#3a4a5a}
+.ssw{width:46px;height:18px;border:1px solid #607080;border-radius:3px;cursor:pointer}
+.srow.dis .ssw{opacity:.3;cursor:default}
+.sswt{font-size:11px;color:var(--mut)}
+/* popup list */
+.pop{position:absolute;z-index:9;background:#1a2a3a;border:1px solid #406080;border-radius:3px;color:var(--txt);font-size:11px;padding:2px 0;box-shadow:0 8px 24px #000a}
+.pop div{padding:3px 12px 3px 8px;white-space:nowrap;cursor:default}
+.pop div:hover,.pop div.cur{background:#00b4d8;color:#fff}
+
+/* ---------- the live mockup ---------- */
+body{padding:12px}
+.stage{flex-wrap:nowrap}
+.setupcol{position:sticky;top:8px;max-height:calc(100vh - 16px);overflow:auto;flex:0 0 auto}
+.pan canvas{cursor:crosshair}
+.pbody{position:relative}
+.pbody .ovl{top:6px;z-index:2}
+.ob{cursor:pointer}
+.pbody .fly{position:absolute;left:62px;top:4px;z-index:6;box-shadow:0 6px 22px rgba(0,0,0,.65)}
+#park{display:none}
+.try summary{cursor:pointer;color:#ccd;font-weight:600}
+.zs{position:absolute;left:4px;bottom:36px;display:flex;gap:2px;z-index:2}
+.zb{width:24px;height:20px;background:rgba(20,30,45,.78);border:1px solid rgba(255,255,255,.157);border-radius:2px;color:var(--txt);font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.zb:hover{background:rgba(0,112,192,.706);border-color:#0090e0}
+.mm{margin:0 6px 6px;border:1px solid #203040;background:var(--panel)}
+.mmh{height:18px;display:flex;align-items:center;gap:8px;padding:0 6px;font-size:10px;color:var(--dim);border-bottom:1px solid #182430}
+.mmh b{color:var(--txt);font-size:11px}
+.mmh span{margin-left:auto}
+.mm canvas{display:block}
+input.num{font-family:inherit;color:var(--txt);text-align:right;outline:none;user-select:text;-webkit-user-select:text;min-width:0;margin:0}
+input.num:focus{border-color:#0090e0}
+input.val.vbox.num{display:block;width:100%;font-size:10px;height:16px;padding:0 3px}
+input.spin.num{display:block;width:100%;font-size:12px}
+.spin.box input.num{background:none;border:0;padding:0;flex:1;width:10px;font-size:12px}
+.pop.box{padding:8px;width:216px}
+.pop.box div{padding:0;white-space:normal}
+.pop.box div:hover{background:none;color:inherit}
+.pop.box .ptit{font-weight:700;color:var(--title);margin-bottom:6px}
+.swg{display:grid;grid-template-columns:repeat(8,1fr);gap:4px;margin-bottom:6px}
+.swb{display:block;height:20px;border:1px solid #607080;border-radius:2px;cursor:pointer}
+.swb.cur{box-shadow:0 0 0 2px #fff}
+.pop.box .pbtn{display:flex;align-items:center;justify-content:space-between;gap:8px;height:22px;padding:0 8px;margin-top:4px;background:#14202c;border:1px solid var(--border);border-radius:3px;cursor:pointer}
+.pop.box .pbtn:hover,.pop.box .pbtn.cur{background:#0070c0;color:#fff}
+.pbtn input[type=color]{width:34px;height:16px;padding:0;border:0;background:none}
+.pbtn input[type=file]{display:none}
+.picg{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.pop.box .picb{border:1px solid var(--border);border-radius:3px;padding:2px;cursor:pointer;font-size:10px;text-align:center;overflow:hidden;text-overflow:ellipsis}
+.pop.box .picb:hover,.pop.box .picb.cur{border-color:#0090e0;background:#0b2a44}
+.picb canvas{display:block;width:100%;height:42px}
+.gwrap{padding:3px 0}
+.gstrip{position:relative;height:18px;border:1px solid var(--border);border-radius:2px;cursor:copy}
+.gstrip canvas{display:block;width:100%;height:16px}
+.gstrip.dis{opacity:.35;cursor:default}
+.gh{position:absolute;top:-3px;width:9px;height:22px;margin-left:-5px;border:1px solid #fff;border-radius:2px;box-shadow:0 0 0 1px #000;cursor:ew-resize}
+.gstrip.dis .gh{cursor:default}
+.gl{display:flex;justify-content:space-between;font-size:9px;color:var(--mut);margin-top:2px}
+.modal{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.55);z-index:20;display:flex;align-items:center;justify-content:center}
+.mbox{width:430px;background:#1b1b28;border:1px solid #406080;border-radius:6px;box-shadow:0 12px 40px #000;padding:14px 16px}
+.mt{font-weight:700;font-size:13px;margin-bottom:8px}
+.mb{font-size:12px;line-height:17px}
+.mf{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.mf .sbtn{cursor:pointer;min-width:64px;justify-content:center}
+.sbtn.def{border-color:#0090e0;background:#0070c0;color:#fff}
+.tree .treenote{white-space:normal;color:var(--mut);font-size:10px;line-height:13px;margin-top:12px}
+#selftest{white-space:pre-wrap;font:11px ui-monospace,monospace;color:#cde;background:#101820;border:1px solid #304050;padding:8px;margin:0 0 10px;user-select:text;-webkit-user-select:text}
+</style></head><body>
+
+<div class="demo">
+ <b>Mockup controls (not part of the app):</b>
+ <label>Radio <select id="radio">
+  <option value="5">ANAN-G2 (runs up to 5 pans)</option>
+  <option value="4">Hermes, ANAN-10/100 (up to 4 pans)</option>
+  <option value="2">Hermes Lite 2 (up to 2 pans)</option>
+ </select></label>
+ <label>Situation <select id="sit">
+  <option value="rx">Receiving</option>
+  <option value="tx">Transmitting on Pan 1</option>
+  <option value="remote">Remote window (a Core runs the radio)</option>
+  <option value="remoteold">Remote window on an older Core</option>
+  <option value="off">Remote window, not connected to its Core</option>
+  <option value="gpu">Receiving, on a computer with limited graphics</option>
+  <option value="nopan">No pan open</option>
+ </select></label>
+ <label>When a row is changed under "All pans" <select id="rule">
+  <option value="win">every pan takes it</option>
+  <option value="keep">a pan with its own value keeps it</option>
+ </select></label>
+ <label><input type="checkbox" id="trim" checked> Black Level and Color Gain work in every mode</label>
+ <label>The transmit scale is <select id="txscope">
+  <option value="one">one for the whole program</option>
+  <option value="pan">each pan's own</option>
+ </select></label>
+ <button id="startover">Start over</button>
+ <details class="try"><summary>Things to try (10 steps, click to open)</summary><div id="try"></div></details>
+</div>
+
+<div class="stage">
+ <div>
+  <div class="where" id="mainwhere"></div>
+  <div class="win main"><div class="wtitle"><i></i>NereusSDR</div><div class="pans" id="pans"></div>
+   <div class="mm" id="mm"><div class="mmh" id="mmh"></div><canvas id="mmcv" style="width:700px;height:64px"></canvas></div>
+  </div>
+  <div id="park"><div class="fly" id="fly"></div></div>
+ </div>
+ <div class="setupcol">
+  <div class="where" id="setupwhere"></div>
+  <div class="win setupw" id="setupw"><div class="wtitle"><i></i>NereusSDR Settings</div>
+   <div class="dlg">
+    <div class="tree" id="tree"></div>
+    <div class="spage" id="spage"></div>
+   </div>
+  </div>
+ </div>
+</div>
+<div class="modal" id="modal" style="display:none"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+const clamp = v => Math.max(0, Math.min(100, v));
+const ALL = [1, 2, 3, 4, 5];   // the most pans any radio runs
+const DRAWN = [1, 2, 3];       // the mockup opens at most three of them
+let PANS = [1, 2, 3];          // pans open in the main window
+const openPans = () => sit() === "nopan" ? [] : DRAWN.slice(0, Math.min(DRAWN.length, maxPans()));
+const TXPAN = 1;               // the pan that carries the transmit slice
+// Each pan sits on its own band: its center (hz), its noise floor N (dBm), where its slice is tuned (vfo, Hz from the
+// center) and on which sideband, the band edge in view, the band and segment the zoom buttons fit, and its signals.
+// Pans 1 and 2 each hold one strong steady carrier just past the band edge. It keeps the pan's mean level steady,
+// which NB Blank judges a row by: without it the loudest voice would count as a noise burst each time it spoke.
+// calm: how much rarer static crashes are than on 40 m.
+const ssb = (f, dbm, fade, side) => ({t: "ssb", f, dbm, fade, side});
+const cw = (f, dbm, wpm, fade) => ({t: "cw", f, dbm, wpm, fade: fade || 0});
+const car = (f, dbm) => ({t: "car", f, dbm, fade: 0});
+const PAN = {
+  1: {band: "40 m", slice: "A", N: -106, seed: 11, hz: 7260000, vfo: 0, side: "l", edge: 40000, bandHz: [-260000, 40000], segHz: [-135000, 40000],
+    sigs: [{t: "am", f: 45000, dbm: -54, fade: 0}, ssb(-38200, -78, 13, "l"), ssb(-21400, -88, 7, "l"), ssb(0, -72, 17, "l"), ssb(14200, -84, 11, "l"),
+      ssb(24800, -66, 19, "l"), ssb(33000, -92, 5, "l"), car(-30500, -74), {t: "drift", f: 9000, dbm: -90, fade: 0}]},
+  2: {band: "20 m", slice: "B", N: -118, seed: 23, calm: 2.5, hz: 14310000, vfo: 0, side: "u", edge: 40000, bandHz: [-310000, 40000], segHz: [-160000, 40000],
+    sigs: [ssb(-41000, -96, 9, "u"), ssb(-30500, -84, 15, "u"), ssb(-12500, -102, 6, "u"), ssb(0, -78, 12, "u"), ssb(9800, -92, 8, "u"),
+      ssb(18300, -74, 21, "u"), ssb(33500, -99, 10, "u"), car(-22000, -95), car(44000, -60), {t: "drift", f: 27000, dbm: -104, fade: 0}]},
+  3: {band: "10 m", slice: "C", N: -128, seed: 37, calm: 2.5, hz: 28040000, vfo: 34000, side: "u", edge: -40000, bandHz: [-40000, 1660000], segHz: [-40000, 260000],
+    sigs: [cw(-34500, -98, 22, 14), cw(-28200, -108, 18, 9), cw(-17000, -92, 26, 20), cw(-9400, -112, 15), cw(-3100, -101, 30, 11), cw(14500, -106, 20, 7),
+      car(6200, -110), car(-45000, -100), {t: "drift", f: 42000, dbm: -114, fade: 0},
+      {t: "ft8", f: 34000, dbm: -100, fade: 0, st: [[350, 0, 0], [640, 1, -6], [910, 0, -12], [1180, 1, 3], [1420, 0, -9], [1760, 1, -3], [2050, 0, -15], [2530, 1, -7]]}]},
+  4: {band: "17 m"}, 5: {band: "15 m"},
+};
+const BANDS = ["160 m", "80 m", "60 m", "40 m", "30 m", "20 m", "17 m", "15 m", "12 m", "10 m", "6 m"];
+const maxPans = () => +$("radio").value;
+const tabPans = () => ALL.slice(0, maxPans());
+const isOpen = p => PANS.includes(p);
+const sit = () => $("sit").value;
+const rule = () => $("rule").value;
+const trim = () => $("trim").checked;
+const txPerPan = () => $("txscope").value === "pan";
+
+// ---------- the one list of display controls: the pill and Setup both draw from it ----------
+const DET = ["Peak", "Rosenfell", "Average", "Sample", "RMS"], WFDET = ["Peak", "Rosenfell", "Average", "Sample"], POWER = ["Average", "Sample", "RMS"];
+const AVG = ["None", "Recursive", "Time Window", "Log Recursive"];
+const WIN = ["Rectangular", "Blackman-Harris 4T", "Hann", "Flat-Top", "Hamming", "Kaiser", "Blackman-Harris 7T"];
+const POS4 = ["Top Left", "Top Right", "Bottom Left", "Bottom Right"];
+const SCHEMES = ["Default", "Enhanced", "Spectran", "BlackWhite", "LinLog", "LinRad", "Custom", "Clarity Blue"];
+const SIZES = [4096, 8192, 16384, 32768, 65536, 131072, 262144];
+const PICS = ["Aurora.jpg", "Night sky.png", "Shack.jpg"];
+// The band of colors that stands in for each picture, so choosing another one shows in the pan.
+const PIC_TINT = {"Aurora.jpg": ["#204060", "#508040", "#603050"], "Night sky.png": ["#081040", "#2848c8", "#101858"], "Shack.jpg": ["#703010", "#c88030", "#502008"]};
+const COLORS = ["#00b4d8", "#00e5ff", "#00ff88", "#ffb800", "#ff5a5a", "#c080ff", "#ffffff", "#0a0a14"];
+const MODES = [["clarity", "Clarity"], ["auto", "Auto"], ["floor", "Floor"], ["manual", "Manual"], ["scale", "Scale"]];
+const MODE_NAME = Object.fromEntries(MODES);
+const sl = (l, min, max, step, d, u, x) => ({l, t: "sl", min, max, step, d, u: u || "", ...x});
+const tg = (l, d, x) => ({l, t: "tg", d, ...x});
+const cb = (l, opts, d, x) => ({l, t: "cb", opts, d, ...x});
+const sg = (opts, d, x) => ({l: "", t: "seg", opts, d, ...x});
+const co = (l, d, x) => ({l, t: "col", d, ...x});
+const ST = {s: "station"}, CP = {s: "computer"}, K1 = {par: 1};
+// s: where the value lives (pan when absent). par: how deep the row sits under its parent.
+const CTL = {
+  // Spectrum
+  det: cb("Detector:", DET, "Peak"), norm: tg("Normalize to 1 Hz", false, K1),
+  avg: cb("Averaging:", AVG, "Log Recursive"), avgms: sl("Avg Time:", 1, 9999, 1, 30, " ms", {par: 1, slMax: 500}),
+  linew: sl("Line Width:", 0.1, 5, 0.1, 1, " px"), linecolor: co("Trace Color:", ""), gradient: tg("Gradient", false),
+  fill: tg("Fill", true), fillalpha: sl("Fill Alpha:", 0, 100, 1, 70, "%", K1), fillcolor: co("Fill Color:", "#00e5ff"),
+  peakhold: tg("Peak Hold", false), peakdelay: sl("Peak Delay:", 100, 10000, 100, 2000, " ms", K1),
+  bg: tg("Background", false), bgpic: {l: "Picture:", t: "pic", d: ""},
+  bgopacity: sl("BG Opacity:", 0, 100, 1, 80, "%", K1), bgcolor: co("BG Color:", "#0a0a14", K1),
+  cal: sl("Cal Offset:", -30, 30, 0.5, 0, " dB"), cursor: tg("Cursor Freq", true),
+  // Levels: the spectrum scale
+  scalemode: sg([["manual", "Manual"], ["track", "Track floor"]], "manual"),
+  dbMax: sl("dB Max:", -200, 0, 1, -40, " dBm", {s: "band"}), dbMin: sl("dB Min:", -200, 0, 1, -140, " dBm", {s: "band"}),
+  trackoff: sl("Floor Offset:", -60, 60, 1, 0, " dB"), keeprange: tg("Keep range", false),
+  dbstep: sl("dB Step:", 1, 40, 1, 10, " dB", K1),
+  grid: tg("Grid", true), gridsp: cb("Grid Spacing:", ["Auto", "1 kHz", "2 kHz", "5 kHz", "10 kHz", "25 kHz", "50 kHz", "100 kHz"], "Auto", K1),
+  scaletxt: cb("Scale Text:", ["8 px", "9 px", "10 px", "11 px", "12 px", "13 px", "14 px"], "10 px"),
+  freqalign: cb("Label Align:", ["Left", "Center", "Right", "Auto", "Off"], "Center"),
+  dbmstrip: tg("dBm scale strip", true), zeroline: tg("Zero line", false), fpsov: tg("FPS overlay", false),
+  // Levels: the waterfall's color range
+  mode: sg(MODES, "clarity"),
+  black: sl("Black Level:", 0, 100, 1, 57), gain: sl("Color Gain:", 0, 100, 1, 60),
+  nfoff: sl("NF Offset:", -60, 60, 1, 0, " dB"),
+  low: sl("Low:", -200, 0, 1, -122, " dBm"), high: sl("High:", -200, 0, 1, -62, " dBm"),
+  // Waterfall
+  scheme: cb("Scheme:", SCHEMES, "Default"), rate: sl("Rate:", 10, 500, 10, 30, " ms"), opacity: sl("Opacity:", 0, 100, 1, 100, "%"),
+  nb: tg("NB Blank", false), nbdb: sl("NB Threshold:", 1, 20, 1, 6, " dB", K1),
+  wfdet: cb("WF Detector:", WFDET, "Peak"), wfavg: cb("WF Avg:", AVG, "None"), wfavgms: sl("WF Avg Time:", 1, 9999, 1, 120, " ms", {par: 1, slMax: 500}),
+  stoptx: tg("Stop on TX", false), rxfilt: tg("RX Filter", false), txfilt: tg("TX Filter", true), rxzero: tg("RX Zero", false), txzero: tg("TX Zero", false),
+  stamp: cb("Timestamp:", ["None", "Left", "Right"], "None"), stampmode: cb("Time Zone:", ["UTC", "Local"], "UTC", K1),
+  rewind: cb("Rewind:", ["60 seconds", "5 minutes", "15 minutes", "20 minutes"], "20 minutes"),
+  // View
+  view: sg([["2d", "2D Waterfall"], ["3d", "3D Stacked Trace"]], "2d"),
+  floor3d: sl("3D Floor:", 0, 24, 1, 6, " dB", {s: "band"}),
+  gain3d: sl("3D Gain:", 0, 100, 1, 70, "%"), span3d: sl("3D Span:", 0, 100, 1, 100, "%"), angle3d: sl("3D Angle:", 0, 100, 1, 50, "%"),
+  speed3d: sl("3D Speed:", 0, 10, 1, 0), shadow3d: tg("Slice Shadow", false),
+  // Peaks & Markers
+  pt: tg("Peak trace with decay", false), ptHold: sl("Hold:", 100, 60000, 100, 2000, " ms", K1), ptDrop: sl("Drop Rate:", 1, 60, 1, 6, " dB/s", K1),
+  ptFill: tg("Fill to trace", false, K1), ptTx: tg("Update during TX", false, K1), ptColor: co("Peak Color:", "#ffd700", K1),
+  pm: tg("Peak markers", false), pmN: sl("Count:", 1, 20, 1, 3, "", K1), pmIn: tg("Inside RX filter only", false, K1),
+  pmHold: tg("Hold before decay", false, K1), pmHoldMs: sl("Hold:", 100, 60000, 100, 500, " ms", {par: 2}),
+  pmDecay: tg("Decay after hold", false, {par: 2}), pmFall: sl("Fall Rate:", 1, 60, 1, 6, " dB/s", {par: 3}),
+  pmColor: co("Marker Color:", "#ff4500", K1), pmText: co("Text Color:", "#7fff00", K1),
+  peakv: tg("Peak Value", false), pvPos: cb("Position:", POS4, "Top Right", K1), pvRefresh: sl("Refresh:", 50, 10000, 50, 500, " ms", K1),
+  nf: tg("Noise Floor", false), nfshift: sl("NF Shift:", -12, 12, 0.5, 0, " dB", K1), nfwidth: sl("Line Width:", 1, 5, 0.5, 1, " px", K1),
+  nfcol: co("Line Color:", "#ff40ff", K1), nftext: co("Text Color:", "#ffff00", K1), nffast: co("Fast Attack:", "#c8c8c8", K1),
+  nfpos: cb("Text Position:", POS4, "Bottom Left", K1),
+  binw: tg("Bin Width", false),
+  // FFT & Engine (the station), and this computer
+  sizing: sg([["auto", "Auto"], ["hzbin", "Hz/bin"], ["fixed", "Fixed"]], "auto", ST),
+  fftsize: sl("FFT Size:", 0, 6, 1, 4096, "", {s: "station", map: SIZES}), hzbin: sl("Hz/bin:", 0.5, 200, 0.5, 23.5, " Hz", ST),
+  window: cb("Window:", WIN, "Blackman-Harris 4T", ST), decim: sl("Decimation:", 1, 16, 1, 1, "", ST), fps: sl("FPS:", 10, 60, 1, 30, " fps", ST),
+  threadprio: cb("Thread Priority:", ["Lowest", "Below Normal", "Normal", "Above Normal", "Highest"], "Above Normal", {s: "computer"}),
+  // Transmit Display: the analyzer rows are the station's; the scale and the waterfall's levels and colors are this computer's
+  txfft: sl("FFT Size:", 0, 6, 1, 32768, "", {s: "station", map: SIZES}), txwindow: cb("Window:", WIN, "Hamming", ST),
+  txdet: cb("Detector:", DET, "Peak", ST), txnorm: tg("Normalize to 1 Hz", false, {s: "station", par: 1}),
+  txavg: cb("Averaging:", AVG, "None", ST), txavgms: sl("Avg Time:", 1, 9999, 1, 30, " ms", {s: "station", par: 1, slMax: 500}),
+  txMax: sl("dB Max:", -200, 200, 1, 20, " dBm", CP), txMin: sl("dB Min:", -200, 200, 1, -80, " dBm", CP),
+  txwfdet: cb("WF Detector:", WFDET, "Peak", ST), txwfavg: cb("WF Avg:", AVG, "None", ST), txwfavgms: sl("WF Avg Time:", 1, 9999, 1, 120, " ms", {s: "station", par: 1, slMax: 500}),
+  txlow: sl("Low:", -200, 200, 5, -70, " dBm", CP), txhigh: sl("High:", -200, 200, 5, 30, " dBm", CP),
+  txpal: cb("Palette:", ["Enhanced", "Spectran", "BlackWhite", "LinLog", "LinRad", "LinAuto", "Custom"], "Enhanced", CP),
+  txlowcolor: co("Low Color:", "#000000", CP),
+  // Multimeter: the page as the app has it today (number boxes, no sliders)
+  mmPoll: sl("Polling delay:", 10, 2000, 1, 100, " ms", {s: "station", box: 1, whose: "the station holds this"}),
+  mmDec: tg("Show decimal point in readouts", true, {s: "computer", whose: "this computer holds this", full: 1}),
+  mmUnits: cb("Display units:", ["S", "dBm", "uV"], "dBm", {s: "computer"}),
+  mmHistDur: sl("History duration:", 1000, 600000, 1, 60000, " ms", {s: "computer", box: 1}),
+  // Appearance, Colors & Theme: this computer's colors, used by every pan
+  cGrid: co("Grid Color:", "#ffffff", CP), cGridFine: co("Grid Fine Color:", "#ffffff", CP), cHGrid: co("H-Grid Color:", "#ffffff", CP),
+  cGridText: co("Grid Text Color:", "#ffff00", CP), cBandEdge: co("Band Edge Color:", "#ff0000", CP),
+  cRxZero: co("RX Zero Line Color:", "#ff0000", CP), cTxZero: co("TX Zero Line Color:", "#ffb800", CP),
+  cRxPass: co("RX Passband Color:", "#00b4d8", CP), cTxPass: co("TX Passband Color:", "#ff783c", CP),
+};
+const slMax = c => c.map ? c.map.length - 1 : c.slMax || c.max;
+// The transmit scale is one for this computer or each pan's own: a question still open, so the mockup does both.
+const TXS = ["txMax", "txMin"];
+const scOf = k => TXS.includes(k) ? (txPerPan() ? "pan" : "computer") : CTL[k].s || "pan";
+
+// ---------- state ----------
+let shared, own, bands, glob, ui;
+function startOver() {
+  shared = {}; glob = {}; bands = {};
+  const bd = {};
+  for (const [k, c] of Object.entries(CTL)) {
+    const sc = c.s || "pan";
+    if (sc === "pan") { shared[k] = c.d; } else if (sc === "band") { bd[k] = c.d; } else { glob[k] = c.d; }
+  }
+  for (const k of TXS) { shared[k] = CTL[k].d; }
+  for (const b of BANDS) { bands[b] = {...bd}; }
+  own = {1: {}, 2: {}, 3: {}, 4: {}, 5: {}};
+  PANS = openPans();
+  // The pans start again too: their signals, their zoom and tuning, the two gradients and the meter's history.
+  for (const k of Object.keys(SIM)) { delete SIM[k]; }
+  GRAD.rx = DEF_STOPS.map(q => [...q]); GRAD.tx = DEF_STOPS.map(q => [...q]); delete GRADLUT.rx; delete GRADLUT.tx;
+  METER.hist.length = 0; METER.at = -1e9; METER.val = null; METER.t = 0;
+  const p = PANS.length ? PANS[0] : null;
+  ui = {pill: p, pillOpen: true, tab: "Levels", page: "Levels", setupFor: "all", setupBand: p ? PAN[p].band : "20 m", collapsed: {}, grad: {}};
+}
+// An open pan's band rows are its band's. Under All pans, and on a pan that is not open, the Band picker chooses.
+const bandOf = t => t === "all" || !isOpen(t) ? ui.setupBand : PAN[t].band;
+function rd(t, k) {
+  const s = scOf(k);
+  if (s === "station" || s === "computer") { return glob[k]; }
+  if (s === "band") { return bands[bandOf(t)][k]; }
+  if (t === "all") { return shared[k]; }
+  return k in own[t] ? own[t][k] : shared[k];
+}
+const PAIRS = {dbMax: ["dbMin", 10, 1], dbMin: ["dbMax", 10, -1], high: ["low", 5, 1], low: ["high", 5, -1], txMax: ["txMin", 10, 1], txMin: ["txMax", 10, -1], txhigh: ["txlow", 5, 1], txlow: ["txhigh", 5, -1]};
+// The other end of a level pair, where this end is live and a mode is setting the other one to a number: the
+// level in use on the pan in view (Track floor's dB Min under a live dB Max; Auto's or Floor's Low under a live High).
+function setEnd(t, k) {
+  const pr = PAIRS[k];
+  if (!pr || k === "dbMax" || gateOf(t, k)) { return null; }
+  const d = gateOf(t, pr[0]);
+  return d && d.by && d.show !== undefined ? d.show : null;
+}
+const gapFrom = (pr, v, other) => pr[2] > 0 ? Math.max(v, other + pr[1]) : Math.min(v, other - pr[1]);
+// The number a live row shows and the pan uses. A level a mode has brought to within the pair's gap of this end
+// carries it along; the number it was set to is kept, and shows again once the other end is clear of it.
+function heldNum(t, k) {
+  const o = setEnd(t, k);
+  return o === null ? rd(t, k) : gapFrom(PAIRS[k], rd(t, k), o);
+}
+function put(t, k, v, force) {
+  const s = scOf(k), pr = PAIRS[k];
+  if (pr) {
+    // A moved end stops at the pair's gap from the other end: from the number kept for it, and from the level in use
+    // where a mode is setting it. Stopped where the handle already sits, it changes nothing.
+    const o = setEnd(t, k);
+    v = gapFrom(pr, v, rd(t, pr[0]));
+    if (o !== null) { v = gapFrom(pr, v, o); if (!force && v === heldNum(t, k)) { return; } }
+  }
+  if (k === "sizing" && v === "hzbin" && !glob.hzKept) { glob.hzbin = hzStart(); }
+  if (k === "hzbin") { glob.hzKept = true; }
+  if (s === "station" || s === "computer") { glob[k] = v; return; }
+  if (s === "band") { bands[bandOf(t)][k] = v; return; }
+  if (t === "all") {
+    // A click that changes nothing (the option already chosen, a handle pressed where it sits) does nothing.
+    // A reset is different: it writes every row it names, so "every pan takes it" reaches each pan.
+    if (!force && v === shared[k]) { return; }
+    shared[k] = v;
+    // "every pan takes it": the change clears each pan's own value. "keeps": a pan's own value is never touched from here.
+    if (rule() === "win") { for (const p of ALL) { delete own[p][k]; } }
+    return;
+  }
+  if (!force && v === rd(t, k)) { return; }
+  // Under "every pan takes it" a pan set back to the All pans value is simply following again. Under "keeps" it stays the pan's own.
+  if (rule() === "win" && v === shared[k]) { delete own[t][k]; } else { own[t][k] = v; }
+}
+// What a copy button writes: each end held to its own row's range, then the pair to its gap, as the app's sliders
+// hold what they are given. So a copy never leaves a number its row could not be set to by hand.
+const inRange = (k, v) => Math.max(CTL[k].min, Math.min(CTL[k].max, v));
+function heldPair(kLo, kHi, lo, hi) {
+  const gap = PAIRS[kHi][1];
+  hi = inRange(kHi, hi); lo = Math.min(inRange(kLo, lo), hi - gap);
+  if (lo < CTL[kLo].min) { lo = CTL[kLo].min; hi = lo + gap; }
+  return [lo, hi];
+}
+const isOwn = (t, k) => t !== "all" && scOf(k) === "pan" && k in own[t];
+// Under "every pan takes it" a pan's value equal to the All pans value is not its own: the pan is following.
+function settleRule() {
+  if (rule() !== "win") { return; }
+  for (const p of ALL) { for (const k of Object.keys(own[p])) { if (own[p][k] === shared[k]) { delete own[p][k]; } } }
+}
+
+// ---------- the levels and sizes in use ----------
+const RATE = 192000, SPAN = 96000, FLOOR = 4096;
+const rate = () => RATE / glob.decim;
+const pow2From = n => { let s = 1024; while (s < 262144 && s < n) { s *= 2; } return s; };
+function capSize() { let s = 1024; while (s < 262144 && s * 2 <= rate() * 0.7) { s *= 2; } return Math.max(FLOOR, s); }
+// Auto keeps about 4096 points across the pan. Hz/bin asks for rate / target points. Both stay between 4096 and about 0.7 s per transform.
+function plan(p) {
+  if (glob.sizing === "fixed") { return {size: glob.fftsize, held: ""}; }
+  // Auto goes by the width in view, so it is each pan's own: the pan the pill is open on where none is named.
+  if (p === undefined) { p = ui.pill !== null && isOpen(ui.pill) ? ui.pill : PANS.length ? PANS[0] : null; }
+  const span = p !== null && SIM[p] ? SIM[p].span : SPAN;
+  const want = pow2From(glob.sizing === "auto" ? FLOOR * rate() / span : rate() / glob.hzbin), cap = capSize();
+  return {size: Math.min(Math.max(want, FLOOR), cap), held: glob.sizing !== "hzbin" ? "" : want < FLOOR ? "floor" : want > cap ? "cap" : ""};
+}
+const fftInUse = () => plan().size;
+const binHz = () => Math.round(rate() / fftInUse() * 10) / 10;
+// The target Hz/bin starts from: the bin width running now, rounded up to the row's step.
+const hzStart = () => Math.min(200, Math.max(0.5, Math.ceil(rate() / fftInUse() * 2) / 2));
+// What the gray Hz/bin row shows: the target last set, or the one Hz/bin would start from.
+const hzShown = () => glob.hzKept ? glob.hzbin : hzStart();
+const keyed = p => sit() === "tx" && p === TXPAN;
+// The spectrum's level scale: the band's stored pair, the noise-floor tracker, or the transmit scale.
+function scaleInUse(p) {
+  const b = bands[PAN[p].band];
+  if (keyed(p)) { return {max: rd(p, "txMax"), min: rd(p, "txMin")}; }
+  if (rd(p, "scalemode") === "track") {
+    // Track floor follows the measured floor in steps (a change of 2 dB or more); Floor Offset acts at once.
+    const s = SIM[p], min0 = (s && s.trackMin !== null ? s.trackMin : floorOf(p)) + rd(p, "trackoff");
+    if (rd(p, "keeprange")) { return {min: min0, max: min0 + (b.dbMax - b.dbMin)}; }
+    // dB Max stays where it is set, and dB Min is held 10 dB under it.
+    return {max: b.dbMax, min: Math.min(min0, b.dbMax - 10), held: min0 > b.dbMax - 10};
+  }
+  return {max: b.dbMax, min: b.dbMin};
+}
+// The waterfall's color range.
+function levels(p) {
+  if (keyed(p)) { return {low: glob.txlow, high: glob.txhigh}; }
+  const s = SIM[p] || {}, nf = nfOf(p), m = rd(p, "mode"), bl = rd(p, "black"), cg = rd(p, "gain");
+  let low, high;
+  if (m === "clarity") {
+    // Clarity's own reading of the floor, a little under the noise floor line, gliding as the band changes.
+    const N = s.clarDraw != null ? s.clarDraw : s.clarN != null ? s.clarN : nf - 4.5;
+    low = N + (bl - 50) * 0.5; return {low, high: low + (80 - 0.7 * cg)};
+  }
+  // Outside Clarity the two rows are trims, where the mockup control says they work in every mode.
+  const lowTrim = trim() ? (bl - 57) * 0.5 : 0, highTrim = trim() ? (cg - 60) * 0.3 : 0;
+  if (m === "auto" || m === "floor") {
+    // Auto: 12 dB under the running level of the weakest part of each row. Floor: the noise floor plus NF Offset.
+    low = (m === "auto" ? (s.autoRun != null ? s.autoRun : nf) - 12 : nf + rd(p, "nfoff")) + lowTrim;
+    // High rides the pair's gap above a Low the mode has brought up to it: the number the High row shows (heldNum).
+    high = Math.max(rd(p, "high"), Math.round(low) + PAIRS.high[1]) - highTrim;
+  }
+  else if (m === "manual") { low = rd(p, "low") + lowTrim; high = rd(p, "high") - highTrim; }
+  else { const sc = scaleInUse(p); low = sc.min + lowTrim; high = sc.max - highTrim; }
+  // held: the hold is what gives High its number, so a gray High row must say that and not name another source (scaleGate).
+  const held = high < low + PAIRS.high[1];
+  if (held) { high = low + PAIRS.high[1]; }
+  return {low, high, held};
+}
+
+// ---------- why a row is gray: one place, used by the pill and by Setup ----------
+// why: the sentence, shown in the pill's bottom area and beside the row in Setup. One sentence, both places.
+// show: the value in use. by: who sets a level that is measured; with by and no show there is no number to show.
+const R = (why, show, by) => ({why, show, by});
+const need = (ok, why) => ok ? null : R(why);
+// A row another choice sets. lead: who sets it and what its number is, or why none is shown. act: how to set it yourself.
+// who and step say the same two things in fewer words, for a reason from outside the page that must add its own
+// sentence and still fit the pill's three lines.
+const setBy = (lead, act, show, by, who, step) => ({...R(`${lead} ${act}`, show, by), who, step});
+const TX_SCALE = ["scalemode", "dbMax", "dbMin", "trackoff", "keeprange"], TX_LEVEL = ["mode", "black", "gain", "nfoff", "low", "high"];
+const D3 = x => need(x.g("view") === "3d", "Used by the 3D view. Pick 3D Stacked Trace above to use it.");
+const NOBG = x => need(x.g("view") !== "3d", "The 3D view does not draw the background. Pick 2D Waterfall above to use it.");
+// The 3D surface takes the place of the trace, its fill and the plain peak hold line, and the zero line is not drawn
+// over it (src/gui/SpectrumTraceFramePlan.h), so their rows are gray in the 3D view, as the Background rows are.
+const NO3D = what => x => need(x.g("view") !== "3d", `The 3D view does not draw ${what}. Pick 2D Waterfall on View to use it.`);
+const NOFILL = NO3D("the fill"), NOHOLD = NO3D("the peak hold line");
+const child = (par, text) => x => need(x.g(par), text);
+const PMOFF = child("pm", "Peak markers are off.");
+// What a gray, measured level row says about its number: that it is the level in use, or why there is none to show.
+const inUse = (x, known) => known ? "The number shown is the level in use."
+  : x.t === "all" ? "Each pan has its own level, so no one number is shown."
+  : !x.live ? `Pan ${x.t} is not open, so no level is in use.`
+  : "This window is not connected, so no level is in use.";
+// Under Scale the waterfall's Low and High are the spectrum's dB Min and dB Max. The sentence sends the reader to that
+// row only where the row is this pan's and can be changed, and says why no number is shown where there is none.
+function scaleGate(k, x, L) {
+  const me = k === "low" ? "Low" : "High", src = k === "low" ? "dB Min" : "dB Max", sk = k === "low" ? "dbMin" : "dbMax";
+  const none = L ? "" : x.t === "all" ? ` Each pan has its own ${src}, so no one number is shown.` : " " + inUse(x, false);
+  // Where the two trims work in every mode, a trim moved off its center shifts the level off the scale's own number.
+  const tk = k === "low" ? "black" : "gain", moved = trim() && x.g(tk) !== CTL[tk].d ? `, trimmed by ${CTL[tk].l.replace(":", "")}` : "";
+  // The trims can bring the scale's top to within the pair's gap of Low. High is then kept that gap above Low (levels),
+  // so its row says so and gives the number, and does not send the reader to dB Max, which would not move it.
+  if (k === "high" && L && L.held) {
+    return R(`High is the spectrum's dB Max${moved}, but is kept ${PAIRS.high[1]} dB above Low, at ${fmt("high", Math.round(L.high))} for now. Pick Manual to set High here.`, Math.round(L.high), src);
+  }
+  const act = L && x.live && !gateOf(x.t, sk) ? `Change ${src} above, or pick Manual to set ${me} here.` : `Pick Manual to set ${me} here.`;
+  return R(`${me} is the spectrum's ${src}${moved}.${none} ${act}`, L ? Math.round(k === "low" ? L.low : L.high) : undefined, src);
+}
+function wfGate(k, x) {
+  const m = x.g("mode"), name = MODE_NAME[m];
+  // Scale over a Manual scale is two stored numbers. Every other level in use is measured from the pan's signal.
+  const L = x.sig || (x.live && m === "scale" && x.g("scalemode") !== "track") ? levels(x.p) : null, lo = L ? Math.round(L.low) : undefined, hi = L ? Math.round(L.high) : undefined;
+  if ((k === "black" || k === "gain") && m !== "clarity" && !trim()) { return R(CTL[k].l.replace(":", "") + " is one of Clarity's two controls. Pick Clarity to use it."); }
+  if (k === "nfoff" && m !== "floor") { return R("NF Offset is used by Floor. Pick Floor to use it."); }
+  if (k === "low" && m === "scale") { return scaleGate(k, x, L); }
+  if (k === "low" && m !== "manual") { return R(`${name} is setting Low. ${inUse(x, !!L)} Pick Manual to set it yourself.`, lo, name); }
+  if (k === "high" && m === "clarity") { return R(`Clarity is setting High. ${inUse(x, !!L)} Pick Auto, Floor or Manual to set it yourself.`, hi, "Clarity"); }
+  if (k === "high" && m === "scale") { return scaleGate(k, x, L); }
+  return null;
+}
+const G = {
+  norm: x => need(POWER.includes(x.g("det")), "Normalize to 1 Hz needs the Average, Sample or RMS detector."),
+  avgms: x => need(x.g("avg") !== "None", "Averaging is None, so there is no time to set."),
+  linew: NO3D("the trace"), linecolor: NO3D("the trace"), fill: NOFILL, zeroline: NO3D("the zero line"),
+  fillalpha: x => NOFILL(x) || need(x.g("fill"), "Fill is off."),
+  // Fill Color also colors the trace while Trace Color follows it. So with Fill off it is gray only once the trace
+  // has a color of its own and nothing is drawn in Fill Color.
+  fillcolor: x => NOFILL(x) || need(x.g("fill") || !x.g("linecolor"), "Fill is off and Trace Color has its own color, so nothing is drawn in Fill Color."),
+  // Gradient colors the fill, and the trace while Trace Color follows Fill Color. It is gray under the same rule as Fill Color.
+  gradient: x => NO3D("the gradient")(x) || need(x.g("fill") || !x.g("linecolor"), "Fill is off and Trace Color has its own color, so there is nothing for Gradient to color."),
+  gridsp: child("grid", "Grid is off, so no grid lines are drawn."), dbstep: child("grid", "Grid is off, so no grid lines are drawn."),
+  peakhold: NOHOLD, peakdelay: x => NOHOLD(x) || need(x.g("peakhold"), "Turn Peak Hold on to set how long a peak is held."),
+  bg: NOBG, bgpic: NOBG,
+  bgcolor: x => NOBG(x) || need(x.g("bg"), "Background is off."),
+  bgopacity: x => NOBG(x) || need(x.g("bg"), "Background is off.") || need(x.g("bgpic"), "BG Opacity fades the picture, and no picture is chosen."),
+  dbMin: x => x.g("scalemode") !== "track" ? null
+    : setBy(`Track floor is setting dB Min: the noise floor plus Floor Offset${x.sig && scaleInUse(x.p).held ? ", held 10 dB under dB Max" : ""}. ${inUse(x, x.sig)}`, "Pick Manual to set it yourself.", x.sig ? Math.round(scaleInUse(x.p).min) : undefined, "Track floor",
+      `Track floor sets dB Min. ${inUse(x, x.sig)}`, "pick Manual"),
+  dbMax: x => !(x.g("scalemode") === "track" && x.g("keeprange")) ? null
+    : setBy(`Keep range is on, so dB Max moves with dB Min. ${inUse(x, x.sig)}`, "Turn Keep range off to set it yourself.", x.sig ? Math.round(scaleInUse(x.p).max) : undefined, "Keep range",
+      `Keep range ties dB Max to dB Min. ${inUse(x, x.sig)}`, "turn Keep range off"),
+  trackoff: x => need(x.g("scalemode") === "track", "Floor Offset is used by Track floor. Pick Track floor to use it."),
+  keeprange: x => need(x.g("scalemode") === "track", "Keep range is used by Track floor. Pick Track floor to use it."),
+  black: x => wfGate("black", x), gain: x => wfGate("gain", x), nfoff: x => wfGate("nfoff", x), low: x => wfGate("low", x), high: x => wfGate("high", x),
+  nbdb: child("nb", "NB Blank is off."),
+  wfavgms: x => need(x.g("wfavg") !== "None", "WF Avg is None, so there is no time to set."),
+  stampmode: x => need(x.g("stamp") !== "None", "Timestamp is None."),
+  // 3D Floor is a band's row. With no open pan in view it is in use when All pans, or an open pan on that band, is in the 3D view.
+  floor3d: x => x.live ? D3(x) : need(x.g("view") === "3d" || PANS.some(p => PAN[p].band === bandOf(x.t) && rd(p, "view") === "3d"), "Used by the 3D view. Pick 3D Stacked Trace above to use it."),
+  gain3d: D3, span3d: D3, angle3d: D3, speed3d: D3, shadow3d: D3,
+  ptHold: child("pt", "Peak trace is off."), ptDrop: child("pt", "Peak trace is off."),
+  ptFill: child("pt", "Peak trace is off."), ptTx: child("pt", "Peak trace is off."), ptColor: child("pt", "Peak trace is off."),
+  pmN: child("pm", "Peak markers are off."), pmIn: child("pm", "Peak markers are off."),
+  pmHold: child("pm", "Peak markers are off."), pmColor: child("pm", "Peak markers are off."), pmText: child("pm", "Peak markers are off."),
+  pmHoldMs: x => PMOFF(x) || need(x.g("pmHold"), "Hold before decay is off."),
+  pmDecay: x => PMOFF(x) || need(x.g("pmHold"), "Hold before decay is off."),
+  pmFall: x => PMOFF(x) || need(x.g("pmHold"), "Hold before decay is off.") || need(x.g("pmDecay"), "Decay after hold is off."),
+  pvPos: child("peakv", "Peak Value is off."), pvRefresh: child("peakv", "Peak Value is off."),
+  nfshift: child("nf", "Noise Floor is off."), nfwidth: child("nf", "Noise Floor is off."),
+  nfcol: child("nf", "Noise Floor is off."), nftext: child("nf", "Noise Floor is off."), nffast: child("nf", "Noise Floor is off."),
+  nfpos: () => R("Not used: the noise floor text sits beside its box. The setting is kept but has no visual effect."),
+  // Today's sentences, but for the label they name: the app's chooser is labeled "Sizing", and here it has no label,
+  // so the sentences name the choice and say where it is ("Sizing is Auto, ..." and "... under Sizing ..." today).
+  fftsize: () => glob.sizing === "fixed" ? null
+    : R((glob.sizing === "auto" ? "Auto is chosen, so the zoom sets the FFT size." : "Hz/bin is chosen, so the bin width sets the FFT size.") + " Choose Fixed to set it yourself.", fftInUse()),
+  hzbin: () => glob.sizing === "hzbin" ? null : R("Choose Hz/bin above to set the bin width yourself.", hzShown()),
+  txnorm: () => need(POWER.includes(glob.txdet), "Normalize to 1 Hz needs the Average, Sample or RMS detector."),
+  txavgms: () => need(glob.txavg !== "None", "Averaging is None, so there is no time to set."),
+  txwfavgms: () => need(glob.txwfavg !== "None", "WF Avg is None, so there is no time to set."),
+};
+const TX_HAS = {dbMax: "txMax", dbMin: "txMin", low: "txlow", high: "txhigh"};
+// Which surface is being drawn. A reason may point somewhere else from the pill than from Setup's own page.
+let drawing = "pill";
+const txScaleWhere = () => !txPerPan() ? "on Transmit Display" : drawing === "setup" ? "under Transmit scale, below" : "in Setup, on Levels";
+// Reasons that come from outside a row's page. A row grayed from here still shows the value in use.
+const SIT_WHERE = {off: ", a remote window not connected to its Core", remote: ", a remote window", remoteold: ", a remote window on an older Core", gpu: ", limited graphics", nopan: ""};
+const isRemote = s => s === "remote" || s === "remoteold" || s === "off";
+// The Core keeps each band's dB Max and dB Min, as it keeps the station's rows.
+const BAND_ON_CORE = ["dbMax", "dbMin"];
+const TX_ANALYZER = ["txfft", "txwindow", "txdet", "txnorm", "txavg", "txavgms", "txwfdet", "txwfavg", "txwfavgms"];
+function SIT_GATE(s, k, sc, mine) {
+  const show = mine ? mine.show : undefined, by = mine ? mine.by : undefined;
+  if (s === "off" && sc === "station") { return R("Connect to the Core to change these.", show, by); }
+  if (s === "off" && BAND_ON_CORE.includes(k)) {
+    // Where a choice on this page sets the row too, connecting is not enough: say who sets it, and both steps.
+    if (mine && mine.who) { return R(`${mine.who} The Core keeps each band's scale: connect to it, then ${mine.step}.`, show, by); }
+    return R("The Core keeps each band's dB Max and dB Min. Connect to the Core to change them.", show, by);
+  }
+  if (s === "remoteold" && k === "decim") { return R("This Core is too old to change Decimation."); }
+  if (s === "remoteold" && TX_ANALYZER.includes(k)) { return R("This Core does not apply transmit display settings from this app. Updating the Core may help."); }
+  if (isRemote(s) && k === "cal") { return R("The Core calibrates the display for its radio."); }
+  if (isRemote(s) && k === "threadprio") { return R("The Core sets its own display thread priority."); }
+  if (s === "gpu" && k === "span3d") { return R("This computer's graphics cannot widen the 3D view. It keeps its narrowing shape.", 0); }
+  if (s === "gpu" && k === "shadow3d") { return R("This computer's graphics cannot draw the slice shadow.", false); }
+  return null;
+}
+// A button is gray when the rows it writes are gray for a reason from outside the page.
+const sitOnly = keys => keys.map(k => SIT_GATE(sit(), k, scOf(k), null)).find(Boolean) || null;
+function gateOf(t, k) {
+  // live: an open pan is in view. sig: it also has a signal to measure; a remote window without its Core has none.
+  const s = sit(), sc = scOf(k), p = t === "all" ? null : t, live = p !== null && isOpen(p), sig = live && s !== "off";
+  const mine = G[k] ? G[k]({t, p, live, sig, g: x => rd(t, x)}) : null;
+  const wide = SIT_GATE(s, k, sc, mine);
+  if (wide) { return wide; }
+  if (p !== null && keyed(p) && (TX_SCALE.includes(k) || TX_LEVEL.includes(k))) {
+    const scale = TX_SCALE.includes(k), name = CTL[k].l.replace(":", "") || "This chooser";
+    if (TX_HAS[k]) {
+      // as: the transmit row whose number is shown, so the gray handle sits where that row's own slider has it.
+      return {...R(`Pan ${p} is transmitting, so ${scale ? "it is drawn on the transmit scale" : "its waterfall uses the transmit levels"}. The number shown is the transmit ${name}. Change it ${scale ? txScaleWhere() : "on Transmit Display"}.`, rd(p, TX_HAS[k])), as: TX_HAS[k]};
+    }
+    return txIdle(p, scale, `${name} is a receive setting and is not used until it stops.`);
+  }
+  return mine;
+}
+// A row or button of the transmitting pan that has no transmit counterpart.
+function txIdle(p, scale, what) { return R(`Pan ${p} is transmitting on the ${scale ? "transmit scale" : "transmit levels"}. ${what}`); }
+// A button there says its own name: it works on receive values, so it waits for the pan to stop.
+const txButton = (t, scale, label) => t !== "all" && keyed(t) ? txIdle(t, scale, `${label} works on the receive ${scale ? "scale" : "levels"}, so it cannot be used until it stops.`) : null;
+// The track a row's handle is placed on: its own, or the transmit row's while it shows that row's number.
+const trackOf = (c, d) => d && d.as ? CTL[d.as] : c;
+
+// The number a row shows: the value in use where a reason supplies one, the number in use on a live row,
+// and none where each pan's noise floor decides it and no open pan is in view.
+function shownNum(t, k) {
+  const d = gateOf(t, k);
+  return d && d.show !== undefined ? d.show : d && d.by ? null : heldNum(t, k);
+}
+// A live row that a measured level is carrying says so: the number it is set to, the gap it keeps, where the
+// measured end is, and the number that gives.
+function carryWhy(t, k) {
+  const o = setEnd(t, k);
+  if (o === null || heldNum(t, k) === rd(t, k)) { return null; }
+  const pr = PAIRS[k], nm = CTL[k].l.replace(":", ""), on = CTL[pr[0]].l.replace(":", "");
+  const who = k === "dbMax" ? "Track floor" : MODE_NAME[rd(t, "mode")];
+  return `${nm} is set to ${fmt(k, rd(t, k))} and is kept at least ${pr[1]} dB ${pr[2] > 0 ? "above" : "below"} ${on}. ${who} has ${on} at ${fmt(pr[0], o)}, so ${nm} is at ${fmt(k, heldNum(t, k))} for now.`;
+}
+// A copy button sets a pair that only Manual leaves to the user. Outside Manual it is gray and says who is setting
+// which end (the app's buttons write the stored numbers in any mode).
+function copyScaleWhy(t) {
+  const m = rd(t, "mode");
+  if (m === "manual") { return null; }
+  const who = m === "scale" ? "under Scale they are the spectrum scale already" : m === "clarity" ? "Clarity is setting both" : `${MODE_NAME[m]} is setting Low`;
+  return R(`Copy from spectrum scale sets Low and High, and ${who}. Pick Manual to use it.`);
+}
+function copyWfWhy(t) {
+  const track = rd(t, "scalemode") !== "manual", scale = rd(t, "mode") === "scale";
+  if (track) { return R(`Copy from waterfall levels sets dB Max and dB Min, and Track floor is setting dB Min. Pick Manual${scale ? " for the spectrum scale and for the waterfall levels" : ""} to use it.`); }
+  return scale ? R("Copy from waterfall levels sets dB Max and dB Min, and under Scale the waterfall levels come from the spectrum scale. Pick Manual for the waterfall levels to use it.") : null;
+}
+// A copy button copies the two numbers its source rows show, so it is gray where either shows none. The sentence
+// names only the end that shows no number: the other end may be a live row with a number of its own.
+function noPair(t, a, b) {
+  const none = [a, b].filter(k => shownNum(t, k) === null).map(k => CTL[k].l.replace(":", ""));
+  if (!none.length) { return null; }
+  const what = none.join(" and "), is = none.length > 1 ? "are" : "is";
+  return t === "all" ? R(`${what} ${is} set pan by pan here, so there is no one pair to copy. Pick a pan under Settings for.`)
+    : !isOpen(t) ? R(`Pan ${t} is not open, so nothing is setting ${what} for it. Open the pan to copy the pair.`)
+    : R(`This window is not connected, so nothing is setting ${what}. Connect to the Core to copy the pair.`);
+}
+
+// ---------- how a value reads ----------
+const sgn = v => (v > 0 ? "+" : v < 0 ? "-" : "+") + Math.abs(v);
+function fmt(k, v, m) {
+  const c = CTL[k];
+  // Today's reading under Clarity, and in every mode when the two rows work only under Clarity. A signed trim otherwise.
+  const asToday = m === "clarity" || !trim();
+  if (k === "black") { return asToday ? "N" + sgn(Math.floor((v - 50) * 0.5)) + " dB" : sgn(Math.round((v - 57) * 0.5)) + " dB"; }
+  if (k === "gain") { return asToday ? Math.round(80 - 0.7 * v) + " dB" : sgn(Math.round((v - 60) * 0.3)) + " dB"; }
+  if (k === "speed3d") { return v === 0 ? "Match" : "1:" + v; }
+  if (c.t === "seg") { return Object.fromEntries(c.opts)[v]; }
+  if (c.t === "tg") { return v ? "On" : "Off"; }
+  if (c.t === "col") { return v || "follows Fill Color"; }
+  if (c.t === "pic") { return v || "no picture"; }
+  if (c.t === "sl" && !c.map) { return (c.step < 1 ? (+v).toFixed(1) : String(v)) + c.u; }
+  return String(v);
+}
+// A value as it reads in a line of Setup. A color is shown as the color itself, the way its row shows it.
+const fmtH = (k, v, m) => CTL[k].t === "col" && v ? `<span class="chip" style="background:${v}" title="${v}"></span>` : esc(fmt(k, v, m));
+const MODE_NOTE = {
+  clarity: "Clarity sets Low and High from the noise floor.",
+  auto: "Auto sets Low from the weakest signals. You set High.",
+  floor: "Low is the noise floor plus NF Offset. You set High.",
+  manual: "You set Low and High.",
+  scale: "Low and High are dB Min and dB Max, above.",
+};
+const SCALE_NOTE = {
+  manual: "You set dB Max and dB Min.",
+  track: "dB Min follows the noise floor plus Floor Offset.",
+};
+const TX_LINK = `<span class="lnk" data-page="Transmit Display">Transmit Display &rarr;</span>`;
+// The pill's way to the transmit scale. Setup's own Levels page says where it is in words (see SROW).
+const txScaleLink = () => !txPerPan() ? TX_LINK : `<span class="lnk" data-page="Levels">Setup, Levels &rarr;</span>`;
+// Outside Clarity, Black Level and Color Gain are trims (when the mockup control says they work in every mode).
+const trimmed = t => trim() && rd(t, "mode") !== "clarity" && (rd(t, "black") !== CTL.black.d || rd(t, "gain") !== CTL.gain.d);
+const MODE_NOTE_TRIM = {
+  auto: "Auto sets Low, you set High.",
+  floor: "Floor sets Low, you set High.",
+  manual: "You set Low and High.",
+  scale: "dB Min and dB Max set them.",
+};
+// The line under each chooser: who is in charge, and what follows what.
+// On the transmitting pan Setup shows the gray chooser's own sentence in this line's place (see SROW), so it draws none.
+function scaleNote(t) {
+  if (t !== "all" && keyed(t)) {
+    return drawing === "setup" ? "" : `Transmitting: this pan is drawn on ${txPerPan() ? "its own" : "the"} transmit scale. ` + txScaleLink();
+  }
+  return SCALE_NOTE[rd(t, "scalemode")] + (rd(t, "mode") === "scale" ? " The waterfall follows this scale." : "");
+}
+function modeNote(t) {
+  if (t !== "all" && keyed(t)) { return drawing === "setup" ? "" : "Transmitting: the waterfall uses the transmit levels. " + TX_LINK; }
+  const m = rd(t, "mode");
+  if (trimmed(t)) { return MODE_NOTE_TRIM[m] + " Black Level and Color Gain trim both."; }
+  return m === "scale" && rd(t, "scalemode") === "track" ? "Low and High are dB Min and dB Max. Track floor moves dB Min." : MODE_NOTE[m];
+}
+const viewNote = t => rd(t, "view") === "3d" ? "The 3D rows are in use. The background, the trace and its fill are not drawn in 3D." : "The Background rows are used by this view. The 3D rows are used by the 3D view.";
+const noteCls = t => t !== "all" && keyed(t) ? "amber" : "hi";
+const SIZING_NOTE = {auto: "The zoom picks the FFT size.", hzbin: "The bin width you ask for picks the FFT size.", fixed: "You pick the FFT size."};
+function readout() {
+  const pl = plan(), held = pl.held === "floor" ? ` ${FLOOR} points is the smallest size.` : pl.held === "cap" ? ` ${pl.size} points is the largest size at this sample rate.` : "";
+  return `${(rate() / pl.size).toFixed(2)} Hz per bin \u00b7 ${(pl.size / rate()).toFixed(2)} s per transform at ${RATE / 1000} kHz${held ? "." + held : ""}`;
+}
+// The readout dims with the station's rows, as the app's does: it has nothing live to report while they are gray.
+const readoutDim = () => sitOnly(["fftsize"]) ? " dim" : "";
+function rewindNote(t) {
+  const want = {"60 seconds": 60, "5 minutes": 300, "15 minutes": 900, "20 minutes": 1200}[rd(t, "rewind")], cap = rd(t, "rate") * 16384 / 1000, kept = Math.min(want, cap);
+  const mmss = s => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+  return kept < want ? `At this Rate the waterfall keeps ${mmss(kept)} (16384 rows). Slow Rate to keep more.` : `Keeps ${mmss(kept)} at this Rate.`;
+}
+// The rows a pan's waterfall shows: its height on the pan in view, or the height a pan opens with.
+const rowsShown = t => lay(t !== "all" && SIM[t] ? SIM[t] : {frac: 0.40}).wfh;
+const delaySec = t => (rowsShown(t) * rd(t, "rate") / 1000).toFixed(1);
+const delayNote = t => `Delay: ${delaySec(t)} s. A row takes that long to cross a waterfall ${rowsShown(t)} rows tall at this Rate.`;
+function speedNote(t) {
+  const n = rd(t, "speed3d"), ms = rd(t, "rate") * n;
+  if (n === 0) { return `Match: the 3D view covers the same time as the waterfall, which Rate sets.`; }
+  return n === 1 ? `Every waterfall row is a 3D row: one every ${ms} ms at this Rate, the fastest.` : `Each 3D row covers ${n} waterfall rows: one every ${ms} ms at this Rate.`;
+}
+
+// ---------- pill ----------
+// named: the label beside the dot names another control (the switch that shares the line), so the dot's sentence
+// names its own: "Pan 3's own Peak Delay." where a row with its own label says "Pan 3's own value."
+function dot(k, named) {
+  const p = ui.pill;
+  if (!isOwn(p, k)) { return ""; }
+  const theirs = CTL[k].t === "pic" ? `All pans has ${fmt(k, shared[k], shared.mode)}` : `All pans is at ${fmt(k, shared[k], shared.mode)}`;
+  return `<span class="dot" data-reset="${k}" data-why="${esc(`Pan ${p}'s own ${named ? CTL[k].l.replace(":", "") : "value"}. ${theirs}. Click the dot to follow All pans again.`)}"></span>`;
+}
+const wat = d => d ? ` data-why="${esc(d.why)}"` : "";
+function H(t, tag, first) { return `<div class="hdr${first ? " first" : ""}"><div class="t">${t}</div><div class="line"></div>${tag ? `<div class="scope">${tag}</div>` : ""}</div>`; }
+function N(t, cls) { return `<div class="note${cls ? " " + cls : ""}">${t}</div>`; }
+const ownWhy = (p, k) => `Pan ${p}'s own ${CTL[k].t === "col" ? "color" : "choice"}.${CTL[k].t === "tg" ? ` All pans has it ${shared[k] ? "On" : "Off"}.` : ""} Click the dot to follow All pans again.`;
+const tdot = (p, k) => isOwn(p, k) ? `<span class="dot" data-reset="${k}" data-why="${esc(ownWhy(p, k))}"></span>` : "";
+function swatch(k, cls) {
+  const p = ui.pill, d = gateOf(p, k), v = rd(p, k) || rd(p, "fillcolor"), nm = CTL[k].l.replace(":", "");
+  // A swatch has no label in the pill, so its sentence starts with its name, gray or not; a gray one then gives the row's reason.
+  const w = d ? ` data-why="${esc(nm + ". " + d.why)}"` : ` data-col="${k}" data-why="${esc(nm + ". Click to pick a color.")}"`;
+  return `<div class="swc"><div class="${cls}${d ? " dis" : ""}" style="background:${v}"${w}></div>${tdot(p, k)}</div>`;
+}
+// The small On / Off button in a row's button column: a parent sharing its child's row.
+function MT(k) {
+  const p = ui.pill, d = gateOf(p, k), v = rd(p, k);
+  return `<div class="pill mini${v ? " on" : ""}${d ? " dis" : ""}"${d ? wat(d) : ` data-t="${k}"`}>${v ? "On" : "Off"}${tdot(p, k)}</div>`;
+}
+const leadOf = o => o.lead ? swatch(o.lead, "sw") : o.tog ? MT(o.tog) : "<div></div>";
+function S(k, o = {}) {
+  const p = ui.pill, c = CTL[k], d = gateOf(p, k), v = d && d.show !== undefined ? d.show : heldNum(p, k);
+  // A measured level with nothing to measure has no number: no handle, and the cell says so.
+  const none = !!d && d.show === undefined && !!d.by;
+  const tr = trackOf(c, d), pos = c.map ? c.map.indexOf(v) : v, min = c.map ? 0 : tr.min, max = slMax(tr);
+  const dc = d ? " dis" : "", w = wat(d), cw = d ? null : carryWhy(p, k);
+  const hint = c.slMax ? ` data-why="${esc(`The slider reaches ${c.slMax}${c.u}. A longer time, up to ${c.max}${c.u}, is typed into the number box.`)}"` : cw ? ` data-why="${esc(cw)}"` : "";
+  // On a shared line the label names the switch, so it is gray when the switch is, not when the row beside it is.
+  const ld = o.tog ? gateOf(p, o.tog) : d;
+  return `<div class="lbl${ld ? " dis" : ""}"${cw ? ` data-why="${esc(cw)}"` : wat(ld)}>${dot(k, !!o.tog)}${o.label || c.l}</div>${leadOf(o)}` +
+    `<div class="sl${dc}${none ? " noh" : ""}"${d ? w : ` data-k="${k}"${hint}`}><div class="g"></div><div class="h" style="left:${clamp((pos - min) / (max - min) * 100)}%"></div></div>` +
+    (c.slMax && !d ? `<input class="val vbox num" data-num="${k}" value="${esc(fmt(k, v, rd(p, "mode")))}"${hint}>` :
+    `<div class="val${dc}${c.slMax ? " vbox" : ""}"${cw ? ` data-why="${esc(cw)}"` : w}>${none ? "no signal" : fmt(k, v, rd(p, "mode"))}</div>`);
+}
+function T(keys) {
+  const p = ui.pill;
+  return `<div class="pills">${keys.map(k => {
+    const d = gateOf(p, k);
+    const on = d && d.show !== undefined ? d.show : rd(p, k);
+    return `<div class="pill${on ? " on" : ""}${d ? " dis" : ""}"${d ? wat(d) : ` data-t="${k}"`}>${CTL[k].l}${tdot(p, k)}</div>`;
+  }).join("")}</div>`;
+}
+function C(k, o = {}) {
+  const d = gateOf(ui.pill, k), ld = o.tog ? gateOf(ui.pill, o.tog) : d;
+  return `<div class="lbl${ld ? " dis" : ""}"${wat(ld)}>${dot(k, !!o.tog)}${o.label || CTL[k].l}</div>${o.tog ? MT(o.tog) : ""}` +
+    `<div class="cmb${o.tog ? " c2" : ""}${d ? " dis" : ""}"${d ? wat(d) : ` data-c="${k}"`}><span>${rd(ui.pill, k)}</span><span class="arr">&#9660;</span></div>`;
+}
+function SEG(k) {
+  const v = rd(ui.pill, k), d = gateOf(ui.pill, k);
+  return `<div class="seg${d ? " dis" : ""}"${wat(d)}>${dot(k)}${CTL[k].opts.map(([val, l]) => `<div class="s${v === val ? " on" : ""}"${d ? "" : ` data-seg="${k}" data-v="${val}"`}>${l}</div>`).join("")}</div>`;
+}
+function B(label, act, d) { return `<div class="btn${d ? " dis" : ""}"${d ? wat(d) : ` data-act="${act}"`}>${label}</div>`; }
+const retuneGate = t => txButton(t, false, "Re-tune") || (rd(t, "mode") === "clarity" ? null : R("Re-tune makes Clarity measure the noise floor again. Pick Clarity to use it."));
+const clearGate = t => gateOf(t, "bgpic") || (rd(t, "bgpic") ? null : R(clearGate.none));
+clearGate.none = "No picture is chosen.";
+const bandTag = p => PAN[p].band.toUpperCase() + " BAND";
+// The Clarity light: green while Clarity sets this pan's levels, amber while it is paused, gray otherwise:
+// Clarity not chosen, or nothing measured, as in a remote window without its Core. The pause is the radio's,
+// not the pan's: while the radio transmits Clarity measures nothing on any pan, so every Clarity pan shows amber.
+const radioKeyed = () => sit() === "tx";
+function badge(p) {
+  const on = rd(p, "mode") === "clarity", sig = sit() !== "off", st = !on || !sig ? "" : radioKeyed() ? " pau" : " act";
+  const why = !on ? "Clarity light: gray, because Clarity is not setting this pan's levels."
+    : !sig ? "Clarity light: gray, because this window is not connected, so Clarity has no signal to measure."
+    : radioKeyed() ? `Clarity light: amber, because Clarity is paused on every pan while the radio transmits.${keyed(p) ? "" : " This pan keeps the levels Clarity last set."}`
+    : "Clarity light: green, because Clarity is setting this pan's levels.";
+  return `<div class="cbadge${st}" data-why="${esc(why)}">C</div>`;
+}
+
+function spTab(p) {
+  return H("Trace", "PAN " + p, true) + C("det") + T(["norm", "fill", "gradient"]) + S("fillalpha", {lead: "fillcolor"}) +
+    C("avg") + S("avgms") + S("linew", {lead: "linecolor"}) +
+    S("peakdelay", {tog: "peakhold", label: "Peak Hold:"}) + S("cal") +
+    H("Grid", "PAN " + p) + C("gridsp", {tog: "grid", label: "Grid:"}) + C("scaletxt") +
+    H("Markers", "PAN " + p) + T(["nf", "binw", "peakv", "cursor"]) +
+    N(`In Setup, Cursor Freq is on Spectrum; the other three and their details are on <span class="lnk" data-page="Peaks &amp; Markers">Peaks &amp; Markers &rarr;</span>`);
+}
+function lvTab(p) {
+  return H("Spectrum scale", `PAN ${p}, ${bandTag(p)}`, true) + SEG("scalemode") + N(scaleNote(p), noteCls(p) + " two") +
+    S("dbMax") + S("dbMin") + S("trackoff") + T(["keeprange"]) + (keyed(p) ? "" : N(`dB Max and dB Min are kept per band (${PAN[p].band}).`)) +
+    H("Waterfall levels", "PAN " + p) + SEG("mode") +
+    `<div class="noteb"><div class="note ${noteCls(p)}">${modeNote(p)}</div>${badge(p)}${B("Re-tune", "retune", retuneGate(p))}</div>` +
+    S("black") + S("gain") + S("nfoff") + S("low") + S("high");
+}
+function wfTab(p) {
+  return H("Drawing", "PAN " + p, true) + C("scheme") + S("rate") + S("opacity") + S("nbdb", {tog: "nb", label: "NB Blank:"}) + C("wfavg") + S("wfavgms") +
+    H("Overlays", "PAN " + p) + T(["stoptx", "rxfilt", "txfilt", "rxzero", "txzero"]) +
+    H("Time", "PAN " + p) + C("stamp") + C("rewind") + N(rewindNote(p), "two");
+}
+function vwTab(p) {
+  const d = gateOf(p, "bg");
+  return H("View", "PAN " + p, true) + SEG("view") + N(viewNote(p), "hi two") +
+    H("3D", "PAN " + p) + S("gain3d") + S("span3d") + S("angle3d") + S("speed3d") + N(speedNote(p), "two") + T(["shadow3d"]) +
+    H("3D floor", bandTag(p)) + S("floor3d") +
+    H("Background", "PAN " + p) +
+    `<div class="lbl${d ? " dis" : ""}"${wat(d)}>${dot("bgpic", true)}Background:</div>` +
+    `<div class="brow">${B("Choose...", "bgchoose", gateOf(p, "bgpic"))}${B("Clear", "bgclear", clearGate(p))}${MT("bg")}</div>` +
+    S("bgopacity", {lead: "bgcolor"});
+}
+function fftTab() {
+  return H("FFT", "STATION", true) + SEG("sizing") + N(SIZING_NOTE[glob.sizing], "hi") + S("fftsize") + S("hzbin") + N(readout(), "two" + readoutDim()) +
+    S("fps") + C("window") + S("decim");
+}
+// The pill's tabs are Setup's pages: each tab holds the rows of its page that are used while operating. One exception:
+// the Noise Floor, Bin Width and Peak Value buttons on Spectrum have their rows on Peaks & Markers, which has no tab.
+const TABS = ["Spectrum", "Levels", "Waterfall", "View", "FFT"];
+const TAB_PAGE = {"Spectrum": "Spectrum", "Levels": "Levels", "Waterfall": "Waterfall", "View": "View", "FFT": "FFT & Engine"};
+const TAB_BODY = {"Spectrum": spTab, "Levels": lvTab, "Waterfall": wfTab, "View": vwTab, "FFT": fftTab};
+const BAND_ROWS = {"Levels": "dB Max and dB Min go", "View": "3D Floor goes"};
+// The rows the pill has, read from its tab builders, so the list cannot drift from the tabs.
+const PILL_KEYS = new Set(Object.values(TAB_BODY).flatMap(f => [...f.toString().matchAll(/"(\w+)"/g)].map(m => m[1])).filter(k => k in CTL));
+function renderPill() {
+  const p = ui.pill;
+  if (p === null) {
+    $("fly").innerHTML = "";
+    return;
+  }
+  // The count is every value the pan has of its own, wherever its row is: some rows are only in Setup.
+  const mine = Object.keys(own[p]).filter(k => scOf(k) === "pan"), n = mine.length, far = mine.filter(k => !PILL_KEYS.has(k)).length, br = BAND_ROWS[ui.tab];
+  const def = ui.tab === "FFT" ? "The station holds these. A change here goes to every pan."
+    : ui.tab === "Levels" && keyed(p) ? `Pan ${p} is transmitting, so these rows are gray until it stops. Point at one to see why.`
+    : `Changes here go to Pan ${p} only${br ? `; ${br} to every pan on ${PAN[p].band}` : ""}. A dot marks Pan ${p}'s own value. Point at a gray row to see why.`;
+  const fwhy = n ? `Drops Pan ${p}'s ${n} own value${n > 1 ? "s" : ""}${far ? ` (${far} on rows only Setup shows)` : ""}, so every row follows All pans again.` : `Pan ${p} already follows All pans in every row.`;
+  $("fly").innerHTML = `<div class="tabs">${TABS.map(t => `<div class="tab${t === ui.tab ? " on" : ""}" data-tab="${t}">${t}</div>`).join("")}</div>` +
+    `<div class="grid">${TAB_BODY[ui.tab](p)}<div class="why" id="why" data-def="${esc(def)}">${def}</div><div class="sep"></div>` +
+    `<div class="foot"><div class="btn${n ? "" : " dis"}"${n ? ` data-act="followall"` : ""} data-why="${esc(fwhy)}">Follow all pans${n ? ` (${n})` : ""}</div>` +
+    `<span class="link" data-act="setup" data-why="${esc(`Opens Setup on ${TAB_PAGE[ui.tab]}${ui.tab === "FFT" ? "" : ", showing Pan " + p}.`)}">Setup &rarr;</span></div></div>`;
+}
+
+// ---------- Setup ----------
+// The gradient a Custom scheme draws with is edited where the scheme is chosen.
+const rxGradGate = t => rd(t, "scheme") === "Custom" ? null : R("Edit custom gradient is used by the Custom scheme. Pick Custom under Scheme to use it.");
+const txGradGate = () => glob.txpal === "Custom" ? null : R("Edit custom gradient is used by the Custom palette. Pick Custom under Palette to use it.");
+const PAGES = [
+  {name: "Spectrum", pan: true, groups: [
+    {t: "Trace", items: ["det", "norm", "avg", "avgms", "linew", "linecolor"]},
+    {t: "Fill", items: ["fill", "fillalpha", "fillcolor", "gradient"]},
+    {t: "Peak hold", items: ["peakhold", "peakdelay", {n: () => `Peak Hold keeps the highest level seen until Peak Delay runs out. For a peak line that falls back slowly, see <span class="lnk" data-page="Peaks &amp; Markers">Peaks &amp; Markers &rarr;</span>`, plain: 1}]},
+    {t: "Grid", items: ["grid", "gridsp", "dbstep"]},
+    {t: "Scales and labels", items: ["scaletxt", "freqalign", "dbmstrip", "zeroline"]},
+    {t: "Calibration", items: ["cal"]},
+    {t: "Readouts", items: ["cursor", "fpsov"]},
+    {t: "Reset", tag: "", items: [{b: "Reset to Smooth Defaults", act: "smooth", note: "also sets other pages"},
+      {n: () => `It also sets Scheme and Rate on <span class="lnk" data-page="Waterfall">Waterfall &rarr;</span> and changes Manual waterfall levels to Auto on <span class="lnk" data-page="Levels">Levels &rarr;</span>`, plain: 1}]},
+    {t: "", bare: 1, items: [{links: [["Configure peaks &rarr;", "Peaks & Markers"], ["Configure multimeter &rarr;", "Multimeter"]]}]}]},
+  {name: "Levels", pan: true, groups: [
+    {t: "Spectrum scale", band: true, items: ["scalemode", {n: scaleNote, cls: noteCls}, {band: 1}, "dbMax", "dbMin",
+      {n: t => t !== "all" && keyed(t) ? "" : `dB Max and dB Min are kept per band (${bandOf(t)}). Manual or Track floor, Floor Offset and Keep range are the same on every band.`, plain: 1},
+      "trackoff", "keeprange",
+      {b: "Copy from waterfall levels", act: "copywf", gate: t => txButton(t, true, "Copy from waterfall levels") || sitOnly(["dbMax", "dbMin"]) || copyWfWhy(t) || noPair(t, "low", "high")}]},
+    {t: "Waterfall levels", items: ["mode", {n: modeNote, cls: noteCls}, "black", "gain", "nfoff", "low", "high",
+      {b: "Re-tune", act: "retune", gate: retuneGate},
+      {b: "Copy from spectrum scale", act: "copyscale", gate: t => txButton(t, false, "Copy from spectrum scale") || copyScaleWhy(t) || noPair(t, "dbMax", "dbMin")}]},
+    // After Waterfall levels, not before: its rows are named dB Max and dB Min too, and the waterfall rows say
+    // "dB Min above" and "dB Max above" of the spectrum scale's pair, which must be the only pair above them.
+    {t: "Transmit scale", when: txPerPan, items: ["txMax", "txMin", {n: () => "A pan is drawn on its transmit scale while it transmits. The rest of the transmit picture is on " + TX_LINK, plain: 1}]},
+    {t: "While transmitting", tag: "", items: [{n: () => (txPerPan() ? "A pan that transmits uses the transmit levels for its waterfall until it stops. " : "A pan that transmits is drawn with the transmit scale and the transmit levels until it stops. ") + TX_LINK, plain: 1}]}]},
+  {name: "Waterfall", pan: true, groups: [
+    {t: "Drawing", items: ["scheme", {b: "Edit custom gradient...", act: "gradrx", gate: rxGradGate}, {grad: "rx", gate: rxGradGate},
+      "rate", {n: delayNote, plain: 1}, "opacity", "nb", "nbdb"]},
+    {t: "Smoothing", items: ["wfdet", "wfavg", "wfavgms"]},
+    {t: "Overlays", items: ["stoptx", "rxfilt", "txfilt", "rxzero", "txzero"]},
+    {t: "Time", items: ["stamp", "stampmode", "rewind", {n: t => rewindNote(t), plain: 1}]}]},
+  {name: "View", pan: true, groups: [
+    {t: "View", items: ["view", {n: viewNote}]},
+    {t: "3D", items: ["gain3d", "span3d", "angle3d", "speed3d", {n: t => speedNote(t) + ` Rate is on <span class="lnk" data-page="Waterfall">Waterfall &rarr;</span>`, plain: 1}, "shadow3d", {b: "Reset 3D to defaults", act: "reset3d", note: "also sets the view and this band's 3D Floor"},
+      {n: () => sit() === "gpu" ? "The reset still works here. 3D Span and Slice Shadow stay gray, because this computer's graphics cannot draw them." : "", plain: 1}]},
+    {t: "3D floor", band: true, bandOnly: true, items: [{band: 1}, "floor3d"]},
+    {t: "Background", items: ["bg", "bgcolor", "bgpic", "bgopacity"]}]},
+  {name: "Peaks & Markers", pan: true, groups: [
+    {t: "Peak trace", items: ["pt", "ptHold", "ptDrop", "ptFill", "ptTx", "ptColor"]},
+    {t: "Peak markers", items: ["pm", "pmN", "pmIn", "pmHold", "pmHoldMs", "pmDecay", "pmFall", "pmColor", "pmText"]},
+    {t: "Peak value", items: ["peakv", "pvPos", "pvRefresh"]},
+    {t: "Noise floor line", items: ["nf", "nfshift", "nfwidth", "nfcol", "nftext", "nffast", "nfpos"]},
+    {t: "Bin width", items: ["binw"]},
+    {t: "", bare: 1, items: [{b: "&larr; Spectrum", page: "Spectrum"}]}]},
+  {name: "FFT & Engine", banner: "The station holds these. Every pan uses them, and so does every window connected to this station.", groups: [
+    {t: "FFT size", tag: "STATION", items: ["sizing", {n: () => SIZING_NOTE[glob.sizing]}, "fftsize", "hzbin", {n: readout, plain: 1, cls: () => readoutDim().trim()}, "window", "decim"]},
+    {t: "Frame rate", tag: "STATION", items: ["fps", {b: "Get Monitor Hz", act: "monhz", gate: () => sitOnly(["fps"]), note: "sets FPS to this screen's refresh rate"}]},
+    {t: "This computer", tag: "THIS COMPUTER", items: ["threadprio"]}]},
+  {name: "Transmit Display", banner: () => "The pan that transmits is drawn with these while it transmits. " +
+    (txPerPan() ? "The station holds the groups marked STATION, each pan has its own transmit scale, and this computer holds the rest." : "The station holds the groups marked STATION; this computer holds the rest."), groups: [
+    {t: "FFT", tag: "STATION", items: ["txfft", {h: () => `<div class="rdo"><span>Bin Width (Hz)<b>${(96000 / glob.txfft).toFixed(3)}</b></span></div>`}, "txwindow"]},
+    {t: "Panadapter", tag: "STATION", items: ["txdet", "txnorm", "txavg", "txavgms"]},
+    {t: "Transmit scale", tag: "THIS COMPUTER", when: () => !txPerPan(), items: ["txMax", "txMin"]},
+    {t: "Transmit scale", tag: "EACH PAN", when: txPerPan, items: [{n: () => `Each pan has its own transmit scale. Set it on <span class="lnk" data-page="Levels">Levels &rarr;</span>`, plain: 1}]},
+    {t: "Waterfall", tag: "STATION", items: ["txwfdet", "txwfavg", "txwfavgms"]},
+    {t: "Waterfall Amplitude Scale", tag: "THIS COMPUTER", items: ["txlow", "txhigh", "txpal", "txlowcolor",
+      {b: "Edit custom gradient...", act: "gradtx", gate: txGradGate}, {grad: "tx", gate: txGradGate}]}]},
+  {name: "Multimeter", groups: [
+    {t: "Multimeter", tag: "", items: ["mmPoll", "mmDec"]},
+    {t: "Signal Units", tag: "THIS COMPUTER", items: ["mmUnits"]},
+    {t: "Signal History", tag: "THIS COMPUTER", items: ["mmHistDur"]},
+    {t: "", bare: 1, items: [{b: "&larr; Spectrum", page: "Spectrum"}]}]},
+  // cat: the page is under Appearance in Setup's tree, not under Display.
+  {name: "Colors & Theme", cat: "Appearance", banner: "This computer holds these colors. Every pan is drawn with them.", groups: [
+    {t: "Spectrum", tag: "THIS COMPUTER", items: ["cGrid", "cGridFine", "cHGrid", "cGridText", "cBandEdge", "cRxZero", "cTxZero", "cRxPass", "cTxPass"]},
+    {t: "", bare: 1, items: [{b: "Reset all colors to defaults", act: "resetcolors", note: "sets the nine colors above"},
+      {n: () => `Trace Color and Fill Color are each pan's own now, so they are on <span class="lnk" data-page="Spectrum">Display, Spectrum &rarr;</span>`, plain: 1}]}]},
+];
+const page = () => PAGES.find(x => x.name === ui.page);
+const curT = () => page().pan ? ui.setupFor : "all";
+const keysOf = pg => pg.groups.filter(g => !g.when || g.when()).flatMap(g => g.items).filter(i => typeof i === "string" && scOf(i) === "pan");
+function sdot(t, k) { return isOwn(t, k) ? `<span class="dot" data-reset="${k}" title="Click to follow All pans again"></span>` : ""; }
+function diffLine(k) {
+  const who = tabPans().filter(p => k in own[p]);
+  if (!who.length) { return ""; }
+  const txt = who.map(p => `Pan ${p}${isOpen(p) ? "" : " (not open)"} ${fmtH(k, own[p][k], rd(p, "mode"))}`).join(", ");
+  return `<div class="ownline"><span>${rule() === "win" ? "Differs on" : "Kept on"}: ${txt}</span><span class="sbtn" data-apply="${k}">Apply to all pans</span></div>`;
+}
+function SROW(k) {
+  const t = curT(), c = CTL[k], d = gateOf(t, k), m = rd(t, "mode"), o = isOwn(t, k);
+  const held = c.whose ? c.whose.charAt(0).toUpperCase() + c.whose.slice(1) + ". " : "";
+  const cls = `srow${d ? " dis" : ""}`, tip = d ? ` title="${esc(held + d.why)}"` : "", ind = c.par ? ` style="padding-left:${14 * c.par}px"` : "";
+  const cw = d ? null : carryWhy(t, k), mine = o ? "All pans: " + fmtH(k, shared[k], shared.mode) : "";
+  const why = `<div class="whyc">${d ? esc(held + d.why) : cw ? esc(cw) + (mine ? " " + mine : "") : mine || (c.slMax ? `box takes up to ${c.max}${c.u}` : c.whose || "")}</div>`;
+  const dt = sdot(t, k), diff = t === "all" && scOf(k) === "pan" ? diffLine(k) : "";
+  let v = c.t === "sl" ? heldNum(t, k) : rd(t, k);
+  if (c.t === "sl") {
+    let txt, noh = "";
+    if (d && d.show !== undefined) { v = d.show; txt = fmt(k, v, m); }
+    else if (d && d.by) { txt = t === "all" ? "per pan" : !isOpen(t) ? "not open" : "no signal"; noh = " noh"; }
+    else { txt = fmt(k, v, m); }
+    const tr = trackOf(c, d), pos = c.map ? c.map.indexOf(v) : v, min = c.map ? 0 : tr.min, max = slMax(tr), pct = clamp((pos - min) / (max - min) * 100);
+    if (c.box) {
+      return `<div class="${cls}"${tip}><div class="l"${ind}>${dt}${c.l}</div><div class="spin box">${d ? `<span>${txt}</span>` : `<input class="num" data-num="${k}" value="${esc(txt)}">`}<span class="st"><span${d ? "" : ` data-box="${k}" data-d="1"`}>&#9650;</span><span${d ? "" : ` data-box="${k}" data-d="-1"`}>&#9660;</span></span></div>${why}</div>${diff}`;
+    }
+    return `<div class="${cls}"${tip}><div class="l"${ind}>${dt}${c.l}</div><div class="ssl${noh}"${d ? "" : ` data-k="${k}"`}><div class="g"></div><div class="f" style="width:${pct}%"></div><div class="h" style="left:${pct}%"></div></div>${d || noh || c.map || k === "speed3d" || k === "black" || k === "gain" ? `<div class="spin">${txt}</div>` : `<input class="spin num" data-num="${k}" value="${esc(txt)}">`}${why}</div>${diff}`;
+  }
+  if (c.t === "tg") {
+    if (d && d.show !== undefined) { v = d.show; }
+    // c.full: the app adds this box across the whole row, with no label column before it.
+    return `<div class="${cls}"${tip}>${c.full ? "" : `<div class="l"></div>`}<div class="chk${v ? " on" : ""}"${c.full ? ` style="grid-column:1/4"` : ind}${d ? "" : ` data-t="${k}"`}>${dt}<i></i>${c.l}</div>${why}</div>${diff}`;
+  }
+  if (c.t === "cb") { return `<div class="${cls}"${tip}><div class="l"${ind}>${dt}${c.l}</div><div class="spin cmbx"${d ? "" : ` data-c="${k}"`}><span>${v}</span><span class="arr">&#9660;</span></div>${why}</div>${diff}`; }
+  if (c.t === "pic") {
+    // Clear is gray with no picture to clear even where the row is live: its sentence, the pill's, stands beside it.
+    const cg = clearGate(t);
+    return `<div class="${cls}"${tip}><div class="l"${ind}>${dt}${c.l}</div><div style="display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;grid-column:2/4">` +
+      `<span class="sbtn${d ? " dis" : ""}"${d ? "" : ` data-act="bgchoose"`}>Choose...</span><span class="sbtn${cg ? " dis" : ""}"${cg ? ` title="${esc(cg.why)}"` : ` data-act="bgclear"`}>Clear</span>` +
+      `<span class="sswt">${v ? esc(v) : esc(clearGate.none)}</span></div>${why}</div>${diff}`;
+  }
+  if (c.t === "col") {
+    const shown = v || rd(t, "fillcolor");
+    return `<div class="${cls}"${tip}><div class="l"${ind}>${dt}${c.l}</div><div style="display:flex;align-items:center;gap:8px;grid-column:2/4"><div class="ssw" style="background:${shown}"${d ? "" : ` data-col="${k}"`}></div>${k === "linecolor" && !v ? `<span class="sswt">follows Fill Color</span>` : ""}</div>${why}</div>${diff}`;
+  }
+  // A gray chooser's sentence is under it, whole. On the transmitting pan it takes the place of the line that says
+  // what the choice does, and ends with the way to the transmit values.
+  const txl = d && t !== "all" && keyed(t) ? " " + (k !== "scalemode" || !txPerPan() ? TX_LINK : "The transmit scale is set under Transmit scale, below.") : "";
+  return `<div class="sseg${d ? " dis" : ""}"${tip}>${dt}${c.opts.map(([val, l]) => `<div class="s${v === val ? " on" : ""}"${d ? "" : ` data-seg="${k}" data-v="${val}"`}>${l}</div>`).join("")}</div>` +
+    (d ? `<div class="snote amber">${esc(d.why)}${txl}</div>` : "") + diff;
+}
+function SITEM(it, t) {
+  if (typeof it === "string") { return SROW(it); }
+  if (it.grad) { return ui.grad[it.grad] ? gradRow(it, t) : ""; }
+  if (it.n) { const s = it.n(t), cl = it.cls ? it.cls(t) : ""; return s ? `<div class="snote${it.plain ? " plain" : ""}${cl === "amber" || cl === "dim" ? " " + cl : ""}">${s}</div>` : ""; }
+  if (it.m) { return `<div class="mnote">${it.m}</div>`; }
+  if (it.h) { return it.h(t); }
+  if (it.links) { return `<div class="srow"><div style="grid-column:1/4;display:flex;gap:8px">${it.links.map(([l, pg]) => `<span class="sbtn" data-page="${esc(pg)}">${l}</span>`).join("")}</div><div class="whyc"></div></div>`; }
+  if (it.page) { return `<div class="srow"><div style="grid-column:1/4"><span class="sbtn" data-page="${it.page}">${it.b}</span></div><div class="whyc"></div></div>`; }
+  if (it.band) {
+    const lock = t !== "all" && isOpen(t), on = PANS.filter(p => PAN[p].band === bandOf(t));
+    return `<div class="srow${lock ? " dis" : ""}"><div class="l">Band:</div><div class="spin cmbx"${lock ? "" : ` data-band="1"`}><span>${bandOf(t)}</span><span class="arr">&#9660;</span></div>` +
+      `<div class="whyc">${lock ? `Pan ${t} is on ${bandOf(t)}` : on.length ? (on.length > 1 ? "Pans " + on.slice(0, -1).join(", ") + " and " + on[on.length - 1] + " are" : "Pan " + on[0] + " is") + " on this band" : "no open pan is on this band"}</div></div>`;
+  }
+  const d = it.gate ? it.gate(t) : null;
+  return `<div class="srow${d ? " dis" : ""}"${d ? ` title="${esc(d.why)}"` : ""}><div class="l"></div><div style="grid-column:2/4"><span class="sbtn${d ? " dis" : ""}"${d ? "" : ` data-act="${it.act}"`}>${it.b}</span></div><div class="whyc">${d ? esc(d.why) : typeof it.note === "function" ? it.note(t) : it.note || ""}</div></div>`;
+}
+function renderSetup() {
+  drawing = "setup";
+  const pg = page(), t = curT(), all = t === "all", ks = keysOf(pg);
+  const leaf = x => `<div class="leaf${x.name === ui.page ? " sel" : ""}" data-page="${esc(x.name)}">${esc(x.name)}</div>`;
+  $("tree").innerHTML = `<div class="cat open">Display</div>` + PAGES.filter(x => !x.cat).map(leaf).join("") +
+    `<div class="cat open">Appearance</div>` + PAGES.filter(x => x.cat).map(leaf).join("") +
+    `<div class="treenote">Setup's other pages are not changed by this work, so they are left out here.</div>`;
+  let head;
+  if (!pg.pan) {
+    head = pg.banner ? `<div class="banner">${typeof pg.banner === "function" ? pg.banner() : pg.banner}</div>` : "";
+  } else {
+    const tabs = `<div class="for"><span class="forl">Settings for:</span>` +
+      [["all", "All pans"], ...tabPans().map(p => [p, "Pan " + p + `<span class="sl2">${isOpen(p) ? "Slice " + PAN[p].slice : "not open"}</span>`])].map(([v, l]) =>
+        `<div class="ft${String(t) === String(v) ? " on" : ""}${v !== "all" && !isOpen(v) ? " off" : ""}" data-for="${v}"${v !== "all" && !isOpen(v) ? ` title="Not open now"` : ""}>${l}${v !== "all" && ks.some(k => k in own[v]) ? `<i class="d"></i>` : ""}</div>`).join("") + `</div>`;
+    const n = all ? 0 : ks.filter(k => k in own[t]).length, rows = `${n} row${n > 1 ? "s" : ""}`;
+    let banner;
+    if (all) {
+      banner = `<div class="banner">${rule() === "win" ? "A change here goes to every pan." : "A change here goes to every pan that has no value of its own for that row."}</div>`;
+    } else {
+      // Both buttons stay on screen. With no value of its own on the page they are gray, and the banner's sentence is the reason.
+      const follows = `Pan ${t} follows All pans in every row on this page.`, none = esc(follows), canChange = ks.some(k => !gateOf(t, k));
+      const btn = (label, act) => `<span class="sbtn${n ? "" : " dis"}"${n ? ` data-act="${act}"` : ` title="${none}"`}>${label}</span>`;
+      const txt = !isOpen(t) ? `Pan ${t} is not open now. What you set here is kept and used when you open it. ${n ? `It has its own value in ${rows} on this page.` : follows}`
+        : n ? `Pan ${t} has its own value in ${rows} on this page, marked with a dot.`
+        : follows + (canChange ? ` Change a row here and it becomes Pan ${t}'s own.` : keyed(t) ? ` Its rows here cannot be changed while it transmits.` : "");
+      banner = `<div class="banner${n && isOpen(t) ? " pan" : ""}"><span>${txt}</span>${btn("Follow all pans", "followpage")}${btn(`Use Pan ${t}'s on all pans`, "copyall")}</div>`;
+    }
+    head = tabs + banner;
+  }
+  const tagOf = g => g.tag !== undefined ? g.tag
+    : (g.bandOnly ? "" : (all ? "ALL PANS" : "PAN " + t)) + (g.band ? (g.bandOnly ? "" : ", ") + bandOf(t).toUpperCase() + " BAND" : "");
+  $("spage").innerHTML = `<h1>${esc(pg.name)}</h1>${head}` + pg.groups.filter(g => !g.when || g.when()).map(g =>
+    g.bare ? `<div style="margin-top:12px">${g.items.map(i => SITEM(i, t)).join("")}</div>` :
+    `<div class="gb"><div class="gt">${g.t}</div>${tagOf(g) ? `<div class="gtag">${tagOf(g)}</div>` : ""}${g.items.map(i => SITEM(i, t)).join("")}</div>`).join("");
+  $("setupwhere").textContent = `Setup, ${pg.cat || "Display"}, ${pg.name}`;
+  paintGrads();
+  drawing = "pill";
+}
+
+// ---------- the live pans ----------
+// ---------- the live pans: the band and the analyzer ----------
+// Each pan runs a made-up band: a noise floor, carriers, voice and Morse signals that come and go, and noise bursts.
+// Every frame the band becomes a spectrum by the analyzer's own rules: the seven windows of src/core/FFTEngine.cpp,
+// the five detectors of src/core/spectrum/SpectrumDetector.cpp and the averaging of SpectrumAvenger.cpp. Every Rate
+// a row goes into the waterfall. So each row of the pill and of Setup moves the picture the way it will in the app.
+const PW = 700, PH = 420, FSH = 28, STRIPW = 36, TXSPAN = 8000;
+const lin = db => Math.pow(10, db / 10), dB = v => 10 * Math.log10(v + 1e-30);
+function mulberry(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+// The windows, with the app's coefficients (FFTEngine.cpp, from WDSP analyzer.c new_window). Kaiser runs at 14.0.
+function bessi0(x) {
+  const ax = Math.abs(x);
+  if (ax < 3.75) { const y = (x / 3.75) * (x / 3.75); return 1.0 + y * (3.5156229 + y * (3.0899424 + y * (1.2067492 + y * (0.2659732 + y * (0.360768e-1 + y * 0.45813e-2))))); }
+  const y = 3.75 / ax;
+  return (Math.exp(ax) / Math.sqrt(ax)) * (0.39894228 + y * (0.1328592e-1 + y * (0.225319e-2 + y * (-0.157565e-2 + y * (0.916281e-2 + y * (-0.2057706e-1 + y * (0.2635537e-1 + y * (-0.1647633e-1 + y * 0.392377e-2))))))));
+}
+const WINF = {
+  "Rectangular": () => 1.0,
+  "Blackman-Harris 4T": a => 0.35875 - 0.48829 * Math.cos(a) + 0.14128 * Math.cos(2 * a) - 0.01168 * Math.cos(3 * a),
+  "Hann": a => 0.5 * (1.0 - Math.cos(a)),
+  "Flat-Top": a => 0.21557895 - 0.41663158 * Math.cos(a) + 0.277263158 * Math.cos(2 * a) - 0.083578947 * Math.cos(3 * a) + 0.006947368 * Math.cos(4 * a),
+  "Hamming": a => 0.54 - 0.46 * Math.cos(a),
+  "Kaiser": (a, i, n) => bessi0(14.0 * Math.sqrt(Math.max(0, 1.0 - Math.pow(2.0 * i / (n - 1) - 1.0, 2)))) / bessi0(14.0),
+  "Blackman-Harris 7T": a => { const c = Math.cos(a); return 6.3964424114390378e-02 + c * (-2.3993864599352804e-01 + c * (3.5015956323820469e-01 + c * (-2.4774111897080783e-01 + c * (8.5438256055858031e-02 + c * (-1.2320203369293225e-02 + c * 4.3778825791773474e-04))))); },
+};
+// A window's shape on the frequency axis: how a steady carrier spreads over the bins beside it. k: the power at an
+// offset of d bins (1 at the carrier). env: the same with the dips between side lobes filled in. cum and cum2: the
+// running sums of k and of k squared, for the detectors that add bins up. enbw: the noise a bin gathers, in bins.
+const KSTEP = 8, KMAX = 64, KFLOOR = 1e-17;
+const KERNEL = {};
+for (const [name, f] of Object.entries(WINF)) {
+  const n = 256, w = new Float64Array(n);
+  let sw = 0, sw2 = 0;
+  for (let i = 0; i < n; i++) { w[i] = f(2 * Math.PI * i / (n - 1), i, n); sw += w[i]; sw2 += w[i] * w[i]; }
+  const m = KMAX * KSTEP + 1, k = new Float64Array(m), env = new Float64Array(m), cum = new Float64Array(m), cum2 = new Float64Array(m);
+  for (let j = 0; j < m; j++) {
+    const d = j / KSTEP; let re = 0, im = 0;
+    for (let i = 0; i < n; i++) { const a = 2 * Math.PI * d * (i - (n - 1) / 2) / n; re += w[i] * Math.cos(a); im += w[i] * Math.sin(a); }
+    k[j] = Math.max(KFLOOR, (re * re + im * im) / (sw * sw));
+  }
+  for (let j = m - 1, top = KFLOOR; j >= 0; j--) { top = Math.max(top, k[j]); env[j] = top; }
+  for (let j = 1; j < m; j++) { cum[j] = cum[j - 1] + (k[j] + k[j - 1]) / 2 / KSTEP; cum2[j] = cum2[j - 1] + (k[j] * k[j] + k[j - 1] * k[j - 1]) / 2 / KSTEP; }
+  const half = env[(KMAX / 2) * KSTEP], end = env[m - 1];
+  KERNEL[name] = {k, env, cum, cum2, enbw: n * sw2 / (sw * sw), roll: Math.max(0, Math.min(8, Math.log2(half / end))), end};
+}
+const kLook = (tab, d) => { const x = Math.abs(d) * KSTEP, i = x | 0; return i >= tab.length - 1 ? tab[tab.length - 1] : tab[i] + (tab[i + 1] - tab[i]) * (x - i); };
+// Past the table the side lobes keep falling at the rate they had at its end.
+const kFar = (K, d) => Math.max(KFLOOR, K.end * Math.pow(KMAX / Math.abs(d), K.roll));
+const kAt = (K, d) => Math.abs(d) >= KMAX ? kFar(K, d) / 2 : kLook(K.k, d);
+const kEnv = (K, d) => Math.abs(d) >= KMAX ? kFar(K, d) : kLook(K.env, d);
+// The sum of k (or of k squared) over the bins from lo to hi.
+function kSum(K, tab, lo, hi) {
+  const part = d => Math.abs(d) >= KMAX ? tab[tab.length - 1] : kLook(tab, d);
+  if (lo >= KMAX || hi <= -KMAX) { const far = kFar(K, (lo + hi) / 2) / 2; return (tab === K.cum ? far : far * far) * (hi - lo); }
+  return lo >= 0 ? part(hi) - part(lo) : hi <= 0 ? part(lo) - part(hi) : part(lo) + part(hi);
+}
+
+// ---------- the made-up bands ----------
+const TX_SIG = [{t: "ssb", f: 0, dbm: 6, fade: 0}];   // the transmitter's own voice
+const TX_NOISE = -92;          // the transmit chain's noise, dBm in each 23.4 Hz
+const REFBIN = 192000 / 8192;  // 23.4 Hz: the bin the band's levels are given in
+const FILT = {u: [150, 2850], l: [-2850, -150]};   // the receive filter, Hz from the slice
+const TXFILT = {u: [200, 2900], l: [-2900, -200]}; // the transmit filter
+const SIM = {};
+function newSim(p) {
+  const P = PAN[p];
+  const s = {p, rnd: mulberry(P.seed), nrnd: mulberry(P.seed * 7 + 1), t: 0, span: SPAN, off: 0, frac: 0.40,
+    sigs: P.sigs.map(x => ({...x})), tx: TX_SIG.map(x => ({...x, f: P.vfo})),
+    drift: 0, burst: 0, burstDb: 10, nextBurst: 4000, sigR: 1, zr: {}, zt: {}, av: {}, wav: {}, txav: {}, txwav: {}, key: "",
+    tr: new Float32Array(PW).fill(-200), lv: null, rows: [], back: 0, lastRow: -1e9, stack: [], fold: null, foldN: 0,
+    nf: null, nfFastUntil: 0, clarN: null, clarDraw: null, clarAt: -1e9, autoRun: null, trackMin: null, trackAt: -1e9,
+    nbHist: [], lastGood: null, pk: null, pkAt: 0, pt: null, ptAt: null, ptHideUntil: 0, marks: [], pv: null, pvAt: -1e9,
+    fpsN: 0, fpsAt: 0, fpsNow: 0, cur: null, wasTx: false, meter: null, acc: 0};
+  for (const g of [...s.sigs, ...s.tx]) { g.env = 1; g.goal = 1; g.next = 0; g.ph = s.rnd() * 6.283; g.df = 0; g.fadeDb = 0; g.tone = 0; }
+  return s;
+}
+// Move every signal on by dt ms. T is the time one transform covers (ms): a signal that comes and goes faster
+// than that is smeared, so a long transform turns Morse into a steady, weaker line.
+function stepSignals(s, dt, T, list) {
+  const r = s.rnd, mix = Math.min(1, dt / Math.max(dt, T));
+  for (const g of list) {
+    if (g.t === "cw") {
+      if (s.t >= g.next) { const dot = 1200 / g.wpm, u = r(); g.goal = g.goal ? 0 : 1; g.next = s.t + dot * (g.goal ? (u < 0.55 ? 1 : 3) : (u < 0.62 ? 1 : u < 0.9 ? 3 : 7)); }
+    } else if (g.t === "ssb" || g.t === "am") {
+      if (s.t >= g.next) { const u = r(); g.goal = u < 0.22 ? 0.02 : 0.25 + 0.75 * r(); g.next = s.t + 70 + 260 * r() + (u < 0.06 ? 900 : 0); }
+    } else if (g.t === "ft8") {
+      // Each station sends for 12.64 s of every other 15 s slot, stepping through eight tones 6.25 Hz apart.
+      g.slot = Math.floor(s.t / 15000); g.goal = s.t - g.slot * 15000 < 12640 ? 1 : 0; g.tone = Math.floor(s.t / 160);
+    } else if (g.t === "drift") { g.df = 2200 * Math.sin(s.t / 9000 + g.ph); g.goal = 1; }
+    else { g.goal = 1; }
+    g.env += (g.goal - g.env) * mix;
+    g.fadeDb = g.fade ? -7 * (1 + Math.sin(s.t / 1000 * 6.283 / g.fade + g.ph)) : 0;
+  }
+}
+// The band's own noise wanders a little, and now and then a burst of impulse noise (a static crash) covers the
+// whole pan. A burst is sized against the pan's mean level, signals included, because that is the level the
+// waterfall's blanker judges a row by: it lifts that mean by 3 to 18 dB.
+function stepNoise(s, dt, T) {
+  const r = s.rnd;
+  s.drift = 1.2 * Math.sin(s.t / 21000 + PAN[s.p].seed);
+  if (s.t >= s.nextBurst) { s.burst = 1; s.burstDb = 3 + 15 * r(); s.nextBurst = s.t + (5000 + 6000 * r()) * (PAN[s.p].calm || 1); }
+  else { s.burst *= Math.max(0, 1 - dt / Math.max(8, T)); if (s.burst < 0.3) { s.burst = 0; } }
+}
+// How a voice signal's power lies across its 2.4 kHz: two broad humps, as speech has.
+const voice = h => h < 300 || h > 2700 ? 0 : 0.35 + 0.9 * Math.exp(-Math.pow((h - 700) / 420, 2)) + 0.55 * Math.exp(-Math.pow((h - 1900) / 520, 2));
+// The steady tones a signal is made of this frame: [Hz from the pan's center, power].
+function tonesOf(g, out) {
+  const a = lin(g.dbm + g.fadeDb) * (g.t === "am" ? 1 : g.env * g.env);   // an AM carrier is steady; its sidebands carry the voice
+  if (g.t === "ssb") { return; }
+  if (g.t === "ft8") {
+    for (let q = 0; q < g.st.length; q++) {
+      const st = g.st[q];
+      if (((g.slot + st[1]) & 1) || a < 1e-30) { continue; }
+      out.push(g.f + st[0] + ((g.tone * (q * 2 + 3) + q) % 8) * 6.25, a * lin(st[2]));
+    }
+    return;
+  }
+  if (a >= 1e-30) { out.push(g.f + g.df, a); }
+}
+
+// One frame's makings. c: the analyzer in use {binHz, K, T, span, f0, tx}. With several bins to a pixel the lists
+// are per pixel; with fewer bins than pixels they are per bin, on the analyzer's own grid.
+function ingredients(s, c) {
+  const P = PAN[s.p], hzPx = c.span / PW, n = hzPx / c.binHz, K = c.K, list = c.tx ? s.tx : s.sigs;
+  const perPx = n >= 1, b0 = Math.floor(c.f0 / c.binHz) - 1, nb = perPx ? PW : Math.ceil(c.span / c.binHz) + 4;
+  const fAt = i => perPx ? c.f0 + (i + 0.5) * hzPx : (b0 + i) * c.binHz, step = perPx ? hzPx : c.binHz, fFirst = fAt(0);
+  const M = new Float64Array(nb), Cpk = new Float64Array(nb), Csum = new Float64Array(nb), Csum2 = new Float64Array(nb), Cmid = new Float64Array(nb), Cmin = new Float64Array(nb);
+  // Decimation drops samples without a filter, so the whole stream's noise folds into the bins that remain.
+  const noiseDb = (c.tx ? TX_NOISE : P.N + s.drift + 10 * Math.log10(glob.decim)) - 10 * Math.log10(REFBIN), nd = lin(noiseDb);
+  // Impulse noise is short, so a longer transform dilutes it.
+  const burst = c.tx ? 0 : s.burst * nd * s.sigR * (lin(s.burstDb) - 1) * Math.min(1, 43 / c.T);
+  const quietBase = nd * c.binHz * K.enbw, base = quietBase + burst * c.binHz * K.enbw;
+  M.fill(base);
+  const idx = f => Math.floor((f - fFirst) / step + 0.5);
+  for (const g of list) {
+    if (g.t !== "ssb" && g.t !== "am") { continue; }
+    const a = lin(g.dbm + g.fadeDb) / REFBIN * g.env * g.env * c.binHz * K.enbw;
+    if (g.t === "am") {
+      for (let i = Math.max(0, idx(g.f - 4600)), e = Math.min(nb - 1, idx(g.f + 4600)); i <= e; i++) { M[i] += a * 0.001 * voice(Math.abs(fAt(i) - g.f) * 0.6); }
+    } else {
+      const up = (g.side || P.side) === "u", lo = up ? g.f + 250 : g.f - 2750;
+      for (let i = Math.max(0, idx(lo)), e = Math.min(nb - 1, idx(lo + 2500)); i <= e; i++) { M[i] += a * voice(up ? fAt(i) - g.f : g.f - fAt(i)); }
+    }
+  }
+  const tones = [];
+  for (const g of list) { tonesOf(g, tones); }
+  for (let q = 0; q < tones.length; q += 2) {
+    const fc = tones[q], pw = tones[q + 1], fb = fc / c.binHz, scal = Math.abs(fb - Math.round(fb));
+    // How far from the carrier its skirt still shows over the noise.
+    let reach = 4; while (reach < 16384 && pw * kEnv(K, reach) > base * 0.02) { reach *= 2; }
+    const i0 = Math.max(0, idx(fc - reach * c.binHz) - 1), i1 = Math.min(nb - 1, idx(fc + reach * c.binHz) + 1);
+    for (let i = i0; i <= i1; i++) {
+      const f = fAt(i);
+      if (perPx) {
+        const d = (f - fc) / c.binHz, lo = d - n / 2, hi = d + n / 2, has = lo <= 0 && hi >= 0;
+        // The pixel that holds the carrier reads its nearest bin, which sits a little off the carrier (scalloping).
+        Cpk[i] += pw * (has ? kAt(K, n >= 2 ? scal : Math.min(Math.abs(d), 0.5)) : kEnv(K, Math.min(Math.abs(lo), Math.abs(hi))));
+        Cmin[i] += pw * kAt(K, Math.max(Math.abs(lo), Math.abs(hi)));
+        Csum[i] += pw * kSum(K, K.cum, lo, hi); Csum2[i] += pw * pw * kSum(K, K.cum2, lo, hi);
+        Cmid[i] += pw * kAt(K, Math.round(f / c.binHz) - fb);
+      } else {
+        Cpk[i] += pw * kAt(K, b0 + i - fb);
+      }
+    }
+  }
+  // How far the pan's mean level stands over its noise, for the next burst.
+  if (!c.tx) {
+    let acc = 0;
+    for (let i = 0; i < nb; i++) { acc += M[i] + Cpk[i]; }
+    s.sigR = Math.max(1, (acc / nb - (base - quietBase)) / quietBase);
+  }
+  return {n, nb, perPx, b0, M, Cpk, Csum, Csum2, Cmid, Cmin, base, burstPart: base - quietBase, fFirst, step, tones};
+}
+// The noise each pixel's bins carry this frame. A transform longer than a frame shares most of its samples with
+// the one before, so only part of the picture changes each frame: a long transform boils slowly.
+function refreshNoise(s, Z, I, q) {
+  const r = s.nrnd, ex = () => -Math.log(1 - r() * 0.999999);
+  if (!I.perPx) {
+    if (!Z.b || Z.b.length !== I.nb || Z.b0 !== I.b0) { Z.b = new Float32Array(I.nb); Z.b0 = I.b0; q = 1; }
+    for (let i = 0; i < I.nb; i++) { if (q >= 1 || r() < q) { Z.b[i] = ex(); } }
+    Z.n = 0;
+    return;
+  }
+  const m = Math.max(1, Math.round(I.n));
+  if (!Z.mx) { Z.mx = new Float32Array(PW); Z.mn = new Float32Array(PW); Z.mean = new Float32Array(PW); Z.msq = new Float32Array(PW); Z.mid = new Float32Array(PW); Z.n = 0; }
+  const all = q >= 1 || Z.n !== m; Z.n = m;
+  for (let x = 0; x < PW; x++) {
+    if (!all && r() >= q) { continue; }
+    if (m <= 8) {
+      let mx = 0, mn = 1e9, sum = 0, sum2 = 0, mid = 0;
+      for (let j = 0; j < m; j++) { const e = ex(); if (e > mx) { mx = e; } if (e < mn) { mn = e; } sum += e; sum2 += e * e; if (j === (m >> 1)) { mid = e; } }
+      Z.mx[x] = mx; Z.mn[x] = mn; Z.mean[x] = sum / m; Z.msq[x] = sum2 / m; Z.mid[x] = mid;
+    } else {
+      const z = (r() + r() + r() - 1.5) * 2;
+      Z.mx[x] = -Math.log(1 - Math.pow(r(), 1 / m) * 0.999999); Z.mn[x] = ex() / m;
+      Z.mean[x] = Math.max(0.05, 1 + z / Math.sqrt(m)); Z.msq[x] = Math.max(0.1, 2 * (1 + z * 2.24 / Math.sqrt(m))); Z.mid[x] = ex();
+    }
+  }
+}
+// One detector's pixels, in linear power, before averaging (SpectrumDetector.cpp). With fewer bins than pixels
+// every detector draws a straight line between bins, in power.
+const DETN = {"Peak": 0, "Rosenfell": 1, "Average": 2, "Sample": 3, "RMS": 4};
+function detect(c, det, I, Z) {
+  const out = new Float64Array(PW), ie = 1 / c.K.enbw, n = I.n, d = DETN[det];
+  if (!I.perPx) {
+    const hzPx = c.span / PW, sc = d >= 2 ? ie : 1;
+    for (let x = 0; x < PW; x++) {
+      const pos = (c.f0 + (x + 0.5) * hzPx) / c.binHz - I.b0, i = Math.max(0, Math.min(I.nb - 2, Math.floor(pos))), fr = pos - i;
+      out[x] = ((I.M[i] * Z.b[i] + I.Cpk[i]) * (1 - fr) + (I.M[i + 1] * Z.b[i + 1] + I.Cpk[i + 1]) * fr) * sc;
+    }
+    return out;
+  }
+  let prevMax = 0;
+  for (let x = 0; x < PW; x++) {
+    const m = I.M[x], peak = m * Z.mx[x] + I.Cpk[x];
+    if (d === 0) { out[x] = peak; }
+    else if (d === 1) {
+      // Rosenfell: where the bins of a pixel both rise and fall (noise), odd pixels take the largest and even ones
+      // the smallest; where they only rise or only fall (the side of a signal), the largest.
+      const noisy = n >= 2 && I.Cpk[x] < 3 * m * Z.mx[x];
+      out[x] = !noisy ? peak : (x & 1) ? Math.max(prevMax, peak) : m * Z.mn[x] + I.Cmin[x];
+      prevMax = peak;
+    }
+    else if (d === 2) { out[x] = (m * Z.mean[x] + I.Csum[x] / n) * ie; }
+    else if (d === 3) { out[x] = (m * Z.mid[x] + I.Cmid[x]) * ie; }
+    else { out[x] = Math.sqrt(m * m * Z.msq[x] + I.Csum2[x] / n + 2 * m * Z.mean[x] * I.Csum[x] / n) * ie; }
+  }
+  return out;
+}
+// Averaging over frames, pixel by pixel (SpectrumAvenger.cpp). Recursive and Time Window average power; Log
+// Recursive averages dB. back is exp(-1 / (fps x seconds)); Time Window averages fps x seconds frames, 2 to 60.
+function avenge(st, mode, px, back, frames) {
+  const out = new Float32Array(PW);
+  if (st.mode !== mode) { st.mode = mode; st.sum = null; st.ring = []; }
+  if (mode === "None") { for (let x = 0; x < PW; x++) { out[x] = dB(px[x]); } return out; }
+  if (mode === "Recursive") {
+    if (!st.sum) { st.sum = Float64Array.from(px); }
+    for (let x = 0; x < PW; x++) { st.sum[x] = back * st.sum[x] + (1 - back) * px[x]; out[x] = dB(st.sum[x]); }
+    return out;
+  }
+  if (mode === "Log Recursive") {
+    if (!st.sum) { st.sum = Float64Array.from(px, dB); }
+    for (let x = 0; x < PW; x++) { st.sum[x] = back * st.sum[x] + (1 - back) * dB(px[x]); out[x] = st.sum[x]; }
+    return out;
+  }
+  if (!st.sum) { st.sum = new Float64Array(PW); st.ring = []; }
+  st.ring.push(px); for (let x = 0; x < PW; x++) { st.sum[x] += px[x]; }
+  while (st.ring.length > frames) { const old = st.ring.shift(); for (let x = 0; x < PW; x++) { st.sum[x] -= old[x]; } }
+  for (let x = 0; x < PW; x++) { out[x] = dB(Math.max(0, st.sum[x]) / st.ring.length); }
+  return out;
+}
+const avgBack = (fps, ms) => Math.exp(-1 / (fps * Math.max(ms, 1) / 1000));
+const avgFrames = (fps, ms) => Math.max(2, Math.min(60, Math.round(fps * ms / 1000)));
+
+// ---------- one frame of one pan ----------
+const TXFPS = 15;   // the transmit analyzer's frame rate
+const REWIND_MS = {"60 seconds": 60000, "5 minutes": 300000, "15 minutes": 900000, "20 minutes": 1200000};
+// The analyzer a pan is drawn from: the receive one, or the transmit one while the pan transmits.
+function analyzer(p, tx) {
+  const s = SIM[p];
+  if (tx) { const size = glob.txfft; return {tx: 1, size, binHz: 96000 / size, K: KERNEL[glob.txwindow], T: size / 96, span: TXSPAN, f0: PAN[p].vfo - TXSPAN / 2, fps: TXFPS}; }
+  const size = plan(p).size, r = rate();
+  return {tx: 0, size, binHz: r / size, K: KERNEL[glob.window], T: size / r * 1000, span: s.span, f0: s.off - s.span / 2, fps: glob.fps};
+}
+// Where the spectrum, the frequency scale and the waterfall sit in a pan (the divider can be dragged).
+function lay(s) { const sph = Math.round((PH - FSH) * s.frac); return {sph, wfy: sph + FSH, wfh: PH - sph - FSH}; }
+function lut(stops) {
+  const out = new Uint8Array(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255; let j = 1; while (j < stops.length - 1 && stops[j][0] < t) { j++; }
+    const a = stops[j - 1], b = stops[j], f = Math.max(0, Math.min(1, (t - a[0]) / (b[0] - a[0] || 1)));
+    for (let c = 0; c < 3; c++) { out[i * 3 + c] = a[c + 1] + (b[c + 1] - a[c + 1]) * f; }
+  }
+  return out;
+}
+// The app's own color stops (src/core/spectrum/WaterfallPalettes.cpp). Custom is the user's gradient; it starts as Default.
+const DEF_STOPS = [[0, 0, 0, 0], [.15, 0, 0, 128], [.3, 0, 64, 255], [.45, 0, 200, 255], [.6, 0, 220, 0], [.8, 255, 255, 0], [1, 255, 0, 0]];
+const PALS = {
+  "Default": lut(DEF_STOPS),
+  "Enhanced": lut([[0, 0, 0, 0], [.111, 0, 0, 255], [.222, 0, 255, 255], [.333, 0, 255, 0], [.444, 128, 255, 0], [.556, 255, 255, 0], [.667, 255, 128, 0], [.778, 255, 0, 0], [.889, 255, 0, 128], [1, 192, 0, 255]]),
+  "Spectran": lut([[0, 0, 0, 0], [.1, 32, 0, 64], [.25, 0, 0, 255], [.4, 0, 192, 0], [.55, 255, 255, 0], [.7, 255, 128, 0], [.85, 255, 0, 0], [1, 255, 255, 255]]),
+  "BlackWhite": lut([[0, 0, 0, 0], [1, 255, 255, 255]]),
+  "LinLog": lut([[0, 0, 0, 0], [.1, 0, 0, 96], [.25, 0, 64, 192], [.5, 0, 192, 192], [.65, 0, 224, 64], [.8, 255, 192, 0], [1, 255, 0, 0]]),
+  "LinRad": lut([[0, 0, 0, 0], [.15, 16, 16, 120], [.3, 32, 80, 200], [.5, 0, 200, 255], [.7, 200, 255, 120], [.85, 255, 200, 0], [1, 255, 32, 0]]),
+  "Clarity Blue": lut([[0, 0, 0, 0], [.18, 2, 8, 32], [.32, 8, 32, 88], [.46, 16, 80, 176], [.58, 16, 160, 224], [.7, 16, 208, 96], [.8, 240, 224, 16], [.9, 255, 128, 0], [.96, 255, 32, 32], [1, 255, 64, 192]]),
+};
+PALS["LinAuto"] = PALS["Default"];   // the transmit list's LinAuto is the Default colors (DisplaySetupPages.cpp:3546)
+const hex3 = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const rgba = (hex, a) => { const c = hex3(hex); return `rgba(${c[0]},${c[1]},${c[2]},${a})`; };
+// The two gradients the user can edit: the receive Custom scheme's and the transmit Custom palette's.
+const GRAD = {rx: null, tx: null}, GRADLUT = {};
+const gradLut = which => GRADLUT[which] || (GRADLUT[which] = lut(GRAD[which]));
+const rxLut = name => name === "Custom" ? gradLut("rx") : PALS[name];
+// The transmit waterfall draws its Low Color at and under Low.
+let txLutKey = "", txLutNow = null;
+function txLut() {
+  const key = glob.txpal + glob.txlowcolor + (glob.txpal === "Custom" ? JSON.stringify(GRAD.tx) : "");
+  if (key !== txLutKey) { txLutKey = key; txLutNow = Uint8Array.from(glob.txpal === "Custom" ? gradLut("tx") : PALS[glob.txpal]); txLutNow.set(hex3(glob.txlowcolor), 0); }
+  return txLutNow;
+}
+// The noise floor a pan measures, and the same as the trace shows it (Normalize to 1 Hz moves the trace and its floor).
+const nfOf = p => SIM[p] && SIM[p].nf !== null ? SIM[p].nf : PAN[p].N;
+const floorOf = p => nfOf(p) - (SIM[p] ? SIM[p].normDb || 0 : 0);
+// A pan shows between 1 kHz and the whole sampled band, and never past the band's ends.
+function clampView(s) { const r = rate(); s.span = Math.max(1000, Math.min(r, s.span)); const m = (r - s.span) / 2; s.off = Math.max(-m, Math.min(m, s.off)); }
+
+function simFrame(p, dt) {
+  const s = SIM[p], g = k => rd(p, k), tx = keyed(p);
+  clampView(s);
+  const a = analyzer(p, tx), L = lay(s);
+  s.t += dt;
+  // Keying, un-keying and a new FFT Size start the noise floor's fast attack: for 1 s the reading moves quickly
+  // and the line is drawn in its Fast Attack color. (In the app a band change and a jump of more than 500 kHz
+  // start it too; this page has neither.)
+  if (tx !== s.wasTx) { s.wasTx = tx; s.nfFastUntil = s.t + 1000; }
+  if (glob.fftsize !== s.fftWas) { if (s.fftWas !== undefined) { s.nfFastUntil = s.t + 1000; } s.fftWas = glob.fftsize; }
+  // A change of bin width, window, zoom or tuning starts the averaging and the held lines again.
+  const key = [a.tx, a.binHz, a.span, a.f0, a.K.enbw].join("|");
+  if (key !== s.key) {
+    s.key = key;
+    for (const st of [s.av, s.wav, s.txav, s.txwav]) { st.sum = null; st.ring = []; }
+    s.pk = null; s.pt = null; s.marks = []; s.zr = {}; s.zt = {}; s.nbHist = []; s.lastGood = null;
+  }
+  stepSignals(s, dt, a.T, s.sigs); stepNoise(s, dt, a.T);
+  if (tx) { stepSignals(s, dt, a.T, s.tx); }
+  const I = ingredients(s, a), Z = tx ? s.zt : s.zr;
+  refreshNoise(s, Z, I, Math.min(1, dt / a.T));
+  // A remote window leaves calibration to its Core.
+  const cal = tx || isRemote(sit()) ? 0 : g("cal");
+
+  // The trace: the detector, then the averaging, then Normalize and Cal Offset.
+  const det = tx ? glob.txdet : g("det"), avg = tx ? glob.txavg : g("avg"), ms = tx ? glob.txavgms : g("avgms");
+  const normDb = (tx ? glob.txnorm : g("norm")) && POWER.includes(det) ? 10 * Math.log10(a.binHz) : 0;
+  const tr = avenge(tx ? s.txav : s.av, avg, detect(a, det, I, Z), avgBack(a.fps, ms), avgFrames(a.fps, ms));
+  if (cal - normDb) { for (let x = 0; x < PW; x++) { tr[x] += cal - normDb; } }
+  s.tr = tr; s.normDb = normDb;
+  // The waterfall has its own detector and averaging over the same bins.
+  const wdet = tx ? glob.txwfdet : g("wfdet"), wavg = tx ? glob.txwfavg : g("wfavg"), wms = tx ? glob.txwfavgms : g("wfavgms");
+  const wl = avenge(tx ? s.txwav : s.wav, wavg, detect(a, wdet, I, Z), avgBack(a.fps, wms), avgFrames(a.fps, wms));
+  if (cal) { for (let x = 0; x < PW; x++) { wl[x] += cal; } }
+
+  if (!tx) {
+    // The noise floor: the level three bins in ten lie under. One reading a frame for the line and Track floor;
+    // Clarity takes one every 500 ms and smooths it over 3 s, and takes none while the radio transmits.
+    const smp = []; for (let i = 0; i < I.nb; i += 4) { smp.push(I.M[i]); }
+    smp.sort((u, v) => u - v);
+    // A noise burst is one frame long and the readings are smoothed over seconds, so it is left out of them.
+    const quiet = Math.max(1e-30, smp[Math.floor(smp.length * 0.3)] - I.burstPart), nfRaw = dB(quiet) + cal, clRaw = dB(quiet * 0.357) + cal;
+    s.nf = s.nf === null ? nfRaw : s.nf + (nfRaw - s.nf) * (s.t < s.nfFastUntil ? 0.5 : 1 - Math.exp(-dt / 1500));
+    if (!radioKeyed() && s.t - s.clarAt >= 500) {
+      s.clarAt = s.t; s.clarN = s.clarN === null ? clRaw : s.clarN + (1 - Math.exp(-0.5 / 3)) * (clRaw - s.clarN);
+    }
+    // Track floor: every 500 ms, and only for a change of 2 dB or more.
+    if (s.t - s.trackAt >= 500) {
+      s.trackAt = s.t;
+      const want = s.nf - normDb + g("nfshift");
+      if (s.trackMin === null || Math.abs(want - s.trackMin) >= 2) { s.trackMin = want; }
+    }
+    // The slice's signal level, for the multimeter: everything inside its filter.
+    const P = PAN[p], fl = FILT[P.side], i0 = Math.max(0, Math.round((P.vfo + fl[0] - I.fFirst) / I.step)), i1 = Math.min(I.nb - 1, Math.round((P.vfo + fl[1] - I.fFirst) / I.step));
+    if (i1 > i0) {
+      let pw = 0;
+      for (let i = i0; i <= i1; i++) { pw += I.M[i] / (a.K.enbw * a.binHz) * I.step; }
+      for (let q = 0; q < I.tones.length; q += 2) { if (I.tones[q] >= P.vfo + fl[0] && I.tones[q] <= P.vfo + fl[1]) { pw += I.tones[q + 1]; } }
+      s.sig = dB(pw) + cal;
+    }
+  }
+  // Peak Hold keeps each pixel's highest level, and starts again from the trace every Peak Delay.
+  if (g("peakhold")) {
+    if (!s.pk || s.t - s.pkAt >= g("peakdelay")) { s.pk = Float32Array.from(tr); s.pkAt = s.t; }
+    else { for (let x = 0; x < PW; x++) { if (tr[x] > s.pk[x]) { s.pk[x] = tr[x]; } } }
+  } else { s.pk = null; }
+  // The peak trace holds each pixel for Hold, then lets it fall at Drop Rate.
+  if (g("pt") && (!tx || g("ptTx"))) {
+    if (!s.pt) { s.pt = Float32Array.from(tr); s.ptAt = new Float64Array(PW).fill(s.t); }
+    const hold = g("ptHold"), drop = g("ptDrop") / a.fps;
+    for (let x = 0; x < PW; x++) {
+      if (tr[x] >= s.pt[x]) { s.pt[x] = tr[x]; s.ptAt[x] = s.t; }
+      else if (s.t - s.ptAt[x] > hold) { s.pt[x] = Math.max(tr[x], s.pt[x] - drop); }
+    }
+  } else if (!g("pt")) { s.pt = null; }
+  if (!g("pm")) { s.marks = []; } else if (!tx) { markers(s, tr, g, a); }
+  if (g("peakv") && s.t - s.pvAt >= g("pvRefresh")) {
+    s.pvAt = s.t; let bx = 0;
+    for (let x = 1; x < PW; x++) { if (tr[x] > tr[bx]) { bx = x; } }
+    s.pv = {db: tr[bx], f: a.f0 + (bx + 0.5) * a.span / PW};
+  }
+  // A waterfall row every Rate. Stop on TX adds none while this pan transmits.
+  const rateMs = g("rate");
+  if (s.t - s.lastRow >= rateMs - 0.5 && !(tx && g("stoptx"))) { s.lastRow = s.t; addRow(s, a, wl, tx, g, L, rateMs); }
+  s.fpsN++;
+  if (s.t - s.fpsAt >= 1000) { s.fpsNow = s.fpsN * 1000 / (s.t - s.fpsAt); s.fpsN = 0; s.fpsAt = s.t; }
+}
+// A peak is taken once the trace has fallen 10 dB from it; a 10 dB rise looks for the next one.
+function findPeaks(tr, x0, x1) {
+  const out = []; let mx = -1e9, mxAt = x0, mn = 1e9, armed = true;
+  for (let x = x0; x <= x1; x++) {
+    const v = tr[x];
+    if (armed) { if (v > mx) { mx = v; mxAt = x; } else if (v < mx - 10) { out.push([mxAt, mx]); armed = false; mn = v; } }
+    else if (v < mn) { mn = v; } else if (v > mn + 10) { armed = true; mx = v; mxAt = x; }
+  }
+  return out;
+}
+function markers(s, tr, g, a) {
+  let x0 = 0, x1 = PW - 1;
+  if (g("pmIn")) {
+    const P = PAN[s.p], fl = FILT[P.side], px = f => Math.round((f - a.f0) / a.span * PW);
+    x0 = Math.max(0, px(P.vfo + fl[0])); x1 = Math.min(PW - 1, px(P.vfo + fl[1]));
+  }
+  const top = [];
+  for (const pk of findPeaks(tr, x0, x1).sort((u, v) => v[1] - u[1])) {
+    if (top.length >= g("pmN")) { break; }
+    if (!top.some(t => Math.abs(t[0] - pk[0]) < 10)) { top.push(pk); }
+  }
+  if (!g("pmHold")) { s.marks = top.map(([x, db]) => ({x, db, at: s.t})); return; }
+  const hold = g("pmHoldMs"), decay = g("pmDecay"), fall = g("pmFall") / a.fps;
+  for (const [x, db] of top) {
+    const m = s.marks.find(m => Math.abs(m.x - x) < 10);
+    if (!m) { s.marks.push({x, db, at: s.t}); } else if (db >= m.db) { m.x = x; m.db = db; m.at = s.t; }
+  }
+  s.marks = s.marks.filter(m => { if (s.t - m.at <= hold) { return true; } if (!decay) { return false; } m.db -= fall; return m.db > tr[m.x]; });
+  s.marks.sort((u, v) => v.db - u.db); s.marks.length = Math.min(s.marks.length, g("pmN"));
+}
+function addRow(s, a, wl, tx, g, L, rateMs) {
+  let lv = wl;
+  if (!tx) {
+    // NB Blank, as the app does it: a row whose mean level stands more than the threshold over the mean of the
+    // last 32 rows is a noise burst, and the last good row is drawn in its place. Eight rows must be in first,
+    // and a burst counts toward the mean at no more than 5% over it.
+    if (g("nb")) {
+      let sum = 0; for (let x = 0; x < PW; x++) { sum += Math.pow(10, wl[x] / 10); }
+      const lev = sum / PW, hist = s.nbHist, base = hist.length ? hist.reduce((u, v) => u + v, 0) / hist.length : lev;
+      const hot = hist.length >= 8 && 10 * Math.log10(lev / base) > g("nbdb");
+      if (hot) { lv = s.lastGood || new Float32Array(PW).fill(10 * Math.log10(base)); } else { s.lastGood = wl; }
+      hist.push(hot ? Math.min(lev, base * 1.05) : lev); if (hist.length > 32) { hist.shift(); }
+    }
+    // Auto follows the weakest level of each row, slowly.
+    let mn = 1e9; for (let x = 0; x < PW; x++) { if (lv[x] < mn) { mn = lv[x]; } }
+    s.autoRun = s.autoRun === null ? mn : 0.05 * mn + 0.95 * s.autoRun;
+    // The floor Clarity draws from glides to its reading row by row.
+    if (s.clarN !== null) { s.clarDraw = s.clarDraw === null ? s.clarN : 0.6 * s.clarDraw + 0.4 * s.clarN; }
+  }
+  // A row keeps the colors it was drawn in: later changes to the levels or the scheme color new rows only.
+  const lvls = levels(s.p), low = lvls.low, span = Math.max(1, lvls.high - lvls.low), ix = new Uint8Array(PW);
+  for (let x = 0; x < PW; x++) { const t = (lv[x] - low) / span; ix[x] = t <= 0 ? 0 : t >= 1 ? 255 : (t * 255) | 0; }
+  s.rowSeq = (s.rowSeq || 0) + 1;
+  s.rows.push({id: s.rowSeq, ix, lut: tx ? txLut() : rxLut(g("scheme")), f0: a.f0, span: a.span, t: s.t});
+  const cap = Math.max(L.wfh + 8, Math.min(16384, Math.ceil(REWIND_MS[g("rewind")] / rateMs)));
+  if (s.rows.length > cap + 64) { s.rows.splice(0, s.rows.length - cap); }
+  // Scrolled back, the view holds still while new rows are stored.
+  if (s.back > 0) { s.back = Math.min(s.back + 1, Math.max(0, s.rows.length - L.wfh)); }
+  // The 3D view folds waterfall rows into its own: the highest level of each column.
+  const n3 = g("speed3d") === 0 ? Math.max(1, Math.min(64, Math.round(L.wfh / 96))) : g("speed3d");
+  if (!s.fold) { s.fold = Float32Array.from(wl); s.foldN = 1; }
+  else { for (let x = 0; x < PW; x++) { if (wl[x] > s.fold[x]) { s.fold[x] = wl[x]; } } s.foldN++; }
+  if (s.foldN >= n3) {
+    // quiet: the row's own quiet level, drawn where a row runs past the pan's edges (3D Span).
+    const smp = []; for (let x = 0; x < PW; x += 8) { smp.push(s.fold[x]); }
+    smp.sort((u, v) => u - v);
+    s.stack.push({lv: s.fold, f0: a.f0, span: a.span, quiet: smp[Math.floor(smp.length * 0.3)], id: s.rowSeq});
+    if (s.stack.length > 96) { s.stack.shift(); }
+    s.fold = null; s.foldN = 0;
+  }
+}
+// Clarity measures again from nothing, so the levels snap to the band as it is now.
+function retune(t) {
+  for (const p of t === "all" ? PANS : [t]) { const s = SIM[p]; if (s) { s.clarN = null; s.clarDraw = null; s.clarAt = -1e9; } }
+}
+
+// ---------- the multimeter ----------
+const METER = {hist: [], at: -1e9, val: null, t: 0};
+const meterPan = () => ui.pill !== null && isOpen(ui.pill) ? ui.pill : PANS.length ? PANS[0] : null;
+function meterStep(dt) {
+  METER.t += dt;
+  const p = meterPan(), s = p === null ? null : SIM[p];
+  if (!s || s.sig === undefined || sit() === "off") { return; }
+  // The meter is read every Polling delay; the history graph keeps History duration of readings.
+  if (METER.t - METER.at >= glob.mmPoll) { METER.at = METER.t; METER.val = s.sig; METER.hist.push([METER.t, s.sig]); }
+  while (METER.hist.length && METER.hist[0][0] < METER.t - 600000) { METER.hist.shift(); }
+}
+function meterText(v) {
+  const dec = glob.mmDec;
+  if (glob.mmUnits === "dBm") { return (dec ? v.toFixed(1) : Math.round(v)) + " dBm"; }
+  if (glob.mmUnits === "uV") { const uv = 50 * Math.pow(10, (v + 73) / 20); return (dec ? uv.toFixed(2) : Math.round(uv)) + " uV"; }
+  const su = (v + 127) / 6;
+  if (su > 9) { return "S9+" + (dec ? (v + 73).toFixed(1) : Math.round(v + 73)) + " dB"; }
+  return "S" + (dec ? Math.max(0, su).toFixed(1) : Math.max(0, Math.round(su)));
+}
+
+// ---------- drawing a pan ----------
+const DPR = Math.min(2, window.devicePixelRatio || 1);
+// The colors of Setup, Appearance. Some are drawn see-through, as the app has them.
+const COLOR_KEYS = ["cGrid", "cGridFine", "cHGrid", "cGridText", "cBandEdge", "cRxZero", "cTxZero", "cRxPass", "cTxPass"];
+const ALPHA = {cGrid: 40 / 255, cGridFine: 20 / 255, cHGrid: 40 / 255, cRxPass: 80 / 255, cTxPass: 46 / 255};
+const colA = (k, a) => rgba(glob[k], (a !== undefined ? a : ALPHA[k] !== undefined ? ALPHA[k] : 1).toFixed(3));
+const PICIMG = {};   // the background pictures, by name
+const mhzOf = (p, f) => (PAN[p].hz + f) / 1e6;
+const stripW = s => s.back > 0 ? 72 : STRIPW;
+// The grid's frequency step: the one chosen, or by the width in view (wider than 500 kHz 50, under 50 kHz 5, under 100 kHz 10, else 25).
+function gridStep(span, sp) {
+  if (sp !== "Auto") { return parseInt(sp, 10) * 1000; }
+  return span > 500000 ? 50000 : span < 50000 ? 5000 : span < 100000 ? 10000 : 25000;
+}
+const HEAT = [[0, "255,0,0"], [.25, "255,255,0"], [.5, "0,255,0"], [.75, "0,255,255"], [1, "0,0,255"]];
+// The gradient: a color for each level, red at dB Max down to blue at dB Min.
+function heatGrad(x, sph, a) { const gr = x.createLinearGradient(0, 0, 0, sph); for (const [t, c] of HEAT) { gr.addColorStop(t, `rgba(${c},${a})`); } return gr; }
+function chip(x, txt, px, py, right, bottom, color, bg) {
+  x.font = "bold 11px sans-serif"; const w = x.measureText(txt).width + 8, cx = right ? px - w : px, cy = bottom ? py - 16 : py;
+  x.fillStyle = bg; x.fillRect(cx, cy, w, 16); x.fillStyle = color; x.textAlign = "left"; x.fillText(txt, cx + 4, cy + 12);
+}
+const hms = (ms, utc) => { const d = new Date(ms), p2 = n => String(n).padStart(2, "0"); return utc ? `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}` : `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`; };
+
+// One waterfall row's pixels. A row keeps the frequencies it was drawn at, so it is placed again after a zoom or a retune.
+function rowPixels(row, v, data, o) {
+  const same = row && row.f0 === v.f0 && row.span === v.span, lt = row ? row.lut : null;
+  for (let xx = 0; xx < PW; xx++, o += 4) {
+    let q = -1;
+    if (same) { q = row.ix[xx] * 3; }
+    else if (row) { const xi = Math.floor((v.f0 + (xx + 0.5) * v.span / PW - row.f0) / row.span * PW); if (xi >= 0 && xi < PW) { q = row.ix[xi] * 3; } }
+    if (q < 0) { data[o] = 10; data[o + 1] = 10; data[o + 2] = 24; } else { data[o] = lt[q]; data[o + 1] = lt[q + 1]; data[o + 2] = lt[q + 2]; }
+    data[o + 3] = 255;
+  }
+}
+// The waterfall is kept as a picture: a new row pushes the rest down, and a zoom, a retune or a scroll redraws it.
+function wfPaint(s, v, h) {
+  if (!s.wfc) { s.wfc = document.createElement("canvas"); s.wfc.width = PW; s.wfc.height = h; s.wfKey = ""; }
+  const c = s.wfc, n = s.rows.length, top = n - 1 - s.back, key = [v.f0, v.span, h, s.back > 0].join("|");
+  if (c.height !== h) { c.height = h; s.wfKey = ""; }
+  const x = c.getContext("2d"), topId = top >= 0 ? s.rows[top].id : 0, k = topId - (s.wfTopId || 0);
+  if (key !== s.wfKey || k < 0 || k > h / 3) {
+    const img = x.createImageData(PW, h);
+    for (let y = 0; y < h; y++) { rowPixels(top - y >= 0 ? s.rows[top - y] : null, v, img.data, y * PW * 4); }
+    x.putImageData(img, 0, 0);
+  } else if (k > 0) {
+    x.drawImage(c, 0, k);
+    const img = x.createImageData(PW, k);
+    for (let y = 0; y < k; y++) { rowPixels(s.rows[top - y], v, img.data, y * PW * 4); }
+    x.putImageData(img, 0, 0);
+  }
+  s.wfKey = key; s.wfTopId = topId;
+}
+
+// The 3D view takes the spectrum's place only. The waterfall stays below it, and the grid, the markers and the
+// readouts are drawn over the surface, as the app does (src/gui/SpectrumTraceFramePlan.h). Its shape is the app's
+// (src/gui/DssGeometry.h): 96 rows, the newest in front; 3D Angle sets how far the back rows narrow and rise;
+// 3D Span lets each row run past the pan's edges to fill the corners; a level's height is its share of the scale
+// to the power 0.6; 3D Gain bends the colors, which span at most 45 dB above the noise floor less 3D Floor.
+function draw3d(x, p, s, v, S_, sph, g) {
+  const lim = sit() === "gpu", t = g("angle3d") / 100, bw = 0.35 + t * 0.5, ds = 0.36 + t * 0.44;
+  const ridge = Math.min(0.75, 0.46 * 0.60 / (1 - 0.58) * (1 - ds) / bw);
+  const range = Math.max(10, S_.max - S_.min), base = floorOf(p) - bands[PAN[p].band].floor3d, cspan = Math.min(range, 45);
+  const gam = Math.pow(4, (50 - g("gain3d")) / 50);
+  // Limited graphics keep the narrowing shape. Otherwise a row may run as far past the edges as there is band to show.
+  const F = lim ? 1 : 1 + (Math.min(rate() / v.span, 1 / bw) - 1) * g("span3d") / 100;
+  const pal = v.tx ? txLut() : rxLut(g("scheme")), cols = [];
+  for (let b = 0; b < 12; b++) { const q = Math.round((0.14 + 0.86 * b / 11) * 255) * 3; cols.push([pal[q], pal[q + 1], pal[q + 2]]); }
+  const rows = s.stack, n = rows.length, P = PAN[p], fl = FILT[P.side], STEP = 3, m = Math.floor(PW / STEP) + 1, ys = new Float32Array(m), bk = new Uint8Array(m);
+  x.save(); x.beginPath(); x.rect(0, 0, PW, sph); x.clip();
+  x.fillStyle = "#06060e"; x.fillRect(0, 0, PW, sph); x.lineWidth = 1;
+  for (let i = 0; i < n; i++) {
+    const r = rows[i], d = (n - 1 - i) / 95, w = 1 - d * (1 - bw), yb = sph * (1 - d * ds) - 1, H = ridge * w * sph;
+    const X = u => PW * (0.5 + (u - 0.5) * w), x0 = Math.max(0, X(0.5 - F / 2)), x1 = Math.min(PW, X(0.5 + F / 2));
+    let c = 0, used = 0; const xs0 = Math.ceil(x0 / STEP) * STEP;
+    for (let sx = xs0; sx <= x1; sx += STEP, c++) {
+      const u = 0.5 + (sx / PW - 0.5) / w, xi = Math.floor((v.f0 + u * v.span - r.f0) / r.span * PW);
+      // Past the pan's edges a row shows the band beside it: here its own quiet level.
+      const lvl = xi >= 0 && xi < PW && u >= 0 && u <= 1 ? r.lv[xi] : r.quiet + (((sx * 7 + r.id * 13) % 11) - 5) * 0.35;
+      const st = Math.max(0, Math.min(1, (lvl - base) / range)), tc = Math.pow(Math.max(0, Math.min(1, (lvl - base) / cspan)), gam);
+      ys[c] = yb - Math.pow(st, 0.6) * H; bk[c] = Math.round(tc * 11); used |= 1 << bk[c];
+    }
+    if (c < 2) { continue; }
+    x.beginPath(); x.moveTo(xs0, yb + 2);
+    for (let j = 0; j < c; j++) { x.lineTo(xs0 + j * STEP, ys[j]); }
+    x.lineTo(xs0 + (c - 1) * STEP, yb + 2); x.closePath(); x.fillStyle = "#06060e"; x.fill();
+    if (g("shadow3d") && !lim && !v.tx) {
+      const a = X((P.vfo + fl[0] - v.f0) / v.span), b = X((P.vfo + fl[1] - v.f0) / v.span), gap = sph * ds / 95 + 1;
+      x.fillStyle = "rgba(0,0,0,.42)"; x.fillRect(a, yb - gap, b - a, gap + 1);
+      x.fillStyle = "rgba(255,255,255,.36)"; x.fillRect(X((P.vfo - v.f0) / v.span), yb - gap, 1, gap + 1);
+    }
+    // Rows fade a little toward the back.
+    const haze = 1 - 0.16 * d * 2.5;
+    for (let b = 0; b < 12; b++) {
+      if (!(used & (1 << b))) { continue; }
+      x.strokeStyle = `rgb(${cols[b][0] * haze | 0},${cols[b][1] * haze | 0},${cols[b][2] * haze | 0})`; x.beginPath();
+      for (let j = 0; j < c - 1; j++) { if (bk[j] === b) { x.moveTo(xs0 + j * STEP, ys[j]); x.lineTo(xs0 + (j + 1) * STEP, ys[j + 1]); } }
+      x.stroke();
+    }
+  }
+  x.restore();
+  // What the dBm strip reads in the 3D view: the surface's floor, and the floor plus the scale's span.
+  return {max: base + range, min: base};
+}
+
+function drawPan(p) {
+  const cv = $("cv" + p), s = SIM[p];
+  if (!cv || !s) { return; }
+  const x = cv.getContext("2d"), g = k => rd(p, k), L = lay(s), sph = L.sph, dead = sit() === "off", tx = keyed(p), P = PAN[p];
+  const v = analyzer(p, tx), S_ = scaleInUse(p), is3d = g("view") === "3d";
+  const fx = f => (f - v.f0) / v.span * PW;
+  x.setTransform(DPR, 0, 0, DPR, 0, 0); x.setLineDash([]); x.globalAlpha = 1; x.textBaseline = "alphabetic"; x.lineJoin = "round";
+  x.fillStyle = "#0a0a18"; x.fillRect(0, 0, PW, PH);
+  // The 3D surface has its own backdrop, so only the 2D spectrum takes the background.
+  if (!is3d && g("bg")) {
+    x.fillStyle = g("bgcolor"); x.fillRect(0, 0, PW, sph);
+    const im = PICIMG[g("bgpic")];
+    if (im) {
+      // The picture covers the spectrum, cut to fit, and BG Opacity fades it into BG Color.
+      const sc = Math.max(PW / im.width, sph / im.height), w = PW / sc, h = sph / sc;
+      x.globalAlpha = 1 - g("bgopacity") / 100; x.drawImage(im, (im.width - w) / 2, (im.height - h) / 2, w, h, 0, 0, PW, sph); x.globalAlpha = 1;
+    }
+  }
+  const strip = is3d && !dead ? draw3d(x, p, s, v, S_, sph, g) : S_;
+  const range = Math.max(1, S_.max - S_.min), yOf = d => sph * (S_.max - d) / range;
+  x.save(); x.beginPath(); x.rect(0, 0, PW, sph); x.clip(); x.lineWidth = 1;
+  const step = gridStep(v.span, g("gridsp")), abs0 = P.hz + v.f0;
+  if (g("grid")) {
+    // dB lines every dB Step up from the bottom of the scale; frequency lines at the grid step, with fine lines at a fifth of it.
+    x.strokeStyle = colA("cHGrid");
+    for (let d = S_.min + g("dbstep"); d < S_.max - 0.01; d += g("dbstep")) { const y = Math.round(yOf(d)) + .5; x.beginPath(); x.moveTo(0, y); x.lineTo(PW, y); x.stroke(); }
+    if (step / v.span * PW >= 4) {
+      x.strokeStyle = colA("cGridFine"); x.setLineDash([1, 3]);
+      if (step / 5 / v.span * PW >= 6) { for (let fa = Math.ceil(abs0 / (step / 5)) * (step / 5); fa < abs0 + v.span; fa += step / 5) { if (Math.round(fa) % step) { const xx = Math.round(fx(fa - P.hz)) + .5; x.beginPath(); x.moveTo(xx, 0); x.lineTo(xx, sph); x.stroke(); } } }
+      x.setLineDash([]); x.strokeStyle = colA("cGrid");
+      for (let fa = Math.ceil(abs0 / step) * step; fa < abs0 + v.span; fa += step) { const xx = Math.round(fx(fa - P.hz)) + .5; x.beginPath(); x.moveTo(xx, 0); x.lineTo(xx, sph); x.stroke(); }
+    }
+  }
+  // The edge of the amateur band, and the slice's filter: the receive filter, or the transmit filter while it transmits.
+  const ex = fx(P.edge);
+  if (!tx && ex >= 0 && ex <= PW) { x.fillStyle = colA("cBandEdge"); x.fillRect(Math.round(ex), 0, 1, sph); }
+  const fl = (tx ? TXFILT : FILT)[P.side], fa = fx(P.vfo + fl[0]), fb = fx(P.vfo + fl[1]), vx = Math.round(fx(P.vfo));
+  if (tx) {
+    x.fillStyle = colA("cTxPass"); x.fillRect(fa, 0, fb - fa, sph); x.fillStyle = "#ff7833"; x.fillRect(fa - 1, 0, 2, sph); x.fillRect(fb - 1, 0, 2, sph);
+    x.font = "9px sans-serif"; x.textAlign = "left"; x.fillStyle = "#ffaa70"; x.fillText(`TX ${fl[0]}-${fl[1]} Hz`, Math.max(8, fa + 8), 13);
+  } else { x.fillStyle = colA("cRxPass"); x.fillRect(fa, 0, Math.max(1, fb - fa), sph); }
+  if (!dead) {
+    const fc = g("fillcolor"), lc = g("linecolor") || fc, tr = s.tr;
+    const path = a => { x.beginPath(); for (let i = 0; i < PW; i++) { const y = Math.max(-3, Math.min(sph + 3, yOf(a[i]))); if (i) { x.lineTo(i + .5, y); } else { x.moveTo(.5, y); } } };
+    // The fill, the plain peak hold line and the trace are the 2D spectrum's. The 3D surface takes their place.
+    if (!is3d && g("fill")) {
+      const a = g("fillalpha") / 100; let st;
+      if (g("gradient")) { st = heatGrad(x, sph, (a * 0.45).toFixed(3)); }
+      else { const c = hex3(fc); st = x.createLinearGradient(0, 0, 0, sph); st.addColorStop(0, rgba(fc, (a * 0.3).toFixed(3))); st.addColorStop(1, `rgba(${c[0] / 3 | 0},${c[1] / 3 | 0},${c[2] / 3 | 0},${a.toFixed(3)})`); }
+      path(tr); x.lineTo(PW, sph + 3); x.lineTo(0, sph + 3); x.closePath(); x.fillStyle = st; x.fill();
+    }
+    if (!is3d && s.pk) { path(s.pk); x.strokeStyle = rgba(fc, .55); x.lineWidth = 1; x.stroke(); }
+    if (s.pt && g("pt")) {
+      // The peak trace: dashed, above the trace; Fill to trace shades the room between them.
+      if (g("ptFill")) { path(s.pt); for (let i = PW - 1; i >= 0; i--) { x.lineTo(i + .5, Math.max(-3, Math.min(sph + 3, yOf(tr[i])))); } x.closePath(); x.fillStyle = rgba(g("ptColor"), .18); x.fill(); }
+      path(s.pt); x.setLineDash([4, 3]); x.strokeStyle = g("ptColor"); x.lineWidth = 1; x.stroke(); x.setLineDash([]);
+    }
+    // Gradient colors the trace by level too, while Trace Color follows Fill Color.
+    if (!is3d) { path(tr); x.strokeStyle = g("gradient") && !g("linecolor") ? heatGrad(x, sph, .9) : rgba(lc, .9); x.lineWidth = g("linew"); x.stroke(); x.lineWidth = 1; }
+    // The zero line marks 0 dBm, so it shows where the scale reaches 0 dBm: on the transmit scale, or with dB Max at 0.
+    if (!is3d && g("zeroline")) { const y = Math.round(yOf(0)) + .5; if (y >= 0 && y <= sph) { x.setLineDash([4, 3]); x.strokeStyle = colA("cRxZero"); x.beginPath(); x.moveTo(0, y); x.lineTo(PW, y); x.stroke(); x.setLineDash([]); } }
+  }
+  // The slice, and while it transmits the transmit zero line.
+  x.fillStyle = tx ? colA("cTxZero") : "rgba(255,255,255,.55)"; x.fillRect(vx, 0, 1, sph);
+  x.font = "bold 9px sans-serif"; x.textAlign = "center"; x.fillStyle = tx ? "#c02020" : "#0070c0"; x.fillRect(vx - 6, 0, 13, 12); x.fillStyle = "#fff"; x.fillText(P.slice, vx + .5, 9);
+  if (!dead) {
+    if (g("nf") && !tx && s.nf !== null) {
+      // The noise floor line: dashed, 40 px in from each side, with its box and its level beside it. Fast Attack colors it while it catches up.
+      const y = Math.round(yOf(floorOf(p) + g("nfshift"))) + .5, col = s.t < s.nfFastUntil ? g("nffast") : g("nfcol");
+      x.setLineDash([2, 2]); x.strokeStyle = col; x.lineWidth = g("nfwidth"); x.beginPath(); x.moveTo(40, y); x.lineTo(PW - 40 - (g("dbmstrip") ? STRIPW : 0), y); x.stroke(); x.setLineDash([]); x.lineWidth = 1;
+      x.fillStyle = col; x.fillRect(30, y - 4, 8, 8); x.font = "bold 11px sans-serif"; x.textAlign = "left"; x.fillStyle = g("nftext"); x.fillText((floorOf(p) + g("nfshift")).toFixed(1), 42, y - 4);
+    }
+    for (const m of s.marks) {
+      const y = Math.max(4, yOf(m.db));
+      x.strokeStyle = g("pmColor"); x.lineWidth = 1.5; x.beginPath(); x.arc(m.x + .5, y, 3, 0, 6.3); x.stroke(); x.lineWidth = 1;
+      x.font = "11px sans-serif"; x.textAlign = "left"; x.fillStyle = g("pmText"); x.fillText(m.db.toFixed(1), m.x + 5, Math.max(10, y - 6));
+    }
+  }
+  x.restore();
+  // The readouts, each in its corner; two in one corner stack.
+  const right = PW - 6 - (g("dbmstrip") ? STRIPW : 0), slot = {};
+  const put1 = (pos, txt, color) => { const r = pos.endsWith("Right"), b = pos.startsWith("Bottom"), n = slot[pos] || 0; slot[pos] = n + 1; chip(x, txt, r ? right : 6 + 58, b ? sph - 6 - n * 18 : 16 + n * 18, r, b, color, "rgba(16,21,32,.7)"); };
+  if (!dead) {
+    if (g("fpsov")) { put1("Top Right", s.fpsNow.toFixed(1) + " fps", "#ffff00"); }
+    if (g("peakv") && s.pv) { put1(g("pvPos"), `Peak: ${s.pv.db.toFixed(1)} dBm @ ${mhzOf(p, s.pv.f).toFixed(4)} MHz`, "#1e90ff"); }
+    if (g("binw")) { put1("Bottom Right", v.binHz.toFixed(3) + " Hz/bin", "#ffff00"); }
+  }
+  // The dBm scale strip: labels a fifth of the scale apart, on a round number of dB, and two arrows that shift the scale.
+  if (g("dbmstrip")) {
+    const sx = PW - STRIPW;
+    x.fillStyle = "rgba(10,10,24,.86)"; x.fillRect(sx, 0, STRIPW, sph); x.fillStyle = "#304050"; x.fillRect(sx, 0, 1, sph);
+    x.fillStyle = "#6080a0"; x.beginPath(); x.moveTo(sx + 9, 3); x.lineTo(sx + 14, 11); x.lineTo(sx + 4, 11); x.closePath(); x.fill();
+    x.beginPath(); x.moveTo(sx + 22, 3); x.lineTo(sx + 32, 3); x.lineTo(sx + 27, 11); x.closePath(); x.fill();
+    const raw = (strip.max - strip.min) / 5, ls = raw >= 20 ? 20 : raw >= 10 ? 10 : raw >= 5 ? 5 : 2, rg = Math.max(1, strip.max - strip.min);
+    x.font = "9px sans-serif"; x.textAlign = "right";
+    for (let d = Math.ceil(strip.min / ls) * ls; d <= strip.max; d += ls) {
+      const y = sph * (strip.max - d) / rg;
+      if (y < 20 || y > sph - 3) { continue; }
+      x.fillStyle = "#507080"; x.fillRect(sx + 1, Math.round(y), 4, 1); x.fillStyle = "#80a0b0"; x.fillText(String(Math.round(d)), PW - 3, y + 3);
+    }
+  }
+  // The frequency scale: MHz labels on the grid's lines, no two closer than 60 px.
+  x.fillStyle = "#101520"; x.fillRect(0, sph, PW, FSH); x.fillStyle = "#283848"; x.fillRect(0, sph, PW, 1);
+  const al = g("freqalign");
+  if (al !== "Off") {
+    // As the app labels them: a chosen spacing that is not a whole number of 10 kHz gets the third decimal, and a
+    // chosen spacing is thinned to every Nth line so labels stay 60 px apart. Auto does neither.
+    const fixed = g("gridsp") !== "Auto", dec = fixed && step % 10000 ? 3 : step >= 100000 ? 1 : step >= 10000 ? 2 : 3;
+    const pxStep = step / v.span * PW, every = fixed && pxStep < 60 ? Math.ceil(60 / pxStep) : 1;
+    x.font = parseInt(g("scaletxt"), 10) + "px sans-serif"; x.fillStyle = colA("cGridText");
+    for (let fq = Math.ceil(abs0 / step) * step; fq < abs0 + v.span; fq += step) {
+      const xx = fx(fq - P.hz);
+      if (Math.round(fq / step) % every || xx < 24 || xx > PW - 24) { continue; }
+      // Left and Right set the label against the side of its 60 px box; Center and Auto set it on its line.
+      x.textAlign = al === "Left" ? "left" : al === "Right" ? "right" : "center";
+      x.fillText((fq / 1e6).toFixed(dec), al === "Left" ? xx - 30 : al === "Right" ? xx + 30 : xx, sph + 18);
+      x.fillStyle = "#506070"; x.fillRect(Math.round(xx), sph + 1, 1, 4); x.fillStyle = colA("cGridText");
+    }
+  }
+  // The waterfall.
+  const wy = L.wfy, wh = L.wfh, sw = stripW(s);
+  if (dead) { x.fillStyle = "#0a0a18"; x.fillRect(0, wy, PW, wh); }
+  else {
+    wfPaint(s, v, wh); x.imageSmoothingEnabled = false; x.drawImage(s.wfc, 0, wy, PW, wh);
+    // Opacity lays the pan's background over the waterfall.
+    if (g("opacity") < 100) { x.fillStyle = `rgba(10,10,20,${(1 - g("opacity") / 100).toFixed(3)})`; x.fillRect(0, wy, PW, wh); }
+    if (g("rxfilt") && !tx) { const f2 = FILT[P.side]; x.fillStyle = "rgba(0,180,216,.196)"; x.fillRect(fx(P.vfo + f2[0]), wy, Math.max(1, fx(P.vfo + f2[1]) - fx(P.vfo + f2[0])), wh); }
+    if (g("rxzero") && !tx) { x.fillStyle = colA("cRxZero"); x.fillRect(vx, wy, 1, wh); }
+    // The transmit filter and the transmit zero line show while the pan transmits.
+    if (g("txfilt") && tx) { x.fillStyle = colA("cTxPass"); x.fillRect(fa, wy, fb - fa, wh); }
+    if (g("txzero") && tx) { x.fillStyle = colA("cTxZero"); x.fillRect(vx, wy, 1, wh); }
+    const top = s.rows.length - 1 - s.back, now = Date.now(), rowMs = r => now - (s.t - r.t);
+    if (g("stamp") !== "None" && top >= 0) {
+      const rt = g("stamp") === "Right";
+      x.font = "10px sans-serif"; x.fillStyle = "rgb(200,220,255)"; x.textAlign = rt ? "right" : "left";
+      x.fillText(hms(rowMs(s.rows[top]), g("stampmode") === "UTC"), rt ? PW - sw - 4 : 4, wy + 12);
+    }
+    // The time strip: a tick every 5 s. Drag it up to scroll back; scrolled back it shows the clock and a red LIVE button.
+    const tsx = PW - sw;
+    x.fillStyle = "rgba(10,10,24,.86)"; x.fillRect(tsx, wy, sw, wh); x.fillStyle = "#304050"; x.fillRect(tsx, wy, 1, wh);
+    x.font = "9px sans-serif"; x.textAlign = "right";
+    if (top >= 0) {
+      let next = Math.ceil((s.t - s.rows[top].t) / 5000) * 5000;
+      for (let y = 0; y < wh && top - y >= 0; y++) {
+        const age = s.t - s.rows[top - y].t;
+        if (age < next) { continue; }
+        if (y > 26 && y < wh - 3) { x.fillStyle = "#507080"; x.fillRect(tsx + 1, wy + y, 4, 1); x.fillStyle = "#80a0b0"; x.fillText(s.back > 0 ? "-" + hms(rowMs(s.rows[top - y]), true) + "Z" : Math.round(next / 1000) + "s", PW - 3, wy + y + 3); }
+        next = (Math.floor(age / 5000) + 1) * 5000;
+      }
+    }
+    const lw = s.back > 0 ? 40 : 32, lh = s.back > 0 ? 20 : 16;
+    x.fillStyle = s.back > 0 ? "#c02020" : "#454545"; x.fillRect(PW - lw - 2, wy + 3, lw, lh);
+    x.font = "bold 9px sans-serif"; x.textAlign = "center"; x.fillStyle = s.back > 0 ? "#fff" : "#a0a8b0"; x.fillText("LIVE", PW - lw / 2 - 2, wy + 3 + lh / 2 + 3);
+  }
+  // Cursor Freq: the frequency under the pointer, beside it.
+  if (!dead && g("cursor") && s.cur) {
+    const txt = mhzOf(p, v.f0 + s.cur.x / PW * v.span).toFixed(4) + " MHz";
+    x.font = "bold 11px sans-serif"; const w = x.measureText(txt).width + 8;
+    chip(x, txt, s.cur.x + 12 + w > PW ? s.cur.x - 12 - w : s.cur.x + 12, s.cur.y - 28 < 0 ? s.cur.y + 12 : s.cur.y - 28, false, false, "#c8d8e8", "rgba(16,21,32,.78)");
+  }
+  s.dirty = false;
+}
+
+// ---------- the multimeter ----------
+function drawMeter() {
+  const cv = $("mmcv"); if (!cv) { return; }
+  const x = cv.getContext("2d"), W = 700, Hh = 64, p = meterPan();
+  x.setTransform(DPR, 0, 0, DPR, 0, 0); x.fillStyle = "#0a0a18"; x.fillRect(0, 0, W, Hh);
+  const live = p !== null && sit() !== "off" && METER.val !== null && !keyed(p);
+  $("mmh").innerHTML = p === null ? "Multimeter" : `Multimeter &middot; Slice ${PAN[p].slice} signal <b>${live ? esc(meterText(METER.val)) : keyed(p) ? "transmitting" : "no signal"}</b><span>history: ${(glob.mmHistDur / 1000).toFixed(glob.mmHistDur % 1000 ? 1 : 0)} s</span>`;
+  // The history graph: the readings of the last History duration, S0 at the bottom to S9+40 dB at the top.
+  x.strokeStyle = "rgba(255,255,255,.08)"; x.fillStyle = "#607080"; x.font = "9px sans-serif"; x.textAlign = "left";
+  for (const [d, l] of [[-121, "S1"], [-97, "S5"], [-73, "S9"], [-53, "+20"]]) { const y = Math.round(Hh * (-33 - d) / 94) + .5; x.beginPath(); x.moveTo(24, y); x.lineTo(W, y); x.stroke(); x.fillText(l, 2, y + 3); }
+  if (!live) { return; }
+  const dur = glob.mmHistDur, t1 = METER.t;
+  x.strokeStyle = "#00e5ff"; x.lineWidth = 1.2; x.beginPath(); let first = true;
+  for (const [t, d] of METER.hist) {
+    if (t < t1 - dur) { continue; }
+    const xx = 24 + (W - 24) * (1 - (t1 - t) / dur), y = Math.max(1, Math.min(Hh - 1, Hh * (-33 - d) / 94));
+    if (first) { x.moveTo(xx, y); first = false; } else { x.lineTo(xx, y); }
+  }
+  x.stroke(); x.lineWidth = 1;
+}
+
+// ---------- the background pictures ----------
+// Three pictures drawn here, so the chooser has something to offer; Browse adds one from this computer.
+function makePics() {
+  const mk = (name, paint) => { const c = document.createElement("canvas"); c.width = 700; c.height = 300; paint(c.getContext("2d"), 700, 300, mulberry(name.length * 97)); PICIMG[name] = c; };
+  mk("Aurora.jpg", (x, w, h, r) => {
+    const g0 = x.createLinearGradient(0, 0, 0, h); g0.addColorStop(0, "#020818"); g0.addColorStop(1, "#06202a"); x.fillStyle = g0; x.fillRect(0, 0, w, h);
+    for (let i = 0; i < 160; i++) { x.fillStyle = `rgba(255,255,255,${0.2 + r() * 0.6})`; x.fillRect(r() * w, r() * h * 0.6, 1, 1); }
+    for (let b = 0; b < 3; b++) {
+      for (let xx = 0; xx < w; xx += 2) {
+        const top = 60 + b * 30 + 40 * Math.sin(xx / 90 + b * 2) + 16 * Math.sin(xx / 23 + b), len = 110 + 50 * Math.sin(xx / 57 + b * 1.3);
+        const g1 = x.createLinearGradient(0, top, 0, top + len); g1.addColorStop(0, b === 1 ? "rgba(190,80,220,0)" : "rgba(60,255,150,0)"); g1.addColorStop(.25, b === 1 ? "rgba(190,80,220,.35)" : "rgba(60,255,150,.5)"); g1.addColorStop(1, "rgba(20,120,90,0)");
+        x.fillStyle = g1; x.fillRect(xx, top, 2, len);
+      }
+    }
+    x.fillStyle = "#010409"; x.beginPath(); x.moveTo(0, h); for (let xx = 0; xx <= w; xx += 20) { x.lineTo(xx, h - 26 - 14 * Math.sin(xx / 70) - 8 * r()); } x.lineTo(w, h); x.fill();
+  });
+  mk("Night sky.png", (x, w, h, r) => {
+    const g0 = x.createLinearGradient(0, 0, w, h); g0.addColorStop(0, "#040618"); g0.addColorStop(.5, "#101a58"); g0.addColorStop(1, "#050824"); x.fillStyle = g0; x.fillRect(0, 0, w, h);
+    for (let i = 0; i < 900; i++) { const u = r(), yy = h * (0.15 + 0.7 * u) + (r() - .5) * 90, xx = u * w + (r() - .5) * 60; x.fillStyle = `rgba(200,210,255,${r() * 0.25})`; x.fillRect(xx, yy, 2, 2); }
+    for (let i = 0; i < 420; i++) { const b = r(); x.fillStyle = `rgba(255,255,${200 + r() * 55 | 0},${0.3 + b * 0.7})`; const sz = b > 0.96 ? 2 : 1; x.fillRect(r() * w, r() * h, sz, sz); }
+  });
+  mk("Shack.jpg", (x, w, h, r) => {
+    const g0 = x.createLinearGradient(0, 0, 0, h); g0.addColorStop(0, "#3a1c0c"); g0.addColorStop(1, "#1a0c04"); x.fillStyle = g0; x.fillRect(0, 0, w, h);
+    x.fillStyle = "#5a3418"; x.fillRect(0, h - 70, w, 70); x.fillStyle = "#2a1608"; x.fillRect(0, h - 74, w, 5);
+    for (const [bx, bw2, bh] of [[60, 190, 90], [280, 150, 70], [470, 180, 100]]) {
+      x.fillStyle = "#1c1c1e"; x.fillRect(bx, h - 74 - bh, bw2, bh); x.fillStyle = "#0a2a1a"; x.fillRect(bx + 12, h - 74 - bh + 12, bw2 * 0.5, bh * 0.45);
+      x.fillStyle = "#ffb030"; for (let i = 0; i < 4; i++) { x.beginPath(); x.arc(bx + bw2 * 0.62 + i * 16, h - 74 - bh + 24, 5, 0, 6.3); x.fill(); }
+      x.fillStyle = "#c8c8c8"; x.beginPath(); x.arc(bx + bw2 * 0.8, h - 74 - bh * 0.4, bh * 0.16, 0, 6.3); x.fill();
+    }
+    const g1 = x.createRadialGradient(w * 0.5, 0, 10, w * 0.5, 0, 420); g1.addColorStop(0, "rgba(255,190,90,.35)"); g1.addColorStop(1, "rgba(255,190,90,0)"); x.fillStyle = g1; x.fillRect(0, 0, w, h);
+  });
+}
+
+// ---------- the pans in the main window ----------
+const ZOOMS = [["S", "Segment zoom: fit the band plan segment the slice is in"], ["B", "Band zoom: fit the whole amateur band"], ["-", "Zoom out: show more bandwidth"], ["+", "Zoom in: show less bandwidth"]];
+// A pan opens with its waterfall full and its measured levels settled, as a pan that has been running does.
+let primeFrames = 270;
+function prime(p) { for (let i = 0; i < primeFrames; i++) { simFrame(p, 1000 / 30); } }
+function panInfo(p) {
+  const s = SIM[p], e = $("frq" + p); if (!s || !e) { return; }
+  const v = analyzer(p, keyed(p));
+  e.textContent = `${mhzOf(p, v.f0 + v.span / 2).toFixed(4)} MHz · ${(v.span / 1000).toFixed(v.span < 20000 ? 1 : 0)} kHz wide`;
+}
+function buildPans() {
+  $("park").appendChild($("fly"));
+  for (const p of PANS) { if (!SIM[p]) { SIM[p] = newSim(p); prime(p); } }
+  if (!PANS.length) { $("pans").innerHTML = `<div class="nopan">No pan is open.</div>`; return; }
+  $("pans").innerHTML = PANS.map(p => `<div class="pan" id="pan${p}"><div class="phead"><b>Pan ${p}</b><span>${PAN[p].band}</span><span id="frq${p}"></span><span class="txb" id="txb${p}" style="display:none">TX</span><span class="flag">Slice ${PAN[p].slice}</span></div>` +
+    `<div class="pbody" id="pb${p}"><canvas id="cv${p}" data-cv="${p}" width="${PW * DPR}" height="${PH * DPR}" style="width:${PW}px;height:${PH}px"></canvas>` +
+    `<div class="ovl">${ui.collapsed[p] ? `<div class="ob nar" data-collapse="${p}" title="Show the pan's buttons">&#9654;</div>`
+      : `<div class="ob nar" data-collapse="${p}" title="Hide the pan's buttons">&#9664;</div><div class="ob" data-pan="${p}" id="ob${p}" title="Display settings for this pan">Display</div>`}</div>` +
+    `<div class="zs">${ZOOMS.map(([z, tip]) => `<div class="zb" data-zoom="${z}" data-p="${p}" title="${tip}">${z}</div>`).join("")}</div></div></div>`).join("");
+  for (const p of PANS) { $("cv" + p).addEventListener("wheel", e => panWheel(e, p), {passive: false}); }
+}
+// The pill opens over its pan, beside the Display button, as in the app.
+function mountPill() {
+  const f = $("fly"), p = ui.pill, home = p !== null && ui.pillOpen && !ui.collapsed[p] ? $("pb" + p) : null;
+  if (!home) { $("park").appendChild(f); } else if (f.parentNode !== home) { home.appendChild(f); }
+}
+const curPan = e => { const c = e.target.closest("canvas[data-cv]"); return c ? +c.dataset.cv : null; };
+const atOf = (e, p) => { const r = $("cv" + p).getBoundingClientRect(); return {x: e.clientX - r.left, y: e.clientY - r.top}; };
+// Shift the receive scale: both ends together, or dB Max alone while Track floor has dB Min.
+function shiftScale(p, db) {
+  if (keyed(p) || !db) { return; }
+  const mx = rd(p, "dbMax"), mn = rd(p, "dbMin");
+  if (gateOf(p, "dbMin")) { if (!gateOf(p, "dbMax")) { put(p, "dbMax", Math.max(-200, Math.min(0, mx + db))); } return; }
+  const d = db > 0 ? Math.min(db, 0 - mx) : Math.max(db, -200 - mn);
+  if (d > 0) { put(p, "dbMax", mx + d); put(p, "dbMin", mn + d); } else { put(p, "dbMin", mn + d); put(p, "dbMax", mx + d); }
+}
+function zoomBy(p, f) { const s = SIM[p]; s.span = s.span * f; clampView(s); s.dirty = true; panInfo(p); }
+function zoomFit(p, lo, hi) { const s = SIM[p]; s.span = hi - lo; clampView(s); s.off = (lo + hi) / 2; clampView(s); s.dirty = true; panInfo(p); }
+function panWheel(e, p) {
+  const d = e.deltaY || e.deltaX;
+  if (!d || sit() === "off") { return; }
+  const s = SIM[p], a = atOf(e, p), up = d < 0;
+  // As the app has it (SpectrumWidget::wheelEvent): over the dBm strip the wheel moves the top of the scale 5 dB;
+  // Ctrl or Cmd with the wheel zooms around the slice; Shift with the wheel shifts the whole scale 5 dB.
+  // The plain wheel tunes the radio in the app; here it scrolls the page.
+  if (a.y < lay(s).sph && a.x >= PW - STRIPW && rd(p, "dbmstrip")) {
+    e.preventDefault();
+    if (!keyed(p) && !gateOf(p, "dbMax")) { put(p, "dbMax", Math.max(-200, Math.min(0, rd(p, "dbMax") + (up ? -5 : 5)))); render(); }
+  }
+  else if (e.ctrlKey || e.metaKey) { e.preventDefault(); if (!keyed(p)) { s.span *= up ? 0.8 : 1.25; clampView(s); s.off = PAN[p].vfo; clampView(s); s.dirty = true; panInfo(p); softRefresh(); } }
+  else if (e.shiftKey) { e.preventDefault(); shiftScale(p, up ? 5 : -5); render(); }
+}
+// The divider between the spectrum and the waterfall is the top edge of the frequency scale. As in the app, a
+// drag takes hold from 6 px above its 4 px to 6 px below.
+const onDivider = (a, L) => a.y >= L.sph - 6 && a.y < L.sph + 10;
+let dragging = false;
+document.addEventListener("mousedown", e => {
+  const p = curPan(e);
+  if (p === null || sit() === "off" || e.button) { return; }
+  e.preventDefault(); closePop();
+  const s = SIM[p], a = atOf(e, p), L = lay(s), tx = keyed(p), x0 = e.clientX, y0 = e.clientY;
+  let move = null;
+  if (onDivider(a, L)) {
+    move = ev => { s.frac = Math.max(0.1, Math.min(0.9, (atOf(ev, p).y) / (PH - FSH))); s.dirty = true; softRefresh(); };
+  } else if (a.y < L.sph && a.x >= PW - STRIPW && rd(p, "dbmstrip")) {
+    // The dBm strip: the arrows shift the scale 10 dB; a drag shifts it half a dB a pixel.
+    if (a.y < 14) { shiftScale(p, a.x < PW - STRIPW / 2 ? 10 : -10); render(); return; }
+    let done = 0;
+    move = ev => { const want = Math.round((ev.clientY - y0) * 0.5), d = want - done; if (d) { shiftScale(p, d); done = want; render(); } };
+  } else if (a.y >= L.sph && a.y < L.wfy) {
+    // A drag along the frequency scale zooms.
+    if (!tx) {
+      const sp0 = s.span;
+      move = ev => { s.span = sp0 / Math.max(0.2, 1 + (ev.clientX - x0) * 0.003); clampView(s); s.dirty = true; panInfo(p); softRefresh(); };
+    }
+  } else if (a.y >= L.wfy && a.x >= PW - stripW(s)) {
+    // The time strip: LIVE returns to now; a drag up scrolls back through the rows kept.
+    const lw = s.back > 0 ? 40 : 32, lh = s.back > 0 ? 20 : 16;
+    if (a.y - L.wfy < lh + 5 && a.x >= PW - lw - 4) { s.back = 0; s.dirty = true; return; }
+    const b0 = s.back;
+    move = ev => { s.back = Math.max(0, Math.min(Math.max(0, s.rows.length - L.wfh), b0 - Math.round(ev.clientY - y0))); s.dirty = true; };
+  } else if (!tx) {
+    const o0 = s.off;
+    move = ev => { s.off = o0 - (ev.clientX - x0) * s.span / PW; clampView(s); s.dirty = true; panInfo(p); };
+  }
+  if (!move) { return; }
+  dragging = true;
+  const up = () => { dragging = false; document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
+  document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
+});
+let lastXY = null;
+document.addEventListener("mousemove", e => {
+  lastXY = [e.clientX, e.clientY];
+  const p = curPan(e);
+  for (const q of PANS) { const s = SIM[q]; if (!s) { continue; } const c = q === p ? atOf(e, q) : null; if (c || s.cur) { s.cur = c; s.dirty = true; } }
+  // The pointer shows what a drag would do here.
+  if (p !== null && !dragging && SIM[p]) {
+    const s = SIM[p], a = atOf(e, p), L = lay(s);
+    $("cv" + p).style.cursor = sit() === "off" ? "" : onDivider(a, L) ? "row-resize"
+      : a.y < L.sph && a.x >= PW - STRIPW && rd(p, "dbmstrip") ? "ns-resize" : a.y >= L.sph && a.y < L.wfy ? "ew-resize"
+      : a.y >= L.wfy && a.x >= PW - stripW(s) ? "ns-resize" : "";
+  }
+});
+document.addEventListener("click", e => {
+  let el;
+  if ((el = e.target.closest("[data-zoom]"))) {
+    const p = +el.dataset.p, z = el.dataset.zoom, P = PAN[p];
+    if (keyed(p) || sit() === "off") { return; }
+    if (z === "S") { zoomFit(p, P.segHz[0], P.segHz[1]); } else if (z === "B") { zoomFit(p, P.bandHz[0], P.bandHz[1]); } else { zoomBy(p, z === "-" ? 1.25 : 0.8); }
+    softRefresh(); return;
+  }
+  if ((el = e.target.closest("[data-collapse]"))) { const p = +el.dataset.collapse; ui.collapsed[p] = !ui.collapsed[p]; buildPans(); render(); }
+});
+
+// ---------- number boxes ----------
+// A number box takes a typed number: held to the row's range and step, as the app's boxes hold it.
+// A box left by a click on something else is taken first, and the page is drawn again once that click is done,
+// so the click lands on the control that was under the pointer.
+let pointerDown = false, numPending = false;
+document.addEventListener("mousedown", e => {
+  pointerDown = true;
+  const a = document.activeElement;
+  if (a && a.matches && a.matches("input[data-num]") && e.target !== a) { a.blur(); }
+}, true);
+document.addEventListener("mouseup", () => { pointerDown = false; if (numPending) { numPending = false; setTimeout(render, 0); } }, true);
+window.addEventListener("blur", () => { pointerDown = false; });
+document.addEventListener("change", e => {
+  const el = e.target.closest ? e.target.closest("[data-num]") : null;
+  if (!el) { return; }
+  const k = el.dataset.num, c = CTL[k], t = tgtOf(el), n = parseFloat(String(el.value).replace(",", "."));
+  if (!isNaN(n)) { put(t, k, +(Math.round(Math.max(c.min, Math.min(c.max, n)) / c.step) * c.step).toFixed(2)); }
+  if (pointerDown) { numPending = true; } else { render(); }
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Enter" && e.target.matches && e.target.matches("[data-num]")) { e.target.blur(); }
+  if (e.key === "Escape") { closePop(); closeModal(); }
+});
+document.addEventListener("focusin", e => { if (e.target.matches && e.target.matches("[data-num]")) { e.target.value = String(parseFloat(e.target.value)); e.target.select(); } });
+
+// ---------- colors, pictures and the gradient ----------
+const SWATCHES = ["#00e5ff", "#00b4d8", "#1e90ff", "#00ff88", "#7fff00", "#ffff00", "#ffd700", "#ffb800", "#ff4500", "#ff0000", "#ff40ff", "#c080ff", "#ffffff", "#c8c8c8", "#808080", "#0a0a14"];
+function openBox(el, fill) {
+  closePop();
+  const r = el.getBoundingClientRect();
+  pop = document.createElement("div"); pop.className = "pop box";
+  pop.style.left = Math.min(r.left + window.scrollX, window.scrollX + document.documentElement.clientWidth - 230) + "px"; pop.style.top = (r.bottom + window.scrollY + 2) + "px";
+  fill(pop); document.body.appendChild(pop); fitPop(el);
+}
+// A popup that would run off the bottom of the window opens above its button instead.
+function fitPop(el) {
+  const r = el.getBoundingClientRect(), h = pop.offsetHeight, vh = document.documentElement.clientHeight;
+  if (r.bottom + h + 4 > vh && r.top - h - 2 >= 0) { pop.style.top = (r.top + window.scrollY - h - 2) + "px"; }
+}
+function openColorPop(el, t, k) {
+  openBox(el, box => {
+    const cur = rd(t, k), set = v => { put(t, k, v); render(); };
+    box.innerHTML = `<div class="ptit">${esc(CTL[k].l.replace(":", ""))}</div><div class="swg">${SWATCHES.map(c => `<i class="swb${c === cur ? " cur" : ""}" data-v="${c}" style="background:${c}" title="${c}"></i>`).join("")}</div>` +
+      (k === "linecolor" ? `<div class="pbtn${cur === "" ? " cur" : ""}" data-v="">Follow Fill Color</div>` : "") +
+      `<label class="pbtn">More colors... <input type="color" value="${cur || rd(t, "fillcolor")}"></label>`;
+    box.addEventListener("click", ev => { const s = ev.target.closest("[data-v]"); if (s) { ev.stopPropagation(); set(s.dataset.v); } });
+    box.querySelector("input").addEventListener("change", ev => set(ev.target.value));
+  });
+}
+function openPicPop(el, t) {
+  openBox(el, box => {
+    const cur = rd(t, "bgpic"), set = v => { put(t, "bgpic", v); put(t, "bg", true); render(); };
+    box.innerHTML = `<div class="ptit">Background picture</div><div class="picg">${PICS.map((n, i) => `<div class="picb${n === cur ? " cur" : ""}" data-i="${i}"><canvas width="96" height="42"></canvas><span>${esc(n)}</span></div>`).join("")}</div>` +
+      `<label class="pbtn">Browse... <input type="file" accept="image/*"></label>`;
+    box.querySelectorAll(".picb").forEach(b => { const n = PICS[+b.dataset.i], im = PICIMG[n]; b.querySelector("canvas").getContext("2d").drawImage(im, 0, 0, im.width, im.height, 0, 0, 96, 42); b.addEventListener("click", ev => { ev.stopPropagation(); set(n); }); });
+    box.querySelector("input").addEventListener("change", ev => {
+      const f = ev.target.files[0]; if (!f) { return; }
+      const im = new Image(); im.onload = () => { PICIMG[f.name] = im; if (!PICS.includes(f.name)) { PICS.push(f.name); } set(f.name); }; im.src = URL.createObjectURL(f);
+    });
+  });
+}
+// The gradient strip: the colors of a Custom scheme, low levels at the left.
+function gradRow(it, t) {
+  const d = it.gate(t), st = GRAD[it.grad];
+  return `<div class="srow${d ? " dis" : ""}"${d ? ` title="${esc(d.why)}"` : ""}><div class="l" style="padding-left:14px">Gradient:</div>` +
+    `<div class="gwrap" style="grid-column:2/4"><div class="gstrip${d ? " dis" : ""}"${d ? "" : ` data-grad="${it.grad}"`}><canvas width="240" height="16"></canvas>` +
+    st.map((q, i) => `<i class="gh" data-gi="${i}" style="left:${q[0] * 100}%;background:rgb(${q[1]},${q[2]},${q[3]})"></i>`).join("") + `</div><div class="gl"><span>LOW</span><span>MID</span><span>HIGH</span></div></div>` +
+    `<div class="whyc">${d ? esc(d.why) : "Click the strip to add a color. Drag a color to move it, double-click it to change it, right-click it to remove it."}</div></div>`;
+}
+function paintGrads() {
+  document.querySelectorAll(".gstrip").forEach(e => {
+    const c = e.querySelector("canvas"), x = c.getContext("2d"), which = e.dataset.grad || (ui.page === "Waterfall" ? "rx" : "tx"), gr = x.createLinearGradient(0, 0, c.width, 0);
+    for (const q of GRAD[which]) { gr.addColorStop(q[0], `rgb(${q[1]},${q[2]},${q[3]})`); }
+    x.fillStyle = gr; x.fillRect(0, 0, c.width, c.height);
+  });
+}
+const gradChanged = which => { GRAD[which].sort((a, b) => a[0] - b[0]); delete GRADLUT[which]; };
+document.addEventListener("mousedown", e => {
+  const strip = e.target.closest("[data-grad]");
+  if (!strip || e.button) { return; }
+  e.preventDefault();
+  const which = strip.dataset.grad, st = GRAD[which], r = strip.getBoundingClientRect(), h = e.target.closest(".gh");
+  const tOf = ev => Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+  if (!h) {
+    // A click on the strip adds a color there: the one the gradient already has at that point.
+    const t = tOf(e), q = (lut(st)), i = Math.round(t * 255) * 3;
+    st.push([t, q[i], q[i + 1], q[i + 2]]); gradChanged(which); renderSetup(); return;
+  }
+  const stop = st[+h.dataset.gi], ends = +h.dataset.gi === 0 || +h.dataset.gi === st.length - 1;
+  if (ends) { return; }   // the two end colors stay at the ends
+  dragging = true; closePop();
+  // A press that does not move the color leaves the strip as it is drawn, so a second press makes a double-click.
+  let moved = false;
+  const move = ev => { moved = true; stop[0] = Math.max(0.01, Math.min(0.99, tOf(ev))); delete GRADLUT[which]; h.style.left = stop[0] * 100 + "%"; paintGrads(); };
+  const up = () => { dragging = false; document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); if (moved) { gradChanged(which); renderSetup(); } };
+  document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
+});
+document.addEventListener("contextmenu", e => {
+  const h = e.target.closest("[data-grad] .gh");
+  if (!h) { return; }
+  e.preventDefault();
+  const which = h.closest("[data-grad]").dataset.grad, st = GRAD[which], i = +h.dataset.gi;
+  if (i > 0 && i < st.length - 1) { st.splice(i, 1); gradChanged(which); renderSetup(); }
+});
+document.addEventListener("dblclick", e => {
+  const h = e.target.closest("[data-grad] .gh");
+  if (!h) { return; }
+  const which = h.closest("[data-grad]").dataset.grad, stop = GRAD[which][+h.dataset.gi], cur = "#" + [1, 2, 3].map(j => stop[j].toString(16).padStart(2, "0")).join("");
+  openBox(h, box => {
+    const set = v => { const c = hex3(v); stop[1] = c[0]; stop[2] = c[1]; stop[3] = c[2]; closePop(); gradChanged(which); renderSetup(); };
+    box.innerHTML = `<div class="ptit">Gradient color</div><div class="swg">${SWATCHES.map(c => `<i class="swb${c === cur ? " cur" : ""}" data-v="${c}" style="background:${c}" title="${c}"></i>`).join("")}</div>` +
+      `<label class="pbtn">More colors... <input type="color" value="${cur}"></label>`;
+    box.addEventListener("click", ev => { const s = ev.target.closest("[data-v]"); if (s) { ev.stopPropagation(); set(s.dataset.v); } });
+    box.querySelector("input").addEventListener("change", ev => set(ev.target.value));
+  });
+});
+
+// ---------- the buttons that ask first ----------
+// The app's own questions (src/gui/setup/DisplaySetupPages.cpp, AppearanceSetupPages.cpp): title, text, buttons, and the default.
+const CONFIRM = {
+  smooth: {t: "Reset to Smooth Defaults", yes: "Yes", no: "No", body: "This will set every panadapter's default Spectrum and Waterfall display settings to the NereusSDR smooth profile. A panadapter you have adjusted from its Display panel keeps its own settings.\n\nYour FFT size, frequency, band stack, and per-band grid ranges are NOT affected.\n\nContinue?"},
+  reset3d: {t: "Reset 3D to defaults", yes: "Yes", no: "No", body: "This will restore Spectrum render mode, 3D Floor, 3D Gain, 3D Span, 3D Angle, 3D Speed and 3D Slice Shadow to their ship defaults.\n\nContinue?"},
+  resetcolors: {t: "Reset all colors to defaults", yes: "Yes", no: "Cancel", body: "Reset all spectrum and waterfall colors to factory defaults?\n\nCustom colors set here will be discarded. Other display settings are not affected."},
+};
+let confirmed = null, modalEl = null;
+function closeModal() { $("modal").style.display = "none"; modalEl = null; }
+function askConfirm(a, el) {
+  const c = CONFIRM[a]; modalEl = el;
+  $("modal").innerHTML = `<div class="mbox"><div class="mt">${esc(c.t)}</div><div class="mb">${esc(c.body).replace(/\n/g, "<br>")}</div><div class="mf"><span class="sbtn" data-yes="${a}">${c.yes}</span><span class="sbtn def" data-no="1">${c.no}</span></div></div>`;
+  $("modal").style.display = "flex";
+}
+document.addEventListener("click", e => {
+  const y = e.target.closest("[data-yes]");
+  if (y) { const el = modalEl; confirmed = y.dataset.yes; closeModal(); if (el && el.isConnected) { el.click(); } confirmed = null; return; }
+  if (e.target.closest("[data-no]") || e.target.id === "modal") { closeModal(); }
+});
+
+// ---------- the loop ----------
+let screenHz = 60, lastTick = 0, lastSoft = 0, softSig = "", hzBuf = [];
+// The measured numbers a gray row shows change as the band does, so the pill and Setup are drawn again when one moves.
+function measured() {
+  const out = [];
+  for (const t of new Set([ui.pill, ui.setupFor])) {
+    if (t === null || t === "all" || !isOpen(t)) { continue; }
+    const S_ = scaleInUse(t), Lv = levels(t);
+    out.push(Math.round(S_.min), Math.round(S_.max), Math.round(Lv.low), Math.round(Lv.high), plan(t).size, lay(SIM[t]).wfh, SIM[t].back > 0);
+  }
+  return out.join(",");
+}
+// While the mouse button is down nothing is drawn again, or the click would lose the control under the pointer.
+const busy = () => pointerDown || dragging || pop || modalEl || (document.activeElement && document.activeElement.matches && document.activeElement.matches("input[data-num]"));
+function softRefresh(force) {
+  const sig = sit() === "off" ? "off" : measured();
+  if (!force && sig === softSig) { return; }
+  softSig = sig;
+  renderPill(); renderSetup(); mountPill();
+  // Keep the sentence for the row under the pointer.
+  const box = $("why"), at = lastXY ? document.elementFromPoint(lastXY[0], lastXY[1]) : null, w = at && at.closest ? at.closest(".fly [data-why]") : null;
+  if (box && w) { box.textContent = w.dataset.why; box.classList.add("amber"); }
+}
+function tick(ts) {
+  requestAnimationFrame(tick);
+  const raw = ts - lastTick; lastTick = ts;
+  if (raw > 0 && raw < 100) { hzBuf.push(raw); if (hzBuf.length > 90) { hzBuf.shift(); } const srt = [...hzBuf].sort((a, b) => a - b); screenHz = 1000 / srt[srt.length >> 1]; }
+  const dt = Math.min(100, raw);
+  if (sit() !== "off") {
+    for (const p of PANS) {
+      const s = SIM[p]; if (!s) { continue; }
+      const fms = 1000 / (keyed(p) ? TXFPS : glob.fps); let n = 0;
+      s.acc += dt;
+      while (s.acc >= fms && n < 4) { simFrame(p, fms); s.acc -= fms; n++; }
+      if (s.acc >= fms) { s.acc = 0; }
+      if (n || s.dirty) { drawPan(p); }
+    }
+    meterStep(dt);
+    if (METER.at === METER.t) { drawMeter(); }
+  } else { for (const p of PANS) { if (SIM[p] && SIM[p].dirty) { drawPan(p); } } }
+  if (ts - lastSoft > 500) { lastSoft = ts; if (!busy()) { softRefresh(); } }
+}
+function startLoop() { softSig = measured(); requestAnimationFrame(tick); }
+
+// The steps name the pan the pill is open on, so they stay true on a radio with fewer pans and with no pan open.
+function tryHtml() {
+  const p = ui.pill, open = p !== null && ui.pillOpen && !ui.collapsed[p];
+  const two = p === null
+    ? `No pan is open in this situation, so there is no pill, and the steps that use the pill need another Situation. Setup still sets every pan.`
+    : `${open ? `The pill is open on Pan ${p}` : `The pill is closed: click "Display" on Pan ${p} to open it there. It belongs to Pan ${p}`}, the pan that carries Slice ${PAN[p].slice}. Its tabs are Setup's pages, with one exception: the Noise Floor, Bin Width and Peak Value buttons on the Spectrum tab have their rows on Setup's Peaks &amp; Markers page, as the note under them says. Change a row: only Pan ${p} changes and a dot marks the row in the pill. Setup shows it too, on the page that has the row: under All pans a line under the row names Pan ${p} and its value and Pan ${p}'s chip carries a dot, and with Pan ${p} picked under "Settings for" the row carries the dot. Click a dot on a row to follow All pans again. Three rows are a band's (dB Max, dB Min, 3D Floor): they go to every pan on that band, and here each open pan is on a band of its own. The FFT tab is the station's and goes to every pan. Neither carries a dot.`;
+  // The transmit steps need the pill and Setup on the pan that transmits, so they say how to get there.
+  const toTx = `open the pill on Pan ${TXPAN} and pick Pan ${TXPAN} under "Settings for"`;
+  const dotStep = p === null ? `Give a pan a value of its own (pick it under "Settings for" and change a row)` : `Give Pan ${p} a dot`;
+  // Each step is drawn on a line of its own.
+  return (`With Situation on Receiving, until a step says otherwise.
+  <b>1.</b> The pans are live: each one draws its band from the settings beside it, so a change in the pill or in Setup shows in the pan as you make it. "Display" on a pan opens the pill over that pan, where the app opens it, and closes it again. A bright line across a waterfall is a static crash: NB Blank on the Waterfall tab takes those rows out.
+  <b>2.</b> On a pan: drag to move along the band. S, B, - and + zoom, and so do Ctrl with the wheel and a drag along the frequency scale. The top edge of the frequency scale is the divider between spectrum and waterfall. The dBm strip drags, its arrows step 10 dB, and Shift with the wheel shifts the scale. A drag on the waterfall's time strip scrolls back, and LIVE returns to now.
+  <b>3.</b> Click through the pages in Setup's tree. The first five are a pan's picture and carry "Settings for". The other four do not: each group there, or each row, says who holds it.
+  <b>4.</b> ${two}
+  <b>5.</b> Levels holds both level jobs. In the pill, pick Track floor: dB Min goes gray and shows the level in use. Then pick Scale in the waterfall chooser further down: Low and High follow the spectrum scale. Cause and effect are on one tab.
+  <b>6.</b> Parents and children: on Spectrum set Averaging to None, turn Fill off, or pick the Average detector. The rows under each one go gray or live, and a gray row says why.
+  <b>7.</b> View: pick 3D Stacked Trace. The Background rows go gray, and so do the trace, fill and peak hold rows on Spectrum, because the 3D surface takes their place; pick 2D and the 3D rows go gray instead.
+  <b>8.</b> Situation, Transmitting on Pan ${TXPAN}: ${toTx}. Pan ${TXPAN} shows the transmit picture, its Levels rows are gray, show the transmit values and say where those are set, and Setup's Transmit Display page moves that picture. The other situations gray the rows a remote window, an older Core or limited graphics cannot change.
+  <b>9.</b> Point at any gray row in the pill: the area at the bottom says why. In Setup the same sentence is on the screen, beside the row or under its chooser.
+  <b>10.</b> The three mockup controls before "Start over" each switch between two ways the app could work. ${dotStep}, then change that row under All pans with each "All pans" choice. Pick Manual and move Black Level with the box checked; uncheck the box and the row is Clarity's alone, gray in every other mode. Pick Transmitting on Pan ${TXPAN}, ${toTx}, and open Levels with each transmit scale choice.`).split(/\n\s*(?=<b>)/).map(x => `<div style="margin-top:5px">${x}</div>`).join("");
+}
+function render() {
+  closePop();
+  $("try").innerHTML = tryHtml();
+  $("mainwhere").textContent = "Main window: " + (PANS.length ? `${PANS.length} of ${maxPans()} pans open` : `no pan open (this radio can run ${maxPans()})`) + (SIT_WHERE[sit()] || "");
+  renderPill(); renderSetup(); mountPill();
+  for (const p of PANS) {
+    const open = p === ui.pill && ui.pillOpen && !ui.collapsed[p], ob = $("ob" + p);
+    $("pan" + p).classList.toggle("sel", open);
+    if (ob) { ob.classList.toggle("on", open); }
+    $("txb" + p).style.display = keyed(p) ? "" : "none";
+    panInfo(p); drawPan(p);
+  }
+  drawMeter();
+  softSig = sit() === "off" ? "off" : measured();
+}
+function flash(id) { const e = $(id); e.classList.remove("flash"); void e.offsetWidth; e.classList.add("flash"); }
+const tgtOf = el => el.closest(".fly") ? ui.pill : curT();
+
+// ---------- popup lists ----------
+let pop = null;
+function closePop() { if (pop) { pop.remove(); pop = null; } }
+function openPop(el, opts, cur, pick) {
+  closePop();
+  const r = el.getBoundingClientRect();
+  pop = document.createElement("div"); pop.className = "pop";
+  pop.style.left = (r.left + window.scrollX) + "px"; pop.style.top = (r.bottom + window.scrollY + 1) + "px"; pop.style.minWidth = r.width + "px";
+  for (const o of opts) {
+    const d = document.createElement("div"); d.textContent = o; if (o === cur) { d.className = "cur"; }
+    d.addEventListener("click", ev => { ev.stopPropagation(); pick(o); render(); });
+    pop.appendChild(d);
+  }
+  document.body.appendChild(pop); fitPop(el);
+}
+
+// ---------- input ----------
+document.addEventListener("mousedown", e => {
+  const s = e.target.closest("[data-k]");
+  if (!s) { return; }
+  e.preventDefault(); closePop();
+  const t = tgtOf(s), k = s.dataset.k, c = CTL[k], min = c.map ? 0 : c.min, max = slMax(c), r = s.getBoundingClientRect();
+  const at = ev => {
+    const f = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+    let v = +(Math.round((min + f * (max - min)) / c.step) * c.step).toFixed(2);
+    if (c.map) { v = c.map[v]; }
+    // A number typed past the slider's reach leaves the handle pinned at that end. A press or a drag that stays
+    // at that end changes nothing: the number moves only once the handle is dragged back onto the track.
+    const cur = rd(t, k);
+    if (!c.map && ((cur > max && v >= max) || (cur < min && v <= min))) { return; }
+    put(t, k, v); render();
+  };
+  // Pressing the handle itself takes hold of it and changes nothing until it is dragged, as a slider does.
+  if (!e.target.classList.contains("h")) { at(e); }
+  const up = () => { document.removeEventListener("mousemove", at); document.removeEventListener("mouseup", up); };
+  document.addEventListener("mousemove", at); document.addEventListener("mouseup", up);
+});
+// The app's smooth profile: Clarity Blue, log-recursive averaging at 650 ms, a white trace without fill, Rate 30 ms.
+// It also turns the waterfall's AGC on, which here means Manual levels become Auto; Clarity, Floor and Scale stay.
+const SMOOTH = {scheme: "Clarity Blue", avg: "Log Recursive", avgms: 650, fillcolor: "#ffffff", linecolor: "#ffffff", fill: false, rate: 30};
+const DEFAULTS_OF = {reset3d: ["view", "floor3d", "gain3d", "span3d", "angle3d", "speed3d", "shadow3d"]};
+document.addEventListener("click", e => {
+  const q = sel => e.target.closest(sel);
+  let el;
+  if (pop && !q(".pop") && !q("[data-c]") && !q("[data-band]")) { closePop(); }
+  // A pan's Display button opens the pill over that pan, and closes it again.
+  if ((el = q("[data-pan]"))) { const p = +el.dataset.pan; ui.pillOpen = p === ui.pill ? !ui.pillOpen : true; ui.pill = p; render(); if (ui.pillOpen) { flash("fly"); } return; }
+  if ((el = q("[data-tab]"))) { ui.tab = el.dataset.tab; render(); return; }
+  if ((el = q("[data-for]"))) { ui.setupFor = el.dataset.for === "all" ? "all" : +el.dataset.for; render(); return; }
+  if ((el = q("[data-reset]"))) { delete own[tgtOf(el)][el.dataset.reset]; render(); return; }
+  if ((el = q("[data-apply]"))) { for (const p of ALL) { delete own[p][el.dataset.apply]; } render(); return; }
+  if ((el = q("[data-page]"))) { if (el.closest(".fly")) { ui.setupFor = ui.pill; } if (!PAGES.some(x => x.name === el.dataset.page)) { flash("setupw"); return; } ui.page = el.dataset.page; render(); if (!el.closest(".tree")) { flash("setupw"); } return; }
+  if ((el = q("[data-box]"))) { const t = tgtOf(el), k = el.dataset.box, c = CTL[k]; put(t, k, Math.max(c.min, Math.min(c.max, rd(t, k) + c.step * +el.dataset.d))); render(); return; }
+  if ((el = q("[data-seg]"))) { put(tgtOf(el), el.dataset.seg, el.dataset.v); render(); return; }
+  if ((el = q("[data-t]"))) { const t = tgtOf(el), k = el.dataset.t; put(t, k, !rd(t, k)); render(); return; }
+  if ((el = q("[data-col]"))) { openColorPop(el, tgtOf(el), el.dataset.col); return; }
+  if ((el = q("[data-c]"))) { const t = tgtOf(el), k = el.dataset.c; openPop(el, CTL[k].opts, rd(t, k), o => put(t, k, o)); return; }
+  if ((el = q("[data-band]"))) { openPop(el, BANDS, ui.setupBand, o => { ui.setupBand = o; }); return; }
+  if ((el = q("[data-act]"))) {
+    const a = el.dataset.act, t = tgtOf(el), ks = keysOf(page());
+    // The three resets ask first, as the app's do.
+    if (CONFIRM[a] && confirmed !== a) { askConfirm(a, el); return; }
+    if (a === "bgchoose") { openPicPop(el, t); return; }
+    if (a === "gradrx" || a === "gradtx") { const w = a.slice(4); ui.grad[w] = !ui.grad[w]; }
+    if (a === "resetcolors") { for (const k of COLOR_KEYS) { glob[k] = CTL[k].d; } }
+    if (a === "followall") { own[ui.pill] = {}; }
+    if (a === "setup") { ui.page = TAB_PAGE[ui.tab]; ui.setupFor = ui.pill; render(); flash("setupw"); return; }
+    if (a === "followpage") { for (const k of ks) { delete own[t][k]; } }
+    if (a === "copyall") {
+      const mine = ks.filter(k => k in own[t]);
+      for (const k of mine) { shared[k] = own[t][k]; for (const p of ALL) { delete own[p][k]; } }
+      // One end of a pair copied without the other meets the All pans other end: it stops at the pair's gap, as a slider does.
+      for (const k of mine) { const pr = PAIRS[k]; if (pr && !mine.includes(pr[0])) { shared[k] = pr[2] > 0 ? Math.max(shared[k], shared[pr[0]] + pr[1]) : Math.min(shared[k], shared[pr[0]] - pr[1]); } }
+    }
+    if (DEFAULTS_OF[a]) { for (const k of DEFAULTS_OF[a]) { put(t, k, CTL[k].d, true); } }
+    if (a === "smooth") {
+      for (const [k, v] of Object.entries(SMOOTH)) { put(t, k, v, true); }
+      // Manual levels become Auto wherever the reset reaches; Clarity, Floor and Scale stay. Under All pans with
+      // "every pan takes it" it reaches every pan, so a pan whose own chooser is on Manual becomes Auto as well.
+      if (t !== "all") { if (rd(t, "mode") === "manual") { put(t, "mode", "auto", true); } }
+      else {
+        if (shared.mode === "manual") { shared.mode = "auto"; }
+        if (rule() === "win") { for (const p of ALL) { if (own[p].mode === "manual") { own[p].mode = "auto"; } } settleRule(); }
+      }
+    }
+    // A copy writes its two ends and no value in between, in the order that keeps one end from being held back by
+    // the other's old value. An end that already matches is not written, so no pan gains or loses a value of its own.
+    if (a === "copyscale") {
+      const [lo, hi] = heldPair("low", "high", shownNum(t, "dbMin"), shownNum(t, "dbMax"));
+      if (lo <= rd(t, "high") - PAIRS.high[1]) { put(t, "low", lo); put(t, "high", hi); } else { put(t, "high", hi); put(t, "low", lo); }
+    }
+    if (a === "copywf") { const b = bands[bandOf(t)], [lo, hi] = heldPair("dbMin", "dbMax", shownNum(t, "low"), shownNum(t, "high")); b.dbMin = lo; b.dbMax = hi; }
+    if (a === "bgclear") { put(t, "bgpic", ""); }
+    if (a === "monhz") { put("all", "fps", Math.max(10, Math.min(60, Math.round(screenHz)))); }
+    if (a === "retune") { retune(t); flash(el.closest(".fly") ? "fly" : "setupw"); }
+    render();
+  }
+});
+document.addEventListener("mouseover", e => {
+  const box = $("why");
+  if (!box) { return; }
+  const w = e.target.closest(".fly [data-why]");
+  if (w) { box.textContent = w.dataset.why; box.classList.add("amber"); }
+  else { box.textContent = box.dataset.def; box.classList.remove("amber"); }
+});
+function radioChanged() {
+  PANS = openPans();
+  if (!isOpen(ui.pill)) { ui.pill = PANS.length ? PANS[0] : null; }
+  if (ui.setupFor !== "all" && ui.setupFor > maxPans()) { ui.setupFor = "all"; }
+  buildPans(); render();
+}
+$("radio").addEventListener("change", radioChanged);
+$("sit").addEventListener("change", radioChanged);
+for (const id of ["rule", "trim", "txscope"]) { $(id).addEventListener("change", () => { settleRule(); render(); }); }
+$("startover").addEventListener("click", () => { startOver(); buildPans(); render(); });
+
+// ---------- start ----------
+makePics(); $("mmcv").width = 700 * DPR; $("mmcv").height = 64 * DPR;
+startOver(); buildPans();
+// ?demo=N loads a prepared state, for still pictures of the mockup.
+const DEMOS = {
+  1: () => { own[3] = {low: -104, scheme: "Clarity Blue", mode: "manual", opacity: 85}; },
+  2: () => { own[3] = {scalemode: "track", mode: "scale"}; ui.setupFor = 3; },
+  3: () => { shared.avg = "None"; shared.fill = false; own[3] = {det: "Average", norm: true, peakhold: true}; ui.tab = "Spectrum"; ui.page = "Spectrum"; },
+  4: () => { $("sit").value = "tx"; ui.pill = 1; ui.page = "Transmit Display"; },
+  5: () => { own[3] = {view: "3d", bg: true, bgpic: "Aurora.jpg"}; ui.tab = "View"; ui.page = "View"; ui.setupFor = 3; },
+  6: () => { shared.pt = true; shared.pm = true; shared.pmHold = true; own[2] = {peakv: true, nf: true}; ui.tab = "Spectrum"; ui.page = "Peaks & Markers"; },
+  7: () => { glob.sizing = "hzbin"; ui.tab = "FFT"; ui.page = "FFT & Engine"; },
+  8: () => { $("sit").value = "off"; ui.tab = "FFT"; },
+  9: () => { ui.page = "Multimeter"; ui.tab = "Waterfall"; },
+  10: () => { $("sit").value = "tx"; ui.pill = 1; ui.setupFor = 1; },
+  11: () => { $("radio").value = "2"; startOver(); buildPans(); own[2] = {low: -104, mode: "manual"}; ui.page = "Spectrum"; ui.tab = "Spectrum"; },
+  12: () => { own[3] = {nb: true, stamp: "Left", rate: 60}; ui.tab = "Waterfall"; ui.page = "Waterfall"; ui.setupFor = 3; },
+  13: () => { own[3] = {bg: true, bgpic: "Night sky.png"}; ui.tab = "View"; ui.page = "View"; },
+  14: () => { $("sit").value = "remoteold"; ui.tab = "FFT"; ui.page = "Transmit Display"; },
+  15: () => { $("sit").value = "gpu"; own[3] = {view: "3d"}; ui.tab = "View"; ui.page = "View"; ui.setupFor = 3; },
+  16: () => { $("sit").value = "nopan"; ui.page = "Levels"; },
+  17: () => { $("sit").value = "off"; ui.tab = "Levels"; ui.page = "Levels"; },
+  18: () => { $("txscope").value = "pan"; $("sit").value = "tx"; ui.pill = 1; ui.setupFor = 1; },
+  19: () => { $("rule").value = "keep"; own[3] = {opacity: 50, nb: true}; own[1] = {opacity: 70}; ui.tab = "Waterfall"; ui.page = "Waterfall"; },
+  20: () => { own[3] = {view: "3d", peakhold: true}; ui.tab = "Spectrum"; ui.page = "Spectrum"; ui.setupFor = 3; },
+};
+const demo = new URLSearchParams(location.search).get("demo");
+if (DEMOS[demo]) { DEMOS[demo](); settleRule(); radioChanged(); }
+render();
+startLoop();
+
+// ---------- ?selftest: the page checks itself (not part of the mockup JJ uses) ----------
+// 1. Every situation, tab, page and "Settings for" choice draws without an error.
+// 2. Every row changes the picture: with the row's parents on, a different value gives a different pan or meter.
+function selfTest() {
+  if (!new URLSearchParams(location.search).has("selftest")) { return; }
+  const out = [], err = (w, e) => out.push("ERROR " + w + ": " + (e && e.stack ? e.stack.split("\n").slice(0, 3).join(" | ") : e));
+  const t0 = performance.now();
+  for (const o of [...$("sit").options]) {
+    const s = o.value;
+    $("sit").value = s; try { radioChanged(); } catch (e) { err("sit " + s, e); }
+    for (const tab of TABS) { ui.tab = tab; try { render(); } catch (e) { err(`sit ${s} tab ${tab}`, e); } }
+    for (const pg of PAGES) { for (const f of ["all", 1, 2, 3, 4]) { ui.page = pg.name; ui.setupFor = f; try { render(); } catch (e) { err(`sit ${s} page ${pg.name} for ${f}`, e); } } }
+    for (const p of PANS) { try { for (let i = 0; i < 12; i++) { simFrame(p, 33); } drawPan(p); } catch (e) { err(`sit ${s} frame pan ${p}`, e); } }
+  }
+  out.push(`sweep done in ${Math.round(performance.now() - t0)} ms`);
+  // The effect check. A context turns the parents on; the row is then changed and the pan run again from the same start.
+  const realNow = Date.now; Date.now = () => 1.7e12;
+  const P = 1; primeFrames = 0;
+  const ON = {fill: true, peakhold: true, pt: true, ptFill: true, pm: true, pmHold: true, pmDecay: true, peakv: true, nf: true, binw: true, fpsov: true, cursor: true,
+    bg: true, bgpic: "Aurora.jpg", grid: true, stamp: "Left", nb: true, rxfilt: true, txfilt: true, rxzero: true, txzero: true, zeroline: true, dbmstrip: true};
+  const CTX = {
+    plain: {},
+    on: {...ON, det: "Average", avg: "Recursive", wfavg: "Recursive", mode: "manual", dbMax: 0, dbMin: -140},
+    onpeak: {...ON, det: "Peak", avg: "None", wfavg: "Time Window", mode: "auto", scheme: "Custom", sizing: "fixed", pmIn: true},
+    track: {...ON, scalemode: "track", mode: "floor", avg: "Time Window", sizing: "hzbin", hzbin: 23.5},
+    keep: {scalemode: "track", keeprange: true, mode: "scale"},
+    clarity: {mode: "clarity", fill: false, linecolor: "#ffffff"},
+    d3: {view: "3d", shadow3d: false},
+    tx: {sit: "tx", ...ON, pt: true, ptTx: false, stoptx: false, txdet: "Average", txavg: "Recursive", txwfavg: "Recursive", txpal: "Custom"},
+    tx2: {sit: "tx", txMax: 20, txMin: -80, stoptx: true, pt: true, ptTx: true, txavg: "Time Window", txwfavg: "Time Window"},
+    // A new FFT Size at the end starts the fast attack, the only time its color is drawn.
+    fast: {nf: true, sizing: "fixed", _fft: 8192},
+    // Rewind shows once more than a minute of rows is stored.
+    long: {_frames: 2100},
+    // Thirty seconds holds several noise bursts of different strengths.
+    bursts: {nb: true, _frames: 900},
+  };
+  // Contexts that are run for their own rows only.
+  const ONLY = {fast: ["nffast"], long: ["rewind"], bursts: ["nb", "nbdb"]};
+  // Rows that draw nothing by design: Text Position is kept and not used, and Thread Priority is how this
+  // computer schedules the display thread.
+  const NO_PICTURE = ["nfpos", "threadprio"];
+  const alt = (k, v) => {
+    const c = CTL[k];
+    if (c.t === "tg") { return !v; }
+    if (c.t === "cb" || c.t === "seg") { const o = c.opts.map(x => Array.isArray(x) ? x[0] : x); return o[(o.indexOf(v) + 1) % o.length]; }
+    if (c.t === "col") { return v === "#ff00ff" ? "#00ff00" : "#ff00ff"; }
+    if (c.t === "pic") { return v === "Shack.jpg" ? "Aurora.jpg" : "Shack.jpg"; }
+    if (c.map) { return c.map[(c.map.indexOf(v) + 2) % c.map.length]; }
+    const lo = c.min, hi = c.slMax || c.max, mid = (lo + hi) / 2, want = v > mid ? lo + (hi - lo) * 0.2 : lo + (hi - lo) * 0.8;
+    return +(Math.round(want / c.step) * c.step).toFixed(2);
+  };
+  const finger = () => {
+    const cv = $("cv" + P), d = cv.getContext("2d").getImageData(0, 0, cv.width, cv.height).data; let h = 2166136261;
+    for (let i = 0; i < d.length; i += 8) { h = Math.imul(h ^ d[i], 16777619); h = Math.imul(h ^ d[i + 1], 16777619); h = Math.imul(h ^ d[i + 2], 16777619); }
+    return (h >>> 0) + "|" + (METER.val === null ? "" : meterText(METER.val)) + "|" + METER.hist.length + "|" + $("mmh").textContent + "|" + SIM[P].rows.length;
+  };
+  const setCtx = ctx => { for (const [kk, v] of Object.entries(ctx)) { if (kk !== "sit" && kk[0] !== "_") { put(P, kk, v, true); } } };
+  const run = (ctx, k, useAlt) => {
+    $("sit").value = ctx.sit || "rx"; startOver(); ui.pill = P;
+    setCtx(ctx);
+    if (k) { const v = rd(P, k); put(P, k, useAlt ? alt(k, v) : v, true); }
+    PANS = openPans(); buildPans();
+    const s = SIM[P]; s.cur = {x: 300, y: 60};
+    for (let i = 0; i < (ctx._frames || 150); i++) { simFrame(P, 33.3); meterStep(33.3); }
+    if (ctx._fft) { put(P, "fftsize", ctx._fft, true); for (let i = 0; i < 6; i++) { simFrame(P, 33.3); } }
+    s.cur = {x: 300, y: 60}; drawPan(P); drawMeter();
+    return finger();
+  };
+  const dead = [], seen = {};
+  for (const k of Object.keys(CTL)) {
+    if (NO_PICTURE.includes(k)) { continue; }
+    let hit = null;
+    for (const [name, ctx] of Object.entries(CTX)) {
+      if (ONLY[name] && !ONLY[name].includes(k)) { continue; }
+      try {
+        // A row that is gray in this context cannot be judged here.
+        $("sit").value = ctx.sit || "rx"; startOver(); setCtx(ctx);
+        if (gateOf(P, k)) { continue; }
+        const base = seen[name + "|" + k] = run(ctx, k, false), other = run(ctx, k, true);
+        if (base !== other) { hit = name; break; }
+      } catch (e) { err(`effect ${k} in ${name}`, e); }
+    }
+    if (!hit) { dead.push(k); }
+  }
+  Date.now = realNow; primeFrames = 270;
+  out.push(`rows with no effect in any context (${dead.length}): ${dead.join(", ") || "none"} (not judged, nothing to draw: ${NO_PICTURE.join(", ")})`);
+  out.push(`effect check done in ${Math.round(performance.now() - t0)} ms`);
+  $("sit").value = "rx"; startOver(); radioChanged();
+  document.body.insertAdjacentHTML("afterbegin", `<pre id="selftest">${esc(out.join("\n"))}</pre>`);
+}
+selfTest();
+</script>
+</body></html>

@@ -1,0 +1,21 @@
+WDSP — OpenHPSDR DSP library
+
+Copyright (C) 2012-2025 Warren Pratt (NR0V)
+
+WDSP is the OpenHPSDR DSP engine, distributed under GNU GPLv2-or-later.
+NereusSDR vendors WDSP sources in third_party/wdsp/ (see that
+directory's license headers for per-file copyright preservation) and
+links against it.
+
+Upstream repository:
+  https://github.com/TAPR/OpenHPSDR-wdsp
+
+The full GPLv2 text ships alongside this notice as `GPLv2.txt` and, for
+the vendored source tree, at `third_party/wdsp/COPYING`. The upstream
+canonical text is also at:
+  https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt
+
+NereusSDR distributes the combined work under GPLv3 via GPLv3 §5(b).
+
+NereusSDR WDSP provenance:  docs/attribution/WDSP-PROVENANCE.md
+Source offer:               SOURCE-OFFER.txt

@@ -1,0 +1,117 @@
+// =================================================================
+// src/core/FlexRadioDiscoveryBroadcaster.h  (NereusSDR)
+// =================================================================
+//
+// NereusSDR-original: no Thetis or AetherSDR upstream.
+// Wire format reverse-engineered from FLEX-8600 v4.2.18.41174 discovery
+// beacon captured 2026-05-19
+// (captures/flex-pgxl-tgxl-capture_00001_20260519173452.pcapng).
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-05-19 - Implemented in C++20/Qt6 for NereusSDR by J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code.
+//   2026-09-24 - R-R3-22 / R-R3-47: setSourceAddress (the Core announces
+//                 its station network address, where its 4992 listener
+//                 listens), isRunning and a no-send test mode. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-03 - Froze the beacon version= field at 0.5.2 when NereusSDR
+//                 moved to calendar versions. J.J. Boyd (KG4VCF), with
+//                 AI-assisted transformation via OpenAI Codex.
+// =================================================================
+
+#pragma once
+
+#include <QObject>
+#include <QUdpSocket>
+#include <QTimer>
+#include <QString>
+#include <QByteArray>
+#include <QHostAddress>
+
+namespace NereusSDR {
+
+// Broadcasts a SmartSDR-format discovery beacon on UDP 4992 so that
+// FlexRadio-aware accessories (PGXL, TGXL) auto-discover NereusSDR
+// in their UI. Wire format reverse-engineered from a FLEX-8600 capture
+// 2026-05-19 (captures/flex-pgxl-tgxl-capture_00001_20260519173452.pcapng).
+//
+// Beacon = 28-byte VITA-49-style header + ASCII key=value payload,
+// emitted once per second to 255.255.255.255:4992.
+//
+// Owned by RadioModel; starts when start() is called and stops on stop().
+class FlexRadioDiscoveryBroadcaster : public QObject {
+    Q_OBJECT
+public:
+    static constexpr char kFrozenBeaconVersion[] = "0.5.2";
+
+    explicit FlexRadioDiscoveryBroadcaster(QObject* parent = nullptr);
+
+    // Configurable fields. Setters update the next emitted beacon.
+    void setSerial(const QString& serial);           // 16-digit dashed
+    void setNickname(const QString& nickname);
+    void setCallsign(const QString& callsign);
+    // For tests and explicit overrides; the default is kFrozenBeaconVersion.
+    void setVersion(const QString& version);
+    void setMacAddress(const QString& macColonForm); // "aa:bb:cc:dd:ee:ff"
+    void setModel(const QString& model);             // e.g. "FLEX-6400" (Flex model string for PGXL validation)
+
+    // Optional route-lookup hint. When set, detectLanIpv4() probes this peer
+    // address via a connected UDP socket to find the kernel-chosen local
+    // source IP, instead of using the default-route fallback (8.8.8.8). Useful
+    // when the PGXL/TGXL subnet is reached via a non-default route. No packet
+    // is ever sent to the hint address; UDP connect is a local-only operation.
+    void setPeerHint(const QHostAddress& peer) { m_peerHint = peer; }
+
+    // R-R3-22 / R-R3-47: the address the beacon announces and sends from,
+    // chosen by the caller. The Core sets its station network address so an
+    // amplifier connects where the Core's 4992 listener listens; null (a
+    // desktop window) keeps the route lookup above.
+    void setSourceAddress(const QHostAddress& source) { m_sourceAddress = source; }
+    // The address the beacon announces (ip=) when it starts.
+    QString advertisedAddress() const { return detectLanIpv4(); }
+
+    // Lifecycle
+    void start();  // begins 1 Hz emission; safe to call repeatedly
+    void stop();   // stops emission; safe to call repeatedly
+    bool isRunning() const { return m_timer.isActive() || m_runningForTest; }
+
+    // Test-only: start() and stop() only record whether the beacon runs;
+    // nothing is bound and no packet leaves the machine.
+    void setNoSendForTesting(bool noSend) { m_noSendForTest = noSend; }
+
+    // Test-only: build the full packet bytes (header + ASCII payload) for a
+    // given sequence count and timestamp without actually sending. Lets unit
+    // tests verify the binary layout deterministically.
+    QByteArray buildBeaconForTesting(quint8 packetCount,
+                                     quint32 unixSeconds) const;
+
+private slots:
+    void onTick();
+
+private:
+    QByteArray buildBeacon(quint8 packetCount, quint32 unixSeconds) const;
+    QString    detectLanIpv4() const; // first non-loopback IPv4 host address
+    QHostAddress computeBroadcastAddress() const; // subnet broadcast for m_ip
+
+    QUdpSocket m_socket;
+    QTimer     m_timer;
+    quint8     m_packetCount{0}; // rolling 0..15 in word 0 bits 19-16
+
+    // Static-ish fields (set once at start, updated by setters)
+    QString m_serial;
+    QString m_nickname;
+    QString m_callsign;
+    QString m_version;
+    QString m_model;  // e.g. "FLEX-6400" (model= field in discovery beacon)
+    QString m_mac;  // dashed uppercase form for radio_license_id
+    QString m_ip;
+    QHostAddress m_broadcastAddress; // subnet broadcast for the LAN interface
+    QHostAddress m_sourceAddress;    // caller-chosen source (the Core's station address)
+    bool         m_noSendForTest{false};
+    bool         m_runningForTest{false};
+    QHostAddress m_peerHint;         // optional route-lookup hint; default-route probe if null
+};
+
+}  // namespace NereusSDR

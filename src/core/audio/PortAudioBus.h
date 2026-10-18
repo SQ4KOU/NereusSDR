@@ -1,0 +1,405 @@
+// =================================================================
+// src/core/audio/PortAudioBus.h  (NereusSDR)
+// =================================================================
+//
+// Phase 3O VAX cross-platform IAudioBus backend built on PortAudio
+// v19.7.0. NereusSDR-original.
+//
+// Design spec: docs/architecture/2026-04-19-vax-design.md §3.2
+// Plan:        docs/architecture/2026-04-19-phase3o-vax-plan.md (3.2–3.4)
+//
+// Supports both render (Output) and capture (Input) modes via
+// PortAudioConfig::direction. Output: push() takes the 48 kHz stereo float
+// mix into a DeviceRateMatcher (the clock matcher, R-AUD-15), and the
+// audio callback reads it and writes the device's own channels. Input: the
+// audio callback captures from the device into the ring, pull() drains it.
+// Host-API / device enumeration helpers are available statically
+// (Task 3.3).
+//
+// Modification history (NereusSDR):
+//   2026-09-22: strict named-input resolution, open-failure stage and
+//               opened-device accessors for the nereus-audio-capture
+//               helper (R-R3-36). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-22: strict resolution accepts exact names only
+//               (matchNamedDevice), R-R3-36 fix wave. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23: R-R3-23 outputRingSamples(): an output stream's ring holds
+//               at least 100 ms at its own rate and channel count, so a
+//               remote window can play on a 176.4 to 384 kHz speaker.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-08: native audio plan Task 1 (V-HW-8): an optional input-block
+//               hook for the audio delay probe's detector, with each
+//               block's capture time. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-10-09: native audio plan Task 6 (R-AUD-15): an output's ring is a
+//               DeviceRateMatcher fed 48 kHz stereo (takesStereoMix), read
+//               by the callback and written in the device's channels;
+//               delayParts, matcherStats and restartClockMatch.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-09: native audio plan Task 7 (R-AUD-06): matchNamedDevice
+//               stays on the saved host API (bug 1); requestFadeOut and
+//               fadedOut for Rescan. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-10-09: native audio plan Task 7 fix (R-AUD-06): every PortAudio
+//               call outside the callback holds PortAudioLibrary's lock,
+//               and an open stream is counted. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-10: setClockMatchWritePacket(): a writer of whole packets
+//               (remote playback) tells the bus's clock matcher its packet
+//               (R-AUD-15, bench regression). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-12: setClockMatchWritePacket() takes the packet's timing
+//               (MatcherPacketTiming: its wait for room, its arrival, its
+//               place in the stream), where it said only whether it had
+//               waited, for the matcher's clock fit and its
+//               standing-backlog rule (R-AUD-15). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+// =================================================================
+
+#pragma once
+
+#include "core/IAudioBus.h"
+#include "core/audio/DeviceRateMatcher.h"
+
+#include <algorithm>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+#include <QVector>
+
+namespace NereusSDR { class Resampler; }
+
+// Forward declarations so consumers of this header don't have to drag
+// in <portaudio.h>. The concrete type is typedef'd the same way by
+// PortAudio itself (`typedef void PaStream`).
+typedef void PaStream;
+struct PaDeviceInfo;
+struct PaStreamCallbackTimeInfo;
+class TstPortAudioBus;
+
+namespace NereusSDR {
+
+enum class AudioDirection { Output, Input };
+
+struct PortAudioConfig {
+    AudioDirection direction = AudioDirection::Output;  // Output = render; Input = capture
+    int     hostApiIndex  = -1;     // -1 = PortAudio default
+    QString deviceName;             // empty = default
+    // 128 frames @ 48 kHz = 2.67 ms per callback. On macOS this maps
+    // to a CoreAudio HAL output latency of ~10-12 ms (CoreAudio
+    // queues ~4 buffers).  Was 256 (22 ms PA latency); reduced to
+    // shave ~11 ms off the end-to-end RX path now that the upstream
+    // jitter (main-thread I/Q dispatch) has been fixed by Lever 2.
+    // 128 is still well above any sensible Apple Silicon minimum and
+    // doubles callback rate vs. 256, but Apple's audio I/O thread is
+    // RT-prio and trivially handles this.  If a slower platform
+    // shows stress here, the call site can override via setConfig().
+    int     bufferSamples = 128;
+    bool    exclusiveMode = false;  // WASAPI only
+};
+
+class PortAudioBus : public IAudioBus {
+public:
+    PortAudioBus();
+    ~PortAudioBus() override;
+
+    // Call before open(). m_cfg is read on the main thread in open() only.
+    void setConfig(const PortAudioConfig& cfg);
+
+    // When set before open(), a missing named input device fails open()
+    // with errorString() starting "device-not-found:" instead of falling
+    // back to a default device.  Only input opens are affected; an empty
+    // deviceName still resolves the platform default.  Off by default, so
+    // every existing caller keeps the fallback.  Used by the
+    // nereus-audio-capture helper (R-R3-36).
+    void setStrictInputDevice(bool strict) { m_strictInputDevice = strict; }
+
+    // Optional observer of every capture callback block, for the audio
+    // delay probe (V-HW-8).  Runs on the PortAudio audio thread: it must
+    // not lock, allocate or make a Qt call.  `interleaved` is the device's
+    // own block (native rate, stream channel count) before any resampling;
+    // captureNsOfFrame0 is audioProbeCaptureNs() on the steady clock.
+    class InputBlockHook {
+    public:
+        virtual ~InputBlockHook() = default;
+        virtual void onInputBlock(const float* interleaved, int frames, int channels,
+                                  int sampleRate, std::int64_t captureNsOfFrame0) = 0;
+    };
+    // Input streams only; nullptr removes it.  The hook must outlive the
+    // open stream (close() joins the callback).
+    void setInputBlockHook(InputBlockHook* hook) {
+        m_inputHook.store(hook, std::memory_order_release);
+    }
+
+    // Which step of the last open() failed; None after a successful open.
+    enum class OpenFailure { None, DeviceNotFound, OpenFailed, StartFailed };
+    OpenFailure lastOpenFailure() const { return m_openFailure; }
+
+    // Describe the stream the last successful open() actually opened:
+    // the resolved device's name, the rate the stream runs at on the
+    // device (before resampling) and its channel count.  Empty / 0 while
+    // closed.
+    QString openedDeviceName() const { return m_openedDeviceName; }
+    int     openedNativeRate() const { return m_stream ? m_nativeSampleRate : 0; }
+    int     openedStreamChannels() const;
+
+    struct HostApiInfo {
+        int     index;
+        QString name;
+    };
+    struct DeviceInfo {
+        int     index;
+        QString name;
+        int     maxOutputChannels;
+        int     maxInputChannels;
+        int     defaultSampleRate;
+        int     hostApiIndex;
+    };
+
+    // Enumeration helpers require Pa_Initialize() to have been called
+    // (owned by the application lifecycle, not this class). In a test run
+    // (portAudioBarredForTestRun) they return empty lists and make no
+    // PortAudio call.
+    static QVector<HostApiInfo> hostApis();
+    static QVector<DeviceInfo>  outputDevicesFor(int hostApiIndex);
+    static QVector<DeviceInfo>  inputDevicesFor(int hostApiIndex);
+
+    // R-R3-21: true in a test run (QStandardPaths test mode, which every
+    // test binary enables before main, the same decision AudioEngine's
+    // makeBus uses to open no real device). A test run then never
+    // initialises PortAudio: AudioEngine skips Pa_Initialize and
+    // Pa_Terminate, and the enumeration helpers above answer empty lists.
+    // Always false in a build without NEREUS_BUILD_TESTS.
+    static bool portAudioBarredForTestRun();
+#ifdef NEREUS_BUILD_TESTS
+    // Lets one test use the PortAudio library itself (its lock and Rescan
+    // under load); that test opens no stream.  No other engine is let in.
+    static void allowPortAudioLibraryForTest(bool allowed);
+#endif
+
+    bool open(const AudioFormat& format) override;
+    void close() override;
+    bool isOpen() const override { return m_stream != nullptr; }
+
+    // Output: `data` is interleaved 48 kHz stereo float (takesStereoMix),
+    // written into the clock matcher whatever the device's rate and
+    // channel count. Input: unused (returns 0).
+    qint64 push(const char* data, qint64 bytes) override;
+    qint64 pull(char* data, qint64 maxBytes) override;
+    void   flush() override;
+    std::optional<OutputPacing> outputPacing() const override;
+
+    // R-AUD-15: an output stream holds a DeviceRateMatcher; an input
+    // stream keeps its ring and reports none of these.
+    bool takesStereoMix() const override { return m_cfg.direction == AudioDirection::Output; }
+    AudioDelayParts delayParts() const override;
+    std::optional<DeviceRateMatcherStats> matcherStats() const override;
+    void restartClockMatch() override;
+    void setClockMatchWritePacket(int frames, const MatcherPacketTiming& timing) override;
+    // R-AUD-06: the output's matcher reader slews to silence (Rescan).
+    void requestFadeOut() override;
+    bool fadedOut() const override;
+
+    float rxLevel() const override { return m_rxLevel.load(std::memory_order_acquire); }
+    float txLevel() const override { return m_txLevel.load(std::memory_order_acquire); }
+
+    QString     backendName() const override { return m_backendName; }
+    AudioFormat negotiatedFormat() const override { return m_negFormat; }
+    QString     errorString() const override { return m_err; }
+
+    // Diagnostics.  R-AUD-15: an output's overruns and dry runs are the
+    // clock matcher's (matcherStats()); these counters stay for the input
+    // ring and for callers that read them, and an output no longer moves
+    // them.  Reset by clearDropStats().  Loaded with relaxed semantics;
+    // observational only and not safety-critical.
+    quint32 ringOverrunEvents() const {
+        return m_dropEvents.load(std::memory_order_relaxed);
+    }
+    quint64 ringOverrunSamples() const {
+        return m_dropSamples.load(std::memory_order_relaxed);
+    }
+    quint32 ringUnderrunEvents() const {
+        return m_underrunEvents.load(std::memory_order_relaxed);
+    }
+    /// Capture frames discarded because a callback block exceeded the
+    /// preallocated downmix scratch.  Expected to stay 0; non-zero
+    /// means the host API is handing us blocks larger than the
+    /// configured buffer size and the mic path is losing audio.
+    quint64 downmixDroppedFrames() const {
+        return m_downmixDroppedFrames.load(std::memory_order_relaxed);
+    }
+    void clearDropStats() {
+        m_dropEvents.store(0, std::memory_order_relaxed);
+        m_dropSamples.store(0, std::memory_order_relaxed);
+        m_underrunEvents.store(0, std::memory_order_relaxed);
+    }
+
+    // ---- Capture-path helpers (pure; unit-tested directly) ----
+    //
+    // Both exist so the native-rate resampling path in paCallback is
+    // testable without a physical device whose native rate differs
+    // from the requested one.  Codex review, PR #291.
+
+    /// Channel count we REPORT through negotiatedFormat() for a capture
+    /// stream.  When the resampler is engaged the callback downmixes to
+    /// mono before pushing to the ring, so the ring holds one float per
+    /// output frame regardless of how many channels the device delivers.
+    /// AudioEngine::pullTxMic() strides by negotiatedFormat().channels,
+    /// so reporting the device's channel count here would make it read
+    /// two samples per frame out of a mono ring -- half-rate, choppy
+    /// TX audio.  Report mono whenever we are downmixing.
+    static int reportedCaptureChannels(int streamChannels, bool resampling) {
+        if (streamChannels < 1) { return 1; }
+        return resampling ? 1 : streamChannels;
+    }
+
+    /// Average `channels` interleaved floats per frame down to mono.
+    /// Writes at most `outCapacity` samples and returns the count
+    /// written, so a caller in a real-time callback can never overrun
+    /// its preallocated scratch.  channels <= 1 is a straight copy.
+    static int downmixToMono(const float* interleaved, int frames,
+                             int channels, float* out, int outCapacity);
+
+    /// Floats in an input stream's ring: 100 ms of 48 kHz stereo.  An
+    /// output stream has no ring of its own: its DeviceRateMatcher holds
+    /// the queue (R-AUD-15).
+    static constexpr std::size_t kDefaultRingSamples = 4800 * 2;
+
+    /// Frames the output callback reads from the matcher and converts per
+    /// step; a larger device block is done in steps of this.
+    static constexpr int kOutputChunkFrames = 512;
+
+    /// One direction-valid device offered to matchNamedDevice().
+    struct NamedDeviceCandidate {
+        QString name;
+        int     hostApi;
+    };
+
+    /// Which of `candidates` a configured device name resolves to, or -1.
+    /// Order: exact on the configured host API (any API when hostApiIndex
+    /// is negative), then substring on it; case-insensitive, `wanted`
+    /// trimmed.  A device on another host API is never matched: a saved
+    /// "Windows WASAPI" name that only exists under MME does not open on
+    /// MME (native audio plan bug 1).  With `strict` only the exact step
+    /// applies: a missing "USB Mic" must not open "USB Mic 2" (the
+    /// capture helper's no-silent-switch rule, R-R3-36).
+    static int matchNamedDevice(const QVector<NamedDeviceCandidate>& candidates,
+                                const QString& wanted, int hostApiIndex, bool strict);
+
+private:
+    friend class ::TstPortAudioBus;
+
+    // R-AUD-15: builds the output's clock matcher (48 kHz in, the device's
+    // rate out), its reader and the callback's scratch, for a stream of
+    // `deviceChannels` at `deviceRate`.  Main thread, before the stream
+    // starts.  False when the matcher cannot run at that rate.
+    bool prepareOutputMatcher(int deviceRate, int deviceChannels);
+    void releaseOutputMatcher();
+    int outputCallbackFramesNow() const;
+
+    PaStream*       m_stream{nullptr};
+    bool            m_streamCounted{false};   // counted in PortAudioLibrary::openStreams()
+    PortAudioConfig m_cfg;
+    AudioFormat     m_negFormat;
+    QString         m_backendName;
+    QString         m_err;
+    bool            m_strictInputDevice{false};
+    OpenFailure     m_openFailure{OpenFailure::None};
+    QString         m_openedDeviceName;
+
+    // macOS mic-input quality fix (2026-05-26):
+    // When the device's native sample rate differs from the requested
+    // 48 kHz, we open the PortAudio stream at the device's native rate
+    // so CoreAudio's AUHAL sample-rate converter is bypassed entirely
+    // (under load that converter delivers bursty / sub-rate samples,
+    // which manifests as audible "digital jitter" on TX).  paCallback
+    // then runs the captured native-rate frames through this r8brain
+    // resampler before pushing to the ring.  Downstream consumers
+    // continue to see the negotiated rate (m_negFormat.sampleRate),
+    // not the actual hardware rate.  m_resampleScratch is sized for
+    // the worst-case per-callback output count and reused between
+    // callbacks (no per-call allocation).
+    //
+    // All four members below are read by paCallback on the PortAudio
+    // audio thread, so open() must finish writing them BEFORE it calls
+    // Pa_StartStream() -- the callback can fire the instant the stream
+    // starts (Codex review, PR #291).
+    int                                  m_nativeSampleRate{0};
+    std::unique_ptr<NereusSDR::Resampler> m_inputResampler;
+    std::vector<float>                   m_resampleScratch;
+
+    // Actual channel count of the open capture stream.  Distinct from
+    // m_negFormat.channels, which reports 1 while the resampler is
+    // engaged because the callback downmixes before it hits the ring
+    // (see reportedCaptureChannels above).  paCallback needs the real
+    // stream layout to deinterleave.
+    int                m_inputStreamChannels{0};
+
+    // Preallocated downmix destination, sized from m_cfg.bufferSamples
+    // in open().  Replaces a fixed 1024-float stack array that silently
+    // discarded every frame past 1024 when the operator selected a
+    // buffer size above that (the UI offers 2048).
+    std::vector<float> m_monoScratch;
+
+    // Frames the capture callback had to discard because they exceeded
+    // m_monoScratch's capacity.  Should stay 0 -- PortAudio is opened
+    // with a fixed framesPerBuffer -- but a host API that hands us a
+    // larger block must be visible rather than silently truncating.
+    std::atomic<quint64> m_downmixDroppedFrames{0};
+
+    // Input ring for pull(). SPSC, lock-free via std::atomic: the audio
+    // callback writes, pull() (caller thread) reads.
+    std::vector<float>  m_ring;
+    std::atomic<qint64> m_ringRead{0};
+    std::atomic<qint64> m_ringWrite{0};
+
+    // R-AUD-15: the output's clock matcher.  push() (the DSP thread, or a
+    // remote receiver's worker) is its writer; the callback reads it with
+    // m_outputReader into m_outputScratch (kOutputChunkFrames stereo
+    // frames) and writes the device's m_outputDeviceChannels.  Built by
+    // open() before the stream starts and released by close() after it
+    // stops, so the callback never sees them change.
+    std::unique_ptr<DeviceRateMatcher> m_outputMatcher;
+    MatcherReader m_outputReader;
+    std::vector<float> m_outputScratch;
+    int m_outputDeviceChannels{0};
+    int m_outputDeviceRate{0};
+    std::size_t m_outputMatcherBytes{0};
+    std::atomic<int> m_outputCallbackFrames{0};
+    // R-R3-35: the open output stream's latency as PortAudio reports it
+    // (Pa_GetStreamInfo outputLatency), in ns; -1 when unknown or closed.
+    std::atomic<qint64> m_outputLatencyNs{-1};
+    // V-HW-8: the open input stream's latency (Pa_GetStreamInfo
+    // inputLatency) in ns, published before the stream starts; -1 unknown.
+    std::atomic<qint64> m_inputLatencyNs{-1};
+    std::atomic<InputBlockHook*> m_inputHook{nullptr};
+
+    std::atomic<float> m_rxLevel{0.0f};
+    std::atomic<float> m_txLevel{0.0f};
+
+    // Drop and underrun accounting (see ringOverrunEvents above).
+    std::atomic<quint32> m_dropEvents{0};
+    std::atomic<quint64> m_dropSamples{0};
+    std::atomic<quint32> m_underrunEvents{0};
+
+    // PortAudio backend-reported anomalies via the callback's flags
+    // parameter.  paOutputUnderflow = the OS audio device ran out of
+    // samples; paOutputOverflow = data we supplied was discarded.
+    // Distinct from m_underrunEvents (our ring-side check) — these
+    // come from the OS/CoreAudio layer regardless of what our ring
+    // looks like.
+    std::atomic<quint32> m_paOutputUnderflowEvents{0};
+    std::atomic<quint32> m_paOutputOverflowEvents{0};
+
+    static int paCallback(const void* in, void* out,
+                          unsigned long frames,
+                          const PaStreamCallbackTimeInfo* timeInfo,
+                          unsigned long flags,
+                          void* userData);
+};
+
+} // namespace NereusSDR

@@ -1,0 +1,8 @@
+# actionlint settings for .github/workflows.
+self-hosted-runner:
+  # Runner labels actionlint does not know:
+  #   nereus-linux  the self-hosted Linux runners (ci.yml, linux-box job);
+  #   xcode-27      GitHub's hosted Xcode 27 image (ios.yml, app job).
+  labels:
+    - nereus-linux
+    - xcode-27

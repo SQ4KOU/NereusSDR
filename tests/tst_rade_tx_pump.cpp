@@ -1,0 +1,782 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// no-port-check: NereusSDR-original unit-test file.
+// =================================================================
+// tests/tst_rade_tx_pump.cpp  (NereusSDR)
+// =================================================================
+//
+// Unit tests for the RADE TX end-to-end wiring (Phase 3R K-bench):
+//
+//   1. setRadeChannel stores the pointer and clears on null.
+//   2. tickForTest with TxPath::Rade emits radeMicBlockReady with
+//      a non-empty payload after enough mic frames have been pushed
+//      through the 48 kHz -> 80 Hz HPF -> 48 -> 16 kHz r8brain path
+//      to clear the resampler warm-up.
+//   3. The TX pump's RADE branch does NOT call sendTxIq on the
+//      MockConnection (RADE bypasses the WDSP TXA chain entirely).
+//   4. RadioModel's txModemReady receiver routes the encoded
+//      baseband through 24 -> txSampleRate upsample into
+//      RadioConnection::sendTxIq with at least one non-zero call.
+//   5. Selected PC mic with unavailable capture emits only silent RADE
+//      encoder input even when the radio mic block is loud.
+//
+// =================================================================
+//
+// Modification history (NereusSDR):
+//   2026-05-11  J.J. Boyd / KG4VCF  Phase 3R K-bench follow-up:
+//                 initial test file. NereusSDR-native. Pins the
+//                 contracts the K2-K4 scaffolding deferred until
+//                 the RADE TX pump was fully wired. AI tooling:
+//                 Anthropic Claude Code.
+//   2026-09-22  J.J. Boyd / KG4VCF  R-R3-36 prerequisite: add a
+//                 selected-PC/unavailable-capture regression proving the
+//                 RADE encoder never receives radio-mic fallback. AI tooling:
+//                 OpenAI Codex.
+//   2026-09-30  J.J. Boyd / KG4VCF  RADE threads review: the RADE branch
+//                 hands the microphone to the encoder only while keyed
+//                 (setRadeMicKeyed, set and cleared at RadioModel's MOX
+//                 edges). AI tooling: Anthropic Claude Code.
+// =================================================================
+
+#include <QtTest/QtTest>
+#include <QObject>
+#include <QSignalSpy>
+
+#include <atomic>
+#include <cmath>
+#include <memory>
+#include <cstring>
+#include <vector>
+
+#include "core/AudioEngine.h"
+#include "core/MoxController.h"
+#include "core/RadeChannel.h"
+#include "core/RadioConnection.h"
+#include "core/TxChannel.h"
+#include "core/TxWorkerThread.h"
+#include "core/audio/TxMicSource.h"
+#include "core/session/media/RemoteMicReceiver.h"
+#include "models/RadioModel.h"
+#include "models/RadeWaveformModel.h"
+#include "fakes/FakeAudioBus.h"
+#include "models/SliceModel.h"
+
+using namespace NereusSDR;
+
+namespace {
+
+// MockConnection is duplicated from tst_tx_worker_thread.cpp; we keep
+// it local rather than promoting to a shared header so the test file
+// stays self-contained.
+class MockConnection : public RadioConnection {
+    Q_OBJECT
+public:
+    explicit MockConnection(QObject* parent = nullptr)
+        : RadioConnection(parent)
+    {
+        setState(ConnectionState::Connected);
+    }
+    void init() override {}
+    void connectToRadio(const NereusSDR::RadioInfo&) override {}
+    void disconnect() override {}
+    void setReceiverFrequency(int, quint64) override {}
+    void setTxFrequency(quint64) override {}
+    void setActiveReceiverCount(int) override {}
+    void setSampleRate(int) override {}
+    void setAttenuator(int) override {}
+    void setPreamp(bool) override {}
+    void setTxDrive(int) override {}
+    void setWatchdogEnabled(bool) override {}
+    void setAntennaRouting(AntennaRouting) override {}
+    void setMox(bool) override {}
+    void setTrxRelay(bool) override {}
+    void setMicBoost(bool) override {}
+    void setLineIn(bool) override {}
+    void setMicTipRing(bool) override {}
+    void setMicBias(bool) override {}
+    void setLineInGain(int) override {}
+    void setUserDigOut(quint8) override {}
+    void setPuresignalRun(bool) override {}
+    void setMicPTTDisabled(bool) override {}
+    void setMicXlr(bool) override {}
+
+    void sendTxIq(const float* iq, int n) override
+    {
+        callCount.fetch_add(1, std::memory_order_relaxed);
+        lastN.store(n, std::memory_order_relaxed);
+        if (iq != nullptr && n > 0) {
+            // Record sum-of-magnitudes so a non-zero burst is detectable
+            // without keeping a per-call buffer (atomic float math is
+            // simpler than QVector across threads).
+            float mag = 0.0f;
+            for (int k = 0; k < n * 2; ++k) {
+                mag += std::abs(iq[k]);
+            }
+            int32_t bits = 0;
+            std::memcpy(&bits, &mag, sizeof(int32_t));
+            magnitudeBits.fetch_add(static_cast<int32_t>(bits),
+                                    std::memory_order_relaxed);
+        }
+    }
+
+    std::atomic<int> callCount{0};
+    std::atomic<int> lastN{0};
+    std::atomic<int32_t> magnitudeBits{0};
+};
+
+}  // namespace
+
+class TstRadeTxPump : public QObject {
+    Q_OBJECT
+
+    static constexpr int kChannelId = 1;
+    static constexpr int kBlockFrames = TxWorkerThread::kBlockFrames;
+
+private slots:
+
+    void decodedIdentityRetiresSameChannelReceiverRoundTripsAndEpochChanges()
+    {
+        RadioModel model;
+        const int id = model.addSlice();
+        SliceModel* const slice = model.sliceById(id);
+        QVERIFY(slice);
+        slice->setStreamIndex(0);
+        slice->setStreamEpoch(4);
+        RadeChannel channel;
+        model.wireRadeChannel(id, &channel, slice);
+        RadeWaveformModel* const waveforms = model.radeWaveformModel();
+        const auto generation = [&] {
+            return waveforms->endpointState(id, WaveformKind::DecodedSpeech).sourceGeneration;
+        };
+        const quint64 first = generation();
+        QVERIFY(first != 0);
+        slice->setStreamIndex(1);
+        slice->setStreamIndex(0);
+        model.synchronizeWaveformEndpoints();
+        QVERIFY(generation() != first);
+        const quint64 returned = generation();
+        slice->setStreamEpoch(5);
+        model.synchronizeWaveformEndpoints();
+        QVERIFY(generation() != returned);
+    }
+    void waveformIdentityRemembersSourceRoundTripsBetweenGuiTicks()
+    {
+        RadioModel model;
+        const int slice = model.addSlice();
+        TxChannel channel(kChannelId, kBlockFrames, kBlockFrames);
+        TxMicSource source;
+        source.start();
+        AudioEngine* const engine = model.audioEngine();
+        auto vax = std::make_unique<FakeAudioBus>();
+        FakeAudioBus* const fakeVax = vax.get();
+        QVERIFY(vax->open(AudioFormat{}));
+        engine->setVaxTxBusForTest(std::move(vax));
+        engine->onMicSourceChangedVax(true);
+        auto owned = std::make_unique<TxWorkerThread>();
+        TxWorkerThread* const worker = owned.get();
+        worker->setTxChannel(&channel);
+        worker->setMicSource(&source);
+        worker->setAudioEngine(engine);
+        model.installTxWorkerForTest(std::move(owned));
+        std::array<float, kBlockFrames> pcm{};
+        const auto tick = [&] {
+            source.inbound(pcm.data(), kBlockFrames);
+            worker->tickForTest();
+        };
+        fakeVax->setForceOpen(false);
+        tick();
+        model.synchronizeWaveformEndpoints();
+        RadeWaveformModel* const waveforms = model.radeWaveformModel();
+        const quint64 before = waveforms->endpointState(slice, WaveformKind::RawMicrophone).sourceGeneration;
+        fakeVax->setForceOpen(true);
+        tick();
+        fakeVax->setForceOpen(false);
+        tick();
+        QCOMPARE(worker->microphoneWaveformSource(), 1);
+        model.synchronizeWaveformEndpoints();
+        QVERIFY(waveforms->endpointState(slice, WaveformKind::RawMicrophone).sourceGeneration != before);
+    }
+    void pcCaptureAndConfigurationReplacementRetireTheSameCategory()
+    {
+        RadioModel model;
+        const int slice = model.addSlice();
+        model.installTxWorkerForTest(std::make_unique<TxWorkerThread>());
+        model.transmitModel().setMicSource(MicSource::Pc);
+        RadeWaveformModel* const waveforms = model.radeWaveformModel();
+        const auto generation = [&] {
+            return waveforms->endpointState(slice, WaveformKind::RawMicrophone).sourceGeneration;
+        };
+        const quint64 before = generation();
+        CaptureSupervisor::Status status;
+        status.generation = 7;
+        status.configuredDevice = "configured";
+        status.actualDevice = "first";
+        emit model.audioEngine()->captureStatusChanged(status);
+        QVERIFY(generation() != before);
+        const quint64 first = generation();
+        emit model.audioEngine()->captureStatusChanged(status);
+        QCOMPARE(generation(), first);
+        status.actualDevice = "replacement";
+        emit model.audioEngine()->captureStatusChanged(status);
+        QVERIFY(generation() != first);
+        const quint64 replaced = generation();
+        AudioDeviceConfig config = model.audioEngine()->txInputConfig();
+        config.deviceName = "another configured device";
+        model.audioEngine()->setTxInputConfig(config);
+        QVERIFY(generation() != replaced);
+    }
+    void remoteMicrophonePhysicalIdentityTracksLiveLines()
+    {
+        RadioModel model;
+        const int sliceId = model.addSlice();
+        QVERIFY(model.txBoundSlice());
+        model.installTxWorkerForTest(std::make_unique<TxWorkerThread>());
+        RadeWaveformModel* const waveforms = model.radeWaveformModel();
+        const QByteArray first("device-first");
+        const QByteArray second("device-second");
+        model.openRemoteMicLine(first);
+        model.setRemoteMicPriming(first, true);
+        QCOMPARE(model.remoteMicWriter(), first);
+        const quint64 firstGeneration =
+            waveforms->endpointState(sliceId, WaveformKind::RawMicrophone).sourceGeneration;
+        QVERIFY(firstGeneration != 0);
+        model.openRemoteMicLine(first);
+        model.closeRemoteMicLine(first);
+        QCOMPARE(waveforms->endpointState(sliceId, WaveformKind::RawMicrophone).sourceGeneration,
+                 firstGeneration);
+        model.openRemoteMicLine(second);
+        model.setRemoteMicPriming(second, true);
+        QCOMPARE(model.remoteMicWriter(), second);
+        const quint64 secondGeneration =
+            waveforms->endpointState(sliceId, WaveformKind::RawMicrophone).sourceGeneration;
+        QVERIFY(secondGeneration != firstGeneration);
+        model.setRemoteMicPriming(second, false);
+        model.closeRemoteMicLine(second);
+        model.setRemoteMicPriming(first, true);
+        const quint64 returnedGeneration =
+            waveforms->endpointState(sliceId, WaveformKind::RawMicrophone).sourceGeneration;
+        QVERIFY(returnedGeneration != firstGeneration);
+        model.closeRemoteMicLine(first);
+        model.openRemoteMicLine(first);
+        model.setRemoteMicPriming(first, true);
+        QVERIFY(waveforms->endpointState(sliceId, WaveformKind::RawMicrophone).sourceGeneration !=
+                returnedGeneration);
+        model.setRemoteMicPriming(first, false);
+        model.closeRemoteMicLine(first);
+        QVERIFY(!waveforms->endpointState(sliceId, WaveformKind::RawMicrophone).available);
+    }
+
+    void remoteMicObservationRequiresRealFrames()
+    {
+        TxChannel channel(kChannelId, kBlockFrames, kBlockFrames);
+        TxMicSource source;
+        source.start();
+        RemoteMicFeed feed;
+        feed.setInUse(true);
+        TxWorkerThread worker;
+        worker.setTxChannel(&channel);
+        worker.setMicSource(&source);
+        worker.setRemoteMicFeed(&feed);
+        worker.setCurrentTxPath(TxWorkerThread::TxPath::Rade);
+        worker.rawWaveformPublisher()->setBindingToken(7);
+        worker.conditionedWaveformPublisher()->setBindingToken(8);
+        QSignalSpy raw(worker.rawWaveformPublisher(), &WaveformPublisher::batchReady),
+            conditioned(worker.conditionedWaveformPublisher(), &WaveformPublisher::batchReady);
+        std::array<float, kBlockFrames> radio;
+        radio.fill(.6f);
+        source.inbound(radio.data(), kBlockFrames);
+        worker.tickForTest();
+        QCOMPARE(raw.size(), 0);
+        std::vector<float> realSilence(RemoteMicConfig::kOpusFrameSamples, 0.f);
+        for (int i = 0; i < 4; ++i) {
+            QVERIFY(feed.write(realSilence.data(), int(realSilence.size())));
+        }
+        // Keep genuine received PCM flowing through the same 500-dispatch
+        // resampler warmup used by the encoder byte-invariance fixture.
+        for (int i = 0; i < 500; ++i) {
+            if (i % 15 == 0) {
+                QVERIFY(feed.write(realSilence.data(), int(realSilence.size())));
+            }
+            source.inbound(radio.data(), kBlockFrames);
+            worker.tickForTest();
+        }
+        QVERIFY(!raw.isEmpty());
+        const auto batch = qvariant_cast<WaveformBatchPtr>(raw.first()[0]);
+        QCOMPARE(batch->sampleRate, 48000);
+        QVERIFY(
+            std::all_of(batch->samples.begin(), batch->samples.end(), [](float value) { return value == 0.f; }));
+        QVERIFY(!conditioned.isEmpty());
+    }
+    void observationPreservesEncoderBytesAndReportsRawSetup()
+    {
+        auto run = [](bool observe, bool rade, QVector<QByteArray>& codec) {
+            TxChannel ch(kChannelId, kBlockFrames, kBlockFrames);
+            TxMicSource source;
+            source.start();
+            TxWorkerThread worker;
+            worker.setTxChannel(&ch);
+            worker.setMicSource(&source);
+            worker.setCurrentTxPath(rade ? TxWorkerThread::TxPath::Rade : TxWorkerThread::TxPath::Wdsp);
+            worker.setRadeMicKeyed(true);
+            QVector<WaveformBatchPtr> raw, conditioned;
+            connect(&worker, &TxWorkerThread::radeMicBlockReady, &worker,
+                    [&](const QByteArray& b) { codec.append(b); });
+            if (observe) {
+                worker.rawWaveformPublisher()->setBindingToken(7);
+                worker.conditionedWaveformPublisher()->setBindingToken(8);
+                connect(worker.rawWaveformPublisher(), &WaveformPublisher::batchReady, &worker,
+                        [&](WaveformBatchPtr b) { raw.append(b); });
+                connect(worker.conditionedWaveformPublisher(), &WaveformPublisher::batchReady, &worker,
+                        [&](WaveformBatchPtr b) { conditioned.append(b); });
+            }
+            std::array<float, kBlockFrames> pcm;
+            for (int block = 0; block < 500; ++block) {
+                for (int i = 0; i < kBlockFrames; ++i) {
+                    pcm[i] = 0.2f * std::sin(float(block * kBlockFrames + i) * 0.13f);
+                }
+                source.inbound(pcm.data(), kBlockFrames);
+                worker.tickForTest();
+            }
+            if (observe) {
+                if (raw.isEmpty()) {
+                    QTest::qFail("No raw observation samples", __FILE__, __LINE__);
+                    return;
+                }
+                QCOMPARE(raw[0]->sampleRate, 48000);
+                QCOMPARE(raw[0]->samples[1], pcm[0] * 0.f + 0.2f * std::sin(0.13f));
+                QCOMPARE(conditioned.isEmpty(), !rade);
+                if (rade) {
+                    QCOMPARE(conditioned[0]->sampleRate, 16000);
+                }
+            }
+        };
+        // A full, never-acknowledged observer cannot change encoder output.
+        QVector<QByteArray> enabled, disabled, setup;
+        run(true, true, enabled);
+        run(false, true, disabled);
+        QCOMPARE(enabled, disabled);
+        run(true, false, setup); // raw setup before the conditioned RADE path is selected
+    }
+    // ── 1. setRadeChannel stores the pointer; null clears ────────────────
+    void setRadeChannelStoresPointer()
+    {
+        TxWorkerThread w;
+        QVERIFY(w.radeChannelForTest() == nullptr);
+
+        RadeChannel ch;
+        w.setRadeChannel(&ch);
+        QCOMPARE(w.radeChannelForTest(), &ch);
+
+        w.setRadeChannel(nullptr);
+        QVERIFY(w.radeChannelForTest() == nullptr);
+    }
+
+    // ── 2. dispatchOneBlock with TxPath::Rade emits radeMicBlockReady ────
+    //
+    // Synthetic 48 kHz mic samples through the pump's RADE branch:
+    //   - drainBlock(64 frames I/Q at 48 kHz, Q=0)
+    //   - extract I channel
+    //   - 80 Hz HPF biquad in place
+    //   - 48 -> 16 kHz r8brain CDSPResampler24
+    //   - float -> int16 conversion
+    //   - emit radeMicBlockReady(QByteArray of int16 mono samples)
+    //
+    // r8brain has a non-trivial filterbank warm-up (~3 blocks at 64 in /
+    // 21 out per block typically), so the FIRST few tickForTest() calls
+    // may emit empty payloads. The contract pinned here: after enough
+    // blocks to clear warm-up, at least one non-empty emission lands.
+    void radePumpEmitsAfterWarmup()
+    {
+        // 2026-05-12 (PR #238 P1 #4 follow-up): asserts the OLD K4
+        // contract that RADE branch never drives the WDSP TXA
+        // chain.  The K-bench reframe at TxWorkerThread.cpp:402-432
+        // intentionally routes RADE TX *through* WDSP TXA so TUNE
+        // and RADE share the modulator path.  Test needs rewriting
+        // against the new "RADE feeds I-leg of m_in, WDSP TXA
+        // modulates as ordinary SSB" contract — defer to a bench
+        // session.
+        QSKIP("Skipped: asserts pre-K-bench direct-sendTxIq contract; "
+              "K-bench routes RADE TX through WDSP TXA. Rewrite "
+              "deferred to bench follow-up.");
+
+        AudioEngine engine;
+        TxChannel ch(kChannelId, kBlockFrames, kBlockFrames);
+        MockConnection conn;
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+
+        TxMicSource src;
+        src.start();
+
+        TxWorkerThread w;
+        w.setTxChannel(&ch);
+        w.setAudioEngine(&engine);
+        w.setMicSource(&src);
+
+        RadeChannel rade;
+        w.setRadeChannel(&rade);
+        w.setCurrentTxPath(TxWorkerThread::TxPath::Rade);
+        w.setRadeMicKeyed(true);
+
+        QSignalSpy micSpy(&w, &TxWorkerThread::radeMicBlockReady);
+
+        // Push 500 blocks of synthetic mic samples. 500 blocks * 64 frames
+        // at 48 kHz = 32000 frames in (~0.67 s of audio). r8brain
+        // CDSPResampler24 ships with the default ReqAtten=206.91 dB
+        // which gives a very long filter (latency in the thousands of
+        // input samples). Push enough samples to clear the warm-up.
+        // The existing tst_rade_tx_filters test pumps 480000 input
+        // samples for the ratio check; we use a more modest 32000 here
+        // because we only need to observe one emission, not steady-state.
+        constexpr int kBlockCount = 500;
+        std::vector<float> mic(kBlockFrames, 0.0f);
+        for (int blk = 0; blk < kBlockCount; ++blk) {
+            for (int i = 0; i < kBlockFrames; ++i) {
+                // 1 kHz sine, mid-amplitude.
+                const float t = static_cast<float>(blk * kBlockFrames + i)
+                                / 48000.0f;
+                mic[i] = 0.5f * std::sin(2.0f * 3.14159265f * 1000.0f * t);
+            }
+            src.inbound(mic.data(), kBlockFrames);
+            w.tickForTest();
+        }
+
+        // At least one emission with a non-empty payload.
+        QVERIFY2(micSpy.count() >= 1,
+                 qPrintable(QString("radeMicBlockReady fired %1 times")
+                                .arg(micSpy.count())));
+
+        bool sawNonEmpty = false;
+        for (const auto& args : micSpy) {
+            if (args.value(0).toByteArray().size() > 0) {
+                sawNonEmpty = true;
+                break;
+            }
+        }
+        QVERIFY2(sawNonEmpty,
+                 "radeMicBlockReady never emitted a non-empty QByteArray "
+                 "(r8brain may be stuck in warm-up; expected at least one "
+                 "post-warmup payload)");
+
+        // RADE branch must NOT have driven the WDSP TXA chain.
+        QCOMPARE(conn.callCount.load(), 0);
+
+        src.stop();
+    }
+
+    // ── 3. With TxPath::Wdsp, dispatchOneBlock skips the RADE pump path
+    //
+    // Sanity check: after setting the path back to Wdsp the worker
+    // resumes the WDSP TXA flow and a single tick produces exactly one
+    // sendTxIq call on the MockConnection — no radeMicBlockReady.
+    void wdspPathStillReachesSendTxIq()
+    {
+        AudioEngine engine;
+        TxChannel ch(kChannelId, kBlockFrames, kBlockFrames);
+        MockConnection conn;
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+
+        TxMicSource src;
+        src.start();
+
+        TxWorkerThread w;
+        w.setTxChannel(&ch);
+        w.setAudioEngine(&engine);
+        w.setMicSource(&src);
+
+        RadeChannel rade;
+        w.setRadeChannel(&rade);
+        w.setCurrentTxPath(TxWorkerThread::TxPath::Wdsp);
+
+        QSignalSpy micSpy(&w, &TxWorkerThread::radeMicBlockReady);
+
+        std::vector<float> mic(kBlockFrames, 0.1f);
+        src.inbound(mic.data(), kBlockFrames);
+        w.tickForTest();
+
+        QCOMPARE(conn.callCount.load(), 1);
+        QCOMPARE(micSpy.count(), 0);
+
+        src.stop();
+    }
+
+    // RADE end-of-over callsigns: radeAudioDrained fires once, in the
+    // block that takes the last of the RADE audio queued before the
+    // notice was armed; at once when nothing is queued; never after
+    // clearRadeAudio.
+    void radeAudioDrainedFollowsTheQueuedAudio()
+    {
+        AudioEngine engine;
+        TxChannel ch(kChannelId, kBlockFrames, kBlockFrames);
+        MockConnection conn;
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+
+        TxMicSource src;
+        src.start();
+
+        TxWorkerThread w;
+        w.setTxChannel(&ch);
+        w.setAudioEngine(&engine);
+        w.setMicSource(&src);
+        RadeChannel rade;
+        w.setRadeChannel(&rade);
+        w.setCurrentTxPath(TxWorkerThread::TxPath::Rade);
+
+        QSignalSpy drained(&w, &TxWorkerThread::radeAudioDrained);
+
+        // Nothing queued: at once.
+        w.armRadeAudioDrainedNotice();
+        QCOMPARE(drained.count(), 1);
+
+        // Two and a half blocks queued: the third block takes the last.
+        const std::vector<float> tail(static_cast<size_t>(kBlockFrames * 5 / 2), 0.25f);
+        w.setRadeAudioBlock(QByteArray(reinterpret_cast<const char*>(tail.data()),
+                                       static_cast<int>(tail.size() * sizeof(float))));
+        w.armRadeAudioDrainedNotice();
+        std::vector<float> mic(kBlockFrames, 0.0f);
+        for (int blk = 0; blk < 2; ++blk) {
+            src.inbound(mic.data(), kBlockFrames);
+            w.tickForTest();
+        }
+        QCOMPARE(drained.count(), 1);
+        src.inbound(mic.data(), kBlockFrames);
+        w.tickForTest();
+        QCOMPARE(drained.count(), 2);
+        src.inbound(mic.data(), kBlockFrames);
+        w.tickForTest();
+        QCOMPARE(drained.count(), 2);  // once per arming
+
+        // Cleared: the queued audio and the notice both go.
+        w.setRadeAudioBlock(QByteArray(reinterpret_cast<const char*>(tail.data()),
+                                       static_cast<int>(tail.size() * sizeof(float))));
+        w.armRadeAudioDrainedNotice();
+        w.clearRadeAudio();
+        for (int blk = 0; blk < 4; ++blk) {
+            src.inbound(mic.data(), kBlockFrames);
+            w.tickForTest();
+        }
+        QCOMPARE(drained.count(), 2);
+
+        src.stop();
+    }
+
+    void pcMicSelected_withoutCaptureFeedsSilenceToRade()
+    {
+        AudioEngine engine;
+        engine.onMicSourceChanged(/*selectedSourceIsPc=*/true);
+
+        TxChannel ch(kChannelId, kBlockFrames, kBlockFrames);
+        MockConnection conn;
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+
+        TxMicSource src;
+        src.start();
+
+        TxWorkerThread w;
+        w.setTxChannel(&ch);
+        w.setAudioEngine(&engine);
+        w.setMicSource(&src);
+        w.setCurrentTxPath(TxWorkerThread::TxPath::Rade);
+        w.setRadeMicKeyed(true);
+
+        QSignalSpy micSpy(&w, &TxWorkerThread::radeMicBlockReady);
+
+        constexpr int kBlockCount = 500;
+        std::vector<float> loudRadio(kBlockFrames);
+        for (int blk = 0; blk < kBlockCount; ++blk) {
+            for (int i = 0; i < kBlockFrames; ++i) {
+                const float t = static_cast<float>(blk * kBlockFrames + i)
+                                / 48000.0f;
+                loudRadio[static_cast<size_t>(i)] =
+                    0.9f * std::sin(2.0f * 3.14159265f * 1000.0f * t);
+            }
+            src.inbound(loudRadio.data(), kBlockFrames);
+            w.tickForTest();
+        }
+
+        QVERIFY2(micSpy.count() > 0,
+                 "RADE resampler never produced a post-warmup payload");
+        for (const auto& args : micSpy) {
+            const QByteArray payload = args.value(0).toByteArray();
+            const int16_t* samples = reinterpret_cast<const int16_t*>(
+                payload.constData());
+            const int sampleCount = payload.size()
+                                    / static_cast<int>(sizeof(int16_t));
+            for (int i = 0; i < sampleCount; ++i) {
+                QCOMPARE(samples[i], static_cast<int16_t>(0));
+            }
+        }
+
+        src.stop();
+    }
+
+    // RADE threads review: the path stays Rade between overs and the pump
+    // runs unkeyed; no microphone block goes to the encoder (a queued call
+    // on the main thread) until the MOX edge keys it, and none after the
+    // release. The edges come from RadioModel's moxStateChanged hook.
+    void radeMicBlocksGoOutOnlyWhileKeyed()
+    {
+        AudioEngine engine;
+        TxChannel ch(kChannelId, kBlockFrames, kBlockFrames);
+        MockConnection conn;
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+        TxMicSource src;
+        src.start();
+
+        RadioModel model;
+        auto owned = std::make_unique<TxWorkerThread>();
+        TxWorkerThread* const w = owned.get();
+        w->setTxChannel(&ch);
+        w->setAudioEngine(&engine);
+        w->setMicSource(&src);
+        model.installTxWorkerForTest(std::move(owned));
+        w->setCurrentTxPath(TxWorkerThread::TxPath::Rade);  // latched by an earlier over
+        QVERIFY(!w->radeMicKeyed());
+
+        QSignalSpy micSpy(w, &TxWorkerThread::radeMicBlockReady);
+        std::vector<float> mic(kBlockFrames);
+        int blk = 0;
+        const auto pump = [&](int blocks) {
+            for (int n = 0; n < blocks; ++n, ++blk) {
+                for (int i = 0; i < kBlockFrames; ++i) {
+                    const float t = static_cast<float>(blk * kBlockFrames + i) / 48000.0f;
+                    mic[static_cast<size_t>(i)] =
+                        0.5f * std::sin(2.0f * 3.14159265f * 1000.0f * t);
+                }
+                src.inbound(mic.data(), kBlockFrames);
+                w->tickForTest();
+            }
+        };
+
+        // Unkeyed: 500 blocks, past the resampler's warm-up, send nothing.
+        pump(500);
+        QCOMPARE(micSpy.count(), 0);
+
+        // The MOX-on edge (the model's signal only; nothing is keyed).
+        QVERIFY(QMetaObject::invokeMethod(
+            model.moxController(), "moxStateChanged", Qt::DirectConnection,
+            Q_ARG(bool, true)));
+        QVERIFY(w->radeMicKeyed());
+        // This model has no RADE slice, so the edge latched the WDSP path;
+        // a RADE TX slice would have latched Rade.
+        w->setCurrentTxPath(TxWorkerThread::TxPath::Rade);
+        pump(50);
+        QVERIFY2(micSpy.count() > 0,
+                 qPrintable(QStringLiteral("keyed emits=%1").arg(micSpy.count())));
+
+        // The release edge: nothing more.
+        QVERIFY(QMetaObject::invokeMethod(
+            model.moxController(), "moxStateChanged", Qt::DirectConnection,
+            Q_ARG(bool, false)));
+        QVERIFY(!w->radeMicKeyed());
+        const int keyedCount = static_cast<int>(micSpy.count());
+        pump(50);
+        QCOMPARE(static_cast<int>(micSpy.count()), keyedCount);
+
+        src.stop();
+    }
+
+    // ── 4. RadioModel txModemReady -> sendTxIq routing ───────────────────
+    //
+    // RadeChannel emits txModemReady (24 kHz stereo float32). The K4 hook
+    // on RadioModel must:
+    //   - Take the L (or mono) channel as the real-valued modem baseband.
+    //   - Upsample 24 kHz -> txSampleRate (P1 default 48 kHz).
+    //   - Build interleaved I/Q with Q=0.
+    //   - Call m_connection->sendTxIq.
+    //
+    // We drive this with a synthetic 24 kHz stereo payload of N=2048
+    // frames (84 ms of audio). At txSampleRate=48 kHz the resampler
+    // emits roughly 4096 samples out, so sendTxIq must be called with
+    // a non-zero magnitude at least once.
+    void txModemReadyRoutesToSendTxIq()
+    {
+        // 2026-05-12 (PR #238 P1 #4 follow-up): asserts the OLD K4
+        // direct path "RadeChannel::txModemReady -> RadioModel
+        // lambda -> mockConn.sendTxIq".  K-bench reframe (see
+        // RadioModel::wireRadeChannel at the txModemReady connect
+        // site) replaces direct sendTxIq with a TxWorkerThread
+        // setRadeAudioBlock call so the WDSP TXA chain modulates
+        // RADE.  In a test fresh RadioModel with no TxWorker the
+        // lambda early-exits at the m_txWorker null check; no
+        // sendTxIq.  Re-author against the K-bench contract on
+        // bench (needs a real TxWorker fixture).
+        QSKIP("Skipped: asserts pre-K-bench direct-sendTxIq routing; "
+              "K-bench routes txModemReady through WDSP TXA via "
+              "TxWorker::setRadeAudioBlock. Rewrite deferred to "
+              "bench follow-up.");
+
+        // ORDER MATTERS: mockConn must outlive RadioModel because
+        // RadioModel::~RadioModel -> teardownConnection touches
+        // m_connection->thread().  Construct mockConn FIRST so it
+        // is destroyed AFTER model.
+        MockConnection mockConn;
+        RadioModel model;
+
+        const int sliceId = model.addSlice();
+        SliceModel* slice = model.sliceById(sliceId);
+        QVERIFY(slice != nullptr);
+
+        model.injectConnectionForTest(&mockConn);
+
+        // Friend test subclass exposing emit txModemReady (signals are
+        // emit-only from inside the class).
+        struct TestableRadeChannelLocal : public RadeChannel {
+            void fire(const QByteArray& iq) { emit txModemReady(iq); }
+        };
+
+        TestableRadeChannelLocal local;
+        model.wireRadeChannel(sliceId, &local, slice);
+
+        // 2048-frame stereo float32 24 kHz payload. L = R = sine
+        // (RadeChannel's processMonoToStereo duplicates the mono modem
+        // baseband to both channels).
+        constexpr int kFrames = 2048;
+        QByteArray payload(kFrames * 2 * static_cast<int>(sizeof(float)),
+                           Qt::Uninitialized);
+        auto* p = reinterpret_cast<float*>(payload.data());
+        for (int i = 0; i < kFrames; ++i) {
+            const float t = static_cast<float>(i) / 24000.0f;
+            const float s = 0.5f * std::sin(2.0f * 3.14159265f * 1000.0f * t);
+            p[2 * i + 0] = s;
+            p[2 * i + 1] = s;
+        }
+
+        const int beforeCalls = mockConn.callCount.load();
+
+        // Drive multiple emissions to clear r8brain's 24 -> 48 kHz
+        // warm-up.  Each call passes 2048 input samples; r8brain at
+        // 2x upsample has roughly 100-200 input samples of warm-up
+        // latency, so the first emission may produce 0 output but the
+        // second is solid.
+        for (int rep = 0; rep < 4; ++rep) {
+            local.fire(payload);
+        }
+
+        // The connect is direct (RadeChannel lives on the main thread),
+        // so by this point the lambda has run synchronously and sendTxIq
+        // has been invoked.
+        const int afterCalls = mockConn.callCount.load();
+
+        QVERIFY2(afterCalls > beforeCalls,
+                 qPrintable(QString("sendTxIq call count did not advance: "
+                                    "before=%1 after=%2")
+                                .arg(beforeCalls).arg(afterCalls)));
+        QVERIFY2(mockConn.lastN.load() > 0,
+                 qPrintable(QString("sendTxIq last frame count = %1; "
+                                    "expected > 0")
+                                .arg(mockConn.lastN.load())));
+
+        // Clear the injected connection pointer before mockConn falls
+        // out of scope (the test fixture's order guarantees this, but
+        // the explicit clear makes the intent unambiguous).
+        model.injectConnectionForTest(nullptr);
+    }
+};
+
+QTEST_MAIN(TstRadeTxPump)
+#include "tst_rade_tx_pump.moc"

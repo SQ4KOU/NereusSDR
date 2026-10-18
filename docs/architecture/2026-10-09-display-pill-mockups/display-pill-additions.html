@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Display pill layouts</title>
+<style>
+/* Every colour, size and radius below is copied from the app:
+   src/gui/StyleConstants.h, src/gui/SpectrumOverlayPanel.cpp (OverlayColors,
+   buildDisplayFlyout), AetherSDR SpectrumOverlayMenu.cpp:1261-2043 (headers,
+   scroll area). Pixel sizes are 1:1 with the Qt widgets. */
+html, body { margin: 0; background: #0f0f1a; color: #c8d8e8;
+  font-family: -apple-system, "Segoe UI", "Helvetica Neue", sans-serif; }
+.page { padding: 18px 24px 60px; }
+.opt-title { font-size: 22px; font-weight: 700; color: #8aa8c0; margin: 26px 0 8px; }
+.opt-title span { display: inline-block; width: 30px; height: 30px; line-height: 30px; text-align: center;
+  background: #0070c0; color: #fff; border: 1px solid #0090e0; border-radius: 4px; margin-right: 10px; }
+.opt-title.sel span { background: #006040; color: #00ff88; border-color: #00a060; }
+
+/* ---------- panadapter host ---------- */
+.pan { position: relative; width: 980px; height: 560px; background: #0a0a14; overflow: hidden;
+  border: 1px solid #203040; }
+.pan canvas { position: absolute; left: 0; top: 0; }
+.vfo-flag { position: absolute; top: 6px; left: 548px; background: rgba(0,212,255,0.92); color: #001020;
+  font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 2px; }
+
+/* ---------- left strip (SpectrumOverlayPanel) ---------- */
+.strip { position: absolute; left: 0; top: 0; width: 72px; }
+.mbtn { position: absolute; left: 2px; width: 68px; height: 22px; box-sizing: border-box;
+  background: rgba(20,30,45,0.94); border: 1px solid rgba(255,255,255,0.157); border-radius: 2px;
+  color: #c8d8e8; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.mbtn.active { background: rgba(0,112,192,0.706); border-color: #0090e0; color: #fff; }
+.mbtn.collapse { font-size: 13px; }
+
+/* ---------- flyout (kPanelStyle) ---------- */
+.fly { position: absolute; left: 72px; top: 0; box-sizing: border-box; width: 268px;
+  background: rgba(15,15,26,0.863); border: 1px solid #304050; border-radius: 3px; }
+.fly .scroll { overflow-y: auto; overflow-x: hidden; }
+.fly .scroll::-webkit-scrollbar { width: 8px; }
+.fly .scroll::-webkit-scrollbar-track { background: transparent; }
+.fly .scroll::-webkit-scrollbar-thumb { background: #304050; border-radius: 4px; }
+.grid { display: grid; grid-template-columns: auto 22px 1fr 50px; column-gap: 4px; row-gap: 4px;
+  padding: 6px 8px; align-items: center; }
+
+.lbl { color: #8090a0; font-size: 10px; white-space: nowrap; }
+.val { color: #c8d8e8; font-size: 10px; text-align: right; white-space: nowrap; }
+.dis .lbl, .dis .val { color: #4a5a6a; }
+
+/* header: accent 9px bold small caps + 1px divider (AetherSDR makeHeader) */
+.hdr { grid-column: 1 / 5; display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.hdr.first { margin-top: 0; }
+.hdr .t { color: #00b4d8; font-size: 9px; font-weight: 700; font-variant: small-caps; letter-spacing: .6px;
+  text-transform: lowercase; }
+.hdr .line { flex: 1; height: 1px; background: #304050; }
+.hdr .scope { color: #708090; font-size: 9px; font-weight: 700; }
+
+/* slider (inline sliderStyle in buildDisplayFlyout) */
+.sl { position: relative; height: 14px; cursor: pointer; }
+.sl .g { position: absolute; left: 0; right: 0; top: 5px; height: 4px; background: #203040; border-radius: 2px; }
+.sl .h { position: absolute; top: 2px; width: 10px; height: 10px; margin-left: -5px; background: #00b4d8; border-radius: 5px; }
+.dis .sl .h { background: #3a4a5a; }
+.dis .sl .g { background: #1a2430; }
+
+/* toggle pill: overlayDisplayToggleStyle() = buttonBaseStyle (2px 6px) + greenCheckedStyle */
+.pill { box-sizing: border-box; height: 18px; min-width: 36px; padding: 0 6px; display: inline-flex;
+  align-items: center; justify-content: center; background: #1a2a3a; border: 1px solid #205070; border-radius: 3px;
+  color: #c8d8e8; font-size: 10px; font-weight: 700; cursor: pointer; user-select: none; white-space: nowrap; }
+.pill:hover { background: #204060; }
+.pill.on { background: #006040; color: #00ff88; border-color: #00a060; }
+.dis .pill, .pill.dis { background: #141e28; color: #4a5a6a; border-color: #243444; cursor: default; }
+.pills { grid-column: 1 / 5; display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* combo 18px (applyComboStyle) */
+.cmb { grid-column: 2 / 5; box-sizing: border-box; height: 18px; background: #1a2a3a; border: 1px solid #304050;
+  border-radius: 3px; color: #c8d8e8; font-size: 10px; padding: 0 6px; display: flex; align-items: center;
+  justify-content: space-between; cursor: pointer; }
+.cmb .arr { color: #708090; font-size: 8px; }
+
+.sw { width: 18px; height: 18px; box-sizing: border-box; border: 1px solid #506070; border-radius: 2px; }
+.badge { width: 18px; height: 18px; box-sizing: border-box; border-radius: 2px; background: #006040; color: #00ff88;
+  border: 1px solid #00a060; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.btn { box-sizing: border-box; height: 18px; padding: 0 8px; background: #1a3050; color: #c8d8e8; border: 1px solid #304050;
+  border-radius: 2px; font-size: 10px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; white-space: nowrap; }
+.btn:hover { background: #254060; }
+.note { grid-column: 1 / 5; color: #708090; font-size: 9px; line-height: 12px; }
+.note.inch { color: #8aa8c0; }
+.sep { grid-column: 1 / 5; height: 1px; background: #304050; margin: 2px 0; }
+.foot { grid-column: 1 / 5; display: flex; align-items: center; justify-content: space-between; }
+.link { color: #00b4d8; font-size: 10px; cursor: pointer; }
+
+/* option B tabs: menu-button idiom, 22px */
+.tabs { display: flex; gap: 2px; padding: 6px 8px 0; }
+.tab { flex: 1; height: 22px; box-sizing: border-box; background: rgba(20,30,45,0.94);
+  border: 1px solid rgba(255,255,255,0.157); border-radius: 2px; color: #c8d8e8; font-size: 10px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.tab.on { background: rgba(0,112,192,0.706); border-color: #0090e0; color: #fff; }
+
+/* option C disclosure row */
+.more { grid-column: 1 / 5; color: #00b4d8; font-size: 10px; cursor: pointer; user-select: none; padding: 1px 0; }
+.hidden { display: none !important; }
+.add > * { background: rgba(255,184,0,0.10); box-shadow: 0 -2px 0 rgba(255,184,0,0.10), 0 2px 0 rgba(255,184,0,0.10); }
+.num { display: inline-flex; width: 12px; height: 12px; border-radius: 6px; background: #ffb800; color: #201000;
+  font-size: 8px; font-weight: 800; align-items: center; justify-content: center; margin-right: 3px; vertical-align: 1px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="opt-title sel" id="tB"><span>B</span>Possible additions from AetherSDR, outlined in amber and numbered</div>
+<div class="pan" id="panB0" style="margin-bottom:26px"></div>
+<div class="pan" id="panB"></div>
+
+
+</div>
+
+<script>
+/* ---------------- panadapter background ---------------- */
+const STOPS = [[0,0,0,0],[.18,2,8,32],[.32,8,32,88],[.46,16,80,176],[.58,16,160,224],
+  [.70,16,208,96],[.80,240,224,16],[.90,255,128,0],[.96,255,32,32],[1,255,64,192]];
+function pal(t){ t=Math.max(0,Math.min(1,t)); for(let i=1;i<STOPS.length;i++){ const a=STOPS[i-1],b=STOPS[i];
+  if(t<=b[0]){ const f=(t-a[0])/(b[0]-a[0]); return [a[1]+(b[1]-a[1])*f,a[2]+(b[2]-a[2])*f,a[3]+(b[3]-a[3])*f]; } } return [255,64,192]; }
+let seed=7; function rnd(){ seed=(seed*16807)%2147483647; return seed/2147483647; }
+const SIGS=[[0.18,-92,9,'ssb'],[0.27,-104,2,'cw'],[0.41,-80,9,'ssb'],[0.585,-72,9,'ssb'],[0.66,-100,2,'cw'],[0.73,-88,9,'ssb'],[0.86,-110,3,'cw']];
+const MOD=SIGS.map(()=>[]);
+function amp(i,row){ if(row<0) return 0; const m=MOD[i]; while(m.length<=row){ const k=m.length; const prev=k?m[k-1]:0;
+  if(SIGS[i][3]==='cw'){ m.push(((Math.floor(k/3)*7+i*5)%11)<6 ? 0 : -60); }
+  else { const burst=(k%14===0 ? (m.gap=(rnd()<0.25)) : m.gap) ? -60 : 0; m.push(burst + prev*0.6 + (rnd()-0.5)*14*0.4); } } return m[row]; }
+function level(xpx,noise,row){ let v=noise; SIGS.forEach(([c,d,w],i)=>{ const cx=c*934; const off=Math.abs(xpx-cx)-w/2;
+  const a = d + (row===undefined ? 0 : amp(i,row)) + (rnd()-0.5)*4; const e = off<=0 ? a : a - off*7; v=Math.max(v,e); }); return v; }
+
+function drawPan(host){
+  const W=980,H=560, specH=230, scaleH=20, scaleW=46;
+  const cv=document.createElement('canvas'); cv.width=W; cv.height=H; host.appendChild(cv);
+  const g=cv.getContext('2d');
+  g.fillStyle='#0a0a14'; g.fillRect(0,0,W,H);
+  // grid
+  g.strokeStyle='rgba(48,64,80,0.55)'; g.lineWidth=1;
+  for(let i=1;i<10;i++){ const x=Math.round(i*(W-scaleW)/10)+.5; g.beginPath(); g.moveTo(x,0); g.lineTo(x,specH); g.stroke(); }
+  for(let i=1;i<8;i++){ const y=Math.round(i*specH/8)+.5; g.beginPath(); g.moveTo(0,y); g.lineTo(W-scaleW,y); g.stroke(); }
+  // dBm scale
+  g.fillStyle='rgba(10,10,24,0.9)'; g.fillRect(W-scaleW,0,scaleW,specH);
+  g.fillStyle='#607080'; g.font='9px -apple-system, sans-serif'; g.textAlign='right';
+  for(let i=0;i<8;i++){ g.fillText((-40-i*12.5).toFixed(0), W-6, Math.round(i*specH/8)+10); }
+  // trace
+  const dbTop=-40, dbBot=-140, pts=[];
+  for(let x=0;x<W-scaleW;x++){ const n=-121+ (rnd()-.5)*7; pts.push(level(x,n)); }
+  const y=(d)=> (dbTop-d)/(dbTop-dbBot)*specH;
+  g.beginPath(); g.moveTo(0,specH); pts.forEach((d,i)=>g.lineTo(i,y(d))); g.lineTo(W-scaleW,specH); g.closePath();
+  const gr=g.createLinearGradient(0,0,0,specH); gr.addColorStop(0,'rgba(0,229,255,0.75)'); gr.addColorStop(1,'rgba(0,229,255,0.25)');
+  g.fillStyle=gr; g.globalAlpha=.7; g.fill(); g.globalAlpha=1;
+  g.beginPath(); pts.forEach((d,i)=> i?g.lineTo(i,y(d)):g.moveTo(i,y(d))); g.strokeStyle='#e8f8ff'; g.lineWidth=1.2; g.stroke();
+  // filter passband + VFO line
+  g.fillStyle='rgba(0,212,255,0.12)'; g.fillRect(560,0,26,specH+scaleH+H);
+  g.strokeStyle='#ff3030'; g.beginPath(); g.moveTo(560.5,0); g.lineTo(560.5,H); g.stroke();
+  // freq scale
+  g.fillStyle='#0f1622'; g.fillRect(0,specH,W,scaleH);
+  g.fillStyle='#8090a0'; g.textAlign='center'; g.font='10px -apple-system, sans-serif';
+  for(let i=0;i<10;i++){ g.fillText((14.150+i*0.025).toFixed(3), Math.round(i*(W-scaleW)/10)+46, specH+14); }
+  // waterfall
+  const wfTop=specH+scaleH, img=g.createImageData(W,H-wfTop);
+  for(let r=0;r<H-wfTop;r++){ for(let x=0;x<W;x++){
+    const n=-121+(rnd()-.5)*9; let d=(x>=W-scaleW)? n : level(x,n,r);
+    const t=(d-(-129))/(-50-(-129)); const c=pal(t);
+    const k=(r*W+x)*4; img.data[k]=c[0]; img.data[k+1]=c[1]; img.data[k+2]=c[2]; img.data[k+3]=255; } }
+  g.putImageData(img,0,wfTop);
+  // flag
+  const f=document.createElement('div'); f.className='vfo-flag'; f.textContent='A  14.2015 USB'; host.appendChild(f);
+  // strip
+  const strip=document.createElement('div'); strip.className='strip'; host.appendChild(strip);
+  const names=['◀','+RX','+TNF','BAND','ANT','Display','VAX','ATT'];
+  names.forEach((n,i)=>{ const b=document.createElement('div'); b.className='mbtn'+(i===0?' collapse':'')+(n==='Display'?' active':'');
+    b.textContent=n; b.style.top=(2+i*24)+'px'; strip.appendChild(b); });
+}
+
+/* ---------------- flyout rows ---------------- */
+function pct(v,min,max){ return ((v-min)/(max-min))*100; }
+function slider(v,min,max){ return `<div class="sl" data-min="${min}" data-max="${max}"><div class="g"></div><div class="h" style="left:${pct(v,min,max)}%"></div></div>`; }
+function S(label,v,min,max,txt,opts={}){
+  const c1 = opts.sw ? `<div class="sw" style="background:${opts.sw}"></div>` : (opts.pill ? `<div class="pill ${opts.pillOn?'on':''}" style="min-width:22px;padding:0 3px">${opts.pill}</div>` : (opts.badge?`<div class="badge">C</div>`:'<div></div>'));
+  const d = opts.dis ? ' dis' : '';
+  return `<div class="lbl${d? ' dis':''}" style="${opts.dis?'color:#4a5a6a':''}">${label}</div><div class="${d}">${c1}</div><div class="${d}">${slider(v,min,max)}</div><div class="val${d}" style="${opts.dis?'color:#4a5a6a':''}">${txt}</div>`;
+}
+function C(label,v){ return `<div class="lbl">${label}</div><div class="cmb"><span>${v}</span><span class="arr">&#9660;</span></div>`; }
+function P(list){ return `<div class="pills">${list.map(p=>{ const [t,on,dis]=p; return `<div class="pill ${on?'on':''} ${dis?'dis':''}">${t}</div>`; }).join('')}</div>`; }
+function H(t,scope,first){ return `<div class="hdr ${first?'first':''}"><span class="t">${t}</span><span class="line"></span>${scope?`<span class="scope">${scope}</span>`:''}</div>`; }
+function N(t,cls=''){ return `<div class="note ${cls}">${t}</div>`; }
+function A(n,html){ return `<div class="add" style="display:contents">${html.replace(/<div class="(lbl|pills|hdr[^"]*)"([^>]*)>/, (m)=> m + `<span class="num">${n}</span>`)}</div>`; }
+function BG(){ return `<div class="lbl">Background:</div><div style="grid-column:2/5;display:flex;gap:4px"><div class="btn">Choose&hellip;</div><div class="btn">Clear</div><div class="pill">Off</div></div>`; }
+const FOOT = `<div class="sep"></div><div class="foot"><div class="btn">Reset this pan</div><div class="link">Setup defaults &#8594;</div></div>`;
+
+/* Section content: [everyday rows, rest rows] */
+const SEC = {
+  spectrum: {
+    title:'Spectrum', scope:'',
+    day: P([['Fill',1],['Grid',1],['Cursor Freq',1],['Peak Hold',0]]) +
+         S('Fill:',70,0,100,'70%',{sw:'#00e5ff'}) +
+         S('dB Max:',-40,-200,0,'-40 dBm') + S('dB Min:',-140,-200,0,'-140 dBm') +
+         N('dB Max and Min are kept per band (20 m).'),
+    rest: P([['Gradient',0],['Noise Floor',0],['Bin Width',0],['Peak Value',0]]) +
+         A(5,S('Line:',1.5,0.5,3,'1.5 px',{sw:'#e8f8ff'})) +
+         C('Detector:','Peak') + C('Averaging:','Log Recursive') +
+         S('Avg Time:',650,10,2000,'650 ms') + S('Cal Offset:',0,-30,30,'0.0 dB') +
+         S('Peak Delay:',2000,100,10000,'2000 ms',{dis:1}) +
+         A(3,C('Grid:','Auto')) + A(4,C('Scale text:','10 pt')) +
+         A(2,H('Background','',false)) + A(2,BG()) + A(2,S('BG Opacity:',80,0,100,'80%')) +
+         A(2,`<div class="lbl">BG Color:</div><div class="sw" style="background:#0a0a14"></div><div></div><div></div>`)
+  },
+  fft: {
+    title:'FFT', scope:'ALL PANS',
+    day: S('FFT Size:',5,0,6,'131072') +
+         N('1.46 Hz per bin &middot; 0.68 s per transform at 192 kHz','inch') +
+         S('FPS:',30,10,60,'30'),
+    rest: C('Window:','Blackman-Harris 7') +
+         S('Hz/bin:',0,0,200,'Off',{pill:'Off'}) +
+         S('Decimation:',1,1,16,'1')
+  },
+  waterfall: {
+    title:'Waterfall', scope:'',
+    day: C('Scheme:','Clarity Blue') +
+         `<div class="lbl">Clarity:</div><div class="badge">C</div><div style="display:flex;gap:4px;align-items:center"><div class="pill on">On</div><div class="btn">Re-tune</div></div><div></div>` +
+         S('Black Level:',52,0,100,'N+3 dB') + S('Color Gain:',45,0,100,'38 dB'),
+    rest: N('Clarity is setting the levels. Turn it off to use these.') +
+         `<div class="lbl" style="color:#4a5a6a">AGC:</div><div></div><div><div class="pill dis">Off</div></div><div></div>` +
+         S('NF-AGC:',0,-60,60,'0 dB',{pill:'Off',dis:1}) +
+         S('Low:',-130,-200,0,'-130 dBm',{dis:1}) + S('High:',-40,-200,0,'-40 dBm',{dis:1}) +
+         S('Rate:',50,10,500,'50 ms') +
+         A(1,S('NB Blank:',15,5,95,'1.15',{pill:'Off'})) +
+         C('WF Avg:','Log Recursive') + S('WF Avg Time:',120,10,2000,'120 ms') +
+         S('Opacity:',100,0,100,'100%') +
+         P([['Stop on TX',0],['RX Filter',1],['TX Filter',0],['RX Zero',0],['TX Zero',0]]) +
+         C('Timestamp:','None') + C('Rewind:','5 min')
+  },
+  three: {
+    title:'3D View', scope:'',
+    day: C('Spectrum:','2D Waterfall'),
+    rest: S('3D Floor:',6,0,24,'6 dB') + S('3D Gain:',70,0,100,'70') + S('3D Span:',100,0,100,'100') +
+          S('3D Angle:',50,0,100,'50') + S('3D Speed:',0,0,10,'Match') + P([['Slice Shadow',1]])
+  }
+};
+const ORDER=['spectrum','fft','waterfall','three'];
+
+/* ---------------- option A: one scrolling list ---------------- */
+function buildA(host){
+  const f=document.createElement('div'); f.className='fly';
+  let html=''; ORDER.forEach((k,i)=>{ const s=SEC[k]; html+=H(s.title,s.scope,i===0)+s.day+s.rest; });
+  f.innerHTML=`<div class="scroll" style="max-height:${560-2}px"><div class="grid">${html}${FOOT}</div></div>`;
+  host.appendChild(f);
+}
+/* ---------------- option B: tabs ---------------- */
+function buildB(host){
+  const f=document.createElement('div'); f.className='fly';
+  const tabs=`<div class="tabs">${ORDER.map((k,i)=>`<div class="tab ${i===0?'on':''}" data-k="${k}">${SEC[k].title}</div>`).join('')}</div>`;
+  const pages=ORDER.map((k,i)=>{ const s=SEC[k]; return `<div class="grid page-${k} ${i? 'hidden':''}">${H(s.title,s.scope,true)}${s.day}${s.rest}${FOOT}</div>`; }).join('');
+  f.innerHTML=tabs+pages; host.appendChild(f);
+  f.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{ f.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===t));
+    ORDER.forEach(k=>f.querySelector('.page-'+k).classList.toggle('hidden',k!==t.dataset.k)); });
+}
+/* ---------------- option C: everyday + More ---------------- */
+function buildC(host){
+  const f=document.createElement('div'); f.className='fly';
+  let html=''; ORDER.forEach((k,i)=>{ const s=SEC[k];
+    html+=H(s.title,s.scope,i===0)+s.day+`<div class="rest-${k} hidden" style="display:contents"></div><div class="more" data-k="${k}">More &#9656;</div>`; });
+  f.innerHTML=`<div class="scroll" style="max-height:${560-2}px"><div class="grid">${html}${FOOT}</div></div>`;
+  host.appendChild(f);
+  f.querySelectorAll('.more').forEach(m=>m.onclick=()=>{ const k=m.dataset.k, box=f.querySelector('.rest-'+k);
+    if(box.classList.contains('hidden')){ box.innerHTML=SEC[k].rest; box.classList.remove('hidden'); m.innerHTML='Less &#9662;'; }
+    else { box.innerHTML=''; box.classList.add('hidden'); m.innerHTML='More &#9656;'; } });
+}
+
+drawPan(panB0); buildB(panB0); drawPan(panB); buildB(panB); panB.querySelector('.tab[data-k=waterfall]').click();
+
+/* pills toggle, sliders drag (visual only) */
+document.addEventListener('click',e=>{ const p=e.target.closest('.pill'); if(p && !p.classList.contains('dis') && !p.closest('.dis')){ p.classList.toggle('on');
+  if(p.textContent==='On'||p.textContent==='Off'){ p.textContent=p.classList.contains('on')?'On':'Off'; } } });
+document.addEventListener('mousedown',e=>{ const s=e.target.closest('.sl'); if(!s||s.closest('.dis')) return;
+  const h=s.querySelector('.h'); const mv=ev=>{ const r=s.getBoundingClientRect(); h.style.left=Math.max(0,Math.min(100,(ev.clientX-r.left)/r.width*100))+'%'; };
+  mv(e); const up=()=>{ document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); };
+  document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up); });
+</script>
+</body>
+</html>

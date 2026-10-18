@@ -1,0 +1,231 @@
+// =================================================================
+// src/core/audio/AudioRingSpsc.h  (NereusSDR)
+// =================================================================
+//   Copyright (C) 2026 J.J. Boyd (KG4VCF) - GPLv2-or-later.
+//   2026-04-23 - created. AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - peekInto (consumer-side peek). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+// =================================================================
+#pragma once
+
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <cstring>
+#include <thread>
+#include <QtGlobal>
+
+namespace NereusSDR {
+
+// Single-producer single-consumer lock-free byte ring.
+// Capacity must be a power of two. One byte of the buffer is always
+// reserved to distinguish full-vs-empty, so usable capacity is
+// Capacity - 1.
+//
+// Release/acquire ordering: producer writes m_wr with release after
+// copying bytes in; consumer reads m_wr with acquire before reading
+// those bytes. Mirror for the return trip.
+//
+// Back-pressure: pushCopy does NOT evict from the ring in the
+// producer thread — doing so would race the consumer's m_rd writes
+// and corrupt the queue (the deprecated in-producer dropOldest pattern
+// fails the 10^6-byte concurrent test in tst_audio_ring_spsc.cpp).
+// Instead, pushCopy yields until the consumer has freed enough space.
+// Callers are therefore responsible for sizing the ring with enough
+// headroom that the yield loop is only ever hit under pathological
+// scheduling (e.g. PipeWireStream sizes the ring for ~170 ms of
+// 48 kHz stereo F32, roughly 8x a typical graph period). The single-
+// shot oversize path (src > kCapacity-1 bytes) DOES drop oldest by
+// advancing src — safe because it only mutates the local pointer.
+template <size_t Capacity>
+class AudioRingSpsc {
+    static_assert((Capacity & (Capacity - 1)) == 0,
+                  "Capacity must be a power of two");
+    static_assert(Capacity >= 16, "Capacity too small to be useful");
+
+public:
+    static constexpr size_t kCapacity = Capacity;
+    static constexpr size_t kMask     = Capacity - 1;
+
+    // "drop-oldest-on-overflow" has two flavours:
+    //   (a) Single-shot: caller asks to push more than the ring's
+    //       usable capacity (Capacity - 1) in ONE call. We advance src
+    //       so only the tail fits, then write it. This path keeps us
+    //       strictly single-writer (only m_wr is touched).
+    //   (b) Steady-state back-pressure: when the ring is temporarily
+    //       full but the caller has a normal-sized payload, we cannot
+    //       evict from the ring atomically without racing the consumer
+    //       on m_rd. Instead we *wait* for the consumer to free enough
+    //       space. This is still lock-free under the SPSC definition —
+    //       we never take a mutex — and it preserves the invariant
+    //       that a successfully-accepted byte is delivered in order.
+    // Non-blocking variant for RT producers that MUST NOT yield.
+    // Writes whatever fits in the current free space; returns the byte
+    // count actually written (0 if the ring was full). Caller is
+    // responsible for tracking the dropped portion (overflow counter).
+    //
+    // Required for PipeWire data-thread producers (onProcessInput): the
+    // PipeWire daemon SIGKILLs clients whose data thread blocks beyond
+    // the per-quantum budget, so the regular pushCopy yield-loop is
+    // fatal there. Use this for any producer running on a thread that
+    // a real-time daemon polices.
+    //
+    // ── Phase 3J-1 bench fix (2026-05-10): alignment-preserving overflow ──
+    // The original implementation truncated `want` to `free` on overflow
+    // (partial write).  Because the ring's usable capacity is `kCapacity-1`
+    // (the classic ring-buffer full-vs-empty trick), the free-space
+    // counter is congruent to (kCapacity-1) mod (whatever granularity the
+    // caller uses) — for kCapacity=131072 and a 4-byte-aligned producer,
+    // free ≡ 7 (mod 8) immediately before overflow.  A partial write of 7
+    // bytes leaves m_wr at an offset that is no longer aligned to the
+    // caller's sample/frame boundary; every subsequent producer push lands
+    // at the same misaligned offset, and the consumer reads garbage even
+    // though it pops at proper boundaries.  Concretely for TciServer's RX
+    // audio drain (4096-byte float-pair sample boundary): after the first
+    // partial write the consumer sees a 1-sample offset that turns every
+    // L,R,L,R pair into ?,L,R,L,R — WSJT-X reads ~50% of samples as
+    // arbitrary memory and pegs its level meter while producing no
+    // decodes.
+    //
+    // Fix: refuse partial writes entirely.  If the input doesn't fit in
+    // the current free space, drop the WHOLE input and return 0.  The
+    // caller's overflow counter increments by the full input size rather
+    // than a truncated remainder, but the ring's wr/rd indices stay
+    // aligned to whatever multiple-of-N boundary the caller is using
+    // (8 bytes for stereo Float32, 4 bytes for mono Float32, etc.).
+    // Realistic audio rates produce O(ms) of drop on overflow rather
+    // than the previous corrupt-stream-until-restart behaviour.
+    qint64 tryPushCopy(const uint8_t* src, qint64 bytes) {
+        if (bytes <= 0) { return 0; }
+        size_t want = size_t(bytes);
+        if (want > kCapacity - 1) {
+            src  += (want - (kCapacity - 1));
+            want  = kCapacity - 1;
+        }
+        const size_t wr = m_wr.load(std::memory_order_relaxed);
+        const size_t rd = m_rd.load(std::memory_order_acquire);
+        const size_t free = (kCapacity - 1) - (wr - rd);
+        if (free < want) {
+            // Refuse partial write — see alignment note above.  Caller
+            // can detect this via the returned 0 and bump an overflow
+            // counter if desired.
+            return 0;
+        }
+        const size_t writeIdx = wr & kMask;
+        const size_t firstChunk =
+            (kCapacity - writeIdx < want) ? kCapacity - writeIdx : want;
+        std::memcpy(&m_buf[writeIdx], src, firstChunk);
+        if (firstChunk < want) {
+            std::memcpy(&m_buf[0], src + firstChunk, want - firstChunk);
+        }
+        m_wr.store(wr + want, std::memory_order_release);
+        return qint64(want);
+    }
+
+    qint64 pushCopy(const uint8_t* src, qint64 bytes) {
+        if (bytes <= 0) { return 0; }
+        size_t want = size_t(bytes);
+
+        // Single-shot input larger than the ring's usable capacity:
+        // advance src so only the last kCapacity-1 bytes get written.
+        if (want > kCapacity - 1) {
+            src  += (want - (kCapacity - 1));
+            want  = kCapacity - 1;
+        }
+
+        const size_t wr = m_wr.load(std::memory_order_relaxed);
+        size_t rd = m_rd.load(std::memory_order_acquire);
+        size_t free = (kCapacity - 1) - (wr - rd);
+
+        // Back-pressure: yield until the consumer has freed enough
+        // space for the full payload. Audio producers generate data at
+        // a steady rate (48 kHz etc.), so this loop only runs if the
+        // consumer is temporarily preempted. In practice the ring is
+        // sized for ~170 ms headroom and this loop almost never spins.
+        while (want > free) {
+            std::this_thread::yield();
+            rd = m_rd.load(std::memory_order_acquire);
+            free = (kCapacity - 1) - (wr - rd);
+        }
+
+        const size_t writeIdx = wr & kMask;
+        const size_t firstChunk =
+            (kCapacity - writeIdx < want) ? kCapacity - writeIdx : want;
+        std::memcpy(&m_buf[writeIdx], src, firstChunk);
+        if (firstChunk < want) {
+            std::memcpy(&m_buf[0], src + firstChunk, want - firstChunk);
+        }
+        m_wr.store(wr + want, std::memory_order_release);
+        return qint64(want);
+    }
+
+    qint64 popInto(uint8_t* dst, qint64 maxBytes) {
+        if (maxBytes <= 0) { return 0; }
+        const size_t rd = m_rd.load(std::memory_order_relaxed);
+        const size_t wr = m_wr.load(std::memory_order_acquire);
+        // Counters are monotonic — see pushCopy for the full rationale
+        // on why we must not mask (wr - rd) when computing used.
+        const size_t used = wr - rd;
+        const size_t toCopy =
+            (size_t(maxBytes) > used) ? used : size_t(maxBytes);
+        if (toCopy == 0) { return 0; }
+        const size_t readIdx = rd & kMask;
+        const size_t firstChunk =
+            (kCapacity - readIdx < toCopy) ? kCapacity - readIdx : toCopy;
+        std::memcpy(dst, &m_buf[readIdx], firstChunk);
+        if (firstChunk < toCopy) {
+            std::memcpy(dst + firstChunk, &m_buf[0], toCopy - firstChunk);
+        }
+        m_rd.store(rd + toCopy, std::memory_order_release);
+        return qint64(toCopy);
+    }
+
+    // Consumer-side helper: drop the oldest `bytes` from the ring by
+    // advancing m_rd. Must only be called from the consumer thread
+    // (m_rd is consumer-owned under the SPSC contract — see pushCopy
+    // for the reason we never touch it from the producer side).
+    // No-op when ring is empty.
+    void dropOldest(size_t bytes) {
+        const size_t rd = m_rd.load(std::memory_order_relaxed);
+        const size_t wr = m_wr.load(std::memory_order_acquire);
+        const size_t used = wr - rd;
+        const size_t toDrop = (bytes > used) ? used : bytes;
+        if (toDrop == 0) { return; }
+        m_rd.store(rd + toDrop, std::memory_order_release);
+    }
+
+    // Consumer-side: copy the oldest `bytes` without consuming them.
+    // Returns false (copying nothing) when fewer than `bytes` are queued.
+    // A record written by one tryPushCopy is visible whole once any of it
+    // is, so a consumer may peek a record header and then pop the record.
+    // (2026-09-30, RADE threads lane: RadeRxBridge reads its framed
+    // records this way.)
+    bool peekInto(uint8_t* dst, size_t bytes) const {
+        const size_t rd = m_rd.load(std::memory_order_relaxed);
+        const size_t wr = m_wr.load(std::memory_order_acquire);
+        if (bytes == 0 || wr - rd < bytes) { return false; }
+        const size_t readIdx = rd & kMask;
+        const size_t firstChunk =
+            (kCapacity - readIdx < bytes) ? kCapacity - readIdx : bytes;
+        std::memcpy(dst, &m_buf[readIdx], firstChunk);
+        if (firstChunk < bytes) {
+            std::memcpy(dst + firstChunk, &m_buf[0], bytes - firstChunk);
+        }
+        return true;
+    }
+
+    size_t usedBytes() const {
+        const size_t wr = m_wr.load(std::memory_order_acquire);
+        const size_t rd = m_rd.load(std::memory_order_acquire);
+        return wr - rd;
+    }
+
+    static constexpr size_t capacity() { return kCapacity; }
+
+private:
+    alignas(64) std::atomic<size_t> m_wr{0};
+    alignas(64) std::atomic<size_t> m_rd{0};
+    std::array<uint8_t, kCapacity> m_buf{};
+};
+
+}  // namespace NereusSDR

@@ -1,0 +1,112 @@
+// =================================================================
+// tests/tst_slice_emnr.cpp  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis source:
+//   Project Files/Source/Console/radio.cs, original licence from Thetis source is included below
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code.
+//   2026-04-23 — Ported to NrSlot activeNr API (Sub-epic C-1 replaced the
+//                 emnrEnabled stub with NrSlot; EMNR == NrSlot::NR2).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// =================================================================
+
+//=================================================================
+// radio.cs
+//=================================================================
+// PowerSDR is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+// Copyright (C) 2019-2026  Richard Samphire
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//=================================================================
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+#include <QtTest/QtTest>
+#include "core/WdspTypes.h"
+#include "models/SliceModel.h"
+
+using namespace NereusSDR;
+
+class TestSliceEmnr : public QObject {
+    Q_OBJECT
+
+private slots:
+    // ── activeNr (EMNR == NrSlot::NR2) ────────────────────────────────────
+    // From Thetis console.cs:43297-43450 [v2.10.3.13] SelectNR() — enum
+    // enforces at-most-one-NR-per-channel. EMNR is WDSP emnr.c, slot NR2.
+
+    void activeNrDefaultIsOff() {
+        // From Thetis radio.cs:2216 — rx_nr2_run default = 0
+        SliceModel s;
+        QCOMPARE(s.activeNr(), NrSlot::Off);
+    }
+
+    void setActiveNrEmnrStoresValue() {
+        SliceModel s;
+        s.setActiveNr(NrSlot::NR2);
+        QCOMPARE(s.activeNr(), NrSlot::NR2);
+    }
+
+    void setActiveNrEmitsSignal() {
+        SliceModel s;
+        QSignalSpy spy(&s, &SliceModel::activeNrChanged);
+        s.setActiveNr(NrSlot::NR2);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(0).value<NrSlot>(), NrSlot::NR2);
+    }
+
+    void setActiveNrNoSignalOnSameValue() {
+        SliceModel s;
+        s.setActiveNr(NrSlot::NR2);
+        QSignalSpy spy(&s, &SliceModel::activeNrChanged);
+        s.setActiveNr(NrSlot::NR2);  // same value — no signal
+        QCOMPARE(spy.count(), 0);
+    }
+
+    void setActiveNrToggleRoundTrip() {
+        SliceModel s;
+        s.setActiveNr(NrSlot::NR2);
+        s.setActiveNr(NrSlot::Off);
+        QCOMPARE(s.activeNr(), NrSlot::Off);
+    }
+};
+
+QTEST_MAIN(TestSliceEmnr)
+#include "tst_slice_emnr.moc"

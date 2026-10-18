@@ -1,0 +1,490 @@
+// src/gui/applets/AppletPanelWidget.cpp
+
+// =================================================================
+// src/gui/applets/AppletPanelWidget.cpp  (NereusSDR)
+// =================================================================
+//
+// Source attribution (AetherSDR — GPLv3):
+//
+//   Copyright (C) 2024-2026  Jeremy (KK7GWY) / AetherSDR contributors
+//       — per https://github.com/ten9876/AetherSDR (GPLv3; see LICENSE
+//       and About dialog for the live contributor list)
+//
+//   This file is a port or structural derivative of AetherSDR source.
+//   AetherSDR is licensed under the GNU General Public License v3.
+//   NereusSDR is also GPLv3. Attribution follows GPLv3 §5 requirements.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-10-02 — Atomic container arrangement and reserved chrome by J.J. Boyd
+//                 (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-10-02 — Mixed container ownership, persistence and source routing by
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-04-16 — Ported/adapted in C++20/Qt6 for NereusSDR by
+//                 J.J. Boyd (KG4VCF), with AI-assisted transformation
+//                 via Anthropic Claude Code.
+//                 Scrollable applet-panel pattern (260px fixed width, 16px title
+//                 bars) ported from AetherSDR `src/gui/AppletPanel.{h,cpp}`.
+// =================================================================
+
+#include "AppletPanelWidget.h"
+#include "gui/containers/ContainerArrangeController.h"
+#include "AppletWidget.h"
+#include "AppletFloatingWindow.h"
+#include "core/AppSettings.h"
+#include <QTimer>
+#include "gui/StyleConstants.h"
+// Task 40 (Phase 3P-II): analog S-Meter replaces the composite MeterWidget
+// header.  The right-click context menu (Tasks 38/39) is the only entry
+// point for RX/TX mode selection and peak-hold settings; the inline settings
+// strip that AetherSDR renders inside the AppletPanel is intentionally absent.
+#include "gui/SMeterWidget.h"
+
+#include <QScrollArea>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QSizePolicy>
+#include <QResizeEvent>
+#include <QPushButton>
+#include <QMenu>
+
+namespace NereusSDR {
+
+AppletPanelWidget::AppletPanelWidget(QWidget* parent)
+    : QWidget(parent)
+{
+    // Minimum width matches AetherSDR AppletPanel (260px), but allow
+    // dynamic expansion when the user drags the splitter handle wider.
+    setMinimumWidth(Style::kAppletPanelW);
+    setStyleSheet(QStringLiteral("AppletPanelWidget { background: %1; }")
+                      .arg(Style::kPanelBg));
+
+    m_rootLayout = new QVBoxLayout(this);
+    m_rootLayout->setContentsMargins(0, 0, 0, 0);
+    m_rootLayout->setSpacing(0);
+
+    // ☰ menu button — created here as a hidden child of `this`. When
+    // setHeaderWidget runs, wrapWithTitleBar will reparent it into the
+    // S-Meter title bar (right end, after the title label). This avoids
+    // a dedicated banner row that would compete for clicks with the
+    // master-volume strip above the panel.
+    m_bannerMenuButton = new QPushButton(QStringLiteral("☰"), this);
+    m_bannerMenuButton->setObjectName(QStringLiteral("appletPanelBannerButton"));
+    m_bannerMenuButton->setFixedSize(22, 18);
+    // User-visible tooltip — plain English, no source cites.
+    m_bannerMenuButton->setToolTip(QStringLiteral("Show or hide applets"));
+    m_bannerMenuButton->setStyleSheet(QStringLiteral(
+        "QPushButton {"
+        "  background: transparent; color: %1;"
+        "  border: none; font-size: 12px;"
+        "}"
+        "QPushButton:hover { color: %2; }"
+        "QPushButton::menu-indicator { image: none; width: 0; }"
+    ).arg(Style::kTitleText, Style::kAccent));
+    m_bannerMenuButton->hide();   // hidden until setBannerMenu called
+
+    // Fixed header area (above scroll) — for MeterWidget / S-Meter
+    m_headerLayout = new QVBoxLayout;
+    m_headerLayout->setContentsMargins(0, 0, 0, 0);
+    m_headerLayout->setSpacing(0);
+    m_rootLayout->addLayout(m_headerLayout);
+
+    // Scrollable area for the applet stack (below header)
+    m_scrollArea = new QScrollArea(this);
+    m_scrollArea->setFrameShape(QFrame::NoFrame);
+    m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_scrollArea->setWidgetResizable(true);
+    m_scrollArea->setStyleSheet(QStringLiteral(
+        "QScrollArea { background: %1; border: none; }"
+        "QScrollBar:vertical {"
+        "  background: %1; width: 8px; border: none;"
+        "}"
+        "QScrollBar::handle:vertical {"
+        "  background: %2; border-radius: 4px; min-height: 20px;"
+        "}"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {"
+        "  height: 0px;"
+        "}"
+    ).arg(Style::kPanelBg, Style::kGroove));
+
+    // Inner widget for the scroll area
+    auto* stackWidget = new QWidget(m_scrollArea);
+    stackWidget->setStyleSheet(QStringLiteral("background: %1;").arg(Style::kPanelBg));
+    m_stackLayout = new QVBoxLayout(stackWidget);
+    // 8 px matches the QScrollBar:vertical width in the stylesheet above;
+    // Qt::ScrollBarAsNeeded means the gutter is wasted when the bar hides,
+    // but 8 px is negligible and avoids a layout reflow on bar show/hide.
+    m_stackLayout->setContentsMargins(0, 0, 8, 0);
+    m_stackLayout->setSpacing(0);
+    m_stackLayout->addStretch();
+
+    m_scrollArea->setWidget(stackWidget);
+    m_rootLayout->addWidget(m_scrollArea);
+
+    // Task 40 (Phase 3P-II): install the analog SMeterWidget as the fixed header.
+    // The composite ItemGroup-based S-Meter previously set here via the
+    // m_meterWidget path in MainWindow::buildUI() is no longer used for the
+    // header; the underlying MeterWidget (Container #0) stays alive for
+    // Container #1 and other targets -- this call only replaces the fixed top
+    // header of the applet panel.
+    //
+    // Right-click context menu (Tasks 38/39) is the only entry point for
+    // mode selection and peak-hold settings per design doc ss5.4.2.
+    // The inline settings strip (TX/RX combos + peak-hold checkbox + decay
+    // combo + reset button) that AetherSDR renders in AppletPanel is not
+    // present in NereusSDR.
+    m_sMeter = new SMeterWidget(this);
+    // aspectRatio 2.0f: width/height = 2.0 gives the needle arc comfortable
+    // vertical room (same ratio as AetherSDR's 280:140 default).
+    setHeaderWidget(m_sMeter, QStringLiteral("S-Meter"), 2.0f);
+}
+
+void AppletPanelWidget::setHeaderWidget(QWidget* widget, const QString& title,
+                                         float aspectRatio)
+{
+    if (!widget) { return; }
+    clearHeaderWidget();
+
+    m_headerAspect = aspectRatio;
+    m_headerWidget = widget;
+
+    // Let the widget expand to fill width; height set dynamically in resizeEvent
+    widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+
+    // Pass the ☰ menu button as the trailing widget so it lives in the
+    // S-Meter title bar (right end). See AppletPanelWidget.h comment for
+    // why we don't use a dedicated banner row.
+    QWidget* wrapped = wrapWithTitleBar(widget, title, m_bannerMenuButton);
+    wrapped->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_headerWrapper = wrapped;
+    m_headerLayout->addWidget(wrapped);
+
+    // Set initial height based on current width
+    int h = qMax(80, static_cast<int>(width() / aspectRatio));
+    widget->setFixedHeight(h);
+    emit headerWidgetChanged(widget);
+}
+
+SMeterWidget* AppletPanelWidget::smeterWidget() const { return m_sMeter; }
+
+void AppletPanelWidget::clearHeaderWidget()
+{
+    if (m_bannerMenuButton && m_headerWrapper) {
+        m_bannerMenuButton->setParent(this); m_bannerMenuButton->hide();
+    }
+    if (m_sMeter && m_sMeter->parentWidget() == m_headerWrapper) {
+        m_sMeter->hide(); m_sMeter->setParent(this);
+    }
+    if (m_headerWrapper) {
+        m_headerLayout->removeWidget(m_headerWrapper);
+        // Detach from the widget tree SYNCHRONOUSLY before deleteLater.
+        // The wrapper's MeterWidget child is a WA_NativeWindow QRhiWidget
+        // with a live D3D11 swapchain. If the wrapper lingers in this
+        // panel's parent chain across an upcoming container reparent, the
+        // new MeterWidget's CreateSwapChainForHwnd returns E_ACCESSDENIED
+        // — Windows refuses to attach a second swapchain while the old
+        // native child is still under the parent HWND.
+        m_headerWrapper->hide();
+        m_headerWrapper->setParent(nullptr);
+        m_headerWrapper->deleteLater();
+        m_headerWrapper = nullptr;
+    }
+    m_headerWidget = nullptr;
+    m_headerAspect = 0.0f;
+    emit headerWidgetChanged(nullptr);
+}
+
+void AppletPanelWidget::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    if (m_headerWidget && m_headerAspect > 0.0f) {
+        int w = event->size().width();
+        int totalH = event->size().height();
+        int h = static_cast<int>(w / m_headerAspect);
+        // Clamp: min 80px, max 40% of total panel height so applets aren't crowded
+        h = qBound(80, h, totalH * 40 / 100);
+        m_headerWidget->setFixedHeight(h);
+    }
+}
+
+void AppletPanelWidget::addApplet(AppletWidget* applet)
+{
+    if (!applet) { return; }
+    if (m_applets.contains(applet)) { return; }  // already present
+    m_applets.append(applet);
+    if (m_managedWorkspace) { applet->setParent(this); applet->hide(); return; }
+
+    applet->setParent(this);
+    applet->show();
+    QWidget* wrapped = wrapWithTitleBar(applet, applet->appletTitle(),
+                                        applet->canFloat() ? makeFloatButton(applet) : nullptr);
+    m_wrappers[applet] = wrapped;
+    m_wantVisible[applet] = true;
+
+    // Insert before the trailing stretch
+    int idx = m_stackLayout->count() - 1;
+    m_stackLayout->insertWidget(idx, wrapped);
+    restoreFloatState(applet);
+}
+
+void AppletPanelWidget::insertApplet(int index, AppletWidget* applet)
+{
+    if (m_managedWorkspace) { addApplet(applet); return; }
+    if (!applet) { return; }
+    if (m_applets.contains(applet)) { return; }  // already present
+    // m_stackLayout keeps a trailing stretch item; applet wrappers occupy
+    // [0, count-1).  Clamp so a large index appends before the stretch.
+    const int appletCount = m_stackLayout->count() - 1;
+    const int at = (index < 0 || index > appletCount) ? appletCount : index;
+    m_applets.insert(std::min(at, static_cast<int>(m_applets.size())), applet);
+    applet->setParent(this);
+    applet->show();
+    QWidget* wrapped = wrapWithTitleBar(applet, applet->appletTitle(),
+                                        applet->canFloat() ? makeFloatButton(applet) : nullptr);
+    m_wrappers[applet] = wrapped;
+    m_wantVisible[applet] = true;
+    m_stackLayout->insertWidget(at, wrapped);
+    restoreFloatState(applet);
+}
+
+// ── Floating applets ─────────────────────────────────────────────────────
+namespace {
+QString floatKey(const AppletWidget* a)     { return QStringLiteral("Applet%1Floating").arg(a->appletId()); }
+QString floatGeomKey(const AppletWidget* a) { return QStringLiteral("Applet%1FloatGeometry").arg(a->appletId()); }
+}
+
+QWidget* AppletPanelWidget::makeFloatButton(AppletWidget* applet)
+{
+    auto* btn = new QPushButton(QString(QChar(0x2197)), this);   // ↗
+    btn->setToolTip(QStringLiteral("Pop this applet out into its own window."));
+    btn->setFixedSize(18, 16);
+    btn->setCursor(Qt::PointingHandCursor);
+    btn->setStyleSheet(QStringLiteral(
+        "QPushButton { color: %1; background: transparent; border: 1px solid %2;"
+        " border-radius: 3px; font-size: 10px; padding: 0; }"
+        "QPushButton:hover { background: %3; }")
+        .arg(QLatin1String(Style::kTitleText), QLatin1String(Style::kTitleBorder),
+             QLatin1String(Style::kButtonHover)));
+    connect(btn, &QPushButton::clicked, this, [this, applet]() { floatApplet(applet); });
+    return btn;
+}
+
+void AppletPanelWidget::restoreFloatState(AppletWidget* applet)
+{
+    if (m_managedWorkspace) { return; }
+    if (!applet || !applet->canFloat()) { return; }
+    const bool wasFloating = AppSettings::instance()
+        .value(floatKey(applet), QStringLiteral("False")).toString() == QLatin1String("True");
+    if (!wasFloating) { return; }
+    // Defer until the main window exists and is shown, so the floating
+    // window gets a sensible parent/screen and saved geometry applies.
+    QTimer::singleShot(0, this, [this, applet]() {
+        if (m_applets.contains(applet)) { floatApplet(applet); }
+    });
+}
+
+void AppletPanelWidget::setArrangeController(ContainerArrangeController *controller)
+{
+    m_arrange = controller;
+}
+bool AppletPanelWidget::isAppletFloating(AppletWidget* applet) const
+{
+    if (m_arrange && applet) {
+        for (const auto &c : m_arrange->workspaceSnapshot().containers) {
+            for (const auto &e : c.contents) {
+                if (e.typeId == QStringLiteral("applet:") + applet->appletId()) {
+                    return c.dockMode == DockMode::Floating;
+                }
+            }
+        }
+        return false;
+    }
+    return applet && m_floating.contains(applet);
+}
+
+void AppletPanelWidget::floatApplet(AppletWidget* applet)
+{
+    if (m_managedWorkspace) {
+        if (m_arrange && applet) {
+            for (const auto &c : m_arrange->workspaceSnapshot().containers) {
+                for (const auto &e : c.contents) {
+                    if (e.typeId == QStringLiteral("applet:") + applet->appletId()) {
+                        m_arrange->popOut(e.id);
+                        return;
+                    }
+                }
+            }
+        }
+        return;
+    }
+    if (!applet || !m_applets.contains(applet) || m_floating.contains(applet)) { return; }
+    QWidget* wrapper = m_wrappers.value(applet, nullptr);
+    if (!wrapper) { return; }
+    // Lift the applet out of its wrapper and hide the (now empty) wrapper.
+    if (auto* lay = wrapper->layout()) {
+        lay->removeWidget(applet);
+    }
+    wrapper->hide();
+    applet->setParent(nullptr);
+
+    auto* win = new AppletFloatingWindow(applet, window());
+    m_floating[applet] = win;
+    connect(win, &AppletFloatingWindow::dockRequested, this,
+            [this](AppletWidget* a) { dockApplet(a); });
+    connect(win, &AppletFloatingWindow::geometryChanged, this,
+            [](AppletWidget* a, const QByteArray& g) {
+        if (a) {
+            AppSettings::instance().setValue(floatGeomKey(a), QString::fromLatin1(g.toHex()));
+        }
+    });
+    const QString geomHex = AppSettings::instance().value(floatGeomKey(applet)).toString();
+    if (!geomHex.isEmpty()) {
+        win->restoreGeometry(QByteArray::fromHex(geomHex.toLatin1()));
+    }
+    AppSettings::instance().setValue(floatKey(applet), QStringLiteral("True"));
+    win->show();
+    win->raise();
+}
+
+void AppletPanelWidget::dockApplet(AppletWidget* applet)
+{
+    if (m_managedWorkspace) {
+        if (m_arrange && applet) {
+            for (const auto &c : m_arrange->workspaceSnapshot().containers) {
+                for (const auto &e : c.contents) {
+                    if (e.typeId == QStringLiteral("applet:") + applet->appletId()) {
+                        m_arrange->returnEntry(e.id);
+                        return;
+                    }
+                }
+            }
+        }
+        return;
+    }
+    if (!applet) { return; }
+    AppletFloatingWindow* win = m_floating.take(applet);
+    if (!win) { return; }
+    win->releaseApplet();
+    win->deleteLater();
+
+    QWidget* wrapper = m_wrappers.value(applet, nullptr);
+    if (wrapper) {
+        applet->setParent(wrapper);
+        if (auto* lay = wrapper->layout()) {
+            lay->addWidget(applet);
+        }
+        applet->show();
+        wrapper->setVisible(m_wantVisible.value(applet, true));
+    }
+    AppSettings::instance().setValue(floatKey(applet), QStringLiteral("False"));
+}
+
+void AppletPanelWidget::removeApplet(AppletWidget* applet)
+{
+    if (!applet) { return; }
+    if (!m_applets.contains(applet)) { return; }
+    if (m_floating.contains(applet)) {
+        dockApplet(applet);
+    }
+    m_wantVisible.remove(applet);
+
+    QWidget* wrapper = m_wrappers.value(applet, nullptr);
+    if (wrapper) {
+        m_stackLayout->removeWidget(wrapper);
+        // Reparent applet out of the wrapper before deleting it
+        applet->setParent(nullptr);
+        applet->hide();
+        wrapper->deleteLater();
+        m_wrappers.remove(applet);
+    }
+    m_applets.removeOne(applet);
+}
+
+void AppletPanelWidget::setAppletVisible(AppletWidget* applet, bool visible)
+{
+    if (!applet) { return; }
+    QWidget* wrapper = m_wrappers.value(applet, nullptr);
+    if (!wrapper) { return; }  // applet not in this panel
+    m_wantVisible[applet] = visible;
+    if (AppletFloatingWindow* win = m_floating.value(applet, nullptr)) {
+        // Hiding a floating applet hides its window; showing brings it back.
+        win->setVisible(visible);
+        return;
+    }
+    wrapper->setVisible(visible);
+}
+
+void AppletPanelWidget::setBannerMenu(QMenu* menu)
+{
+    if (!m_bannerMenuButton) { return; }
+    m_bannerMenuButton->setMenu(menu);
+    m_bannerMenuButton->setVisible(menu != nullptr);
+}
+
+void AppletPanelWidget::addWidget(QWidget* widget, const QString& title)
+{
+    if (!widget) { return; }
+
+    QWidget* wrapped = wrapWithTitleBar(widget, title);
+
+    // Insert before the trailing stretch
+    int idx = m_stackLayout->count() - 1;
+    m_stackLayout->insertWidget(idx, wrapped);
+    emit panelWidgetAdded(widget);
+}
+
+QWidget* AppletPanelWidget::wrapWithTitleBar(QWidget* child, const QString& title,
+                                              QWidget* trailing)
+{
+    // Wrapper container
+    auto* wrapper = new QWidget(this);
+    auto* wrapLayout = new QVBoxLayout(wrapper);
+    wrapLayout->setContentsMargins(0, 0, 0, 0);
+    wrapLayout->setSpacing(0);
+
+    // Title bar — from AetherSDR AppletTitleBar:
+    // 16px height, gradient, grip dots + title label.
+    // Bumped to 22px when a trailing widget is hosted (the S-Meter
+    // header gets the ☰ menu button on its right end).
+    auto* titleBar = new QWidget(wrapper);
+    const int titleBarHeight = trailing ? 22 : Style::kTitleBarH;
+    titleBar->setFixedHeight(titleBarHeight);
+    titleBar->setStyleSheet(Style::titleBarStyle());
+
+    auto* titleLayout = new QHBoxLayout(titleBar);
+    titleLayout->setContentsMargins(2, 0, 4, 0);
+    titleLayout->setSpacing(4);
+
+    // Grip dots (⋮⋮) — from AetherSDR: #607080, 10px
+    auto* grip = new QLabel(QStringLiteral("\u22EE\u22EE"), titleBar);
+    grip->setStyleSheet(QStringLiteral(
+        "QLabel { color: %1; font-size: 10px; background: transparent; }"
+    ).arg(Style::kTextScale));
+    titleLayout->addWidget(grip);
+
+    // Title label — from AetherSDR: #8aa8c0, 10px bold
+    auto* label = new QLabel(title, titleBar);
+    label->setStyleSheet(QStringLiteral(
+        "QLabel { color: %1; font-size: 10px; font-weight: bold;"
+        " background: transparent; }"
+    ).arg(Style::kTitleText));
+    titleLayout->addWidget(label);
+    titleLayout->addStretch();
+
+    if (trailing) {
+        // Reparent under the title bar (Qt does this automatically on
+        // addWidget). The trailing widget keeps its current visibility
+        // state — callers manage show/hide via their own API (e.g.
+        // setBannerMenu for the ☰ button).
+        titleLayout->addWidget(trailing);
+    }
+
+    wrapLayout->addWidget(titleBar);
+    wrapLayout->addWidget(child);
+
+    return wrapper;
+}
+
+} // namespace NereusSDR

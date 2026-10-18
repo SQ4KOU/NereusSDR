@@ -1,0 +1,356 @@
+# NereusSDR vendored patches in this file (vs. upstream radae_nopy
+# at b289102, see third_party/rade/VERSION.txt):
+#   1. BUILD_COMMAND $(MAKE) -> make
+#      Make-only $-escape; Ninja can't parse it.
+#   2. BUILD_BYPRODUCTS added to ExternalProject_Add(build_opus)
+#      Required so Ninja knows libopus.a is produced by build_opus
+#      and the consumer link step can wait on it.
+#   3. PATCH_COMMAND ${CMAKE_SOURCE_DIR} -> ${CMAKE_CURRENT_LIST_DIR}/..
+#      Upstream assumes standalone build (CMAKE_SOURCE_DIR == radae_nopy
+#      root). When nested via add_subdirectory, CMAKE_SOURCE_DIR is the
+#      parent project root; CMAKE_CURRENT_LIST_DIR works in both modes.
+#   4. Windows branch: build Opus via its native CMakeLists.txt instead
+#      of autotools. cmd.exe can't run ./autogen.sh and the default
+#      Windows CI runner image has no autoconf/automake/libtool. Opus
+#      ships both autogen.bat + dnn/download_model.bat (Windows-native
+#      model download via PowerShell) AND a full CMakeLists.txt with
+#      OPUS_DRED and OPUS_OSCE options, so the Windows path uses CMake
+#      to bypass autotools entirely. Linux + non-universal macOS keep
+#      the autotools chain.
+#   5. URL_HASH on every ExternalProject_Add(build_opus*) (upstream
+#      declares none): the default OPUS_URL gets its own hash, and an
+#      OPUS_URL given by the caller must come with OPUS_URL_HASH or the
+#      configure stops. Plus the model steps of NereusOpusModel.cmake: a
+#      first PATCH_COMMAND copies a verified DRED/OSCE model into the
+#      source tree (the pre-fetched one the parent names in
+#      NEREUS_OPUS_MODEL_ARCHIVE, else a verified copy kept outside the
+#      tree), and two steps keep that copy, so neither a CI run with a
+#      dependency cache nor the re-extract of an existing build dir asks
+#      media.xiph.org for it. The pinned Opus's dnn/download_model.sh and
+#      download_model.bat download the model only when no copy is there.
+# RADE v2 refresh: apply upstream opus-nnet.c.diff in every path; its
+# 2048-float convolution scratch supports the V2 decoder (c8a3dc1).
+# All five are noted at their site as well. See Task A2 of
+# docs/architecture/phase3j2-3r-spots-and-rade-design.md.
+
+message(STATUS "Will build opus with FARGAN")
+
+set(CONFIGURE_COMMAND ./autogen.sh && ./configure --with-pic --enable-osce --enable-dred --disable-shared --disable-doc --disable-extra-programs)
+
+if (CMAKE_CROSSCOMPILING)
+set(CONFIGURE_COMMAND ${CONFIGURE_COMMAND} --host=${CMAKE_C_COMPILER_TARGET} --target=${CMAKE_C_COMPILER_TARGET})
+endif (CMAKE_CROSSCOMPILING)
+
+if (NOT DEFINED OPUS_URL)
+set(OPUS_URL https://github.com/xiph/opus/archive/940d4e5af64351ca8ba8390df3f555484c567fbb.zip)
+# NereusSDR vendored patch (5): the default URL's SHA-256, set only with the
+# default URL. cmake/NereusDependencyArchives.cmake carries the same pin.
+if (NOT DEFINED OPUS_URL_HASH)
+set(OPUS_URL_HASH SHA256=20e37f9079ac2b80e3235cd8ce2547829e147bf44a2f5dd28a888fa3e9c24341)
+endif (NOT DEFINED OPUS_URL_HASH)
+endif (NOT DEFINED OPUS_URL)
+message(STATUS "Using Opus from ${OPUS_URL}")
+
+# NereusSDR vendored patch (5): an OPUS_URL from the caller (a mirror, or a
+# local zip such as the offline kits' Opus zip with the model) is used only
+# with its own hash, checked on it whether it is a URL or a local path.
+if (NOT OPUS_URL_HASH)
+message(FATAL_ERROR
+    "OPUS_URL is set to ${OPUS_URL} without OPUS_URL_HASH. Pass "
+    "-DOPUS_URL_HASH=SHA256=<sha256 of that archive>; Opus is never used unverified.")
+endif ()
+
+# NereusSDR vendored patch (5): the DRED/OSCE model. The pin is the one the
+# pinned Opus's autogen.sh passes to dnn/download_model.sh (and the Windows
+# branch below passes to download_model.bat as _opus_model_sha).
+set(_opus_model_sha256 4ed9445b96698bad25d852e912b41495ddfa30c8dbc8a55f9cde5826ed793453)
+set(_opus_model_stash ${CMAKE_CURRENT_BINARY_DIR}/opus_model/opus_data-${_opus_model_sha256}.tar.gz)
+if (NEREUS_OPUS_MODEL_ARCHIVE)
+message(STATUS "Using Opus model from ${NEREUS_OPUS_MODEL_ARCHIVE}")
+endif ()
+# Git for Windows supplies patch under usr/bin; other hosts use PATH.
+find_program(PATCH_EXECUTABLE NAMES patch
+    HINTS "C:/Program Files/Git/usr/bin" "C:/Program Files (x86)/Git/usr/bin"
+    REQUIRED)
+set(_opus_patch_script ${CMAKE_CURRENT_LIST_DIR}/NereusOpusPatches.cmake)
+set(_opus_patch_dir ${CMAKE_CURRENT_LIST_DIR}/../src)
+set(_opus_patch_command ${CMAKE_COMMAND}
+    -DSOURCE_DIR=<SOURCE_DIR>
+    "-DPATCH_EXECUTABLE=${PATCH_EXECUTABLE}"
+    -P ${_opus_patch_script})
+set(_opus_model_script ${CMAKE_CURRENT_LIST_DIR}/NereusOpusModel.cmake)
+set(_opus_model_seed_command ${CMAKE_COMMAND}
+    -DMODE=seed
+    "-DMODEL=${NEREUS_OPUS_MODEL_ARCHIVE}"
+    "-DSTASH=${_opus_model_stash}"
+    -DSOURCE_DIR=<SOURCE_DIR>
+    -DSHA256=${_opus_model_sha256}
+    -P ${_opus_model_script})
+
+# Keep a verified copy of the model outside the source tree: before the
+# download step (an existing build dir's copy, which the re-extract would
+# wipe) and after the configure step (the copy just downloaded).
+function(_nereus_opus_model_steps project)
+    ExternalProject_Add_StepDependencies(${project} patch
+        ${_opus_patch_script}
+        ${_opus_patch_dir}/opus-nnet.h.diff
+        ${_opus_patch_dir}/opus-nnet.c.diff)
+    ExternalProject_Add_Step(${project} nereus_keep_model_before
+        COMMAND ${CMAKE_COMMAND} -DMODE=stash "-DSTASH=${_opus_model_stash}"
+                -DSOURCE_DIR=<SOURCE_DIR> -DSHA256=${_opus_model_sha256}
+                -P ${_opus_model_script}
+        DEPENDEES mkdir
+        DEPENDERS download)
+    ExternalProject_Add_Step(${project} nereus_keep_model_after
+        COMMAND ${CMAKE_COMMAND} -DMODE=stash "-DSTASH=${_opus_model_stash}"
+                -DSOURCE_DIR=<SOURCE_DIR> -DSHA256=${_opus_model_sha256}
+                -P ${_opus_model_script}
+        DEPENDEES configure
+        DEPENDERS build)
+endfunction()
+
+include(ExternalProject)
+if(APPLE AND BUILD_OSX_UNIVERSAL)
+# Opus ./configure doesn't behave properly when built as a universal binary;
+# build it twice and use lipo to create a universal libopus.a instead.
+ExternalProject_Add(build_opus_x86
+    DOWNLOAD_EXTRACT_TIMESTAMP NO
+    BUILD_IN_SOURCE 1
+    PATCH_COMMAND ${_opus_model_seed_command}
+        COMMAND ${_opus_patch_command}
+    CONFIGURE_COMMAND ${CONFIGURE_COMMAND} --host=x86_64-apple-darwin --target=x86_64-apple-darwin CFLAGS=-arch\ x86_64\ -O2\ -mmacosx-version-min=10.11
+    BUILD_COMMAND make
+    # NereusSDR vendored patch: upstream uses $(MAKE), which Ninja
+    # parses as a literal-dollar escape error ("bad $-escape"). $(MAKE)
+    # is a Makefile-specific variable; replacing with plain `make`
+    # works for both Ninja and Make top-level generators. See Task A2
+    # of phase3j2-3r-spots-and-rade-design.md.
+    INSTALL_COMMAND ""
+    URL ${OPUS_URL}
+    URL_HASH ${OPUS_URL_HASH}
+)
+_nereus_opus_model_steps(build_opus_x86)
+ExternalProject_Add(build_opus_arm
+    DOWNLOAD_EXTRACT_TIMESTAMP NO
+    BUILD_IN_SOURCE 1
+    PATCH_COMMAND ${_opus_model_seed_command}
+        COMMAND ${_opus_patch_command}
+    CONFIGURE_COMMAND ${CONFIGURE_COMMAND} --host=aarch64-apple-darwin --target=aarch64-apple-darwin CFLAGS=-arch\ arm64\ -O2\ -mmacosx-version-min=10.11
+    BUILD_COMMAND make
+    # NereusSDR vendored patch: upstream uses $(MAKE), which Ninja
+    # parses as a literal-dollar escape error ("bad $-escape"). $(MAKE)
+    # is a Makefile-specific variable; replacing with plain `make`
+    # works for both Ninja and Make top-level generators. See Task A2
+    # of phase3j2-3r-spots-and-rade-design.md.
+    INSTALL_COMMAND ""
+    URL ${OPUS_URL}
+    URL_HASH ${OPUS_URL_HASH}
+)
+_nereus_opus_model_steps(build_opus_arm)
+
+ExternalProject_Get_Property(build_opus_arm BINARY_DIR)
+ExternalProject_Get_Property(build_opus_arm SOURCE_DIR)
+set(OPUS_ARM_BINARY_DIR ${BINARY_DIR})
+ExternalProject_Get_Property(build_opus_x86 BINARY_DIR)
+set(OPUS_X86_BINARY_DIR ${BINARY_DIR})
+
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/libopus${CMAKE_STATIC_LIBRARY_SUFFIX}
+    COMMAND lipo ${OPUS_ARM_BINARY_DIR}/.libs/libopus${CMAKE_STATIC_LIBRARY_SUFFIX} ${OPUS_X86_BINARY_DIR}/.libs/libopus${CMAKE_STATIC_LIBRARY_SUFFIX} -output ${CMAKE_CURRENT_BINARY_DIR}/libopus${CMAKE_STATIC_LIBRARY_SUFFIX} -create
+    DEPENDS build_opus_arm build_opus_x86)
+
+add_custom_target(
+    libopus.a
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/libopus${CMAKE_STATIC_LIBRARY_SUFFIX})
+
+include_directories(${SOURCE_DIR}/dnn ${SOURCE_DIR}/celt ${SOURCE_DIR}/include ${SOURCE_DIR})
+
+add_library(opus STATIC IMPORTED)
+add_dependencies(opus libopus.a)
+set_target_properties(opus PROPERTIES
+    IMPORTED_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/libopus${CMAKE_STATIC_LIBRARY_SUFFIX}"
+)
+
+elseif(APPLE AND CMAKE_OSX_ARCHITECTURES)
+
+# NereusSDR vendored patch (macOS single-arch cross-compile):
+# release.yml does NOT set BUILD_OSX_UNIVERSAL — each macOS row
+# builds for a single arch (matrix.arch ∈ {x86_64, arm64}) and
+# passes -DCMAKE_OSX_ARCHITECTURES=<arch>. The plain autotools
+# `else` branch below ignores CMAKE_OSX_ARCHITECTURES, so on the
+# macos-15 (arm64) runner the Intel row produced arm64 Opus
+# objects and the NereusSDR link failed with
+#   "ignoring file libopus.a: found arch 'arm64', required 'x86_64'"
+# Pass --host/--target plus CFLAGS=-arch X to autoconf so Opus
+# builds for the requested arch regardless of runner host arch.
+# Mirrors the per-arch CONFIGURE_COMMAND extension that the
+# `APPLE AND BUILD_OSX_UNIVERSAL` branch uses for its two
+# sub-builds. See Task A2 of phase3j2-3r-spots-and-rade-design.md.
+#
+# Gate uses bare `CMAKE_OSX_ARCHITECTURES` (truthy-test) rather than
+# `DEFINED CMAKE_OSX_ARCHITECTURES` so an empty-string value (ci.yml
+# does not pass -DCMAKE_OSX_ARCHITECTURES, leaving it defined-but-empty)
+# falls through to the plain autotools `else` branch instead of
+# hitting the FATAL_ERROR below.
+
+list(LENGTH CMAKE_OSX_ARCHITECTURES _osx_arch_count)
+if(_osx_arch_count GREATER 1)
+    message(FATAL_ERROR
+        "BuildOpus.cmake: multi-arch CMAKE_OSX_ARCHITECTURES (${CMAKE_OSX_ARCHITECTURES}) "
+        "requires BUILD_OSX_UNIVERSAL=ON path; got single-arch path. Set BUILD_OSX_UNIVERSAL "
+        "or pick a single arch.")
+endif()
+
+if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+    set(_opus_host_triple "x86_64-apple-darwin")
+elseif(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+    set(_opus_host_triple "aarch64-apple-darwin")
+else()
+    message(FATAL_ERROR "BuildOpus.cmake: unsupported CMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
+endif()
+
+if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0")
+endif()
+
+set(_opus_binary_dir ${CMAKE_CURRENT_BINARY_DIR}/build_opus-prefix/src/build_opus)
+set(_opus_static_lib ${_opus_binary_dir}/.libs/libopus${CMAKE_STATIC_LIBRARY_SUFFIX})
+
+ExternalProject_Add(build_opus
+    DOWNLOAD_EXTRACT_TIMESTAMP NO
+    BUILD_IN_SOURCE 1
+    PATCH_COMMAND ${_opus_model_seed_command}
+        COMMAND ${_opus_patch_command}
+    CONFIGURE_COMMAND ${CONFIGURE_COMMAND}
+        --host=${_opus_host_triple}
+        --target=${_opus_host_triple}
+        CFLAGS=-arch\ ${CMAKE_OSX_ARCHITECTURES}\ -O2\ -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}
+    BUILD_COMMAND make
+    BUILD_BYPRODUCTS ${_opus_static_lib}
+    INSTALL_COMMAND ""
+    URL ${OPUS_URL}
+    URL_HASH ${OPUS_URL_HASH}
+)
+_nereus_opus_model_steps(build_opus)
+
+ExternalProject_Get_Property(build_opus BINARY_DIR)
+ExternalProject_Get_Property(build_opus SOURCE_DIR)
+add_library(opus STATIC IMPORTED)
+add_dependencies(opus build_opus)
+
+set_target_properties(opus PROPERTIES
+    IMPORTED_LOCATION "${_opus_static_lib}"
+    IMPORTED_IMPLIB   "${_opus_static_lib}"
+)
+
+include_directories(${SOURCE_DIR}/dnn ${SOURCE_DIR}/celt ${SOURCE_DIR}/include ${SOURCE_DIR})
+
+elseif(WIN32)
+
+# NereusSDR vendored patch (Windows): bypass autotools, use Opus's
+# native CMake build. cmd.exe can't run ./autogen.sh and the default
+# Windows CI runner image has no autoconf/automake/libtool. Opus's
+# CMakeLists.txt at the pinned commit (940d4e5af6) supports
+# OPUS_DRED + OPUS_OSCE (the FARGAN/DRED neural enhancers RADE needs),
+# and dnn/download_model.bat fetches the model via PowerShell instead
+# of wget. See patch (4) at the top of this file.
+
+# Model hash must stay in sync with autogen.sh in the pinned Opus
+# commit (verify: gh api repos/xiph/opus/contents/autogen.sh?ref=940d4e5).
+set(_opus_model_sha "4ed9445b96698bad25d852e912b41495ddfa30c8dbc8a55f9cde5826ed793453")
+
+# CMake-built Opus (no BUILD_IN_SOURCE) puts the static lib in a
+# separate build tree under build_opus-prefix/src/build_opus-build/.
+set(_opus_binary_dir ${CMAKE_CURRENT_BINARY_DIR}/build_opus-prefix/src/build_opus-build)
+set(_opus_static_lib ${_opus_binary_dir}/${CMAKE_STATIC_LIBRARY_PREFIX}opus${CMAKE_STATIC_LIBRARY_SUFFIX})
+
+ExternalProject_Add(build_opus
+    DOWNLOAD_EXTRACT_TIMESTAMP NO
+    URL ${OPUS_URL}
+    URL_HASH ${OPUS_URL_HASH}
+    # Two-step patch: (1) fetch DRED/OSCE model tarball + extract into
+    # dnn/ via the upstream Windows-native script; (2) apply the
+    # NereusSDR opus-nnet.h.diff that adds RADE_EXPORT visibility tags
+    # to nnet.h. Both are required before configure.
+    #
+    # The download_model.bat invocation runs from <SOURCE_DIR> (NOT
+    # <SOURCE_DIR>/dnn) because the tarball's internal paths all begin
+    # with "dnn/" — extracting from <SOURCE_DIR>/dnn would land files
+    # at <SOURCE_DIR>/dnn/dnn/... and CMake configure would fail
+    # looking for dnn/fargan_data.h. This matches upstream autogen.bat
+    # which also runs the bat from the source root.
+    PATCH_COMMAND ${_opus_model_seed_command}
+        COMMAND ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> cmd /c dnn\\download_model.bat ${_opus_model_sha}
+        COMMAND ${_opus_patch_command}
+    CMAKE_ARGS
+        -DCMAKE_BUILD_TYPE=Release
+        -DOPUS_DRED=ON
+        -DOPUS_OSCE=ON
+        -DOPUS_BUILD_SHARED_LIBRARY=OFF
+        -DOPUS_BUILD_PROGRAMS=OFF
+        -DOPUS_BUILD_TESTING=OFF
+        -DOPUS_INSTALL_PKG_CONFIG_MODULE=OFF
+        -DOPUS_INSTALL_CMAKE_CONFIG_MODULE=OFF
+    BUILD_BYPRODUCTS ${_opus_static_lib}
+    INSTALL_COMMAND ""
+)
+_nereus_opus_model_steps(build_opus)
+
+ExternalProject_Get_Property(build_opus SOURCE_DIR)
+add_library(opus STATIC IMPORTED)
+add_dependencies(opus build_opus)
+
+set_target_properties(opus PROPERTIES
+    IMPORTED_LOCATION "${_opus_static_lib}"
+    IMPORTED_IMPLIB   "${_opus_static_lib}"
+)
+
+include_directories(${SOURCE_DIR}/dnn ${SOURCE_DIR}/celt ${SOURCE_DIR}/include ${SOURCE_DIR})
+
+else(APPLE AND BUILD_OSX_UNIVERSAL)
+
+# Disable Opus CPU feature detection when crosscompiling for ARM due to
+# compiler issues building Windows for ARM version.
+if (CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+set(CONFIGURE_COMMAND ${CONFIGURE_COMMAND} --disable-rtcd)
+endif (CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+
+# NereusSDR vendored patch: pre-compute BINARY_DIR so we can declare
+# BUILD_BYPRODUCTS. Ninja needs to know which file ExternalProject
+# produces, otherwise it cannot wire the dependency from the consumer
+# (librade.dylib) back to build_opus, and link fails with
+# "missing and no known rule to make it". Make-generators don't need
+# this. See Task A2 of phase3j2-3r-spots-and-rade-design.md.
+set(_opus_binary_dir ${CMAKE_CURRENT_BINARY_DIR}/build_opus-prefix/src/build_opus)
+set(_opus_static_lib ${_opus_binary_dir}/.libs/libopus${CMAKE_STATIC_LIBRARY_SUFFIX})
+
+ExternalProject_Add(build_opus
+    BUILD_IN_SOURCE 1
+    PATCH_COMMAND ${_opus_model_seed_command}
+        COMMAND ${_opus_patch_command}
+    CONFIGURE_COMMAND ${CONFIGURE_COMMAND}
+    BUILD_COMMAND make
+    # NereusSDR vendored patch: upstream uses $(MAKE), which Ninja
+    # parses as a literal-dollar escape error ("bad $-escape"). $(MAKE)
+    # is a Makefile-specific variable; replacing with plain `make`
+    # works for both Ninja and Make top-level generators. See Task A2
+    # of phase3j2-3r-spots-and-rade-design.md.
+    BUILD_BYPRODUCTS ${_opus_static_lib}
+    INSTALL_COMMAND ""
+    URL ${OPUS_URL}
+    URL_HASH ${OPUS_URL_HASH}
+)
+_nereus_opus_model_steps(build_opus)
+
+ExternalProject_Get_Property(build_opus BINARY_DIR)
+ExternalProject_Get_Property(build_opus SOURCE_DIR)
+add_library(opus STATIC IMPORTED)
+add_dependencies(opus build_opus)
+
+set_target_properties(opus PROPERTIES
+    IMPORTED_LOCATION "${BINARY_DIR}/.libs/libopus${CMAKE_STATIC_LIBRARY_SUFFIX}"
+    IMPORTED_IMPLIB   "${BINARY_DIR}/.libs/libopus${CMAKE_STATIC_LIBRARY_SUFFIX}"
+)
+
+include_directories(${SOURCE_DIR}/dnn ${SOURCE_DIR}/celt ${SOURCE_DIR}/include ${SOURCE_DIR})
+endif(APPLE AND BUILD_OSX_UNIVERSAL)

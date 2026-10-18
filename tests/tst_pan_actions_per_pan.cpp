@@ -1,0 +1,1236 @@
+// =================================================================
+// tests/tst_pan_actions_per_pan.cpp  (NereusSDR)
+// =================================================================
+//
+// no-port-check: NereusSDR-original test. Asserts that a control drawn on a
+// pan acts on that pan, in a local window and in a remote one.
+//
+// Remote-window parity plan, Task 18 (R-R3-09, R-R3-24, R-R3-34, R-R3-49):
+//   B3.1  the overlay BAND flyout on a pan whose slice is not the active
+//         one changes that pan's slice, local and remote.
+//   C8    a restored pan with no slice says so and how to add one, instead
+//         of standing blank.
+//   and the passing items: the Display flyout (Grid Lines included) and
+//   the Clarity badge on every pan, each acting on its own pan; a spot's
+//   left-click doing what AetherSDR's does; Pan Layout and +PAN using the
+//   Core's advertised slice limit in a remote window.
+//
+// Loopback WebSocket and test radio models only: no RF, no radio, no audio
+// device. Every run is offscreen.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-10-16  J.J. Boyd / KG4VCF. A local slice keyed to a pan the layout
+//                does not show is rehomed onto the window's pan, with no
+//                hidden pan. AI-assisted via Anthropic Claude Code.
+//   2026-10-16  J.J. Boyd / KG4VCF. A slice keyed to a pan that a layout
+//                change then makes lands on that pan, flag, stream and all.
+//                AI-assisted via Anthropic Claude Code.
+//   2026-10-05 — J.J. Boyd (KG4VCF). Independent per-pan Clarity ownership.
+//                 AI-assisted via OpenAI Codex.
+//   2026-10-03  J.J. Boyd / KG4VCF. STEP propagation, pan wheel and stale
+//                slice lifetime regressions. AI-assisted via OpenAI Codex.
+//   2026-10-02  J.J. Boyd / KG4VCF. Real window/fake Core TX-letter Take
+//                regressions: cancellation, current refusal, unchanged RX
+//                history, and target lifetime. AI-assisted via OpenAI Codex.
+//   2026-10-02  J.J. Boyd / KG4VCF. Selected-pan Clarity grid and output
+//                 lifetime regressions. AI-assisted via OpenAI Codex.
+//   2026-10-01  J.J. Boyd / KG4VCF. Unkeyed TX-letter shared-pan history
+//                 lifecycle regression. AI-assisted via OpenAI Codex.
+//   2026-10-01  J.J. Boyd / KG4VCF. Primary empty-key Max Bin regression
+//                                    and coverage guards. AI-assisted via
+//                                    OpenAI Codex.
+//   2026-09-26  J.J. Boyd / KG4VCF  Remote-window parity Task 18.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
+// =================================================================
+
+#include <QtTest/QtTest>
+
+#include <QAbstractSlider>
+#include <QAction>
+#include <QCloseEvent>
+#include <QComboBox>
+#include <QLabel>
+#include <QLoggingCategory>
+#include <QPushButton>
+#include <QPointer>
+#include <QSignalSpy>
+#include <QWheelEvent>
+
+#include <memory>
+
+#include "core/AppSettings.h"
+#include "core/ClarityController.h"
+#include "core/ConnectionState.h"
+#include "core/FFTRouter.h"
+#include "core/session/SessionMessages.h"
+#include "core/session/StationCapabilities.h"
+#include "core/session/StationClient.h"
+#include "fakes/RemoteWindowHarness.h"
+#include "gui/MainWindow.h"
+#include "gui/PanClarityRegistry.h"
+#include "gui/MoxDisplayController.h"
+#include "gui/PanadapterApplet.h"
+#include "gui/PanadapterStack.h"
+#include "gui/SpectrumOverlayPanel.h"
+#include "gui/SpectrumWidget.h"
+#include "gui/SMeterWidget.h"
+#include "gui/applets/TxApplet.h"
+#include "gui/applets/RxApplet.h"
+#include "gui/TuneStepLabel.h"
+#include "gui/widgets/VfoWidget.h"
+#include "core/TxSliceArbiter.h"
+#include "core/safety/TransmitHolder.h"
+#include "gui/meters/MeterPoller.h"
+#include "core/session/media/SpectrumEndpoint.h"
+#include "gui/meters/MeterWidget.h"
+#include "gui/meters/presets/BarPresetItem.h"
+#include "gui/containers/ContainerPreviewWidget.h"
+#include "gui/containers/ContainerContentRegistry.h"
+#include "gui/containers/ContainerManager.h"
+#include "models/Band.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
+#include "models/SpotModeResolver.h"
+#include "models/SpotModel.h"
+#include "OperatorWording.h"
+
+using namespace NereusSDR;
+using NereusSDR::Test::RemoteWindowHarness;
+
+namespace {
+
+constexpr int kSettleMs = 300;
+
+PanadapterApplet* appletFor(MainWindow* window, const QString& panId)
+{
+    if (!window) { return nullptr; }
+    for (PanadapterApplet* applet : window->findChildren<PanadapterApplet*>()) {
+        if (applet->panId() == panId) { return applet; }
+    }
+    return nullptr;
+}
+
+SpectrumOverlayPanel* stripFor(MainWindow* window, const QString& panId)
+{
+    PanadapterApplet* applet = appletFor(window, panId);
+    return applet && applet->spectrumWidget()
+        ? applet->spectrumWidget()->findChild<SpectrumOverlayPanel*>()
+        : nullptr;
+}
+
+// The slice a pan shows: its own active slice.
+SliceModel* sliceOnPan(MainWindow* window, const QString& panId)
+{
+    PanadapterApplet* applet = appletFor(window, panId);
+    if (!applet || !window->radioModel()) { return nullptr; }
+    return window->radioModel()->sliceById(applet->activeSliceIndex());
+}
+
+// A local window on a test radio with the saved layout `layout`, connected,
+// every pan given its slice as a local window does at connect.
+std::unique_ptr<MainWindow> openLocalWindow(const QString& layout)
+{
+    AppSettings::instance().setValue(QStringLiteral("PanLayoutId"), layout);
+    auto window = std::make_unique<MainWindow>(RemoteStationOptions{}, nullptr,
+                                               MainWindow::ConnectionStartup::Deferred);
+    RadioModel* model = window->radioModel();
+    model->setBoardForTest(HPSDRHW::Saturn);
+    model->configureStreamPool(/*userDdcCount=*/5, /*maxSlices=*/5,
+                               /*defaultRateHz=*/192000);
+    window->resize(1280, 800);
+    window->show();
+    model->setConnectionStateForTest(ConnectionState::Connected);
+    return window;
+}
+
+} // namespace
+
+class TestPanActionsPerPan final : public QObject {
+    Q_OBJECT
+
+private slots:
+    void shutdownRetiresBeforeContainerDestruction()
+    {
+        auto window = openLocalWindow(QStringLiteral("vertical-2"));
+        QPointer<PanClarityRegistry> registry(window->findChild<PanClarityRegistry*>());
+        auto* containers = window->findChild<ContainerManager*>();
+        QVERIFY(registry); QVERIFY(containers);
+        QVERIFY(registry->controllerForPan(QStringLiteral("pan-0")));
+        bool observed = false;
+        bool retired = false;
+        connect(containers, &QObject::destroyed, this, [&] {
+            observed = true;
+            retired = registry && !registry->controllerForPan(QStringLiteral("pan-0"));
+        });
+        window.reset();
+        QVERIFY(observed); QVERIFY(retired);
+    }
+    void closeEntryRetiresClarityImmediately()
+    {
+        auto window = openLocalWindow(QStringLiteral("vertical-2"));
+        auto* registry = window->findChild<PanClarityRegistry*>();
+        QVERIFY(registry);
+        QVERIFY(registry->controllerForPan(QStringLiteral("pan-0")));
+        QCloseEvent event;
+        QCoreApplication::sendEvent(window.get(), &event);
+        QVERIFY(!registry->controllerForPan(QStringLiteral("pan-0")));
+        QVERIFY(!registry->controllerForPan(QStringLiteral("pan-1")));
+        registry->retireAll(); // every shutdown entry can repeat retirement
+    }
+    void initTestCase()
+    {
+        QLoggingCategory::setFilterRules(QStringLiteral("nereus.*.debug=false"));
+        QVERIFY(RemoteWindowHarness::useIsolatedProfile(QStringLiteral("pan-actions-per-pan")));
+    }
+
+    void init()
+    {
+        QVERIFY(RemoteWindowHarness::clearIsolatedProfile());
+    }
+
+    void cleanupTestCase()
+    {
+        QVERIFY(RemoteWindowHarness::removeIsolatedProfile());
+    }
+
+    void selectedStepControlsPanWheelAndDisplayedStep()
+    {
+        RemoteWindowHarness h;
+        QVERIFY(h.start());
+        h.startStartupConnection();
+        QTRY_VERIFY(h.client()->isHandshakeComplete());
+        SliceModel* slice = h.remoteModel()->sliceById(0);
+        PanadapterApplet* pan = appletFor(h.window(), QStringLiteral("pan-0"));
+        RxApplet* rx = h.window()->findChild<RxApplet*>();
+        QVERIFY(slice && pan && rx);
+        SpectrumWidget* sw = pan->spectrumWidget();
+        slice->setStepHz(100);
+        slice->setStepHz(1000);
+        bool displayed = false;
+        for (QLabel* label : rx->findChildren<QLabel*>()) {
+            displayed |= label->text() == formatTuneStepLabel(1000);
+        }
+        QVERIFY(displayed);
+        const double before = slice->frequency();
+        sw->setVfoFrequency(before);
+        QSignalSpy requests(sw, &SpectrumWidget::frequencyClicked);
+        QWheelEvent wheel(QPointF(20, 20), QPointF(20, 20), QPoint(), QPoint(0, 120),
+                          Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(sw, &wheel);
+        QCOMPARE(requests.size(), 1);
+        QCOMPARE(requests.first().first().toDouble(), before + 1000.0);
+        QCOMPARE(sw->stepSize(), 1000);
+    }
+
+    void panStepsFollowSelectionAndReplacementWithoutStaleUpdates()
+    {
+        RemoteWindowHarness::Options options;
+        options.stationSlices = 2;
+        options.panLayout = QStringLiteral("2v");
+        RemoteWindowHarness h(options);
+        QVERIFY(h.start());
+        h.station().sliceById(0)->setStepHz(1000);
+        h.station().sliceById(1)->setStepHz(500);
+        h.startStartupConnection();
+        QTRY_VERIFY(h.client()->isHandshakeComplete());
+        RadioModel* model = h.remoteModel();
+        SliceModel* a = model->sliceById(0);
+        SliceModel* b = model->sliceById(1);
+        PanadapterApplet* panA = appletFor(h.window(), QStringLiteral("pan-0"));
+        PanadapterApplet* panB = appletFor(h.window(), QStringLiteral("pan-1"));
+        QVERIFY(a && b && panA && panB);
+        SpectrumWidget* swA = panA->spectrumWidget();
+        SpectrumWidget* swB = panB->spectrumWidget();
+        QCOMPARE(swA->stepSize(), 1000);
+        QCOMPARE(swB->stepSize(), 500);
+
+        // Apply the same inbound create/destroy entry points as a new Core
+        // snapshot. A recycled id must not retain its previous STEP source.
+        QCOMPARE(model->addSliceWithStationId(99, QStringLiteral("pan-0")), 99);
+        SliceModel* replacement = model->sliceById(99);
+        QVERIFY(replacement);
+        replacement->setStepHz(2500);
+        panA->setActiveSliceIndex(99);
+        QCOMPARE(swA->stepSize(), 2500);
+        QCOMPARE(swB->stepSize(), 500);
+        a->setStepHz(10);
+        QCOMPARE(swA->stepSize(), 2500);
+        panA->setActiveSliceIndex(0);
+        QCOMPARE(swA->stepSize(), 10);
+        replacement->setStepHz(5000);
+        QCOMPARE(swA->stepSize(), 10);
+        panA->setActiveSliceIndex(99);
+        QCOMPARE(swA->stepSize(), 5000);
+        QPointer<SliceModel> old(replacement);
+        QVERIFY(QMetaObject::invokeMethod(replacement, "stepHzChanged", Qt::QueuedConnection,
+                                          Q_ARG(int, 10000)));
+        model->removeSliceWithStationId(99);
+        QCOMPARE(model->addSliceWithStationId(99, QStringLiteral("pan-0")), 99);
+        replacement = model->sliceById(99);
+        QVERIFY(replacement);
+        replacement->setStepHz(1000);
+        panA->setActiveSliceIndex(99);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCOMPARE(swA->stepSize(), 1000);
+        QCOMPARE(swB->stepSize(), 500);
+        if (old) { emit old->stepHzChanged(10000); }
+        QCOMPARE(swA->stepSize(), 1000);
+        QCOMPARE(swB->stepSize(), 500);
+
+        replacement->setPanKey(QStringLiteral("pan-1"));
+        panB->setActiveSliceIndex(99);
+        replacement->setStepHz(2500);
+        QCOMPARE(swA->stepSize(), a->stepHz());
+        QCOMPARE(swB->stepSize(), 2500);
+        b->setStepHz(100);
+        QCOMPARE(swB->stepSize(), 2500);
+        panB->setActiveSliceIndex(1);
+        QCOMPARE(swB->stepSize(), 100);
+        QCOMPARE(swA->stepSize(), a->stepHz());
+    }
+
+    // Core's primary slice can have no panKey. Its associated live pan is
+    // still its Max Bin source, shared by the S-meter and VFO meter.
+    void maxBinUsesAssociatedPanForEmptyCoreKey()
+    {
+        RemoteWindowHarness h;
+        QVERIFY(h.start());
+        SliceModel* coreSlice = h.station().slices().first();
+        coreSlice->setPanKey(QString());
+        coreSlice->setFrequency(14002000.0);
+        coreSlice->setFilter(500, 2500);
+        h.startStartupConnection();
+        QTRY_VERIFY(h.client()->isHandshakeComplete());
+        SliceModel* slice = h.remoteModel()->sliceById(coreSlice->sliceIndex());
+        QVERIFY(slice);
+        QVERIFY(slice->panKey().isEmpty());
+        QVERIFY(slice->streamIndex() >= 0);
+        PanadapterApplet* pan = appletFor(h.window(), QStringLiteral("pan-0"));
+        QVERIFY(pan && pan->associatedSlices().contains(slice->sliceIndex()));
+        SpectrumWidget* sw = pan->spectrumWidget();
+        QVERIFY(sw);
+        SpectrumEndpointContext context;
+        context.codec = {29, 1, -180, 0, 11, 11, 0};
+        context.exactCentreHz = 14000000;
+        context.exactSpanHz = 10000;
+        sw->setRemoteSpectrumContext(context, context.exactCentreHz, 192000);
+        DisplayCodecFrame frame;
+        frame.context = context.codec;
+        frame.traceDbm = QVector<float>(11, -120);
+        frame.traceDbm[8] = -71;
+        frame.waterfallDbm = QVector<float>(11, -110);
+        QVERIFY(sw->updateRemoteSpectrum(frame));
+        QCOMPARE(sw->peakDbmInPassband(14002500, 14004500), -71.0);
+        MeterPoller* poller = h.window()->findChild<MeterPoller*>();
+        SMeterWidget* meter = h.window()->findChild<SMeterWidget*>();
+        QVERIFY(poller && meter);
+        meter->setRxMode(QStringLiteral("Max Bin"));
+        QSignalSpy vfo(poller, &MeterPoller::remoteSliceLevelUpdated);
+        QVERIFY(QMetaObject::invokeMethod(poller, "poll", Qt::DirectConnection));
+        QCOMPARE(meter->levelDbm(), -71.0f);
+        QVERIFY(!vfo.isEmpty());
+        QCOMPARE(vfo.last().at(0).toInt(), slice->sliceIndex());
+        QCOMPARE(vfo.last().at(1).toDouble(), -71.0);
+
+        ContainerContentRegistry registry;
+        ContainerPreviewWidget preview(registry,*poller);
+        ContainerDocument draft; draft.id="preview"; draft.layout=ContentLayout::VerticalStack;
+        auto entry=registry.makeEntry("meter.signalMaxBin"); entry.context["sliceId"]=slice->sliceIndex(); entry.context["bindingId"]=MeterBinding::SignalMaxBin;
+        draft.contents={entry}; const int targetCount=poller->targetCountForTest(); preview.setDocument(draft);
+        auto* previewMeter=preview.findChild<MeterWidget*>(); auto* previewFace=qobject_cast<BarPresetItem*>(previewMeter->items()[0]); QVERIFY(previewFace);
+        QVERIFY(previewFace->hasPrimaryReading()); QCOMPARE(previewFace->value(),-71.0); QCOMPARE(poller->targetCountForTest(),targetCount);
+        const auto noReading = [&]() {
+            vfo.clear();
+            QVERIFY(QMetaObject::invokeMethod(poller, "poll", Qt::DirectConnection));
+            QCOMPARE(meter->sUnitsText(), QStringLiteral("--"));
+            QVERIFY(!vfo.isEmpty());
+            QCOMPARE(vfo.last().at(1).toDouble(), -400.0);
+        };
+        // An unbound slice cannot borrow a retained display frame.
+        const int stream = slice->streamIndex();
+        slice->setStreamIndex(-1);
+        poller->copyCachedReadings(previewMeter,{{"sliceId",slice->sliceIndex()}}); QVERIFY(!previewFace->hasPrimaryReading());
+        noReading();
+        slice->setStreamIndex(stream);
+        // A marker association with another receiver does not lend its peak.
+        h.remoteModel()->addSliceWithStationId(99);
+        SliceModel* foreign = h.remoteModel()->sliceById(99);
+        QVERIFY(foreign);
+        foreign->setStreamIndex(stream + 1);
+        pan->addSlice(99);
+        pan->setActiveSliceIndex(99);
+        h.remoteModel()->setActiveSlice(slice->sliceIndex());
+        // Focus the slice again but explicitly leave the test pan displaying
+        // the other receiver, without processing a subscription renewal.
+        pan->setActiveSliceIndex(99);
+        poller->copyCachedReadings(previewMeter,{{"sliceId",slice->sliceIndex()}}); QVERIFY(!previewFace->hasPrimaryReading());
+        vfo.clear();
+        QVERIFY(QMetaObject::invokeMethod(poller, "poll", Qt::DirectConnection));
+        bool foundPrimary = false;
+        for (const QList<QVariant>& reading : vfo) {
+            if (reading.at(0).toInt() == slice->sliceIndex()) {
+                QCOMPARE(reading.at(1).toDouble(), -400.0);
+                foundPrimary = true;
+            }
+        }
+        QVERIFY(foundPrimary);
+        // Selecting a co-host on the same receiver keeps the primary's
+        // passband measurement available, matching a live shared pan.
+        foreign->setStreamIndex(stream);
+        foreign->setStreamEpoch(slice->streamEpoch());
+        vfo.clear();
+        QVERIFY(QMetaObject::invokeMethod(poller, "poll", Qt::DirectConnection));
+        foundPrimary = false;
+        for (const QList<QVariant>& reading : vfo) {
+            if (reading.at(0).toInt() == slice->sliceIndex()) {
+                QCOMPARE(reading.at(1).toDouble(), -71.0);
+                foundPrimary = true;
+            }
+        }
+        QVERIFY(foundPrimary);
+        foreign->setStreamEpoch(slice->streamEpoch()+1);
+        poller->copyCachedReadings(previewMeter,{{"sliceId",slice->sliceIndex()}}); QVERIFY(!previewFace->hasPrimaryReading());
+        foreign->setStreamEpoch(slice->streamEpoch()); foreign->setFrequency(slice->frequency()); foreign->setFilter(slice->filterLow(),slice->filterHigh());
+        poller->copyCachedReadings(previewMeter,{{"sliceId",99}}); QVERIFY(previewFace->hasPrimaryReading()); QCOMPARE(previewFace->value(),-71.0);
+        poller->copyCachedReadings(previewMeter,{{"sliceId",slice->sliceIndex()},{"sessionId","foreign session"}}); QVERIFY(!previewFace->hasPrimaryReading());
+        pan->removeSlice(99);
+        pan->setActiveSliceIndex(slice->sliceIndex());
+        h.remoteModel()->setActiveSlice(slice->sliceIndex());
+        // Rejected/retired coverage clears the trace, so no old peak remains.
+        sw->clearRemoteSpectrum();
+        noReading();
+        // No actual host is not replaced by an arbitrary active pan.
+        pan->removeSlice(slice->sliceIndex());
+        noReading();
+    }
+
+    void unkeyedTxAppletSliceChoiceKeepsSharedPanHistory_data()
+    {
+        QTest::addColumn<bool>("takeFirst");
+        QTest::newRow("already-holder") << false;
+        QTest::newRow("take-from-unheld") << true;
+    }
+
+    void unkeyedTxAppletSliceChoiceKeepsSharedPanHistory()
+    {
+        QFETCH(bool, takeFirst);
+        RemoteWindowHarness::Options options;
+        options.stationSlices = 1;
+        options.sliceAccess = true;
+        RemoteWindowHarness h(options);
+        QVERIFY(h.start());
+        h.server().setRemoteTransmitAllowed(true);
+        h.server().setTokenSessionsMayTransmitForTest(true);
+        SliceModel* first = h.station().sliceById(0);
+        QVERIFY(first);
+        first->setPanKey(QString());
+        first->setFrequency(3650000);
+        QCOMPARE(h.station().addSlice(QStringLiteral("pan-0")), 1);
+        SliceModel* second = h.station().sliceById(1);
+        QVERIFY(second);
+        second->setFrequency(3651000);
+        QVERIFY(h.station().moveSlicesToStream({0, 1}, first->streamIndex(), 3650000));
+        QCOMPARE(second->streamIndex(), first->streamIndex());
+        const int stream = first->streamIndex();
+        const quint64 epoch = first->streamEpoch();
+        h.startStartupConnection();
+        QTRY_VERIFY(h.client()->stationLinkReady());
+        TransmitHolder::Holder self;
+        self.deviceId = QByteArrayLiteral("token:1");
+        self.name = QStringLiteral("History bench window");
+        if (!takeFirst) {
+            h.server().transmitHolder()->transferTo(self, QStringLiteral("test"));
+            QTRY_VERIFY(h.client()->holdsTransmitHere());
+        } else {
+            QTRY_VERIFY(h.server().transmitHolder()->state() == TransmitHolder::State::Unheld);
+            QVERIFY(!h.client()->holdsTransmitHere());
+        }
+        QTRY_VERIFY(h.remoteModel()->sliceById(1));
+        PanadapterApplet* pan = appletFor(h.window(), QStringLiteral("pan-0"));
+        QVERIFY(pan && pan->associatedSlices().contains(0)
+                    && pan->associatedSlices().contains(1));
+        SpectrumWidget* sw = pan->spectrumWidget();
+        QVERIFY(sw);
+        sw->setWaterfallTickerPausedForTest(true);
+        // Let the initial shown-window resize/history debounce settle before
+        // the trigger; viewport rebuilds can change cursor representation.
+        QTest::qWait(300);
+        sw->setSpectrumRenderMode(static_cast<int>(SpectrumRenderMode::Mode3D));
+        // 2026-10-02 KG4VCF, Codex: seed six populated history rows at an
+        // explicit cadence. The landed remote capture path folds input rows;
+        // the selection invariance below must not assume the automatic divider.
+        sw->setDssRowDivider(1);
+        SpectrumEndpointContext context;
+        context.codec = {29, 1, -180, 0, 11, 11, 0};
+        context.exactCentreHz = 3650000;
+        context.exactSpanHz = 10000;
+        sw->setRemoteSpectrumContext(context, context.exactCentreHz, 192000);
+        DisplayCodecFrame frame;
+        frame.context = context.codec;
+        frame.traceDbm = QVector<float>(11, -100);
+        frame.waterfallDbm = QVector<float>(11, -110);
+        QVERIFY(sw->updateRemoteSpectrum(frame));
+        for (int i = 0; i < 6; ++i) { sw->pushWaterfallRowForTest(frame.waterfallDbm); }
+        const int rows = sw->dssRowsPushedForTest();
+        const int history = sw->waterfallHistoryRowsForTest();
+        QVERIFY(rows >= 6 && history >= 6);
+        const auto colouredPixels = [sw]() {
+            const QImage& image = sw->liveWaterfallForTest();
+            int coloured = 0;
+            const QRgb empty = QColor(0x0f, 0x0f, 0x1a).rgb();
+            for (int y = 0; y < image.height(); ++y) {
+                const QRgb* line = reinterpret_cast<const QRgb*>(image.constScanLine(y));
+                for (int x = 0; x < image.width(); ++x) {
+                    if (line[x] != empty && line[x] != qRgb(0, 0, 0)) { ++coloured; }
+                }
+            }
+            return coloured;
+        };
+        QVERIFY(colouredPixels() > 0);
+        const QSize originalImageSize = sw->liveWaterfallForTest().size();
+        const int active = pan->activeSliceIndex();
+        const int modelActive = h.remoteModel()->activeSlice()->sliceIndex();
+        const QStringList accessCommands = h.sliceAccessCommands();
+        const double centre = sw->centerFrequency();
+        const double span = sw->bandwidth();
+        TxApplet* applet = h.window()->findChild<TxApplet*>();
+        QVERIFY(applet);
+        QSignalSpy finished(h.client(), &StationClient::deviceCommandFinished);
+        int minimumRows = rows;
+        int minimumHistory = history;
+        int minimumColoured = colouredPixels();
+        QTimer sampler;
+        QObject::connect(&sampler, &QTimer::timeout, h.window(), [&]() {
+            minimumRows = std::min(minimumRows, sw->dssRowsPushedForTest());
+            minimumHistory = std::min(minimumHistory, sw->waterfallHistoryRowsForTest());
+            minimumColoured = std::min(minimumColoured, colouredPixels());
+        });
+        sampler.start(1);
+        for (int id : {0, 1, 0}) {
+            QPushButton* letter = nullptr;
+            for (QPushButton* button : applet->transmitSliceButtons()) {
+                if (button->property("sliceId").toInt() == id) { letter = button; }
+            }
+            QVERIFY(letter && letter->isEnabled());
+            const int writeRow = sw->liveWaterfallWriteRowForTest();
+            finished.clear();
+            letter->click();
+            QTRY_VERIFY(!finished.isEmpty()
+                        && finished.last().at(0).toByteArray() == QByteArrayLiteral("tx.setTxSlice"));
+            QCOMPARE(finished.last().at(0).toByteArray(), QByteArrayLiteral("tx.setTxSlice"));
+            QVERIFY2(finished.last().at(2).toBool(),
+                     qPrintable(finished.last().at(3).toString()));
+            QTRY_VERIFY(h.remoteModel()->sliceById(id)->isTxSlice());
+            QCOMPARE(h.station().txSliceArbiter()->txBoundSliceId(), id);
+            QVERIFY(h.server().transmitHolder()->isHeldBy(self.deviceId));
+            QVERIFY(!h.server().transmitHolder()->holder()->keyed);
+            QVERIFY(h.client()->holdsTransmitHere());
+            QVERIFY(!h.station().mox());
+            QVERIFY(!h.remoteModel()->mox());
+            QVERIFY(!h.station().isTune());
+            QVERIFY(!h.remoteModel()->isTune());
+            QCOMPARE(first->streamIndex(), stream);
+            QCOMPARE(second->streamIndex(), stream);
+            QCOMPARE(first->streamEpoch(), epoch);
+            QCOMPARE(second->streamEpoch(), epoch);
+            QCOMPARE(pan->activeSliceIndex(), active);
+            QCOMPARE(h.remoteModel()->activeSlice()->sliceIndex(), modelActive);
+            QCOMPARE(h.sliceAccessCommands(), accessCommands);
+            QCOMPARE(sw->centerFrequency(), centre);
+            QCOMPARE(sw->bandwidth(), span);
+            QTest::qWait(120);
+            QCOMPARE(minimumRows, rows);
+            QCOMPARE(minimumHistory, history);
+            QVERIFY(minimumColoured > 0);
+            QCOMPARE(sw->liveWaterfallForTest().size(), originalImageSize);
+            if (sw->liveWaterfallWriteRowForTest() != writeRow) {
+                qInfo() << "History fixture cursor moved" << writeRow
+                        << sw->liveWaterfallWriteRowForTest()
+                        << "image" << sw->liveWaterfallForTest().size()
+                        << "coloured" << colouredPixels();
+            }
+            QVERIFY(sw->updateRemoteSpectrum(frame));
+            sw->pushWaterfallRowForTest(frame.waterfallDbm);
+            QVERIFY(sw->dssRowsPushedForTest() > rows);
+        }
+        sampler.stop();
+    }
+
+    // ── B3.1 ────────────────────────────────────────────────────────────
+
+    // A remote window: the second pan's BAND flyout changes the second
+    // pan's slice on the Core, not the active slice on the first pan.
+    void bandFlyoutChangesItsOwnPansSliceRemote()
+    {
+        RemoteWindowHarness::Options options;
+        options.stationSlices = 2;
+        options.panLayout = QStringLiteral("2v");
+        RemoteWindowHarness h(options);
+        QVERIFY(h.start());
+        QAction* connect = h.menuAction(QStringLiteral("&Radio"), QStringLiteral("&Connect"));
+        QVERIFY(connect && connect->isEnabled());
+        connect->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(h.client()->isHandshakeComplete(), 10000);
+        QCOMPARE(h.client()->capabilities().bandSelectVersion, 1);
+
+        const QList<SliceModel*> coreSlices = h.station().slices();
+        QCOMPARE(coreSlices.size(), 2);
+        SliceModel* const first = coreSlices.at(0);
+        SliceModel* const second = coreSlices.at(1);
+        QCOMPARE(first->panKey(), QStringLiteral("pan-0"));
+        QCOMPARE(second->panKey(), QStringLiteral("pan-1"));
+        QCOMPARE(h.station().activeSlice(), first);
+        const double firstHz = first->frequency();
+        QVERIFY(bandFromFrequency(second->frequency()) != Band::Band40m);
+
+        MainWindow* const window = h.window();
+        QTRY_VERIFY(sliceOnPan(window, QStringLiteral("pan-1"))
+                    && sliceOnPan(window, QStringLiteral("pan-1"))->sliceIndex()
+                           == second->sliceIndex());
+        SpectrumOverlayPanel* const strip = stripFor(window, QStringLiteral("pan-1"));
+        QVERIFY(strip);
+        // The Core runs its own band change for that slice (slice.selectBand),
+        // with its own band memory, as a band button at the Core does.
+        QStringList bandVerbs;
+        QObject::connect(h.client(), &StationClient::commandResponse, h.window(),
+            [&bandVerbs](const SessionMessage& message) {
+                if (message.commandVerb == "slice.selectBand") {
+                    bandVerbs << (message.accepted ? QStringLiteral("accepted")
+                                                   : message.reason);
+                }
+            });
+
+        emit strip->bandSelected(QStringLiteral("40m"), 7.0e6, QStringLiteral("LSB"));
+
+        QTRY_COMPARE(bandVerbs, QStringList{QStringLiteral("accepted")});
+        QTRY_COMPARE(bandFromFrequency(second->frequency()), Band::Band40m);
+        QTest::qWait(kSettleMs);
+        QCOMPARE(first->frequency(), firstHz);
+        // The window shows the Core's change.
+        QTRY_COMPARE(bandFromFrequency(
+                         h.remoteModel()->sliceById(second->sliceIndex())->frequency()),
+                     Band::Band40m);
+    }
+
+    // A local window: the same click, the same result.
+    void bandFlyoutChangesItsOwnPansSliceLocal()
+    {
+        std::unique_ptr<MainWindow> window = openLocalWindow(QStringLiteral("2v"));
+        RadioModel* const model = window->radioModel();
+        QTRY_VERIFY(sliceOnPan(window.get(), QStringLiteral("pan-0"))
+                    && sliceOnPan(window.get(), QStringLiteral("pan-1")));
+        SliceModel* const first = sliceOnPan(window.get(), QStringLiteral("pan-0"));
+        SliceModel* const second = sliceOnPan(window.get(), QStringLiteral("pan-1"));
+        QVERIFY(first != second);
+        model->setActiveSliceById(first->sliceIndex());
+        QCOMPARE(model->activeSlice(), first);
+        const double firstHz = first->frequency();
+        QVERIFY(bandFromFrequency(second->frequency()) != Band::Band40m);
+
+        SpectrumOverlayPanel* const strip = stripFor(window.get(), QStringLiteral("pan-1"));
+        QVERIFY(strip);
+        emit strip->bandSelected(QStringLiteral("40m"), 7.0e6, QStringLiteral("LSB"));
+
+        QCOMPARE(bandFromFrequency(second->frequency()), Band::Band40m);
+        QCOMPARE(first->frequency(), firstHz);
+    }
+
+    // ── C8 ──────────────────────────────────────────────────────────────
+
+    // A remote window restores two pans while the Core has one slice: the
+    // empty pan says why and how to fill it; a slice arriving clears it.
+    void restoredPanWithNoSliceSaysSoRemote()
+    {
+        RemoteWindowHarness::Options options;
+        options.stationSlices = 1;
+        options.panLayout = QStringLiteral("2v");
+        RemoteWindowHarness h(options);
+        QVERIFY(h.start());
+        PanadapterApplet* const pan0 = appletFor(h.window(), QStringLiteral("pan-0"));
+        PanadapterApplet* const pan1 = appletFor(h.window(), QStringLiteral("pan-1"));
+        QVERIFY(pan0 && pan1);
+        // Not connected: an empty pan is not a missing slice yet.
+        QCOMPARE(pan1->visibleNoSliceHint(), QString());
+
+        h.holdNextSnapshot();
+        h.startStartupConnection();
+        QTRY_VERIFY_WITH_TIMEOUT(h.snapshotHeld() && h.remoteModel()->isConnected(), 10000);
+        QTest::qWait(kSettleMs);
+        // The Core's slices have not arrived: nothing to say yet.
+        QCOMPARE(pan1->visibleNoSliceHint(), QString());
+
+        h.releaseSnapshot();
+        QTRY_VERIFY_WITH_TIMEOUT(h.client()->isHandshakeComplete(), 10000);
+        QTRY_COMPARE(pan1->visibleNoSliceHint(), PanadapterApplet::noSliceHintText());
+        QCOMPARE(pan0->visibleNoSliceHint(), QString());
+        QVERIFY(h.addSliceCommands().isEmpty());
+
+        // A slice on that pan clears it; closing it brings it back.
+        h.station().addSlice(QStringLiteral("pan-1"));
+        QTRY_COMPARE(pan1->visibleNoSliceHint(), QString());
+        const QVector<SliceModel*> onPan1 = h.station().slicesOnPan(QStringLiteral("pan-1"));
+        QCOMPARE(onPan1.size(), 1);
+        h.station().removeSlice(onPan1.first()->sliceIndex());
+        QTRY_COMPARE(pan1->visibleNoSliceHint(), PanadapterApplet::noSliceHintText());
+
+        // The radio going offline at the Core ends it.
+        h.reportRadioOffline();
+        QTRY_COMPARE(pan1->visibleNoSliceHint(), QString());
+    }
+
+    // A local window holds only the pans its layout shows. A slice added
+    // with a pan key the layout does not show gets no pan of its own; it is
+    // rehomed onto the window's pan, as a layout change rehomes it.
+    void localSliceKeyedToAPanTheLayoutLacksIsRehomed()
+    {
+        auto window = openLocalWindow(QStringLiteral("1"));
+        RadioModel* model = window->radioModel();
+        auto* stack = window->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        QCOMPARE(stack->currentLayoutId(), QStringLiteral("1"));
+        const int id = model->addSlice(QStringLiteral("pan-1"));
+        QVERIFY(id >= 0);
+        SliceModel* slice = model->sliceById(id);
+        QVERIFY(slice);
+        PanadapterApplet* pan = appletFor(window.get(), QStringLiteral("pan-0"));
+        QVERIFY(pan);
+        QTRY_COMPARE(slice->panKey(), QStringLiteral("pan-0"));
+        QTRY_VERIFY(pan->associatedSlices().contains(id));
+        QTest::qWait(kSettleMs);
+        QCOMPARE(stack->currentLayoutId(), QStringLiteral("1"));
+        QCOMPARE(stack->allApplets().size(), 1);
+        QVERIFY(!appletFor(window.get(), QStringLiteral("pan-1")));
+    }
+
+    // The same slice, but the layout grows to show its pan before the
+    // window gets back to its event loop (a slice made, then the layout
+    // applied, as a station restore or a test does). The pan the layout
+    // makes takes the slice and its flag, as the hidden pan that held it
+    // used to when the layout took that pan up.
+    void localSliceKeyedToAPanALayoutChangeMakesLandsOnIt()
+    {
+        auto window = openLocalWindow(QStringLiteral("1"));
+        RadioModel* model = window->radioModel();
+        auto* stack = window->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        const int id = model->addSlice(QStringLiteral("pan-1"));
+        QVERIFY(id >= 0);
+        SliceModel* slice = model->sliceById(id);
+        QVERIFY(slice);
+        QVERIFY(QMetaObject::invokeMethod(window.get(), "applyPanLayout",
+                                          Q_ARG(QString, QStringLiteral("2v"))));
+        PanadapterApplet* pan = appletFor(window.get(), QStringLiteral("pan-1"));
+        QVERIFY(pan);
+        QCOMPARE(slice->panKey(), QStringLiteral("pan-1"));
+        QVERIFY(pan->associatedSlices().contains(id));
+        QVERIFY(!appletFor(window.get(), QStringLiteral("pan-0"))->associatedSlices().contains(id));
+        VfoWidget* flag = nullptr;
+        int flags = 0;
+        for (VfoWidget* each : window->findChildren<VfoWidget*>()) {
+            if (each->sliceIndex() == id) { flag = each; ++flags; }
+        }
+        QCOMPARE(flags, 1);
+        QCOMPARE(flag->parentWidget(), pan->spectrumWidget());
+        // The rehome queued when the slice came in finds it on a pan this
+        // window shows and leaves it there.
+        QTest::qWait(kSettleMs);
+        QCOMPARE(slice->panKey(), QStringLiteral("pan-1"));
+        QVERIFY(pan->associatedSlices().contains(id));
+        QCOMPARE(flag->parentWidget(), pan->spectrumWidget());
+    }
+
+    // The pan that takes such a slice takes its stream too. While the slice
+    // was on no pan its stream fed the active pan. pan-0 has its own slice
+    // here, so the layout change adds no slice whose arrival would rebuild
+    // the routing anyway.
+    void aSliceDockedOnAPanALayoutChangeMakesFeedsThatPan()
+    {
+        auto window = openLocalWindow(QStringLiteral("1"));
+        RadioModel* model = window->radioModel();
+        QTRY_VERIFY(sliceOnPan(window.get(), QStringLiteral("pan-0")));
+        SliceModel* first = sliceOnPan(window.get(), QStringLiteral("pan-0"));
+        const int id = model->addSlice(QStringLiteral("pan-1"));
+        QVERIFY(id >= 0);
+        SliceModel* slice = model->sliceById(id);
+        QVERIFY(slice);
+        slice->setFrequency(first->frequency() + 1'000'000.0);
+        QVERIFY(slice->streamIndex() >= 0);
+        QVERIFY(slice->streamIndex() != first->streamIndex());
+        FFTRouter* router = model->fftRouter();
+        QVERIFY(router);
+        QVERIFY(QMetaObject::invokeMethod(window.get(), "applyPanLayout",
+                                          Q_ARG(QString, QStringLiteral("2v"))));
+        PanadapterApplet* pan = appletFor(window.get(), QStringLiteral("pan-1"));
+        QVERIFY(pan);
+        QVERIFY(pan->associatedSlices().contains(id));
+        QCOMPARE(pan->associatedSlices().size(), 1);
+        const QList<QString> fed = router->pansForReceiver(slice->streamIndex());
+        QVERIFY2(fed.contains(QStringLiteral("pan-1")),
+                 qPrintable(QStringLiteral("stream %1 feeds %2")
+                                .arg(slice->streamIndex()).arg(fed.join(QLatin1Char(',')))));
+        QVERIFY(!fed.contains(QStringLiteral("pan-0")));
+    }
+
+    // A local window: a pan whose slice is closed says the same.
+    void emptyPanSaysSoLocal()
+    {
+        std::unique_ptr<MainWindow> window = openLocalWindow(QStringLiteral("2v"));
+        RadioModel* const model = window->radioModel();
+        QTRY_VERIFY(sliceOnPan(window.get(), QStringLiteral("pan-1")));
+        PanadapterApplet* const pan1 = appletFor(window.get(), QStringLiteral("pan-1"));
+        QCOMPARE(pan1->visibleNoSliceHint(), QString());
+        model->removeSlice(sliceOnPan(window.get(), QStringLiteral("pan-1"))->sliceIndex());
+        QTRY_COMPARE(pan1->visibleNoSliceHint(), PanadapterApplet::noSliceHintText());
+        model->setConnectionStateForTest(ConnectionState::Disconnected);
+        QTRY_COMPARE(pan1->visibleNoSliceHint(), QString());
+    }
+
+    // ── Passing items ───────────────────────────────────────────────────
+
+    // Pan Layout and +PAN offer as many pans as the Core says it can hold
+    // in a remote window, and the board's own limit locally.
+    void panLayoutLimitFollowsTheCoresSliceLimit()
+    {
+        RemoteWindowHarness h;
+        QVERIFY(h.start());
+        QAction* connect = h.menuAction(QStringLiteral("&Radio"), QStringLiteral("&Connect"));
+        QVERIFY(connect);
+        connect->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(h.client()->isHandshakeComplete(), 10000);
+        RadioModel* const remote = h.remoteModel();
+        QCOMPARE(MainWindow::panLayoutLimitFor(remote), 5);
+
+        StationCapabilities narrowed = h.client()->capabilities();
+        QCOMPARE(narrowed.boardMaxSlices, 5);
+        narrowed.effectiveMaxSlices = 2;
+        h.pushCapabilities(narrowed);
+        QTRY_COMPARE(remote->maxSlices(), 2);
+        QCOMPARE(MainWindow::panLayoutLimitFor(remote), 2);
+        // The board is unchanged: the limit is the Core's, not the board's.
+        QCOMPARE(remote->boardCapabilities().maxSlices, 5);
+    }
+
+    void panLayoutLimitIsTheBoardsLocally()
+    {
+        std::unique_ptr<MainWindow> window = openLocalWindow(QStringLiteral("1"));
+        RadioModel* const model = window->radioModel();
+        QTRY_VERIFY(model->isConnected());
+        QCOMPARE(MainWindow::panLayoutLimitFor(model),
+                 qMin(model->boardCapabilities().maxSlices, model->userStreamCount()));
+        QCOMPARE(MainWindow::panLayoutLimitFor(nullptr), 1);
+    }
+
+    // The Display flyout on the second pan changes the second pan, Grid
+    // Lines included, and leaves the first alone.
+    void displayFlyoutActsOnItsOwnPan()
+    {
+        std::unique_ptr<MainWindow> window = openLocalWindow(QStringLiteral("2v"));
+        QTRY_VERIFY(stripFor(window.get(), QStringLiteral("pan-1")));
+        SpectrumWidget* const sw0 = appletFor(window.get(), QStringLiteral("pan-0"))->spectrumWidget();
+        SpectrumWidget* const sw1 = appletFor(window.get(), QStringLiteral("pan-1"))->spectrumWidget();
+        SpectrumOverlayPanel* const strip1 = stripFor(window.get(), QStringLiteral("pan-1"));
+
+        // Grid Lines: the toggle in the second pan's flyout, clicked.
+        QPushButton* grid = nullptr;
+        for (QPushButton* button : sw1->findChildren<QPushButton*>()) {
+            if (button->toolTip() == QStringLiteral("Show or hide frequency and dB grid lines")) {
+                QVERIFY(grid == nullptr);
+                grid = button;
+            }
+        }
+        QVERIFY(grid);
+        QVERIFY(sw1->gridEnabled());
+        QCOMPARE(grid->isChecked(), true);
+        grid->click();
+        QCOMPARE(sw1->gridEnabled(), false);
+        QCOMPARE(sw0->gridEnabled(), true);
+        grid->click();
+        QCOMPARE(sw1->gridEnabled(), true);
+
+        // Display pill plan Task 16: the flyout is the Display pill, which
+        // edits its own pan directly; the per-row signals this case used to
+        // emit are gone. Task 17: the waterfall rows (black level, colour
+        // scheme) are on its Waterfall tab.
+        QCOMPARE(strip1->displayTarget(), sw1);
+        strip1->openDisplayPill();
+        QVERIFY(strip1->displayPillVisible());
+
+        auto* alpha = sw1->findChild<QAbstractSlider*>(QStringLiteral("pillDisplayFftFillAlpha"));
+        QVERIFY(alpha);
+        const float alpha0 = sw0->fillAlpha();
+        alpha->setValue(25);
+        QCOMPARE(sw1->fillAlpha(), 0.25f);
+        QCOMPARE(sw0->fillAlpha(), alpha0);
+
+        auto* cursor = sw1->findChild<QPushButton*>(QStringLiteral("pillDisplayShowCursorFreq"));
+        QVERIFY(cursor);
+        const bool cursor0 = sw0->cursorFreqVisible();
+        QCOMPARE(cursor->isChecked(), sw1->cursorFreqVisible());
+        const bool cursor1 = sw1->cursorFreqVisible();
+        cursor->click();
+        QCOMPARE(sw1->cursorFreqVisible(), !cursor1);
+        QCOMPARE(sw0->cursorFreqVisible(), cursor0);
+
+        auto* width = sw1->findChild<QAbstractSlider*>(QStringLiteral("pillDisplayLineWidth"));
+        QVERIFY(width);
+        const float width0 = sw0->lineWidth();
+        width->setValue(width0 == 3.0f ? 5 : 30);   // tenths of a pixel
+        QCOMPARE(sw1->lineWidth(), width0 == 3.0f ? 0.5f : 3.0f);
+        QCOMPARE(sw0->lineWidth(), width0);
+
+        auto* black = sw1->findChild<QAbstractSlider*>(QStringLiteral("pillDisplayWfBlackLevel"));
+        QVERIFY(black);
+        const int black0 = sw0->wfBlackLevel();
+        QCOMPARE(black->value(), sw1->wfBlackLevel());
+        black->setValue(black0 == 30 ? 70 : 30);
+        QCOMPARE(sw1->wfBlackLevel(), black0 == 30 ? 70 : 30);
+        QCOMPARE(sw0->wfBlackLevel(), black0);
+
+        auto* scheme = sw1->findChild<QComboBox*>(QStringLiteral("pillDisplayWfColorScheme"));
+        QVERIFY(scheme);
+        const WfColorScheme scheme0 = sw0->wfColorScheme();
+        QCOMPARE(scheme->currentIndex(), static_cast<int>(sw1->wfColorScheme()));
+        const WfColorScheme chosen = scheme0 == WfColorScheme::Spectran
+            ? WfColorScheme::LinRad : WfColorScheme::Spectran;
+        scheme->setCurrentIndex(static_cast<int>(chosen));
+        QCOMPARE(sw1->wfColorScheme(), chosen);
+        QCOMPARE(sw0->wfColorScheme(), scheme0);
+    }
+
+    // Clarity tunes the active pan. Re-tune on the second pan's strip makes
+    // it the pan Clarity tunes; its badge shows, the first pan's does not,
+    // and the first pan goes back to its own waterfall levels.
+    void everyPanAndNewPanObserveExistingKeyedTruth()
+    {
+        auto window = openLocalWindow(QStringLiteral("2v"));
+        QTRY_VERIFY(sliceOnPan(window.get(), QStringLiteral("pan-0"))
+            && sliceOnPan(window.get(), QStringLiteral("pan-1")));
+        auto* registry = window->findChild<PanClarityRegistry*>();
+        auto* display = window->findChild<MoxDisplayController*>();
+        auto* stack = window->findChild<PanadapterStack*>();
+        QVERIFY(registry && display && stack);
+        // Display truth is read-only: this invokes no MOX/radio command.
+        display->setKeyed(true, -1);
+        for (const QString& id : {QStringLiteral("pan-0"), QStringLiteral("pan-1")}) {
+            ClarityController* owner = registry->controllerForPan(id);
+            QVERIFY(owner && owner->isTransmitting());
+            const float before = stack->spectrum(id)->wfActiveLowThreshold();
+            owner->feedNoiseFloor(-50, 1000);
+            owner->snapToFloor(-70);
+            emit owner->noiseFloorChanged(-50);
+            emit owner->waterfallThresholdsChanged(-55, 5);
+            QVERIFY(!stack->spectrum(id)->clarityActive());
+            QCOMPARE(stack->spectrum(id)->wfActiveLowThreshold(), before);
+        }
+        QVERIFY(stack->addPanadapter(QStringLiteral("pan-2")));
+        ClarityController* created = registry->controllerForPan(QStringLiteral("pan-2"));
+        QVERIFY(created && created->isTransmitting());
+        emit created->waterfallThresholdsChanged(-55, 5);
+        QVERIFY(!stack->spectrum(QStringLiteral("pan-2"))->clarityActive());
+        display->setKeyed(false, -1);
+        QVERIFY(!created->isTransmitting());
+    }
+
+    void eachPanKeepsClarityWhenAnotherIsSelected()
+    {
+        auto window = openLocalWindow(QStringLiteral("2v"));
+        QTRY_VERIFY(stripFor(window.get(), QStringLiteral("pan-1")));
+        QTRY_VERIFY(sliceOnPan(window.get(), QStringLiteral("pan-0"))
+            && sliceOnPan(window.get(), QStringLiteral("pan-1")));
+        for (SliceModel* slice : window->radioModel()->slices()) {
+            QVERIFY(window->radioModel()->bindSliceToStream(slice, slice->frequency()));
+        }
+        auto* stack = window->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        stack->setActivePan(QStringLiteral("pan-0"));
+        ClarityController* const owner = window->radioModel()->clarityController();
+        QVERIFY(owner && owner->isEnabled());
+        SpectrumWidget* const sw0 = stack->spectrum(QStringLiteral("pan-0"));
+        owner->setPollIntervalMs(0);
+        owner->feedNoiseFloor(-125.0f, 1000);
+        QVERIFY(sw0->clarityActive());
+        QCOMPARE(sw0->wfActiveLowThreshold(), owner->lastLow());
+        const float low = sw0->wfActiveLowThreshold();
+        stack->setActivePan(QStringLiteral("pan-1"));
+        QVERIFY(sw0->clarityActive());
+        QCOMPARE(sw0->wfActiveLowThreshold(), low);
+    }
+
+    void clarityBadgeAndRetuneActOnTheirOwnPan()
+    {
+        std::unique_ptr<MainWindow> window = openLocalWindow(QStringLiteral("2v"));
+        QTRY_VERIFY(stripFor(window.get(), QStringLiteral("pan-1")));
+        QTRY_VERIFY(sliceOnPan(window.get(), QStringLiteral("pan-0"))
+            && sliceOnPan(window.get(), QStringLiteral("pan-1")));
+        for (SliceModel* slice : window->radioModel()->slices()) {
+            QVERIFY(window->radioModel()->bindSliceToStream(slice, slice->frequency()));
+        }
+        ClarityController* const clarity = window->radioModel()->clarityController();
+        QVERIFY(clarity && clarity->isEnabled());
+        SpectrumWidget* const sw0 = appletFor(window.get(), QStringLiteral("pan-0"))->spectrumWidget();
+        SpectrumWidget* const sw1 = appletFor(window.get(), QStringLiteral("pan-1"))->spectrumWidget();
+        const auto badge = [&window](const QString& panId) -> QLabel* {
+            SpectrumOverlayPanel* strip = stripFor(window.get(), panId);
+            if (!strip) { return nullptr; }
+            return strip->parentWidget()->findChild<QLabel*>(
+                QStringLiteral("pillClarityBadge"));
+        };
+        QVERIFY(badge(QStringLiteral("pan-0")) && badge(QStringLiteral("pan-1")));
+        // Display pill plan Task 17: the badge is always shown. It is grey
+        // ("off") until Clarity sets its pan's levels.
+        const auto lit = [&badge](const QString& panId) {
+            return badge(panId)->property("clarityState").toString() != QStringLiteral("off");
+        };
+        auto* stack = window->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        stack->setActivePan(QStringLiteral("pan-0"));
+        emit clarity->waterfallThresholdsChanged(-125.0f, -85.0f);
+        QVERIFY(sw0->clarityActive());
+        QVERIFY(lit(QStringLiteral("pan-0")));
+        QVERIFY(!lit(QStringLiteral("pan-1")));
+
+        emit stripFor(window.get(), QStringLiteral("pan-1"))->clarityRetuneRequested();
+        QCOMPARE(stack->activePanId(), QStringLiteral("pan-1"));
+        QVERIFY(sw0->clarityActive());
+        ClarityController* second = window->radioModel()->clarityController();
+        QVERIFY(second && second != clarity);
+        emit second->waterfallThresholdsChanged(-120.0f, -80.0f);
+        QVERIFY(sw1->clarityActive());
+        QVERIFY(sw0->clarityActive());
+        QVERIFY(lit(QStringLiteral("pan-0")));
+        QVERIFY(lit(QStringLiteral("pan-1")));
+        QVERIFY(!badge(QStringLiteral("pan-0"))->isHidden());
+        QVERIFY(!badge(QStringLiteral("pan-1"))->isHidden());
+    }
+
+    // The estimator's actual output follows the selected pane; retaining
+    // the construction-time receiver moves an inactive pane's grid instead.
+    void clarityNoiseFloorGridFollowsSelectedPan()
+    {
+        std::unique_ptr<MainWindow> window = openLocalWindow(QStringLiteral("2v"));
+        QTRY_VERIFY(stripFor(window.get(), QStringLiteral("pan-1")));
+        QTRY_VERIFY(sliceOnPan(window.get(), QStringLiteral("pan-0"))
+            && sliceOnPan(window.get(), QStringLiteral("pan-1")));
+        for (SliceModel* slice : window->radioModel()->slices()) {
+            QVERIFY(window->radioModel()->bindSliceToStream(slice, slice->frequency()));
+        }
+        auto* stack = window->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        SpectrumWidget* const sw0 = stack->spectrum(QStringLiteral("pan-0"));
+        SpectrumWidget* const sw1 = stack->spectrum(QStringLiteral("pan-1"));
+        QVERIFY(sw0 && sw1);
+        ClarityController* const clarity = window->radioModel()->clarityController();
+        QVERIFY(clarity);
+        clarity->setEnabled(true);
+        clarity->setPollIntervalMs(0);
+        clarity->setSmoothingTauSec(0.0f);
+        for (SpectrumWidget* sw : {sw0, sw1}) {
+            sw->setAdjustGridMinToNoiseFloor(true);
+            sw->setNFOffsetGridFollow(-10);
+            sw->setMaintainNFAdjustDelta(true);
+        }
+        sw0->setDbmRange(-150.0f, -50.0f);
+        sw1->setDbmRange(-140.0f, -40.0f);
+
+        stack->setActivePan(QStringLiteral("pan-1"));
+        ClarityController* second = window->radioModel()->clarityController();
+        QVERIFY(second && second != clarity);
+        second->setPollIntervalMs(0); second->setSmoothingTauSec(0.0f);
+        second->retuneNow();
+        second->feedBins(QVector<float>(1024, -100.0f), 1000);
+        QCOMPARE(sw1->gridMin(), -110);
+        QCOMPARE(sw1->gridMax(), -10);
+        QCOMPARE(sw0->gridMin(), -150);
+        QCOMPARE(sw0->gridMax(), -50);
+        QVERIFY(sw1->clarityActive());
+        QVERIFY(!sw0->clarityActive());
+
+        stack->setActivePan(QStringLiteral("pan-0"));
+        clarity->feedBins(QVector<float>(1024, -125.0f), 2000);
+        QCOMPARE(sw0->gridMin(), -135);
+        QCOMPARE(sw0->gridMax(), -35);
+        QCOMPARE(sw1->gridMin(), -110);
+        QCOMPARE(sw1->gridMax(), -10);
+        QVERIFY(sw0->clarityActive());
+        QVERIFY(sw1->clarityActive());
+    }
+
+    // Destroying the original pane must not disconnect the surviving
+    // owner's floor delivery. Exercise the stack's actual retirement path.
+    void clarityNoiseFloorSurvivesInitialPanRemoval()
+    {
+        std::unique_ptr<MainWindow> window = openLocalWindow(QStringLiteral("2v"));
+        QTRY_VERIFY(stripFor(window.get(), QStringLiteral("pan-1")));
+        QTRY_VERIFY(sliceOnPan(window.get(), QStringLiteral("pan-0"))
+            && sliceOnPan(window.get(), QStringLiteral("pan-1")));
+        for (SliceModel* slice : window->radioModel()->slices()) {
+            QVERIFY(window->radioModel()->bindSliceToStream(slice, slice->frequency()));
+        }
+        auto* stack = window->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        QPointer<SpectrumWidget> retired = stack->spectrum(QStringLiteral("pan-0"));
+        SpectrumWidget* const survivor = stack->spectrum(QStringLiteral("pan-1"));
+        QVERIFY(retired && survivor);
+        auto* registry = window->findChild<PanClarityRegistry*>();
+        QVERIFY(registry);
+        ClarityController* const clarity = registry->controllerForPan(QStringLiteral("pan-1"));
+        QVERIFY(clarity);
+        clarity->setEnabled(true);
+        clarity->setPollIntervalMs(0);
+        clarity->setSmoothingTauSec(0.0f);
+        survivor->setAdjustGridMinToNoiseFloor(true);
+        survivor->setNFOffsetGridFollow(-10);
+        survivor->setMaintainNFAdjustDelta(true);
+        stack->setActivePan(QStringLiteral("pan-1"));
+        stack->removePanadapter(QStringLiteral("pan-0"));
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(retired.isNull());
+        QCOMPARE(stack->activePanId(), QStringLiteral("pan-1"));
+        QCOMPARE(window->activeSpectrumWidget(), survivor);
+        survivor->setDbmRange(-140.0f, -40.0f);
+        clarity->setLowMarginDb(-5.0f);
+        clarity->setHighMarginDb(55.0f);
+        clarity->setMinGapDb(30.0f);
+        const float savedLow = survivor->wfLowThreshold();
+        const float savedHigh = survivor->wfHighThreshold();
+        clarity->retuneNow();
+        clarity->feedBins(QVector<float>(1024, -115.0f), 1000);
+        QCOMPARE(survivor->wfActiveLowThreshold(), -120.0f);
+        QCOMPARE(survivor->wfActiveHighThreshold(), -60.0f);
+        QCOMPARE(survivor->gridMin(), -125);
+        QCOMPARE(survivor->gridMax(), -25);
+        QCOMPARE(survivor->wfLowThreshold(), savedLow);
+        QCOMPARE(survivor->wfHighThreshold(), savedHigh);
+        QVERIFY(survivor->clarityActive());
+
+        // No pane remains after the current owner is retired. Both output
+        // routes must safely ignore a valid new controller estimate.
+        QPointer<SpectrumWidget> lastOwner = survivor;
+        stack->removePanadapter(QStringLiteral("pan-1"));
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(lastOwner.isNull());
+        QVERIFY(stack->activePanId().isEmpty());
+        QVERIFY(window->activeSpectrumWidget() == nullptr);
+        QVERIFY(registry->controllerForPan(QStringLiteral("pan-1")) == nullptr);
+    }
+
+    // A left-click on a spot: the widget tunes the pan's slice, and the
+    // slice takes the spot's mode (AetherSDR's spot click), on that pan only.
+    void spotClickSetsItsOwnPansSliceMode()
+    {
+        std::unique_ptr<MainWindow> window = openLocalWindow(QStringLiteral("2v"));
+        QTRY_VERIFY(sliceOnPan(window.get(), QStringLiteral("pan-0"))
+                    && sliceOnPan(window.get(), QStringLiteral("pan-1")));
+        RadioModel* const model = window->radioModel();
+        SliceModel* const first = sliceOnPan(window.get(), QStringLiteral("pan-0"));
+        SliceModel* const second = sliceOnPan(window.get(), QStringLiteral("pan-1"));
+        first->setDspMode(DSPMode::USB);
+        second->setDspMode(DSPMode::USB);
+        model->spotModel()->applySpotStatus(7, {
+            {QStringLiteral("callsign"), QStringLiteral("K1ABC")},
+            {QStringLiteral("rx_freq"), QStringLiteral("7.025")},
+            {QStringLiteral("mode"), QStringLiteral("CW")},
+            {QStringLiteral("source"), QStringLiteral("Cluster")}});
+        model->spotModel()->applySpotStatus(8, {
+            {QStringLiteral("callsign"), QStringLiteral("VK2XYZ")},
+            {QStringLiteral("rx_freq"), QStringLiteral("14.236")},
+            {QStringLiteral("source"), QStringLiteral("FreeDV")}});
+        SpectrumWidget* const sw1 = appletFor(window.get(), QStringLiteral("pan-1"))->spectrumWidget();
+
+        emit sw1->spotTriggered(7);
+        QCOMPARE(second->dspMode(), DSPMode::CWL);
+        QCOMPARE(first->dspMode(), DSPMode::USB);
+
+        emit sw1->spotTriggered(8);
+        QCOMPARE(second->dspMode(), DSPMode::RADE_U);
+
+        // Auto mode off in the Spot Hub: the click only tunes.
+        second->setDspMode(DSPMode::USB);
+        AppSettings::instance().setValue(QStringLiteral("SpotAutoSwitchMode"),
+                                         QStringLiteral("False"));
+        emit sw1->spotTriggered(7);
+        QCOMPARE(second->dspMode(), DSPMode::USB);
+        AppSettings::instance().remove(QStringLiteral("SpotAutoSwitchMode"));
+
+        // A spot that is gone changes nothing.
+        emit sw1->spotTriggered(99);
+        QCOMPARE(second->dspMode(), DSPMode::USB);
+    }
+
+    // The same click in a remote window changes the Core's slice.
+    void spotClickSetsItsOwnPansSliceModeRemote()
+    {
+        RemoteWindowHarness::Options options;
+        options.stationSlices = 2;
+        options.panLayout = QStringLiteral("2v");
+        RemoteWindowHarness h(options);
+        QVERIFY(h.start());
+        QAction* connect = h.menuAction(QStringLiteral("&Radio"), QStringLiteral("&Connect"));
+        QVERIFY(connect);
+        connect->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(h.client()->isHandshakeComplete(), 10000);
+        SliceModel* const coreFirst = h.station().slices().at(0);
+        SliceModel* const coreSecond = h.station().slices().at(1);
+        coreFirst->setDspMode(DSPMode::USB);
+        coreSecond->setDspMode(DSPMode::USB);
+        QTRY_VERIFY(sliceOnPan(h.window(), QStringLiteral("pan-1"))
+                    && sliceOnPan(h.window(), QStringLiteral("pan-1"))->dspMode() == DSPMode::USB);
+        h.remoteModel()->spotModel()->applySpotStatus(7, {
+            {QStringLiteral("callsign"), QStringLiteral("K1ABC")},
+            {QStringLiteral("rx_freq"), QStringLiteral("14.025")},
+            {QStringLiteral("mode"), QStringLiteral("CW")},
+            {QStringLiteral("source"), QStringLiteral("Cluster")}});
+        emit h.panSpectrum(QStringLiteral("pan-1"))->spotTriggered(7);
+        QTRY_COMPARE(coreSecond->dspMode(), DSPMode::CWU);
+        QTest::qWait(kSettleMs);
+        QCOMPARE(coreFirst->dspMode(), DSPMode::USB);
+    }
+
+    void spotModesFollowAetherSdr()
+    {
+        using namespace SpotModeResolver;
+        // AetherSDR's resolver, unchanged.
+        QCOMPARE(extractSpotModeFromComment(QStringLiteral("CW  6 dB 28 WPM CQ")),
+                 QStringLiteral("CW"));
+        QCOMPARE(extractSpotModeFromComment(QStringLiteral("JP-1277 Higashimurayama FT8")),
+                 QStringLiteral("FT8"));
+        QCOMPARE(inferSpotModeFromBand(14.030), QStringLiteral("CW"));
+        QCOMPARE(inferSpotModeFromBand(14.074), QStringLiteral("DIGU"));
+        QCOMPARE(inferSpotModeFromBand(14.250), QStringLiteral("USB"));
+        QCOMPARE(inferSpotModeFromBand(3.800), QStringLiteral("LSB"));
+        QCOMPARE(mapSpotModeToRadioMode(QStringLiteral("SSB"), 7.2), QStringLiteral("LSB"));
+        QCOMPARE(mapSpotModeToRadioMode(QStringLiteral("RTTY"), 14.08), QStringLiteral("DIGL"));
+        QCOMPARE(resolveSpotRadioMode({}, {}, 0.5), QString());
+        // NereusSDR's modes for them.
+        SpotData spot;
+        spot.rxFreqMhz = 7.030;
+        spot.mode = QStringLiteral("CW");
+        QCOMPARE(dspModeForSpot(spot), std::optional<DSPMode>(DSPMode::CWL));
+        spot.rxFreqMhz = 21.030;
+        QCOMPARE(dspModeForSpot(spot), std::optional<DSPMode>(DSPMode::CWU));
+        spot.mode = QStringLiteral("NFM");
+        QCOMPARE(dspModeForSpot(spot), std::optional<DSPMode>(DSPMode::FM));
+        spot.mode = QStringLiteral("FT8");
+        QCOMPARE(dspModeForSpot(spot), std::optional<DSPMode>(DSPMode::DIGU));
+        spot.mode = QStringLiteral("OTHER");
+        spot.rxFreqMhz = 0.5;
+        QCOMPARE(dspModeForSpot(spot), std::optional<DSPMode>());
+        spot.mode.clear();
+        spot.source = QStringLiteral("FreeDV");
+        spot.rxFreqMhz = 7.177;
+        QCOMPARE(dspModeForSpot(spot), std::optional<DSPMode>(DSPMode::RADE_L));
+        spot.rxFreqMhz = 5.354;
+        QCOMPARE(dspModeForSpot(spot), std::optional<DSPMode>(DSPMode::RADE_U));
+    }
+
+    void noSliceHintIsPlain()
+    {
+        QVERIFY(OperatorWording::isPlain(PanadapterApplet::noSliceHintText()));
+        QVERIFY(!PanadapterApplet::noSliceHintText().contains(QChar(0x2014)));
+    }
+};
+
+QTEST_MAIN(TestPanActionsPerPan)
+#include "tst_pan_actions_per_pan.moc"

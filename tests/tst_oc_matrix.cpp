@@ -1,0 +1,216 @@
+// no-port-check: test fixture asserts OcMatrix model behavior + persistence round-trip
+#include <QtTest/QtTest>
+#include <QScopeGuard>
+#include <QSignalSpy>
+#include "core/OcMatrix.h"
+#include "models/Band.h"
+#include "core/AppSettings.h"
+
+using namespace NereusSDR;
+
+class TestOcMatrix : public QObject {
+    Q_OBJECT
+private slots:
+    void initTestCase() {
+        // Use a clean isolated AppSettings for each test run.
+        AppSettings::instance().clear();
+    }
+
+    // Default state — every band × pin × {RX,TX} starts clear (0)
+    void default_state_all_clear() {
+        OcMatrix m;
+        for (int b = int(Band::Band160m); b < int(Band::Count); ++b) {
+            for (int pin = 0; pin < 7; ++pin) {
+                QVERIFY(!m.pinEnabled(Band(b), pin, false));
+                QVERIFY(!m.pinEnabled(Band(b), pin, true));
+            }
+        }
+        QCOMPARE(int(m.maskFor(Band::Band20m, false)), 0);
+        QCOMPARE(int(m.maskFor(Band::Band20m, true)),  0);
+    }
+
+    // Setting individual pins flips the right bits
+    void setPin_flips_bit() {
+        OcMatrix m;
+        m.setPin(Band::Band20m, /*pin=*/2, /*tx=*/false, true);
+        QCOMPARE(int(m.maskFor(Band::Band20m, false)) & 0x04, 0x04);  // pin 2 → bit 2
+        QCOMPARE(int(m.maskFor(Band::Band20m, true)),  0);
+        QCOMPARE(int(m.maskFor(Band::Band80m, false)), 0);
+    }
+
+    // Mask format: bit N = pin N
+    void mask_bit_layout() {
+        OcMatrix m;
+        m.setPin(Band::Band40m, 0, true, true);
+        m.setPin(Band::Band40m, 6, true, true);
+        const quint8 expected = 0x01 | 0x40;  // pins 0 and 6
+        QCOMPARE(int(m.maskFor(Band::Band40m, true)), int(expected));
+    }
+
+    // TX pin action mapping — default clear
+    void txPinAction_default_clear() {
+        OcMatrix m;
+        for (int pin = 0; pin < 7; ++pin) {
+            for (int act = 0; act < int(OcMatrix::TXPinAction::Count); ++act) {
+                QCOMPARE(m.pinAction(pin), OcMatrix::TXPinAction::MoxTuneTwoTone);
+            }
+        }
+    }
+
+    void txPinAction_set_get() {
+        OcMatrix m;
+        m.setPinAction(/*pin=*/2, OcMatrix::TXPinAction::Mox);
+        m.setPinAction(/*pin=*/3, OcMatrix::TXPinAction::Tune);
+        QCOMPARE(m.pinAction(2), OcMatrix::TXPinAction::Mox);
+        QCOMPARE(m.pinAction(3), OcMatrix::TXPinAction::Tune);
+        // Untouched pins still have default
+        QCOMPARE(m.pinAction(0), OcMatrix::TXPinAction::MoxTuneTwoTone);
+    }
+
+    // Per-MAC persistence round-trip
+    void persistence_roundtrip() {
+        const QString mac = QStringLiteral("aa:bb:cc:dd:ee:ff");
+
+        OcMatrix m1;
+        m1.setMacAddress(mac);
+        m1.setPin(Band::Band20m, 2, false, true);
+        m1.setPin(Band::Band40m, 5, true, true);
+        m1.setPinAction(3, OcMatrix::TXPinAction::Tune);
+        m1.save();
+
+        // Fresh instance — should hydrate from AppSettings
+        OcMatrix m2;
+        m2.setMacAddress(mac);
+        m2.load();
+        QVERIFY(m2.pinEnabled(Band::Band20m, 2, false));
+        QVERIFY(!m2.pinEnabled(Band::Band20m, 2, true));
+        QVERIFY(m2.pinEnabled(Band::Band40m, 5, true));
+        QCOMPARE(m2.pinAction(3), OcMatrix::TXPinAction::Tune);
+    }
+
+    // resetDefaults() clears every cell back to Thetis init state
+    void resetDefaults_restores_init_state() {
+        OcMatrix m;
+        m.setPin(Band::Band20m, 2, false, true);
+        m.setPinAction(3, OcMatrix::TXPinAction::Mox);
+        m.resetDefaults();
+        QCOMPARE(int(m.maskFor(Band::Band20m, false)), 0);
+        // After reset, pin actions restore to Thetis init: MOX_TUNE_TWOTONE
+        QCOMPARE(m.pinAction(3), OcMatrix::TXPinAction::MoxTuneTwoTone);
+    }
+
+    // changed() signal fires on setPin / setPinAction
+    void changed_signal_fires_on_setPin() {
+        OcMatrix m;
+        QSignalSpy spy(&m, &OcMatrix::changed);
+        m.setPin(Band::Band20m, 2, false, true);
+        QCOMPARE(spy.count(), 1);
+    }
+
+    void changed_signal_fires_on_setPinAction() {
+        OcMatrix m;
+        QSignalSpy spy(&m, &OcMatrix::changed);
+        m.setPinAction(0, OcMatrix::TXPinAction::Mox);
+        QCOMPARE(spy.count(), 1);
+    }
+
+    // Issue #191 regression: setPin must persist immediately (no explicit
+    // save() needed). The HF/SWL OC tab toggle handlers only call
+    // setPin(); they don't follow up with save(). Before the fix, user
+    // edits never reached AppSettings and were lost on app restart.
+    void setPin_persists_without_explicit_save() {
+        const QString mac = QStringLiteral("11:22:33:44:55:66");
+
+        OcMatrix m1;
+        m1.setMacAddress(mac);
+        m1.setPin(Band::Band20m, 3, /*tx=*/false, true);
+        m1.setPin(Band::Band40m, 1, /*tx=*/true,  true);
+        // No m1.save() — mimics the OcOutputsHfTab / OcOutputsSwlTab
+        // checkbox toggle paths.
+
+        OcMatrix m2;
+        m2.setMacAddress(mac);
+        m2.load();
+        QVERIFY(m2.pinEnabled(Band::Band20m, 3, /*tx=*/false));
+        QVERIFY(m2.pinEnabled(Band::Band40m, 1, /*tx=*/true));
+        QVERIFY(!m2.pinEnabled(Band::Band20m, 3, /*tx=*/true));
+    }
+
+    // Issue #191 regression: setPinAction must persist immediately.
+    void setPinAction_persists_without_explicit_save() {
+        const QString mac = QStringLiteral("22:33:44:55:66:77");
+
+        OcMatrix m1;
+        m1.setMacAddress(mac);
+        m1.setPinAction(2, OcMatrix::TXPinAction::Mox);
+        m1.setPinAction(5, OcMatrix::TXPinAction::TuneTwoTone);
+        // No explicit save() — mimics the HF tab pin-action lambda.
+
+        OcMatrix m2;
+        m2.setMacAddress(mac);
+        m2.load();
+        QCOMPARE(m2.pinAction(2), OcMatrix::TXPinAction::Mox);
+        QCOMPARE(m2.pinAction(5), OcMatrix::TXPinAction::TuneTwoTone);
+    }
+
+    // Issue #191 regression: resetDefaults must persist immediately so
+    // that the user-visible "Reset OC defaults" button survives restart.
+    // Establish a non-default baseline via an explicit save() first, so
+    // that the post-reset cleared state is observably different from the
+    // pre-reset baseline (otherwise an unpersisted reset looks identical
+    // to the baseline-default-everywhere case and the test passes
+    // coincidentally).
+    void resetDefaults_persists_without_explicit_save() {
+        const QString mac = QStringLiteral("33:44:55:66:77:88");
+
+        OcMatrix m1;
+        m1.setMacAddress(mac);
+        m1.setPin(Band::Band20m, 0, /*tx=*/false, true);
+        m1.setPinAction(0, OcMatrix::TXPinAction::Mox);
+        m1.save();  // explicit save → baseline is durable
+
+        OcMatrix m2;
+        m2.setMacAddress(mac);
+        m2.load();
+        QVERIFY(m2.pinEnabled(Band::Band20m, 0, /*tx=*/false));  // baseline visible
+        m2.resetDefaults();
+        // No explicit save() — mimics OcOutputsHfTab::onResetClicked().
+
+        OcMatrix m3;
+        m3.setMacAddress(mac);
+        m3.load();
+        QVERIFY(!m3.pinEnabled(Band::Band20m, 0, /*tx=*/false));
+        QCOMPARE(m3.pinAction(0), OcMatrix::TXPinAction::MoxTuneTwoTone);
+    }
+
+    // R-R3-46: save() writes only the keys whose saved value differs, so
+    // one pin click in a remote window is one write to the Core (not the
+    // whole matrix), and the result reads back the same.
+    void save_writes_only_the_keys_that_changed() {
+        const QString mac = QStringLiteral("44:55:66:77:88:99");
+        OcMatrix m;
+        m.setMacAddress(mac);
+        m.save();  // all defaults: nothing differs from an empty store
+        QStringList written;
+        AppSettings::instance().setChangeHook([&written](const QString& key) { written << key; });
+        const auto unhook = qScopeGuard([] { AppSettings::instance().setChangeHook(nullptr); });
+        m.setPin(Band::Band20m, 3, /*tx=*/false, true);  // setPin saves
+        QCOMPARE(written, QStringList{QStringLiteral("hardware/%1/oc/rx/20m/pin4").arg(mac)});
+        written.clear();
+        m.setPinAction(2, OcMatrix::TXPinAction::Tune);
+        QCOMPARE(written, QStringList{QStringLiteral("hardware/%1/oc/actions/pin3/action").arg(mac)});
+        written.clear();
+        m.save();
+        QVERIFY(written.isEmpty());
+
+        OcMatrix reread;
+        reread.setMacAddress(mac);
+        reread.load();
+        QVERIFY(reread.pinEnabled(Band::Band20m, 3, false));
+        QCOMPARE(reread.pinAction(2), OcMatrix::TXPinAction::Tune);
+        QCOMPARE(reread.pinAction(0), OcMatrix::TXPinAction::MoxTuneTwoTone);
+    }
+};
+
+QTEST_APPLESS_MAIN(TestOcMatrix)
+#include "tst_oc_matrix.moc"

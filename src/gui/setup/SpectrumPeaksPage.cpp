@@ -1,0 +1,412 @@
+// =================================================================
+// src/gui/setup/SpectrumPeaksPage.cpp  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis source:
+//   Project Files/Source/Console/display.cs, original licence from Thetis source is included below
+//
+// NereusSDR-original page structure.  Constants and property defaults
+// reference Thetis display.cs:
+//   display.cs:4395-4419  ShowPeakBlobs / NumberOfPeakBlobs [v2.10.3.13]
+//   display.cs:4593-4714  BlobPeakHold / BlobPeakHoldMS / BlobPeakHoldDrop / PeakBlobFall [v2.10.3.13]
+//   display.cs:8434-8435  m_bDX2_PeakBlob = OrangeRed, m_bDX2_PeakBlobText = Chartreuse [v2.10.3.13]
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-10-12 - J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//                 Align native Display labels with the approved version29 resource.
+//   2026-10-12 - Bind picture rows to selected-pan and explicit-master scope.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-05-01 — Skeleton created in C++20/Qt6 for NereusSDR by J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code.
+//   2026-09-28 - Setup description ids for the thirteen rows the remote
+//                 Display description publishes (version 11); source
+//                 references moved out of four tooltips into comments.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
+//   2026-09-28 - Hold duration and Update during TX now work (Thetis
+//                 display.cs [v2.10.3.15]) and are described too; the peak
+//                 hold tooltips say what it does. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28 - A change now reaches every pan at once
+//                 (SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans), not
+//                 only the pan Setup points at. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+// =================================================================
+
+//=================================================================
+// display.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley (W5WC)
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to:
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Waterfall AGC Modifications Copyright (C) 2013 Phil Harman (VK6APH)
+// Transitions to directX and continual modifications Copyright (C) 2020-2025 Richard Samphire (MW0LGE)
+//=================================================================
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+#include "SpectrumPeaksPage.h"
+#include "gui/ColorSwatchButton.h"
+#include "gui/SpectrumWidget.h"
+#include "core/AppSettings.h"
+#include "models/RadioModel.h"
+
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QFormLayout>
+#include <QGroupBox>
+#include <QCheckBox>
+#include <QSpinBox>
+#include <QPushButton>
+#include <QLabel>
+#include <QSignalBlocker>
+
+namespace NereusSDR {
+
+namespace {
+
+void applyDarkStyle(QWidget* w)
+{
+    w->setStyleSheet(QStringLiteral(
+        "QGroupBox { color: #8090a0; font-size: 11px;"
+        "  border: 1px solid #203040; border-radius: 4px;"
+        "  margin-top: 8px; padding-top: 4px; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
+        "QLabel { color: #c8d8e8; }"
+        "QSpinBox { background: #1a2a3a; color: #c8d8e8;"
+        "  border: 1px solid #203040; border-radius: 3px; padding: 1px 4px; }"
+        "QCheckBox { color: #c8d8e8; }"
+        "QCheckBox::indicator { width: 14px; height: 14px; background: #1a2a3a;"
+        "  border: 1px solid #203040; border-radius: 2px; }"
+        "QCheckBox::indicator:checked { background: #00b4d8; border-color: #00b4d8; }"
+    ));
+}
+
+} // anonymous namespace
+
+SpectrumPeaksPage::SpectrumPeaksPage(RadioModel* model, QWidget* parent)
+    : SetupPage(QStringLiteral("Spectrum Peaks"), model, parent)
+{
+    buildUI();
+
+    // ── Load persisted values ─────────────────────────────────────────────────
+    auto& s = AppSettings::instance();
+
+    // Active Peak Hold
+    m_aphEnable->setChecked(
+        s.value(QStringLiteral("DisplayActivePeakHoldEnabled"), QStringLiteral("False")).toString()
+        == QStringLiteral("True"));
+    m_aphDurationMs->setValue(
+        s.value(QStringLiteral("DisplayActivePeakHoldDurationMs"), 2000).toInt());
+    m_aphDropDbPerSec->setValue(
+        s.value(QStringLiteral("DisplayActivePeakHoldDropDbPerSec"), 6).toInt());
+    m_aphFill->setChecked(
+        s.value(QStringLiteral("DisplayActivePeakHoldFill"), QStringLiteral("False")).toString()
+        == QStringLiteral("True"));
+    m_aphOnTx->setChecked(
+        s.value(QStringLiteral("DisplayActivePeakHoldOnTx"), QStringLiteral("False")).toString()
+        == QStringLiteral("True"));
+    // NereusSDR-original — distinct trace colour. Default gold (#FFD700FF)
+    // contrasts against typical clarity-blue spectrum and pure-white
+    // Smooth-Defaults data line. Persisted format is "#RRGGBBAA".
+    m_aphColor->setColor(ColorSwatchButton::colorFromHex(
+        s.value(QStringLiteral("DisplayActivePeakHoldColor"),
+                QStringLiteral("#FFD700FF")).toString()));
+
+    // Peak Blobs
+    // Thetis Display.cs:4395 [v2.10.3.13] ships m_bPeakBlobMaximums = true.
+    // NereusSDR deviation: default OFF so first-launch is a clean panadapter.
+    m_blobEnable->setChecked(
+        s.value(QStringLiteral("DisplayPeakBlobsEnabled"), QStringLiteral("False")).toString()
+        == QStringLiteral("True"));
+    // From Thetis Display.cs:4407 [v2.10.3.13] m_nNumberOfMaximums = 3
+    m_blobCount->setValue(
+        s.value(QStringLiteral("DisplayPeakBlobsCount"), 3).toInt());
+    // From Thetis Display.cs:4401 [v2.10.3.13] m_bInsideFilterOnly = false
+    m_blobInsideFilter->setChecked(
+        s.value(QStringLiteral("DisplayPeakBlobsInsideFilterOnly"), QStringLiteral("False")).toString()
+        == QStringLiteral("True"));
+    // From Thetis Display.cs:4593 [v2.10.3.13] m_bBlobPeakHold = false
+    m_blobHoldEnable->setChecked(
+        s.value(QStringLiteral("DisplayPeakBlobsHoldEnabled"), QStringLiteral("False")).toString()
+        == QStringLiteral("True"));
+    // From Thetis Display.cs:4599 [v2.10.3.13] m_fBlobPeakHoldMS = 500
+    m_blobHoldMs->setValue(
+        s.value(QStringLiteral("DisplayPeakBlobsHoldMs"), 500).toInt());
+    // From Thetis Display.cs:4605 [v2.10.3.13] m_bBlobPeakHoldDrop = false
+    m_blobHoldDrop->setChecked(
+        s.value(QStringLiteral("DisplayPeakBlobsHoldDrop"), QStringLiteral("False")).toString()
+        == QStringLiteral("True"));
+    // From Thetis Display.cs:4697 [v2.10.3.13] m_dBmPerSecondPeakBlobFall = 6.0f
+    m_blobFallDbPerSec->setValue(
+        s.value(QStringLiteral("DisplayPeakBlobsFallDbPerSec"), 6).toInt());
+    // From Thetis display.cs:8434 [v2.10.3.13] m_bDX2_PeakBlob = OrangeRed (#FF4500, fully opaque).
+    // Upstream tags preserved: //MW0LGE (from cited display.cs:8429) [v2.10.3.15]
+    // Persisted format is "#RRGGBBAA" via ColorSwatchButton::colorToHex; use the
+    // matching colorFromHex helper so alpha lands in the right channel.
+    m_blobColor->setColor(ColorSwatchButton::colorFromHex(
+        s.value(QStringLiteral("DisplayPeakBlobColor"), QStringLiteral("#FF4500FF")).toString()));
+    // From Thetis display.cs:8435 [v2.10.3.13] m_bDX2_PeakBlobText = Chartreuse (#7FFF00, fully opaque)
+    m_blobTextColor->setColor(ColorSwatchButton::colorFromHex(
+        s.value(QStringLiteral("DisplayPeakBlobTextColor"), QStringLiteral("#7FFF00FF")).toString()));
+
+    // ── Persist on change + reach every pan at once ──────────────────────────
+    // The keys are stored once for every pan, so each change saves to
+    // AppSettings and then every SpectrumWidget re-reads them: every pan
+    // follows the change now, not only the one Setup is pointed at, and not
+    // only after a restart.
+    // Approved rebuild: these rows edit the selected pan or the explicit
+    // master through the same sparse-default path as the other picture pages.
+    bindDefaultToggle(m_aphEnable, QStringLiteral("DisplayActivePeakHoldEnabled"),
+        [](SpectrumWidget* pan, bool value) { pan->setActivePeakHoldEnabled(value); });
+    bindDefaultSpin(m_aphDurationMs, QStringLiteral("DisplayActivePeakHoldDurationMs"),
+        [](SpectrumWidget* pan, int value) { pan->setActivePeakHoldDurationMs(value); });
+    bindDefaultSpin(m_aphDropDbPerSec, QStringLiteral("DisplayActivePeakHoldDropDbPerSec"),
+        [](SpectrumWidget* pan, int value) { pan->setActivePeakHoldDropDbPerSec(value); });
+    bindDefaultToggle(m_aphFill, QStringLiteral("DisplayActivePeakHoldFill"),
+        [](SpectrumWidget* pan, bool value) { pan->setActivePeakHoldFill(value); });
+    bindDefaultToggle(m_aphOnTx, QStringLiteral("DisplayActivePeakHoldOnTx"),
+        [](SpectrumWidget* pan, bool value) { pan->setActivePeakHoldOnTx(value); });
+    bindDefaultToggle(m_blobEnable, QStringLiteral("DisplayPeakBlobsEnabled"),
+        [](SpectrumWidget* pan, bool value) { pan->setPeakBlobsEnabled(value); });
+    bindDefaultSpin(m_blobCount, QStringLiteral("DisplayPeakBlobsCount"),
+        [](SpectrumWidget* pan, int value) { pan->setPeakBlobsCount(value); });
+    bindDefaultToggle(m_blobInsideFilter, QStringLiteral("DisplayPeakBlobsInsideFilterOnly"),
+        [](SpectrumWidget* pan, bool value) { pan->setPeakBlobsInsideFilterOnly(value); });
+    bindDefaultToggle(m_blobHoldEnable, QStringLiteral("DisplayPeakBlobsHoldEnabled"),
+        [](SpectrumWidget* pan, bool value) { pan->setPeakBlobsHoldEnabled(value); });
+    bindDefaultSpin(m_blobHoldMs, QStringLiteral("DisplayPeakBlobsHoldMs"),
+        [](SpectrumWidget* pan, int value) { pan->setPeakBlobsHoldMs(value); });
+    bindDefaultToggle(m_blobHoldDrop, QStringLiteral("DisplayPeakBlobsHoldDrop"),
+        [](SpectrumWidget* pan, bool value) { pan->setPeakBlobsHoldDrop(value); });
+    bindDefaultSpin(m_blobFallDbPerSec, QStringLiteral("DisplayPeakBlobsFallDbPerSec"),
+        [](SpectrumWidget* pan, int value) { pan->setPeakBlobsFallDbPerSec(value); });
+    const auto bindColour = [this](ColorSwatchButton* button, const QString& key,
+                                   void (SpectrumWidget::*setter)(const QColor&)) {
+        connect(button, &ColorSwatchButton::colorChanged, this,
+            [this, key, setter](const QColor& colour) {
+                applyDisplayDefault(key, ColorSwatchButton::colorToHex(colour),
+                    [setter, colour](SpectrumWidget* pan) { (pan->*setter)(colour); });
+            });
+        followDisplayDefault(key, [this, button, key]() {
+            const QSignalBlocker blocker(button);
+            button->setColor(ColorSwatchButton::colorFromHex(displayDefaultText(key)));
+        });
+    };
+    bindColour(m_aphColor, QStringLiteral("DisplayActivePeakHoldColor"), &SpectrumWidget::setActivePeakHoldColor);
+    bindColour(m_blobColor, QStringLiteral("DisplayPeakBlobColor"), &SpectrumWidget::setPeakBlobColor);
+    bindColour(m_blobTextColor, QStringLiteral("DisplayPeakBlobTextColor"), &SpectrumWidget::setPeakBlobTextColor);
+    showDisplayDefaults();
+}
+
+void SpectrumPeaksPage::buildUI()
+{
+    applyDarkStyle(this);
+
+    // ── Active Peak Hold ──────────────────────────────────────────────────────
+    m_aphGroup = new QGroupBox(QStringLiteral("Active Peak Hold"), this);
+    auto* aphForm = new QFormLayout(m_aphGroup);
+    aphForm->setSpacing(6);
+
+    m_aphEnable = new QCheckBox(
+        QStringLiteral("Peak trace with decay"), m_aphGroup);
+    m_aphEnable->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHold");
+    m_aphEnable->setToolTip(QStringLiteral(
+        "Display a secondary trace of the highest recent level at each "
+        "frequency bin. Each bin holds its peak for the hold duration after "
+        "it was last raised, then falls at the drop rate."));
+    aphForm->addRow(QString(), m_aphEnable);
+
+    m_aphDurationMs = new QSpinBox(m_aphGroup);
+    m_aphDurationMs->setRange(100, 60000);
+    m_aphDurationMs->setSingleStep(100);
+    m_aphDurationMs->setSuffix(QStringLiteral(" ms"));
+    // From Thetis display.cs:746-750 [v2.10.3.15] SpectralPeakHoldDelayRX1
+    // (setup.cs:20821-20825 udActivePeakHoldDurationRX1).
+    m_aphDurationMs->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHoldTime");
+    m_aphDurationMs->setToolTip(QStringLiteral(
+        "How long (ms) a peak bin is held at its maximum before starting to decay."));
+    aphForm->addRow(QStringLiteral("Hold duration:"), m_aphDurationMs);
+
+    m_aphDropDbPerSec = new QSpinBox(m_aphGroup);
+    m_aphDropDbPerSec->setRange(1, 60);
+    m_aphDropDbPerSec->setSuffix(QStringLiteral(" dB/s"));
+    m_aphDropDbPerSec->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHoldDropRate");
+    m_aphDropDbPerSec->setToolTip(QStringLiteral(
+        "Rate at which a held peak falls once its hold duration has passed."));
+    aphForm->addRow(QStringLiteral("Drop rate:"), m_aphDropDbPerSec);
+
+    m_aphFill = new QCheckBox(
+        QStringLiteral("Fill to trace"), m_aphGroup);
+    m_aphFill->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHoldFill");
+    m_aphFill->setToolTip(QStringLiteral(
+        "Shade the region between the live spectrum and the peak-hold trace."));
+    aphForm->addRow(QString(), m_aphFill);
+
+    m_aphOnTx = new QCheckBox(
+        QStringLiteral("Update during TX"), m_aphGroup);
+    // From Thetis display.cs:4941-4945, 5011 [v2.10.3.15] ActivePeakInTxRX1
+    // (setup.cs:37288-37291 chkActivePeakRX1_tx, "Also in TX").
+    m_aphOnTx->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHoldOnTx");
+    m_aphOnTx->setToolTip(QStringLiteral(
+        "Keep the peak trace running while this panadapter transmits. "
+        "When off, the trace is hidden and paused until transmit ends."));
+    aphForm->addRow(QString(), m_aphOnTx);
+
+    // Placeholder colour; setColor() is called in the constructor after buildUI().
+    // Gold default contrasts well against typical clarity-blue and white live traces.
+    m_aphColor = new ColorSwatchButton(QColor(0xFF, 0xD7, 0x00, 0xFF), m_aphGroup);
+    m_aphColor->setProperty("nereusSetupId", "display.spectrumPeaks.activePeakHoldColor");
+    m_aphColor->setToolTip(QStringLiteral(
+        "Color of the dashed Active Peak Hold trace. Set this to a hue "
+        "different from the live data-line color so the peak trace stays "
+        "visible (e.g. after Reset to Smooth Defaults paints the live "
+        "trace white)."));
+    aphForm->addRow(QStringLiteral("Trace color:"), m_aphColor);
+
+    addContent(m_aphGroup);
+
+    // ── Peak Blobs ────────────────────────────────────────────────────────────
+    // From Thetis Display.cs:4395-4714 [v2.10.3.13] — ShowPeakBlobs / NumberOfPeakBlobs /
+    //   ShowPeakBlobsInsideFilterOnly / BlobPeakHold / BlobPeakHoldMS /
+    //   BlobPeakHoldDrop / PeakBlobFall
+    m_blobGroup = new QGroupBox(QStringLiteral("Peak Blobs"), this);
+    auto* blobForm = new QFormLayout(m_blobGroup);
+    blobForm->setSpacing(6);
+
+    m_blobEnable = new QCheckBox(
+        QStringLiteral("Peak markers"), m_blobGroup);
+    // From Thetis setup.cs chkShowPeakBlobMaximums [v2.10.3.13]
+    m_blobEnable->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobs");
+    m_blobEnable->setToolTip(QStringLiteral(
+        "Display small circle markers at the top-N highest signal peaks in the spectrum."));
+    blobForm->addRow(QString(), m_blobEnable);
+
+    // From Thetis Display.cs:4407 [v2.10.3.13] range 1..m_nRX1Maximums.Length (=20)
+    m_blobCount = new QSpinBox(m_blobGroup);
+    m_blobCount->setRange(1, 20);
+    // Default 3, max 20 from the Display.cs:4407 cite above.
+    m_blobCount->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobCount");
+    m_blobCount->setToolTip(QStringLiteral(
+        "Number of peak markers to display (1 to 20)."));
+    blobForm->addRow(QStringLiteral("Number of peaks:"), m_blobCount);
+
+    m_blobInsideFilter = new QCheckBox(
+        QStringLiteral("Inside RX filter only"), m_blobGroup);
+    // From Thetis Display.cs:4401 [v2.10.3.13] ShowPeakBlobsInsideFilterOnly
+    m_blobInsideFilter->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobInsideFilter");
+    m_blobInsideFilter->setToolTip(QStringLiteral(
+        "Restrict peak blobs to frequencies within the current RX filter passband."));
+    blobForm->addRow(QString(), m_blobInsideFilter);
+
+    m_blobHoldEnable = new QCheckBox(
+        QStringLiteral("Hold before decay"), m_blobGroup);
+    // From Thetis Display.cs:4593 [v2.10.3.13] BlobPeakHold
+    m_blobHoldEnable->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobHold");
+    m_blobHoldEnable->setToolTip(QStringLiteral(
+        "Keep each blob at its peak position for the hold duration before falling."));
+    blobForm->addRow(QString(), m_blobHoldEnable);
+
+    // From Thetis Display.cs:4599 [v2.10.3.13] m_fBlobPeakHoldMS = 500
+    m_blobHoldMs = new QSpinBox(m_blobGroup);
+    m_blobHoldMs->setRange(100, 60000);
+    m_blobHoldMs->setSingleStep(100);
+    m_blobHoldMs->setSuffix(QStringLiteral(" ms"));
+    // Default 500 ms from the Display.cs:4599 cite above.
+    m_blobHoldMs->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobHoldTime");
+    m_blobHoldMs->setToolTip(QStringLiteral(
+        "How long (ms) a blob is held at its peak before falling."));
+    blobForm->addRow(QStringLiteral("Hold duration:"), m_blobHoldMs);
+
+    m_blobHoldDrop = new QCheckBox(
+        QStringLiteral("Decay after hold"), m_blobGroup);
+    // From Thetis Display.cs:4605 [v2.10.3.13] BlobPeakHoldDrop
+    m_blobHoldDrop->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobHoldDrop");
+    m_blobHoldDrop->setToolTip(QStringLiteral(
+        "When on, blobs decay at the fall rate after the hold. "
+        "When off, blobs disappear instantly after the hold duration."));
+    blobForm->addRow(QString(), m_blobHoldDrop);
+
+    // From Thetis Display.cs:4697 [v2.10.3.13] m_dBmPerSecondPeakBlobFall = 6.0f
+    m_blobFallDbPerSec = new QSpinBox(m_blobGroup);
+    m_blobFallDbPerSec->setRange(1, 60);
+    m_blobFallDbPerSec->setSuffix(QStringLiteral(" dB/s"));
+    // Default 6 dB/s from the Display.cs:4697 cite above.
+    m_blobFallDbPerSec->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobFallRate");
+    m_blobFallDbPerSec->setToolTip(QStringLiteral(
+        "Rate at which blobs fall after the hold duration."));
+    blobForm->addRow(QStringLiteral("Fall rate:"), m_blobFallDbPerSec);
+
+    // Colors
+    // From Thetis display.cs:8434 [v2.10.3.13] m_bDX2_PeakBlob = Color.OrangeRed
+    // Upstream tags preserved: //MW0LGE (from cited display.cs:8429) [v2.10.3.15]
+    // Placeholder color; setColor() is called in the constructor after buildUI().
+    m_blobColor = new ColorSwatchButton(QColor(0xFF, 0x45, 0x00, 0xFF), m_blobGroup);
+    // Default OrangeRed from the display.cs:8434 cite above.
+    m_blobColor->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobColor");
+    m_blobColor->setToolTip(QStringLiteral(
+        "Color of the peak blob circles."));
+    blobForm->addRow(QStringLiteral("Blob color:"), m_blobColor);
+
+    // From Thetis display.cs:8435 [v2.10.3.13] m_bDX2_PeakBlobText = Color.Chartreuse
+    // Placeholder color; setColor() is called in the constructor after buildUI().
+    m_blobTextColor = new ColorSwatchButton(QColor(0x7F, 0xFF, 0x00, 0xFF), m_blobGroup);
+    // Default Chartreuse from the display.cs:8435 cite above.
+    m_blobTextColor->setProperty("nereusSetupId", "display.spectrumPeaks.peakBlobTextColor");
+    m_blobTextColor->setToolTip(QStringLiteral(
+        "Color of the dBm readout text on each peak blob."));
+    blobForm->addRow(QStringLiteral("Text color:"), m_blobTextColor);
+
+    addContent(m_blobGroup);
+
+    // ── Cross-link ────────────────────────────────────────────────────────────
+    m_backBtn = new QPushButton(QStringLiteral("← Spectrum defaults"), this);
+    m_backBtn->setToolTip(QStringLiteral(
+        "Navigate back to the Spectrum Defaults page."));
+    m_backBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { background: #1a2a3a; color: #8aa8c0; border: 1px solid #203040;"
+        "  border-radius: 3px; padding: 4px 10px; }"
+        "QPushButton:hover { background: #203040; color: #c8d8e8; }"));
+    connect(m_backBtn, &QPushButton::clicked,
+            this, &SpectrumPeaksPage::backToSpectrumDefaultsRequested);
+    addContent(m_backBtn);
+    contentLayout()->setAlignment(m_backBtn, Qt::AlignLeft);
+}
+
+}  // namespace NereusSDR

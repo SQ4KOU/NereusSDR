@@ -1,0 +1,370 @@
+// no-port-check: test fixture asserts HermesLiteBandwidthMonitor — upstream
+// byte-rate compute_bps() port + NereusSDR throttle-detection layer.
+//
+// The upstream bandwidth_monitor.{c,h} (mi0bot/MW0LGE [@c26a8a4]) does NOT
+// implement throttle detection. Throttle detection is a NereusSDR addition.
+// These tests cover both the byte-rate port and the throttle state machine.
+#include <QtTest/QtTest>
+#include <QSignalSpy>
+#include <barrier>
+#include <cmath>
+#include <thread>
+#include "core/HermesLiteBandwidthMonitor.h"
+
+using namespace NereusSDR;
+
+class TestHermesLiteBandwidthMonitor : public QObject {
+    Q_OBJECT
+private slots:
+
+    // Cached readouts are polled on the GUI/daemon thread while the single
+    // connection writer ticks. Removing their atomic publication is detected
+    // by ThreadSanitizer: accesses after each barrier release are unordered.
+    void cached_readouts_safe_during_connection_ticks()
+    {
+        HermesLiteBandwidthMonitor monitor;
+        constexpr int kEpochs = 16;
+        constexpr int kTicksPerEpoch = HermesLiteBandwidthMonitor::kThrottleTickThreshold + 2;
+        constexpr int kPollsPerEpoch = 256;
+        std::barrier epochBoundary(2);
+        bool validReadouts = true;
+        int previousEvents = 0;
+
+        std::thread producer([&]() {
+            monitor.recordEp6Bytes(1024);
+            monitor.recordEp2Bytes(512);
+            monitor.tick();
+            for (int epoch = 0; epoch < kEpochs; ++epoch) {
+                epochBoundary.arrive_and_wait();
+                for (int tick = 0; tick < kTicksPerEpoch; ++tick) {
+                    // Advance the real rate clock without introducing any
+                    // synchronization with the polling reader.
+                    QTest::qSleep(2);
+                    if (epoch % 2 == 0) {
+                        monitor.recordEp6Bytes(1024);
+                    }
+                    monitor.recordEp2Bytes(512);
+                    monitor.tick();
+                }
+                epochBoundary.arrive_and_wait();
+            }
+        });
+
+        for (int epoch = 0; epoch < kEpochs; ++epoch) {
+            epochBoundary.arrive_and_wait();
+            for (int poll = 0; poll < kPollsPerEpoch; ++poll) {
+                const double ingress = monitor.ep6IngressBytesPerSec();
+                const double egress = monitor.ep2EgressBytesPerSec();
+                const bool throttled = monitor.isThrottled();
+                const int events = monitor.throttleEventCount();
+                // These are independent scalar snapshots; do not require
+                // a coherent relationship between throttle and event count.
+                Q_UNUSED(throttled);
+                validReadouts = validReadouts && std::isfinite(ingress)
+                    && ingress >= 0.0 && std::isfinite(egress) && egress >= 0.0
+                    && events >= previousEvents && events <= kEpochs * kTicksPerEpoch;
+                previousEvents = events;
+            }
+            epochBoundary.arrive_and_wait();
+        }
+        producer.join();
+
+        QVERIFY(validReadouts);
+        QVERIFY(monitor.isThrottled());
+        QCOMPARE(monitor.throttleEventCount(), kEpochs / 2);
+        QVERIFY(monitor.ep2EgressBytesPerSec() > 0.0);
+
+        // reset() remains a lifecycle operation after the connection writer
+        // is quiescent, matching connect/teardown rather than racing tick().
+        monitor.reset();
+        QCOMPARE(monitor.ep6IngressBytesPerSec(), 0.0);
+        QCOMPARE(monitor.ep2EgressBytesPerSec(), 0.0);
+        QVERIFY(!monitor.isThrottled());
+        QCOMPARE(monitor.throttleEventCount(), 0);
+    }
+
+    // Initial state: not throttled, zero counts, zero rates.
+    void initial_state_clear()
+    {
+        HermesLiteBandwidthMonitor m;
+        QVERIFY(!m.isThrottled());
+        QCOMPARE(m.throttleEventCount(), 0);
+        QCOMPARE(m.ep6IngressBytesPerSec(), 0.0);
+        QCOMPARE(m.ep2EgressBytesPerSec(), 0.0);
+    }
+
+    // First tick with no data: prev_ms == 0 branch in compute_bps() → returns 0.
+    // Source: mi0bot bandwidth_monitor.c:93-98 [@c26a8a4]
+    void first_tick_no_data_returns_zero()
+    {
+        HermesLiteBandwidthMonitor m;
+        m.tick();
+        QCOMPARE(m.ep6IngressBytesPerSec(), 0.0);
+        QCOMPARE(m.ep2EgressBytesPerSec(), 0.0);
+    }
+
+    // recordEp6Bytes with bytes <= 0 must be silently ignored.
+    // Source: mi0bot bandwidth_monitor.c:76 — if (bytes > 0) guard [@c26a8a4]
+    void record_non_positive_bytes_is_noop()
+    {
+        HermesLiteBandwidthMonitor m;
+        m.recordEp6Bytes(0);
+        m.recordEp6Bytes(-1);
+        m.recordEp2Bytes(0);
+        m.tick();
+        // First tick always returns 0 (prev_ms == 0 branch), but the total
+        // bytes counter must also be 0 — verified by the second tick having no rate.
+        m.recordEp6Bytes(0);
+        m.tick();
+        QCOMPARE(m.ep6IngressBytesPerSec(), 0.0);
+        QVERIFY(!m.isThrottled());
+    }
+
+    // After recording ep6 bytes and ticking twice (second tick has a non-zero
+    // dt), the ingress rate must be positive.
+    // Source: mi0bot bandwidth_monitor.c:101-111 compute_bps delta path [@c26a8a4]
+    void ep6_rate_positive_after_second_tick()
+    {
+        HermesLiteBandwidthMonitor m;
+        m.recordEp6Bytes(10000);
+        m.tick();  // first tick: prev_ms == 0, returns 0, sets baseline
+        // Give the clock a moment to advance so dt > 0 on the second tick.
+        QTest::qSleep(5);
+        m.recordEp6Bytes(10000);
+        m.tick();  // second tick: computes real delta
+        // Rate should be positive (10000 bytes over a few ms → many bytes/sec)
+        QVERIFY(m.ep6IngressBytesPerSec() > 0.0);
+    }
+
+    // Phase 3J-1 closeout Item 10 (2026-05-12): startup grace.
+    //
+    // Before the radio has sent its first ep6 frame, the silent-tick
+    // counter must not advance even if ep2 is fully active (host is
+    // sending the metis-start + initial command burst).  Bench log
+    // 2026-05-12 15:38 showed the throttle false-positive at +104 ms
+    // after Connected, because the watchdog runs at ~30 Hz so three
+    // ticks elapse in ~100 ms -- well before any HL2 firmware can
+    // respond.  This regression test pins that gate.
+    void startup_grace_no_throttle_before_first_ep6_frame()
+    {
+        HermesLiteBandwidthMonitor m;
+        QSignalSpy spy(&m, &HermesLiteBandwidthMonitor::throttledChanged);
+
+        // Simulate the connect startup window: ep2 is active (host sent
+        // metis-start + initial C&C burst), ep6 has not delivered a single
+        // byte yet.  Run several ticks beyond the threshold to be sure.
+        for (int i = 0; i < HermesLiteBandwidthMonitor::kThrottleTickThreshold + 5; ++i) {
+            QTest::qSleep(5);
+            m.recordEp2Bytes(500);  // host commands continue
+            m.tick();
+        }
+        QVERIFY(!m.isThrottled());
+        QCOMPARE(spy.count(), 0);
+
+        // Now the radio responds with the first ep6 frame -- monitor
+        // should still NOT trip on this tick (ep6 ingress is positive).
+        m.recordEp6Bytes(1024);
+        m.recordEp2Bytes(500);
+        m.tick();
+        QVERIFY(!m.isThrottled());
+    }
+
+    // Throttle is NOT detected with only ep6 silence but no ep2 traffic —
+    // the condition requires ep2 to be active (host is still sending commands).
+    void throttle_requires_ep2_active()
+    {
+        HermesLiteBandwidthMonitor m;
+        QSignalSpy spy(&m, &HermesLiteBandwidthMonitor::throttledChanged);
+
+        // Establish ep6 baseline (sets prev_ms so compute_bps can measure)
+        m.recordEp6Bytes(10000);
+        m.recordEp2Bytes(5000);
+        m.tick();
+        QTest::qSleep(5);
+
+        // Now: ep6 silent AND ep2 silent — should NOT throttle
+        for (int i = 0; i < HermesLiteBandwidthMonitor::kThrottleTickThreshold + 2; ++i) {
+            QTest::qSleep(5);
+            m.tick();  // no bytes recorded → ep2 also silent
+        }
+        QVERIFY(!m.isThrottled());
+        QCOMPARE(spy.count(), 0);
+    }
+
+    // Throttle IS detected when ep6 goes silent while ep2 keeps flowing.
+    void throttle_detected_when_ep6_silent_ep2_active()
+    {
+        HermesLiteBandwidthMonitor m;
+        QSignalSpy spy(&m, &HermesLiteBandwidthMonitor::throttledChanged);
+
+        // Establish baseline so compute_bps can measure real deltas.
+        m.recordEp6Bytes(10000);
+        m.recordEp2Bytes(5000);
+        m.tick();
+
+        // Feed enough ticks to establish ep2 rate.
+        for (int i = 0; i < 3; ++i) {
+            QTest::qSleep(5);
+            m.recordEp6Bytes(10000);
+            m.recordEp2Bytes(5000);
+            m.tick();
+        }
+        QVERIFY(!m.isThrottled());
+
+        // Now ep6 goes silent while ep2 continues.
+        for (int i = 0; i < HermesLiteBandwidthMonitor::kThrottleTickThreshold; ++i) {
+            QTest::qSleep(5);
+            m.recordEp2Bytes(5000);
+            m.tick();
+        }
+        QVERIFY(m.isThrottled());
+        QVERIFY(spy.count() >= 1);
+        QCOMPARE(spy.last().at(0).toBool(), true);
+    }
+
+    // Throttle clears when ep6 traffic resumes.
+    void throttle_clears_when_ep6_resumes()
+    {
+        HermesLiteBandwidthMonitor m;
+
+        // Establish baseline + trigger throttle
+        m.recordEp6Bytes(10000);
+        m.recordEp2Bytes(5000);
+        m.tick();
+        for (int i = 0; i < 3; ++i) {
+            QTest::qSleep(5);
+            m.recordEp6Bytes(10000);
+            m.recordEp2Bytes(5000);
+            m.tick();
+        }
+        for (int i = 0; i < HermesLiteBandwidthMonitor::kThrottleTickThreshold; ++i) {
+            QTest::qSleep(5);
+            m.recordEp2Bytes(5000);
+            m.tick();
+        }
+        QVERIFY(m.isThrottled());
+
+        QSignalSpy spy(&m, &HermesLiteBandwidthMonitor::throttledChanged);
+
+        // ep6 resumes
+        for (int i = 0; i < 2; ++i) {
+            QTest::qSleep(5);
+            m.recordEp6Bytes(10000);
+            m.recordEp2Bytes(5000);
+            m.tick();
+        }
+        QVERIFY(!m.isThrottled());
+        QVERIFY(spy.count() >= 1);
+        QCOMPARE(spy.last().at(0).toBool(), false);
+    }
+
+    // throttleEventCount increments on each assertion of the throttle flag.
+    void throttle_event_count_increments()
+    {
+        HermesLiteBandwidthMonitor m;
+
+        auto runThrottle = [&]() {
+            // Establish ep6 baseline
+            m.recordEp6Bytes(10000);
+            m.recordEp2Bytes(5000);
+            m.tick();
+            for (int i = 0; i < 3; ++i) {
+                QTest::qSleep(5);
+                m.recordEp6Bytes(10000);
+                m.recordEp2Bytes(5000);
+                m.tick();
+            }
+            // Trigger throttle
+            for (int i = 0; i < HermesLiteBandwidthMonitor::kThrottleTickThreshold; ++i) {
+                QTest::qSleep(5);
+                m.recordEp2Bytes(5000);
+                m.tick();
+            }
+        };
+
+        auto runRecover = [&]() {
+            for (int i = 0; i < 3; ++i) {
+                QTest::qSleep(5);
+                m.recordEp6Bytes(10000);
+                m.recordEp2Bytes(5000);
+                m.tick();
+            }
+        };
+
+        runThrottle();
+        QCOMPARE(m.throttleEventCount(), 1);
+
+        runRecover();
+        runThrottle();
+        QCOMPARE(m.throttleEventCount(), 2);
+    }
+
+    // liveStatsUpdated is emitted on every tick().
+    void live_stats_updated_emitted_on_tick()
+    {
+        HermesLiteBandwidthMonitor m;
+        QSignalSpy spy(&m, &HermesLiteBandwidthMonitor::liveStatsUpdated);
+        m.tick();
+        QCOMPARE(spy.count(), 1);
+        m.tick();
+        QCOMPARE(spy.count(), 2);
+    }
+
+    // reset() clears all state including rates, throttle flag, and event count.
+    // Source: mi0bot bandwidth_monitor.c:59-72 bandwidth_monitor_reset() [@c26a8a4]
+    void reset_clears_state()
+    {
+        HermesLiteBandwidthMonitor m;
+
+        m.recordEp6Bytes(1000);
+        m.recordEp2Bytes(500);
+        m.tick();
+        QTest::qSleep(5);
+        m.recordEp6Bytes(1000);
+        m.tick();
+
+        m.reset();
+
+        QVERIFY(!m.isThrottled());
+        QCOMPARE(m.throttleEventCount(), 0);
+        QCOMPARE(m.ep6IngressBytesPerSec(), 0.0);
+        QCOMPARE(m.ep2EgressBytesPerSec(), 0.0);
+
+        // After reset, next tick should behave like the very first tick
+        // (prev_ms == 0 → returns 0 again).
+        m.recordEp6Bytes(1000);
+        m.tick();
+        QCOMPARE(m.ep6IngressBytesPerSec(), 0.0);  // first tick after reset
+    }
+
+    // reset() emits throttledChanged(false) if previously throttled.
+    void reset_emits_signal_if_throttled()
+    {
+        HermesLiteBandwidthMonitor m;
+
+        m.recordEp6Bytes(10000);
+        m.recordEp2Bytes(5000);
+        m.tick();
+        for (int i = 0; i < 3; ++i) {
+            QTest::qSleep(5);
+            m.recordEp6Bytes(10000);
+            m.recordEp2Bytes(5000);
+            m.tick();
+        }
+        for (int i = 0; i < HermesLiteBandwidthMonitor::kThrottleTickThreshold; ++i) {
+            QTest::qSleep(5);
+            m.recordEp2Bytes(5000);
+            m.tick();
+        }
+        QVERIFY(m.isThrottled());
+
+        QSignalSpy spy(&m, &HermesLiteBandwidthMonitor::throttledChanged);
+        m.reset();
+        QVERIFY(!m.isThrottled());
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).toBool(), false);
+    }
+};
+
+QTEST_APPLESS_MAIN(TestHermesLiteBandwidthMonitor)
+#include "tst_hermes_lite_bandwidth_monitor.moc"
