@@ -1,0 +1,242 @@
+# NereusSDR for iPhone and iPad (R-IOS-29, plan Task 5).
+#
+# The package job builds and tests the NereusKit Swift package. The interop
+# job (plan Tasks 10 and 15b) builds the station's media offerer and pairing
+# peer helpers and nereusd, and runs the app's media peer against the Core's
+# own media transport and its pairing against the Core's own pairing, by
+# the helper and by a scratch nereusd kept off the network. The app job
+# (plan Task 51) generates the Xcode project, builds the app for the
+# simulator and for devices, and runs the app's tests and NereusKit's on an
+# iPhone 17 simulator: it builds the tests first, then boots the simulator
+# and waits for the runner to go quiet (ios/scripts/sim-settle.sh), then
+# tests. They run on
+# changes to the app, to the conformance fixtures the app's tests read, to
+# the station's media transport, pairing and console and the helpers, and
+# to this workflow. On a pull request the app job runs only when the PR
+# changes the app, the conformance fixtures or this workflow: a change to
+# the Core's media, pairing or console code runs the package and interop
+# jobs, which check the app's code against the Core's, and the app job
+# then runs on main after the merge. The provenance check over ios/ runs
+# in ci.yml's compliance job, beside the other attribution checks.
+name: iOS
+
+on:
+  # Pushes run only on main: a pull request's branch already runs here
+  # through pull_request, so a push trigger there ran every commit twice
+  # and held two of the account's few macOS runners.
+  push:
+    branches: [main]
+    paths:
+      - 'ios/**'
+      - 'tests/data/link/**'
+      - 'tests/tools/nereus_media_offerer.cpp'
+      - 'src/core/session/media/**'
+      - 'cmake/NereusRemoteMedia.cmake'
+      - 'tests/tools/nereus_pairing_peer.cpp'
+      - 'src/core/security/**'
+      - 'src/core/session/StationServer.cpp'
+      - 'src/core/session/SessionMessages.cpp'
+      - 'src/core/daemon/StationControlCommands.cpp'
+      - 'src/server_main.cpp'
+      - 'cmake/NereusPairing.cmake'
+      - 'resources/pairing-words-v1.txt'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    paths:
+      - 'ios/**'
+      - 'tests/data/link/**'
+      - 'tests/tools/nereus_media_offerer.cpp'
+      - 'src/core/session/media/**'
+      - 'cmake/NereusRemoteMedia.cmake'
+      - 'tests/tools/nereus_pairing_peer.cpp'
+      - 'src/core/security/**'
+      - 'src/core/session/StationServer.cpp'
+      - 'src/core/session/SessionMessages.cpp'
+      - 'src/core/daemon/StationControlCommands.cpp'
+      - 'src/server_main.cpp'
+      - 'cmake/NereusPairing.cmake'
+      - 'resources/pairing-words-v1.txt'
+      - '.github/workflows/ios.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scope:
+    # Decides whether this pull request runs the app job, which holds a
+    # macOS runner for over an hour. Pushes to main always run it. Fails
+    # closed: if the diff can't be read, the app job runs.
+    runs-on: ubuntu-latest
+    name: Which iOS jobs run
+    outputs:
+      app: ${{ steps.scope.outputs.app }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+        with:
+          # The merge commit and its first parent, the base, give the
+          # pull request's own diff.
+          fetch-depth: 2
+
+      - name: Check what the pull request changes
+        id: scope
+        shell: bash
+        run: |
+          app=true
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            if files=$(git diff --name-only HEAD^1 HEAD); then
+              # A here-string, not a pipe: under pipefail, grep -q quitting
+              # early kills printf on a long list and would read as no match.
+              if ! grep -qE '^(ios/|tests/data/link/|\.github/workflows/ios\.yml$)' <<<"$files"; then
+                app=false
+              fi
+            else
+              echo "Could not read the pull request's diff; running the app job." >&2
+            fi
+          fi
+          echo "App job: $app"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+
+  package:
+    runs-on: macos-26
+    name: NereusKit package tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show the toolchain
+        run: |
+          xcode-select -p
+          swift --version
+
+      - name: swift test (NereusKit)
+        run: ios/scripts/swift-test.sh
+
+  interop:
+    runs-on: macos-26
+    name: Media and pairing interop with the Core
+    env:
+      NEREUS_DEPENDENCY_ARCHIVE_DIR: ${{ github.workspace }}/.nereus-deps
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the station's dependencies
+        # The station build's macOS dependencies, as ci.yml installs them.
+        run: brew install qt@6 ninja fftw openssl@3 autoconf automake libtool wget
+
+      # Reuse ci.yml's pin-verified downloads and Git mirrors so the
+      # station configure can use cached dependencies after upstream 5xx.
+      - name: Restore dependency downloads
+        id: deps-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.nereus-deps
+          key: nereus-deps-${{ runner.os }}-${{ hashFiles('cmake/NereusDependencyArchives.cmake', 'cmake/FetchDependencyArchives.cmake') }}
+          restore-keys: |
+            nereus-deps-${{ runner.os }}-
+
+      - name: Fetch dependency downloads
+        shell: bash
+        run: |
+          # pwd -W gives Git Bash's D:/ form on Windows; elsewhere it fails
+          # and plain pwd is used.
+          mirrors="$(cd "$RUNNER_TEMP" && (pwd -W 2>/dev/null || pwd))/nereus-git-mirrors.gitconfig"
+          cmake -DNEREUS_DEPENDENCY_ARCHIVE_DIR="$NEREUS_DEPENDENCY_ARCHIVE_DIR" \
+                -DNEREUS_GIT_MIRROR_CONFIG="$mirrors" \
+                -P cmake/FetchDependencyArchives.cmake
+          git config --global --add include.path "$mirrors"
+
+      - name: Save dependency downloads
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.nereus-deps
+          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
+
+      - name: Configure the station build
+        # Against the openssl@3 keg only; the reason is in
+        # scripts/ci/macos-openssl.sh.
+        run: |
+          scripts/ci/macos-openssl.sh unlink
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix)" \
+            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+            -DNEREUS_BUILD_TESTS=ON
+
+      - name: Check the configure found openssl@3
+        # Before the pin this configure printed "Found OpenSSL:
+        # /opt/homebrew/lib/libcrypto.dylib (found suitable version "4.0.3" ...)".
+        run: scripts/ci/macos-openssl.sh check-cache build/CMakeCache.txt "$(brew --prefix openssl@3)/lib"
+
+      - name: Interop (MediaPeer, PairingClient against the Core's own code)
+        # Builds only the helpers and nereusd in build/, then runs the
+        # interop tests with NEREUS_MEDIA_OFFERER, NEREUS_PAIRING_PEER and
+        # NEREUS_NEREUSD set.
+        run: ios/scripts/interop-test.sh
+
+  app:
+    needs: scope
+    if: needs.scope.outputs.app == 'true'
+    # Xcode 27 is on its own hosted image; macos-26 carries Xcode 26.
+    # https://github.com/actions/runner-images/issues/14404
+    runs-on: xcode-27
+    name: The app on the iOS simulator
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 27
+        # The app needs Xcode 27 and its iOS 27 simulator; take the newest
+        # Xcode 27 the runner image carries, and fail if it has none.
+        run: |
+          xcode=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$xcode" ]; then
+            echo "This runner image has no Xcode 27" >&2
+            ls -d /Applications/Xcode*.app >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+          xcrun simctl list devices available | grep -E "iPhone 17 |-- iOS"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the Xcode project
+        run: ios/scripts/generate-project.sh
+
+      - name: Build for the simulator
+        run: |
+          xcodebuild -project ios/NereusSDR.xcodeproj -scheme NereusSDR \
+            -destination 'generic/platform=iOS Simulator' \
+            build
+
+      - name: Build for devices
+        # Unsigned: CI holds no signing identity.
+        run: |
+          xcodebuild -project ios/NereusSDR.xcodeproj -scheme NereusSDR \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO build
+
+      - name: Build the tests
+        # Before any simulator boots: a build beside a simulator's first
+        # boot took three times as long.
+        run: |
+          xcodebuild -project ios/NereusSDR.xcodeproj -scheme NereusSDR \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            build-for-testing
+
+      - name: Boot the simulator and wait for the runner to go quiet
+        # A simulator's first boot keeps this runner busy for a quarter of
+        # an hour. Tests run through it were three to five times as slow,
+        # and waits in them ran out of time.
+        run: ios/scripts/sim-settle.sh 'iPhone 17'
+
+      - name: Test on an iPhone 17 simulator
+        run: |
+          xcodebuild -project ios/NereusSDR.xcodeproj -scheme NereusSDR \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            test-without-building
