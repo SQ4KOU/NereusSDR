@@ -1,0 +1,30 @@
+name: One-time upstream main import (SQ4KOU backup-safe)
+on:
+  push:
+    branches: [upstream-import-20261018]
+    paths: [.github/workflows/import-upstream-main.yml]
+permissions:
+  contents: write
+jobs:
+  import-upstream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Copy exact upstream main history and files to dedicated branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "::group::Clone boydsoftprez/NereusSDR main"
+          git clone --no-tags --single-branch --branch main https://github.com/boydsoftprez/NereusSDR.git upstream
+          actual="$(git -C upstream rev-parse HEAD)"
+          expected="0dccef066ef1ed8f49f342ef97a3ff15bb4b0cbd"
+          echo "Source SHA: $actual"
+          test "$actual" = "$expected" || { echo "Upstream moved since validation, refusing inconsistent import"; exit 1; }
+          echo "Source tree: $(git -C upstream rev-parse HEAD^{tree})"
+          echo "::endgroup::"
+          echo "::group::Push to SQ4KOU/NereusSDR/upstream-main-20261018"
+          git -C upstream -c credential.helper= push "https://x-access-token:${GH_TOKEN}@github.com/SQ4KOU/NereusSDR.git" HEAD:refs/heads/upstream-main-20261018
+          echo "::endgroup::"
+          echo "Imported exact upstream commit $actual without touching SQ4KOU main."
